@@ -33,3 +33,21 @@ Rate limits (in-memory sliding window per replica):
 - `PAPERCLIP_RUN_JWT_SECRET` must be supplied as an external secret. The route
   factory fails fast at boot if it's unset, so deployments never silently
   generate per-restart keys (which would invalidate every in-flight JWT).
+
+## 2026-05-09 — Risk #4 (empirical resource defaults) partially resolved
+
+The empirical-measurement integration test
+(`packages/adapters/kubernetes-execution/test/integration/empirical-measurement.test.ts`)
+provisions kind + metrics-server and runs a Job under measurement. Peak CPU /
+memory are captured via `kubectl top pod` polling and written to
+`docs/k8s-execution/sizing-fake-agent.md`.
+
+**M2 ships M1 defaults unchanged.** The measured workload (busybox echo loop)
+is not representative of real claude_local — its peak memory is well under
+100 Mi vs the M1 default of 256 Mi requests / 1 Gi limit. Real claude-code
+measurement requires the M3 agent-runtime-claude image with valid Anthropic
+protocol; it will be done in M3 and the defaults updated accordingly.
+
+The infrastructure (metrics-server bootstrap, pod-metrics polling, sizing.md
+generation) is in place. M3 only needs to swap the workload, not rebuild the
+harness.
