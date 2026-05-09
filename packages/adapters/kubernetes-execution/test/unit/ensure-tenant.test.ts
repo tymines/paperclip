@@ -63,7 +63,9 @@ describe("ensureTenantNamespace", () => {
   it("derives the namespace name and creates objects in the correct order", async () => {
     const client = makeFakeClient();
     const result = await ensureTenantNamespace(client, { ...baseInput, connection: baseConnection });
-    expect(result.namespace).toBe("paperclip-acme-corp");
+    // Always-hash namespace shape: paperclip-<slug>-<8-char-hash(companyId)>.
+    // See M3b Task 17 / orchestrator/naming.ts for the rationale.
+    expect(result.namespace).toMatch(/^paperclip-acme-corp-[0-9a-z]{8}$/);
     expect(result.ciliumApplied).toBe(false);
     expect(client.core.createNamespace).toHaveBeenCalledTimes(1);
     expect(client.core.createNamespacedServiceAccount).toHaveBeenCalledTimes(1);

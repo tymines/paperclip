@@ -126,7 +126,9 @@ describe.skipIf(!process.env["K8S_INTEGRATION"] || !process.env["ANTHROPIC_API_K
           imagePullDockerConfigJson: null,
         });
         const namespace = ensure.namespace;
-        expect(namespace).toBe(`paperclip-${COMPANY_SLUG}`);
+        // Always-hash namespace shape: paperclip-<slug>-<8-char-hash(companyId)>.
+        // See M3b Task 17 / orchestrator/naming.ts for the rationale.
+        expect(namespace).toMatch(new RegExp(`^paperclip-${COMPANY_SLUG}-[0-9a-z]{8}$`));
 
         // 2. Apply PVC (driver will also call applyAgentWorkspacePvc, which is
         //    idempotent; we apply it first so seedWorkspaceFromFixture can bind it).

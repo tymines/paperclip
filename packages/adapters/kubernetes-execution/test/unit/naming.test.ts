@@ -15,13 +15,35 @@ describe("isValidDns1123Label", () => {
   });
 });
 
+// Why always-hash: two companies named "Acme" by different users must NOT
+// collide on the (cluster_connection_id, namespace_name) unique index in
+// cluster_namespace_bindings. M3b Task 17 makes the hash suffix unconditional
+// so namespace names are globally-unique-by-construction — replacing the M1
+// "takeover guard" which only blocked the failure rather than preventing it.
 describe("deriveNamespaceName", () => {
-  it("returns paperclip-{slug} for short clean slugs", () => {
-    expect(deriveNamespaceName({
+  it("always appends an 8-char hash suffix derived from companyId, even for short clean slugs", () => {
+    const r = deriveNamespaceName({
       companySlug: "acme-corp",
       companyId: "11111111-1111-1111-1111-111111111111",
       prefix: "paperclip-",
-    })).toBe("paperclip-acme-corp");
+    });
+    expect(r).toMatch(/^paperclip-acme-corp-[0-9a-z]{8}$/);
+  });
+
+  it("produces different namespaces for two companies with identical slugs", () => {
+    const a = deriveNamespaceName({
+      companySlug: "acme",
+      companyId: "11111111-1111-1111-1111-111111111111",
+      prefix: "paperclip-",
+    });
+    const b = deriveNamespaceName({
+      companySlug: "acme",
+      companyId: "22222222-2222-2222-2222-222222222222",
+      prefix: "paperclip-",
+    });
+    expect(a).not.toBe(b);
+    expect(a).toMatch(/^paperclip-acme-[0-9a-z]{8}$/);
+    expect(b).toMatch(/^paperclip-acme-[0-9a-z]{8}$/);
   });
 
   it("appends a short hash when the slug overflows after prefix", () => {
@@ -36,16 +58,6 @@ describe("deriveNamespaceName", () => {
     expect(result).toMatch(/-[0-9a-z]{8}$/);
   });
 
-  it("appends a short hash when explicit collision flag is set", () => {
-    const withHash = deriveNamespaceName({
-      companySlug: "acme-corp",
-      companyId: "33333333-3333-3333-3333-333333333333",
-      prefix: "paperclip-",
-      collisionFallback: true,
-    });
-    expect(withHash).toMatch(/^paperclip-acme-corp-[0-9a-z]{8}$/);
-  });
-
   it("sanitizes invalid slugs deterministically and produces a DNS-1123 label", () => {
     const r = deriveNamespaceName({
       companySlug: "Acme Corp.!",
@@ -54,30 +66,21 @@ describe("deriveNamespaceName", () => {
     });
     expect(isValidDns1123Label(r)).toBe(true);
     expect(r.startsWith("paperclip-")).toBe(true);
+    expect(r).toMatch(/-[0-9a-z]{8}$/);
   });
 
   it("produces a stable result for the same companyId across calls", () => {
     const a = deriveNamespaceName({
-      companySlug: "acme-corp", companyId: "55555555-5555-5555-5555-555555555555",
-      prefix: "paperclip-", collisionFallback: true,
+      companySlug: "acme-corp",
+      companyId: "55555555-5555-5555-5555-555555555555",
+      prefix: "paperclip-",
     });
     const b = deriveNamespaceName({
-      companySlug: "acme-corp", companyId: "55555555-5555-5555-5555-555555555555",
-      prefix: "paperclip-", collisionFallback: true,
+      companySlug: "acme-corp",
+      companyId: "55555555-5555-5555-5555-555555555555",
+      prefix: "paperclip-",
     });
     expect(a).toBe(b);
-  });
-
-  it("produces different hash suffixes for different companyIds with the same slug", () => {
-    const a = deriveNamespaceName({
-      companySlug: "acme-corp", companyId: "11111111-1111-1111-1111-111111111111",
-      prefix: "paperclip-", collisionFallback: true,
-    });
-    const b = deriveNamespaceName({
-      companySlug: "acme-corp", companyId: "22222222-2222-2222-2222-222222222222",
-      prefix: "paperclip-", collisionFallback: true,
-    });
-    expect(a).not.toBe(b);
   });
 
   it("returns a valid label even when the slug becomes empty after sanitization", () => {
@@ -87,5 +90,6 @@ describe("deriveNamespaceName", () => {
       prefix: "paperclip-",
     });
     expect(isValidDns1123Label(r)).toBe(true);
+    expect(r).toMatch(/-[0-9a-z]{8}$/);
   });
 });

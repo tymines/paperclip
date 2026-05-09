@@ -26,22 +26,17 @@ export interface DeriveNamespaceNameInput {
   companySlug: string;
   companyId: string;
   prefix: string;
-  collisionFallback?: boolean;
 }
 
 export function deriveNamespaceName(input: DeriveNamespaceNameInput): string {
-  const { companySlug, companyId, prefix, collisionFallback } = input;
+  const { companySlug, companyId, prefix } = input;
   const slug = sanitizeSlug(companySlug);
-  const naive = `${prefix}${slug}`;
-
-  // The hash suffix is appended when ANY of:
-  //   - explicit collision fallback requested
-  //   - naive name overflows 63 chars
-  //   - sanitization mangled the slug (e.g. "Acme Corp.!" → "acme-corp")
-  const sanitizedDiffers = slug !== companySlug.toLowerCase();
-  const overflow = naive.length > MAX_LABEL;
-  if (!collisionFallback && !overflow && !sanitizedDiffers) return naive;
-
+  // Always-hash: every namespace ends with `-<8-char-hash(companyId)>`. This
+  // guarantees globally-unique namespace names by construction, so two
+  // companies with identical slugs ("Acme" twice) cannot collide on the
+  // (cluster_connection_id, namespace_name) unique index in
+  // cluster_namespace_bindings. M3b Task 17 — replaces the M1 takeover
+  // guard, which only blocked the failure rather than preventing collision.
   const suffix = `-${shortHash(companyId)}`;
   const room = MAX_LABEL - prefix.length - suffix.length;
   const truncatedSlug = slug.slice(0, Math.max(1, room)).replace(/-+$/g, "");
