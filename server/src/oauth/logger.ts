@@ -1,6 +1,6 @@
 import { logger } from "../middleware/logger.js";
 
-const REDACT_PATHS = [
+export const OAUTH_REDACT_PATHS = [
   "access_token", "refresh_token", "id_token",
   "code", "code_verifier", "client_secret",
   "*.access_token", "*.refresh_token", "*.id_token",
@@ -10,5 +10,5 @@ const REDACT_PATHS = [
 
 export const oauthLogger = logger.child(
   { component: "oauth" },
-  { redact: { paths: REDACT_PATHS, censor: "[REDACTED]" } },
+  { redact: { paths: OAUTH_REDACT_PATHS, censor: "[REDACTED]" } },
 );
