@@ -5,7 +5,7 @@ Run this checklist on every heartbeat. This covers both your local planning/memo
 ## 1. Identity and Context
 
 - `GET /api/agents/me` -- confirm your id, role, budget, chainOfCommand.
-- Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`.
+- Check wake context: `PAPERCLIP_TASK_ID`, `PAPERCLIP_WAKE_REASON`, `PAPERCLIP_WAKE_COMMENT_ID`, `PAPERCLIP_GOAL_ID`.
 
 ## 2. Local Planning Check
 
@@ -61,7 +61,28 @@ Status quick guide:
 3. Update `$AGENT_HOME/memory/YYYY-MM-DD.md` with timeline entries.
 4. Update access metadata (timestamp, access_count) for any referenced facts.
 
-## 8. Exit
+## 8. Goal Pursuit
+
+When `PAPERCLIP_GOAL_ID` is set or `PAPERCLIP_WAKE_REASON` is `goal_activated` or `goal_work_complete`:
+
+### goal_activated (a goal just became active)
+1. `GET /api/goals/{goalId}/heartbeat-context` -- fetch the goal, its parent/children, linked projects, and open/closed issues.
+2. Draft a plan: break the goal into subtasks, assign each to the right department head (same routing rules as § 6 Delegation).
+3. Submit the plan as a `goal_plan` approval. The board (or goal owner, depending on `reviewPolicy`) will approve or reject.
+4. Once approved, create the subtasks and link them to the goal via `goalId`.
+
+### goal_work_complete (all child issues under a goal are closed)
+1. `GET /api/goals/{goalId}/heartbeat-context` -- review the goal and all its closed issues.
+2. Assess whether the goal's objective is truly met or if follow-up work is needed.
+3. If met: submit a `goal_completion` approval to transition the goal to `achieved`.
+4. If not met: create follow-up issues under the goal and comment on what remains.
+
+### Ongoing (PAPERCLIP_GOAL_ID set on a regular task)
+- You're working on a task linked to a goal. Keep the goal's objective in mind when making decisions.
+- When delegating subtasks, always set `goalId` so your reports inherit goal context.
+- When the task is done, check if it was the last open issue under the goal -- if so, a `goal_work_complete` wakeup will fire automatically.
+
+## 9. Exit
 
 - Comment on any in_progress work before exiting.
 - If no assignments and no valid mention-handoff, exit cleanly.
