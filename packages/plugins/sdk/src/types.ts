@@ -1510,6 +1510,7 @@ export interface PluginGoalsClient {
     description?: string;
     level?: Goal["level"];
     status?: Goal["status"];
+    reviewPolicy?: Goal["reviewPolicy"];
     parentId?: string;
     ownerAgentId?: string;
   }): Promise<Goal>;
@@ -1517,7 +1518,7 @@ export interface PluginGoalsClient {
     goalId: string,
     patch: Partial<Pick<
       Goal,
-      "title" | "description" | "level" | "status" | "parentId" | "ownerAgentId"
+      "title" | "description" | "level" | "status" | "reviewPolicy" | "parentId" | "ownerAgentId"
     >>,
     companyId: string,
   ): Promise<Goal>;

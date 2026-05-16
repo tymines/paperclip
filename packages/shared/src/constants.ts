@@ -329,6 +329,12 @@ export type GoalLevel = (typeof GOAL_LEVELS)[number];
 export const GOAL_STATUSES = ["planned", "active", "achieved", "cancelled"] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
+export const GOAL_REVIEW_POLICIES = ["owner", "board"] as const;
+export type GoalReviewPolicy = (typeof GOAL_REVIEW_POLICIES)[number];
+
+export const GOAL_WAKEUP_REASONS = ["goal_activated", "goal_work_complete"] as const;
+export type GoalWakeupReason = (typeof GOAL_WAKEUP_REASONS)[number];
+
 export const PROJECT_STATUSES = [
   "backlog",
   "planned",
@@ -410,6 +416,8 @@ export const APPROVAL_TYPES = [
   "approve_ceo_strategy",
   "budget_override_required",
   "request_board_approval",
+  "goal_plan",
+  "goal_completion",
 ] as const;
 export type ApprovalType = (typeof APPROVAL_TYPES)[number];
 

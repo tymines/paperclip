@@ -1951,6 +1951,7 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           description: input.description ?? null,
           level: input.level ?? "task",
           status: input.status ?? "planned",
+          reviewPolicy: input.reviewPolicy ?? "owner",
           parentId: input.parentId ?? null,
           ownerAgentId: input.ownerAgentId ?? null,
           createdAt: now,

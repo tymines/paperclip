@@ -268,8 +268,10 @@ export {
 export {
   createGoalSchema,
   updateGoalSchema,
+  linkProjectToGoalSchema,
   type CreateGoal,
   type UpdateGoal,
+  type LinkProjectToGoal,
 } from "./goal.js";
 
 export {

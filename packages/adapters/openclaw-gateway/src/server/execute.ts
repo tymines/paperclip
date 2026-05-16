@@ -22,6 +22,7 @@ type WakePayload = {
   agentId: string;
   companyId: string;
   taskId: string | null;
+  goalId: string | null;
   issueId: string | null;
   wakeReason: string | null;
   wakeCommentId: string | null;
@@ -306,6 +307,7 @@ function buildWakePayload(ctx: AdapterExecutionContext): WakePayload {
     agentId: agent.id,
     companyId: agent.companyId,
     taskId: nonEmpty(context.taskId) ?? nonEmpty(context.issueId),
+    goalId: nonEmpty(context.goalId),
     issueId: nonEmpty(context.issueId),
     wakeReason: nonEmpty(context.wakeReason),
     wakeCommentId: nonEmpty(context.wakeCommentId) ?? nonEmpty(context.commentId),
@@ -348,6 +350,7 @@ function buildPaperclipEnvForWake(ctx: AdapterExecutionContext, wakePayload: Wak
     paperclipEnv.PAPERCLIP_API_URL = paperclipApiUrlOverride;
   }
   if (wakePayload.taskId) paperclipEnv.PAPERCLIP_TASK_ID = wakePayload.taskId;
+  if (wakePayload.goalId) paperclipEnv.PAPERCLIP_GOAL_ID = wakePayload.goalId;
   const issueWorkMode = readPaperclipIssueWorkModeFromContext(ctx.context);
   if (issueWorkMode) paperclipEnv.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
   if (wakePayload.wakeReason) paperclipEnv.PAPERCLIP_WAKE_REASON = wakePayload.wakeReason;
@@ -373,6 +376,7 @@ function buildWakeText(
     "PAPERCLIP_COMPANY_ID",
     "PAPERCLIP_API_URL",
     "PAPERCLIP_TASK_ID",
+    "PAPERCLIP_GOAL_ID",
     "PAPERCLIP_WAKE_REASON",
     "PAPERCLIP_WAKE_COMMENT_ID",
     "PAPERCLIP_APPROVAL_ID",
@@ -490,6 +494,7 @@ function buildStandardPaperclipPayload(
     agentId: ctx.agent.id,
     agentName: ctx.agent.name,
     taskId: wakePayload.taskId,
+    goalId: wakePayload.goalId,
     issueId: wakePayload.issueId,
     issueIds: wakePayload.issueIds,
     wakeReason: wakePayload.wakeReason,

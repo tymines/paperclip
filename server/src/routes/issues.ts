@@ -90,6 +90,7 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import { detectAndFireGoalWorkComplete } from "../services/goal-wakeups.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
 import { feedbackService } from "../services/feedback.js";
@@ -3938,6 +3939,19 @@ export function issueRoutes(
       requestedByActorType: actor.actorType,
       requestedByActorId: actor.actorId,
     });
+
+    const statusJustClosed =
+      (issue.status === "done" || issue.status === "cancelled") &&
+      existing.status !== issue.status;
+    if (statusJustClosed && issue.goalId) {
+      void detectAndFireGoalWorkComplete(
+        db,
+        { id: issue.id, companyId: issue.companyId, status: issue.status, goalId: issue.goalId },
+        actor,
+      ).catch((err) =>
+        logger.warn({ err, issueId: issue.id, goalId: issue.goalId }, "goal_work_complete detection failed"),
+      );
+    }
 
     // Merge all wakeups from this update into one enqueue per agent to avoid duplicate runs.
     void (async () => {

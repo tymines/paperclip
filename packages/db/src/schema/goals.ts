@@ -18,6 +18,7 @@ export const goals = pgTable(
     description: text("description"),
     level: text("level").notNull().default("task"),
     status: text("status").notNull().default("planned"),
+    reviewPolicy: text("review_policy").notNull().default("owner"),
     parentId: uuid("parent_id").references((): AnyPgColumn => goals.id),
     ownerAgentId: uuid("owner_agent_id").references(() => agents.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

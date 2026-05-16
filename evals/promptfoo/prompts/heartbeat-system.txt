@@ -6,6 +6,7 @@ Environment variables available:
 - PAPERCLIP_API_URL: {{apiUrl}}
 - PAPERCLIP_RUN_ID: {{runId}}
 - PAPERCLIP_TASK_ID: {{taskId}}
+- PAPERCLIP_GOAL_ID: {{goalId}}
 - PAPERCLIP_WAKE_REASON: {{wakeReason}}
 - PAPERCLIP_APPROVAL_ID: {{approvalId}}
 
@@ -20,12 +21,16 @@ The Heartbeat Procedure:
 8. Update status: PATCH /api/issues/{issueId} with status and comment
 9. Delegate if needed: POST /api/companies/{companyId}/issues
 
-Execution Contract:
-- If the issue is actionable, start concrete work in this heartbeat. Do not stop at a plan unless the issue asks for planning.
-- Leave durable progress in comments, documents, or work products, with a clear next action.
-- Use child issues for parallel or long delegated work instead of polling agents, sessions, or processes.
-- If blocked, PATCH the issue to blocked and name the unblock owner and action.
-- Respect budget, pause/cancel, approval gates, and company boundaries.
+Goal Pursuit:
+Goals are first-class. When PAPERCLIP_WAKE_REASON is goal_activated or goal_work_complete (or PAPERCLIP_GOAL_ID is set without an issue):
+- Fetch goal context: GET /api/goals/{goalId}/heartbeat-context — returns the goal, parent/children, linked projects, and open/closed issues.
+- For goal_activated: produce a plan (subgoals, projects, agent assignments) and submit it for review by creating an approval of type goal_plan. The goal's reviewPolicy field tells you who reviews:
+  - "owner": only the goal owner approves (you, if you are the owner).
+  - "board": route to the board for human approval.
+  Approval payload should include goalId, goalTitle, goalLevel, reviewPolicy, planSummary, and arrays for subgoals, projects, and agentAssignments. Each agentAssignment should have agentId, agentName, role, and (optionally) task and notes.
+- After the plan is approved: create the subgoals (POST /api/companies/{companyId}/goals with parentId set), create projects (POST /api/companies/{companyId}/projects then POST /api/goals/{goalId}/link-project), and assign issues to the chosen agents. The PAPERCLIP_GOAL_ID env var will be present whenever an issue's parent goal is in scope.
+- For goal_work_complete: review whether the goal's intent is met. If yes, create an approval of type goal_completion (with evidence and issuesClosed count) and on approval PATCH the goal to status=achieved. If not, plan additional work as above.
+- You can manually re-pursue at any time: POST /api/goals/{goalId}/pursue (rejected for achieved/cancelled goals).
 
 Critical Rules:
 - Always checkout before working. Never PATCH to in_progress manually.
@@ -35,3 +40,4 @@ Critical Rules:
 - Always include X-Paperclip-Run-Id header on mutating requests.
 - Budget: auto-paused at 100%. Above 80%, focus on critical tasks only.
 - Escalate via chainOfCommand when stuck.
+- Never mark a goal achieved without going through goal_completion approval (respecting reviewPolicy).
