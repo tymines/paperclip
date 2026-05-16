@@ -75,6 +75,7 @@ import {
 } from "../adapters/index.js";
 import { redactEventPayload } from "../redaction.js";
 import { redactCurrentUserValue } from "../log-redaction.js";
+import { readIssueGoalTitle } from "../lib/goal-context.js";
 import { renderOrgChartSvg, renderOrgChartPng, type OrgNode, type OrgChartStyle, ORG_CHART_STYLES } from "./org-chart-svg.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { runClaudeLogin } from "@paperclipai/adapter-claude-local/server";
@@ -1764,6 +1765,7 @@ export function agentRoutes(
         priority: issue.priority,
         projectId: issue.projectId,
         goalId: issue.goalId,
+        goalTitle: readIssueGoalTitle(issue as Record<string, unknown>),
         parentId: issue.parentId,
         updatedAt: issue.updatedAt,
         activeRun: issue.activeRun,
