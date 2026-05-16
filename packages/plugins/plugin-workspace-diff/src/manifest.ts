@@ -28,7 +28,7 @@ const manifest: PaperclipPluginManifestV1 = {
         displayName: "Changes",
         exportName: "ChangesTab",
         entityTypes: ["execution_workspace", "project_workspace"],
-        order: 5,
+        order: 25,
       },
     ],
   },
