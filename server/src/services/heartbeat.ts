@@ -2496,6 +2496,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         originKind: issues.originKind,
         originId: issues.originId,
         originRunId: issues.originRunId,
+        goalId: issues.goalId,
       })
       .from(issues)
       .where(and(eq(issues.id, issueId), eq(issues.companyId, companyId)))
