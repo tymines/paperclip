@@ -14,6 +14,7 @@ import {
   GitBranch,
   Settings,
   MessageSquare,
+  Megaphone,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -122,6 +123,7 @@ export function Sidebar() {
 
         <SidebarSection label="Collaboration">
           <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+          <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
         </SidebarSection>
 
         <SidebarSection label="Company">

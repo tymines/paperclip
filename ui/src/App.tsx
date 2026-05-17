@@ -50,6 +50,8 @@ import { OrgChart } from "./pages/OrgChart";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
 import { RoomDetail } from "./pages/RoomDetail";
+import { Social } from "./pages/Social";
+import { SocialPostDetail } from "./pages/SocialPostDetail";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
 import { BoardClaimPage } from "./pages/BoardClaim";
@@ -85,6 +87,8 @@ function boardRoutes() {
       <Route path="knowledge-graph" element={<KnowledgeGraph />} />
       <Route path="rooms" element={<Rooms />} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
+      <Route path="social" element={<Social />} />
+      <Route path="social/posts/:postId" element={<SocialPostDetail />} />
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       <Route path="agents/all" element={<Agents />} />
       <Route path="agents/active" element={<Agents />} />
@@ -330,6 +334,8 @@ export function App() {
           <Route path="knowledge-graph" element={<UnprefixedBoardRedirect />} />
           <Route path="rooms" element={<UnprefixedBoardRedirect />} />
           <Route path="rooms/:roomId" element={<UnprefixedBoardRedirect />} />
+          <Route path="social" element={<UnprefixedBoardRedirect />} />
+          <Route path="social/posts/:postId" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>

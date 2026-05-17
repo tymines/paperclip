@@ -450,3 +450,14 @@ export {
   type AddRoomMember,
   type SendRoomMessage,
 } from "./room.js";
+
+export {
+  createSocialAccountSchema,
+  updateSocialAccountSchema,
+  createSocialPostSchema,
+  updateSocialPostSchema,
+  type CreateSocialAccount,
+  type UpdateSocialAccount,
+  type CreateSocialPost,
+  type UpdateSocialPost,
+} from "./social.js";

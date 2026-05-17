@@ -630,6 +630,30 @@ export type RoomSenderType = (typeof ROOM_SENDER_TYPES)[number];
 export const ROOM_MESSAGE_TYPES = ["chat", "action", "status"] as const;
 export type RoomMessageType = (typeof ROOM_MESSAGE_TYPES)[number];
 
+// ── Social (Postiz) ──────────────────────────────────────────────────────────
+export const SOCIAL_PLATFORMS = [
+  "twitter",
+  "linkedin",
+  "instagram",
+  "facebook",
+  "tiktok",
+  "youtube",
+  "pinterest",
+  "threads",
+  "bluesky",
+  "mastodon",
+] as const;
+export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
+
+export const SOCIAL_ACCOUNT_STATUSES = ["connected", "expired", "revoked", "error"] as const;
+export type SocialAccountStatus = (typeof SOCIAL_ACCOUNT_STATUSES)[number];
+
+export const SOCIAL_POST_STATUSES = ["draft", "scheduled", "publishing", "published", "failed", "cancelled"] as const;
+export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
+
+export const SOCIAL_POST_TYPES = ["text", "image", "video", "carousel", "story", "reel", "thread"] as const;
+export type SocialPostType = (typeof SOCIAL_POST_TYPES)[number];
+
 export const PRINCIPAL_TYPES = ["user", "agent"] as const;
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];
 

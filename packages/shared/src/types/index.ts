@@ -392,6 +392,15 @@ export type {
   RoomMessagePage,
 } from "./room.js";
 export type {
+  SocialAccount,
+  SocialAccountPublic,
+  SocialPost,
+  SocialPostTarget,
+  SocialPostAnalytics,
+  SocialPostDetail,
+  SocialPostListItem,
+} from "./social.js";
+export type {
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,

@@ -189,6 +189,12 @@ export const queryKeys = {
     detail: (companyId: string, roomId: string) => ["rooms", "detail", companyId, roomId] as const,
     messages: (companyId: string, roomId: string) => ["rooms", "messages", companyId, roomId] as const,
   },
+  social: {
+    accounts: (companyId: string) => ["social", "accounts", companyId] as const,
+    accountDetail: (companyId: string, accountId: string) => ["social", "accounts", companyId, accountId] as const,
+    posts: (companyId: string, status?: string) => ["social", "posts", companyId, status] as const,
+    postDetail: (companyId: string, postId: string) => ["social", "posts", "detail", companyId, postId] as const,
+  },
   plugins: {
     all: ["plugins"] as const,
     examples: ["plugins", "examples"] as const,

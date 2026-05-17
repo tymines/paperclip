@@ -14,6 +14,7 @@ export { activityRoutes } from "./activity.js";
 export { dashboardRoutes } from "./dashboard.js";
 export { knowledgeGraphRoutes } from "./knowledge-graph.js";
 export { roomRoutes } from "./rooms.js";
+export { socialRoutes } from "./social.js";
 export { sidebarBadgeRoutes } from "./sidebar-badges.js";
 export { sidebarPreferenceRoutes } from "./sidebar-preferences.js";
 export { inboxDismissalRoutes } from "./inbox-dismissals.js";
