@@ -27,6 +27,7 @@ export { issueReferenceService } from "./issue-references.js";
 export { issueRecoveryActionService } from "./issue-recovery-actions.js";
 export { goalService } from "./goals.js";
 export { knowledgeGraphService } from "./knowledge-graph.js";
+export { roomService } from "./rooms.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";

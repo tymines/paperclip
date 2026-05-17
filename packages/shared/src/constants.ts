@@ -612,8 +612,23 @@ export const LIVE_EVENT_TYPES = [
   "plugin.worker.crashed",
   "plugin.worker.restarted",
   "knowledge_graph.updated",
+  "room.message",
+  "room.member.joined",
+  "room.member.left",
+  "room.updated",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
+
+export const ROOM_STATUSES = ["active", "archived"] as const;
+export type RoomStatus = (typeof ROOM_STATUSES)[number];
+export const ROOM_TYPES = ["collaboration", "war-room", "standup"] as const;
+export type RoomType = (typeof ROOM_TYPES)[number];
+export const ROOM_MEMBER_ROLES = ["member", "moderator", "observer"] as const;
+export type RoomMemberRole = (typeof ROOM_MEMBER_ROLES)[number];
+export const ROOM_SENDER_TYPES = ["agent", "user", "system"] as const;
+export type RoomSenderType = (typeof ROOM_SENDER_TYPES)[number];
+export const ROOM_MESSAGE_TYPES = ["chat", "action", "status"] as const;
+export type RoomMessageType = (typeof ROOM_MESSAGE_TYPES)[number];
 
 export const PRINCIPAL_TYPES = ["user", "agent"] as const;
 export type PrincipalType = (typeof PRINCIPAL_TYPES)[number];

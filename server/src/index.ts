@@ -28,6 +28,7 @@ import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { logger } from "./middleware/logger.js";
 import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
+import { setupRoomWebSocketServer } from "./realtime/room-events-ws.js";
 import {
   feedbackService,
   heartbeatService,
@@ -652,6 +653,11 @@ export async function startServer(): Promise<StartedServer> {
   process.env.PAPERCLIP_API_URL = configuredApiUrl;
   
   setupLiveEventsWebSocketServer(server, db as any, {
+    deploymentMode: config.deploymentMode,
+    resolveSessionFromHeaders,
+  });
+
+  setupRoomWebSocketServer(server, db as any, {
     deploymentMode: config.deploymentMode,
     resolveSessionFromHeaders,
   });

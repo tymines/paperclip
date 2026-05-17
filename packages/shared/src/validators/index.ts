@@ -439,3 +439,14 @@ export {
   type SetPluginState,
   type ListPluginState,
 } from "./plugin.js";
+
+export {
+  createRoomSchema,
+  updateRoomSchema,
+  addRoomMemberSchema,
+  sendRoomMessageSchema,
+  type CreateRoom,
+  type UpdateRoom,
+  type AddRoomMember,
+  type SendRoomMessage,
+} from "./room.js";

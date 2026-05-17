@@ -385,6 +385,13 @@ export type {
   ImportMarkdownResult,
 } from "./knowledge-graph.js";
 export type {
+  Room,
+  RoomMember,
+  RoomMessage,
+  RoomDetail,
+  RoomMessagePage,
+} from "./room.js";
+export type {
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,

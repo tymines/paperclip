@@ -184,6 +184,11 @@ export const queryKeys = {
     hubs: (companyId: string) => ["knowledge-graph", "hubs", companyId] as const,
     agentSkills: (companyId: string) => ["knowledge-graph", "agent-skills", companyId] as const,
   },
+  rooms: {
+    list: (companyId: string) => ["rooms", companyId] as const,
+    detail: (companyId: string, roomId: string) => ["rooms", "detail", companyId, roomId] as const,
+    messages: (companyId: string, roomId: string) => ["rooms", "messages", companyId, roomId] as const,
+  },
   plugins: {
     all: ["plugins"] as const,
     examples: ["plugins", "examples"] as const,

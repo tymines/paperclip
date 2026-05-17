@@ -631,6 +631,13 @@
       "when": 1778976003000,
       "tag": "0089_knowledge_graph",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1778976004000,
+      "tag": "0090_rooms",
+      "breakpoints": true
     }
   ]
 }

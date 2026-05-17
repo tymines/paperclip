@@ -13,6 +13,7 @@ import {
   Repeat,
   GitBranch,
   Settings,
+  MessageSquare,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -118,6 +119,10 @@ export function Sidebar() {
         <SidebarProjects />
 
         <SidebarAgents />
+
+        <SidebarSection label="Collaboration">
+          <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+        </SidebarSection>
 
         <SidebarSection label="Company">
           <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
