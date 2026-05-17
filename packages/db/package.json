@@ -41,7 +41,8 @@
     "typecheck": "pnpm run check:migrations && tsc --noEmit",
     "generate": "pnpm run check:migrations && tsc -p tsconfig.json && drizzle-kit generate",
     "migrate": "pnpm run check:migrations && tsx src/migrate.ts",
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "seed:agent-rooms": "tsx src/seed-agent-rooms.ts"
   },
   "dependencies": {
     "@paperclipai/shared": "workspace:*",
