@@ -1,6 +1,7 @@
 import { createReadStream, promises as fs } from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { pipeline } from "node:stream/promises";
 import { notFound } from "../errors.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
 
@@ -67,29 +68,23 @@ function createLocalFileRunLogStore(basePath: string): RunLogStore {
       return { content: "", nextOffset: start };
     }
 
-    const chunks: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      const stream = createReadStream(filePath, { start, end });
-      stream.on("data", (chunk) => {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      });
-      stream.on("error", reject);
-      stream.on("end", () => resolve());
-    });
-
-    const content = Buffer.concat(chunks).toString("utf8");
-    const nextOffset = end + 1 < stat.size ? end + 1 : undefined;
-    return { content, nextOffset };
+    const length = end - start + 1;
+    const buffer = Buffer.alloc(length);
+    const handle = await fs.open(filePath, "r");
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, length, start);
+      const content = buffer.subarray(0, bytesRead).toString("utf8");
+      const nextOffset = end + 1 < stat.size ? end + 1 : undefined;
+      return { content, nextOffset };
+    } finally {
+      await handle.close();
+    }
   }
 
   async function sha256File(filePath: string): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const hash = createHash("sha256");
-      const stream = createReadStream(filePath);
-      stream.on("data", (chunk) => hash.update(chunk));
-      stream.on("error", reject);
-      stream.on("end", () => resolve(hash.digest("hex")));
-    });
+    const hash = createHash("sha256");
+    await pipeline(createReadStream(filePath), hash);
+    return hash.digest("hex");
   }
 
   return {
