@@ -179,6 +179,11 @@ export const queryKeys = {
   skills: {
     available: ["skills", "available"] as const,
   },
+  knowledgeGraph: {
+    get: (companyId: string) => ["knowledge-graph", companyId] as const,
+    hubs: (companyId: string) => ["knowledge-graph", "hubs", companyId] as const,
+    agentSkills: (companyId: string) => ["knowledge-graph", "agent-skills", companyId] as const,
+  },
   plugins: {
     all: ["plugins"] as const,
     examples: ["plugins", "examples"] as const,

@@ -813,6 +813,12 @@ function handleLiveEvent(
     return;
   }
 
+  if (event.type === "knowledge_graph.updated") {
+    queryClient.invalidateQueries({ queryKey: queryKeys.knowledgeGraph.get(expectedCompanyId) });
+    queryClient.invalidateQueries({ queryKey: queryKeys.knowledgeGraph.hubs(expectedCompanyId) });
+    return;
+  }
+
   if (event.type === "heartbeat.run.queued" || event.type === "heartbeat.run.status") {
     invalidateHeartbeatQueries(queryClient, expectedCompanyId, payload);
     invalidateVisibleIssueRunQueries(queryClient, pathname, payload);

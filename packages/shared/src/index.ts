@@ -639,6 +639,13 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  KnowledgeEntityType,
+  KnowledgeEdgeRelationType,
+  KnowledgeEntity,
+  KnowledgeEdge,
+  KnowledgeGraph,
+  IngestRunResult,
+  ImportMarkdownResult,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {

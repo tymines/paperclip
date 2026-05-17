@@ -28,6 +28,8 @@ export { workspaceOperations } from "./workspace_operations.js";
 export { workspaceRuntimeServices } from "./workspace_runtime_services.js";
 export { projectGoals } from "./project_goals.js";
 export { goals } from "./goals.js";
+export { knowledgeHubs } from "./knowledge_hubs.js";
+export { knowledgeEntities, knowledgeEdges } from "./knowledge_graph.js";
 export { issues } from "./issues.js";
 export { issueRecoveryActions } from "./issue_recovery_actions.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";

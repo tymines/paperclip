@@ -376,6 +376,15 @@ export type {
   CompanyPortabilityExportRequest,
 } from "./company-portability.js";
 export type {
+  KnowledgeEntityType,
+  KnowledgeEdgeRelationType,
+  KnowledgeEntity,
+  KnowledgeEdge,
+  KnowledgeGraph,
+  IngestRunResult,
+  ImportMarkdownResult,
+} from "./knowledge-graph.js";
+export type {
   JsonSchema,
   PluginJobDeclaration,
   PluginWebhookDeclaration,

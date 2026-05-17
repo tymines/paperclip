@@ -8,6 +8,7 @@ import {
   Search,
   SquarePen,
   Network,
+  Share2,
   Boxes,
   Repeat,
   GitBranch,
@@ -119,6 +120,7 @@ export function Sidebar() {
         <SidebarAgents />
 
         <SidebarSection label="Company">
+          <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
           <SidebarNavItem to="/org" label="Org" icon={Network} />
           <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
           <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />

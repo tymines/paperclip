@@ -617,6 +617,20 @@
       "when": 1778976001000,
       "tag": "0087_goal_review_policy",
       "breakpoints": true
+    },
+    {
+      "idx": 88,
+      "version": "7",
+      "when": 1778976002000,
+      "tag": "0088_knowledge_hubs",
+      "breakpoints": true
+    },
+    {
+      "idx": 89,
+      "version": "7",
+      "when": 1778976003000,
+      "tag": "0089_knowledge_graph",
+      "breakpoints": true
     }
   ]
 }
