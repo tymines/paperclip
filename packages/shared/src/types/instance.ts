@@ -32,6 +32,7 @@ export interface InstanceExperimentalSettings {
   autoRestartDevServerWhenIdle: boolean;
   enableIssueGraphLivenessAutoRecovery: boolean;
   issueGraphLivenessAutoRecoveryLookbackHours: number;
+  enableUiV1: boolean;
 }
 
 export interface InstanceSettings {

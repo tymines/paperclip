@@ -44,6 +44,10 @@ interface DialogContextValue {
   newAgentOpen: boolean;
   openNewAgent: () => void;
   closeNewAgent: () => void;
+  // UI v1 unified Create composer (gated by enableUiV1).
+  createComposerOpen: boolean;
+  openCreateComposer: () => void;
+  closeCreateComposer: () => void;
   onboardingOpen: boolean;
   onboardingOptions: OnboardingOptions;
   openOnboarding: (options?: OnboardingOptions) => void;
@@ -58,6 +62,7 @@ type DialogStateValue = Pick<
   | "newGoalOpen"
   | "newGoalDefaults"
   | "newAgentOpen"
+  | "createComposerOpen"
   | "onboardingOpen"
   | "onboardingOptions"
 >;
@@ -74,6 +79,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [newGoalOpen, setNewGoalOpen] = useState(false);
   const [newGoalDefaults, setNewGoalDefaults] = useState<NewGoalDefaults>({});
   const [newAgentOpen, setNewAgentOpen] = useState(false);
+  const [createComposerOpen, setCreateComposerOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingOptions, setOnboardingOptions] = useState<OnboardingOptions>({});
 
@@ -113,6 +119,14 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     setNewAgentOpen(false);
   }, []);
 
+  const openCreateComposer = useCallback(() => {
+    setCreateComposerOpen(true);
+  }, []);
+
+  const closeCreateComposer = useCallback(() => {
+    setCreateComposerOpen(false);
+  }, []);
+
   const openOnboarding = useCallback((options: OnboardingOptions = {}) => {
     setOnboardingOptions(options);
     setOnboardingOpen(true);
@@ -131,6 +145,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       newGoalOpen,
       newGoalDefaults,
       newAgentOpen,
+      createComposerOpen,
       onboardingOpen,
       onboardingOptions,
     }),
@@ -141,6 +156,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       newGoalOpen,
       newGoalDefaults,
       newAgentOpen,
+      createComposerOpen,
       onboardingOpen,
       onboardingOptions,
     ],
@@ -156,6 +172,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       closeNewGoal,
       openNewAgent,
       closeNewAgent,
+      openCreateComposer,
+      closeCreateComposer,
       openOnboarding,
       closeOnboarding,
     }),
@@ -168,6 +186,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       closeNewGoal,
       openNewAgent,
       closeNewAgent,
+      openCreateComposer,
+      closeCreateComposer,
       openOnboarding,
       closeOnboarding,
     ],

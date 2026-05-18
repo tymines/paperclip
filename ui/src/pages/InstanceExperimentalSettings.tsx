@@ -265,6 +265,28 @@ export function InstanceExperimentalSettings() {
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1.5">
+            <h2 className="text-sm font-semibold">UI v1 — Linear-style Home, trimmed sidebar, ⌘K Create</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Replaces Dashboard with a Home page (agent strip + goal tree + waiting-on-you list),
+              trims the sidebar to 6 top-level items + More, adds a Work page that merges
+              Issues / Routines / Goals into filter tabs, and turns ⌘K into the unified
+              "+ Create" surface. Theme picks up a soft 8px card radius and the teal accent.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={experimentalQuery.data?.enableUiV1 === true}
+            onCheckedChange={() =>
+              toggleMutation.mutate({ enableUiV1: !(experimentalQuery.data?.enableUiV1 === true) })
+            }
+            disabled={toggleMutation.isPending}
+            aria-label="Toggle UI v1"
+          />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1.5">
             <h2 className="text-sm font-semibold">Enable Environments</h2>
             <p className="max-w-2xl text-sm text-muted-foreground">
               Show environment management in company settings and allow project and agent environment assignment
