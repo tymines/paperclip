@@ -1483,8 +1483,8 @@ function CostsSection({
         </div>
       )}
       {runsWithCost.length > 0 && (
-        <div className="border border-border rounded-lg overflow-hidden">
-          <table className="w-full text-xs">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[480px] text-xs">
             <thead>
               <tr className="border-b border-border bg-accent/20">
                 <th className="text-left px-3 py-2 font-medium text-muted-foreground">Date</th>

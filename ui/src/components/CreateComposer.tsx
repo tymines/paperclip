@@ -76,7 +76,7 @@ export function CreateComposer({ open, onOpenChange }: CreateComposerProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle className="text-base">Create</DialogTitle>
           <DialogDescription>
@@ -95,13 +95,13 @@ export function CreateComposer({ open, onOpenChange }: CreateComposerProps) {
                 onClick={() => setSelected(option.key)}
                 onDoubleClick={() => dispatch(option.key)}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors",
+                  "flex min-h-[44px] items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition-colors sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-xs",
                   active
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
                 )}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                 {option.label}
               </button>
             );
@@ -124,23 +124,23 @@ export function CreateComposer({ open, onOpenChange }: CreateComposerProps) {
           })()}
         </div>
 
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
-          <span>
+        <div className="flex flex-col-reverse items-stretch gap-2 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+          <span className="hidden sm:inline">
             <kbd className="rounded border border-border bg-muted px-1 py-0.5 text-[10px]">⌘↵</kbd>{" "}
             open form
           </span>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:justify-end">
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+              className="min-h-[44px] flex-1 rounded-md border border-border px-3 text-sm text-muted-foreground hover:text-foreground sm:min-h-0 sm:flex-initial sm:py-1.5 sm:text-xs"
             >
               Cancel
             </button>
             <button
               type="button"
               onClick={() => dispatch(selected)}
-              className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              className="min-h-[44px] flex-1 rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 sm:min-h-0 sm:flex-initial sm:py-1.5 sm:text-xs"
             >
               Continue
             </button>

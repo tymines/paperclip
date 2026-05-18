@@ -3765,7 +3765,7 @@ export function IssueDetail() {
         )}
 
         {imageAttachments.length > 0 && (
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
             {imageAttachments.map((attachment) => (
               <div
                 key={attachment.id}

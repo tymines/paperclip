@@ -175,7 +175,7 @@ export function InstanceSettings() {
         </p>
       </div>
 
-      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
         <span><span className="font-semibold text-foreground">{activeCount}</span> active</span>
         <span><span className="font-semibold text-foreground">{disabledCount}</span> disabled</span>
         <span><span className="font-semibold text-foreground">{grouped.length}</span> {grouped.length === 1 ? "company" : "companies"}</span>
@@ -223,46 +223,48 @@ export function InstanceSettings() {
                     return (
                       <div
                         key={agent.id}
-                        className="flex items-center gap-3 px-3 py-2 text-sm"
+                        className="flex flex-col gap-2 px-3 py-3 text-sm sm:flex-row sm:items-center sm:gap-3 sm:py-2"
                       >
-                        <Badge
-                          variant={agent.schedulerActive ? "default" : "outline"}
-                          className="shrink-0 text-[10px] px-1.5 py-0"
-                        >
-                          {agent.schedulerActive ? "On" : "Off"}
-                        </Badge>
-                        <Link
-                          to={buildAgentHref(agent)}
-                          className="font-medium truncate hover:underline"
-                        >
-                          {agent.agentName}
-                        </Link>
-                        <span className="hidden sm:inline text-muted-foreground truncate">
-                          {humanize(agent.title ?? agent.role)}
-                        </span>
-                        <span className="text-muted-foreground tabular-nums shrink-0">
-                          {agent.intervalSec}s
-                        </span>
-                        <span
-                          className="hidden md:inline text-muted-foreground truncate"
-                          title={agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : undefined}
-                        >
-                          {agent.lastHeartbeatAt
-                            ? relativeTime(agent.lastHeartbeatAt)
-                            : "never"}
-                        </span>
-                        <span className="ml-auto flex items-center gap-1.5 shrink-0">
+                        <div className="flex min-w-0 items-center gap-2 sm:contents">
+                          <Badge
+                            variant={agent.schedulerActive ? "default" : "outline"}
+                            className="shrink-0 text-[10px] px-1.5 py-0"
+                          >
+                            {agent.schedulerActive ? "On" : "Off"}
+                          </Badge>
                           <Link
                             to={buildAgentHref(agent)}
-                            className="text-muted-foreground hover:text-foreground"
+                            className="font-medium truncate hover:underline"
+                          >
+                            {agent.agentName}
+                          </Link>
+                          <span className="hidden sm:inline text-muted-foreground truncate">
+                            {humanize(agent.title ?? agent.role)}
+                          </span>
+                          <span className="text-muted-foreground tabular-nums shrink-0 ml-auto sm:ml-0">
+                            {agent.intervalSec}s
+                          </span>
+                          <span
+                            className="hidden md:inline text-muted-foreground truncate"
+                            title={agent.lastHeartbeatAt ? formatDateTime(agent.lastHeartbeatAt) : undefined}
+                          >
+                            {agent.lastHeartbeatAt
+                              ? relativeTime(agent.lastHeartbeatAt)
+                              : "never"}
+                          </span>
+                        </div>
+                        <span className="flex items-center gap-1.5 sm:ml-auto sm:shrink-0">
+                          <Link
+                            to={buildAgentHref(agent)}
+                            className="flex h-9 w-9 items-center justify-center text-muted-foreground hover:text-foreground sm:h-auto sm:w-auto"
                             title="Full agent config"
                           >
-                            <ExternalLink className="h-3.5 w-3.5" />
+                            <ExternalLink className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
                           </Link>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-6 px-2 text-xs"
+                            className="h-9 flex-1 px-2 text-xs sm:h-6 sm:flex-initial"
                             disabled={saving}
                             onClick={() => toggleMutation.mutate(agent)}
                           >

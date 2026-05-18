@@ -166,13 +166,13 @@ export function Work() {
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div>
+      <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5">
+        <div className="min-w-0">
           <h1 className="text-base font-semibold">Work</h1>
-          <p className="text-xs text-muted-foreground">Everything assigned or watched.</p>
+          <p className="hidden text-xs text-muted-foreground md:block">Everything assigned or watched.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" disabled className="hidden md:inline-flex">
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Group
           </Button>
@@ -182,7 +182,7 @@ export function Work() {
         </div>
       </div>
 
-      <div className="flex items-center gap-5 border-b border-border px-5">
+      <div className="flex items-center gap-4 overflow-x-auto border-b border-border px-3 scrollbar-auto-hide md:gap-5 md:px-5">
         {(["all", "issue", "routine", "goal"] as FilterTab[]).map((entry) => {
           const label =
             entry === "all"
@@ -199,7 +199,7 @@ export function Work() {
               type="button"
               onClick={() => setTab(entry)}
               className={cn(
-                "border-b-2 py-2.5 text-sm transition-colors",
+                "shrink-0 whitespace-nowrap border-b-2 py-3 text-sm transition-colors md:py-2.5",
                 isActive
                   ? "border-primary text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground",
@@ -218,7 +218,7 @@ export function Work() {
         </div>
       ) : (
         <div>
-          <div className="grid grid-cols-[24px_minmax(0,1fr)_90px_120px_120px] gap-3 border-b border-border bg-accent/20 px-5 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <div className="hidden grid-cols-[24px_minmax(0,1fr)_90px_120px_120px] gap-3 border-b border-border bg-accent/20 px-5 py-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground md:grid">
             <span />
             <span>Item</span>
             <span>Type</span>
@@ -230,28 +230,39 @@ export function Work() {
               <li key={row.id}>
                 <Link
                   to={row.href}
-                  className="grid grid-cols-[24px_minmax(0,1fr)_90px_120px_120px] items-center gap-3 border-b border-border/60 px-5 py-2.5 text-sm transition-colors hover:bg-accent/40"
+                  className="flex min-h-[56px] items-center gap-3 border-b border-border/60 px-3 py-2.5 text-sm transition-colors hover:bg-accent/40 md:min-h-0 md:gap-3 md:px-5"
                 >
-                  <span className="flex justify-center">
+                  <span className="flex w-6 shrink-0 justify-center">
                     {row.priority ? (
                       <PriorityIcon priority={row.priority} />
                     ) : (
                       <span className="h-2 w-2 rounded-full bg-muted-foreground/30" />
                     )}
                   </span>
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block truncate">{row.title}</span>
+                    <span className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground md:hidden">
+                      <span className="capitalize">{row.type}</span>
+                      {row.identifier ? (
+                        <>
+                          <span aria-hidden>·</span>
+                          <span className="truncate font-mono">{row.identifier}</span>
+                        </>
+                      ) : null}
+                    </span>
                     {row.identifier ? (
-                      <span className="block truncate text-[11px] text-muted-foreground font-mono">
+                      <span className="hidden truncate text-[11px] font-mono text-muted-foreground md:block">
                         {row.identifier}
                       </span>
                     ) : null}
                   </span>
-                  <span className="text-xs capitalize text-muted-foreground">{row.type}</span>
-                  <span>
+                  <span className="hidden w-[90px] shrink-0 text-xs capitalize text-muted-foreground md:block">
+                    {row.type}
+                  </span>
+                  <span className="shrink-0 md:w-[120px]">
                     <StatusBadge status={row.status} />
                   </span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <span className="hidden w-[120px] shrink-0 truncate text-xs text-muted-foreground md:block">
                     {row.due ?? (row.type === "issue" ? relativeTime(new Date()) : "—")}
                   </span>
                 </Link>
