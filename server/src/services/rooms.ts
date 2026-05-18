@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { rooms, roomMembers, roomMessages } from "@paperclipai/db";
 
@@ -99,5 +99,12 @@ export function roomService(db: Db) {
         .values(data)
         .returning()
         .then((rows) => rows[0]),
+
+    countMessages: (roomId: string) =>
+      db
+        .select({ value: count() })
+        .from(roomMessages)
+        .where(eq(roomMessages.roomId, roomId))
+        .then((rows) => rows[0]?.value ?? 0),
   };
 }

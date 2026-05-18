@@ -630,6 +630,10 @@ export type RoomSenderType = (typeof ROOM_SENDER_TYPES)[number];
 export const ROOM_MESSAGE_TYPES = ["chat", "action", "status"] as const;
 export type RoomMessageType = (typeof ROOM_MESSAGE_TYPES)[number];
 
+// Safety cap on per-room message volume. Prevents bridged agents from
+// runaway-ping-ponging if one calls the other in a tight loop.
+export const ROOM_MESSAGE_HARD_CAP = 200;
+
 // ── Social (Postiz) ──────────────────────────────────────────────────────────
 export const SOCIAL_PLATFORMS = [
   "twitter",

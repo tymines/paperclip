@@ -27,6 +27,17 @@ export const agents = pgTable(
     adapterConfig: jsonb("adapter_config").$type<Record<string, unknown>>().notNull().default({}),
     runtimeConfig: jsonb("runtime_config").$type<Record<string, unknown>>().notNull().default({}),
     defaultEnvironmentId: uuid("default_environment_id").references(() => environments.id, { onDelete: "set null" }),
+    // Optional bridge to an external agent runtime (e.g. OpenClaw, Hermes).
+    // When set, room messages addressed to this agent are dispatched via HTTP to
+    // the bridge's gateway, which runs the agent loop and POSTs replies back.
+    // peerEndpoint is reserved for v2 (cross-machine peers) — leave null for now.
+    agentBridge: jsonb("agent_bridge").$type<{
+      kind: string;
+      gatewayUrl: string;
+      authToken: string;
+      identityId: string;
+      peerEndpoint?: string | null;
+    } | null>(),
     budgetMonthlyCents: integer("budget_monthly_cents").notNull().default(0),
     spentMonthlyCents: integer("spent_monthly_cents").notNull().default(0),
     pauseReason: text("pause_reason"),

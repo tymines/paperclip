@@ -5,10 +5,12 @@ import {
   updateRoomSchema,
   addRoomMemberSchema,
   sendRoomMessageSchema,
+  ROOM_MESSAGE_HARD_CAP,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { roomService, logActivity, publishLiveEvent, heartbeatService } from "../services/index.js";
-import { notFound } from "../errors.js";
+import { dispatchAgentBridge } from "../services/agent-bridge.js";
+import { conflict, notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
 
@@ -214,6 +216,16 @@ export function roomRoutes(db: Db) {
       throw notFound("Room not found");
     }
     const actor = getActorInfo(req);
+
+    // Hard cap on per-room message volume — defends against bridged-agent ping-pong loops.
+    const messageCount = await svc.countMessages(roomId);
+    if (messageCount >= ROOM_MESSAGE_HARD_CAP) {
+      throw conflict(
+        `Room has hit the hard message cap (${ROOM_MESSAGE_HARD_CAP}). Archive or split the room to continue.`,
+        { roomId, messageCount, cap: ROOM_MESSAGE_HARD_CAP },
+      );
+    }
+
     const message = await svc.sendMessage({
       roomId,
       senderId: actor.actorId,
@@ -238,13 +250,34 @@ export function roomRoutes(db: Db) {
       },
     });
 
-    // Wake up agent members so they can respond to the message.
+    // Dispatch to agent members. Bridged agents are routed via HTTP to their
+    // external runtime (e.g. OpenClaw); non-bridged agents are woken via the
+    // standard heartbeat path so the existing adapter executes their loop.
     void (async () => {
       const members = await svc.listMembers(roomId);
       const actorIsAgent = actor.actorType === "agent";
       for (const member of members) {
         if (!member.agentId) continue;
         if (actorIsAgent && actor.actorId === member.agentId) continue;
+
+        const handled = await dispatchAgentBridge(db, {
+          agentId: member.agentId,
+          companyId,
+          roomId,
+          messageId: message.id,
+          messageContent: message.content,
+          senderActorType: actor.actorType,
+          senderActorId: actor.actorId,
+        }).catch((err) => {
+          logger.warn(
+            { err, roomId, agentId: member.agentId },
+            "agent bridge dispatch failed",
+          );
+          return false;
+        });
+
+        if (handled) continue;
+
         heartbeat
           .wakeup(member.agentId, {
             source: "automation",
