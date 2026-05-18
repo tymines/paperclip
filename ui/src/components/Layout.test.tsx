@@ -76,6 +76,10 @@ vi.mock("./NewGoalDialog", () => ({
   NewGoalDialog: () => null,
 }));
 
+vi.mock("./CreateComposer", () => ({
+  CreateComposer: () => null,
+}));
+
 vi.mock("./NewAgentDialog", () => ({
   NewAgentDialog: () => null,
 }));
@@ -139,6 +143,11 @@ vi.mock("../context/DialogContext", () => ({
   useDialogActions: () => ({
     openNewIssue: vi.fn(),
     openOnboarding: vi.fn(),
+    openCreateComposer: vi.fn(),
+    closeCreateComposer: vi.fn(),
+  }),
+  useDialogState: () => ({
+    createComposerOpen: false,
   }),
 }));
 

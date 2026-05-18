@@ -40,6 +40,28 @@
   --radius-md: 0.5rem;
   --radius-lg: 0px;
   --radius-xl: 0px;
+  --color-brand-tint: var(--brand-tint, transparent);
+}
+
+/* UI v1 — soft radius on cards/dialogs, sharp on buttons (decision 2),
+   teal accent (decision 3), and per-company tint scaffold (decision 4).
+   Activated via [data-ui-v1="true"] on <html> by InstanceExperimentalSettings
+   so the legacy look stays untouched when the flag is off. */
+:root[data-ui-v1="true"] {
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+  --primary: oklch(0.62 0.13 165);
+  --primary-foreground: oklch(0.15 0.04 165);
+  --ring: oklch(0.62 0.13 165);
+  --chart-1: oklch(0.62 0.13 165);
+}
+
+.dark[data-ui-v1="true"],
+:root[data-ui-v1="true"].dark {
+  --primary: oklch(0.68 0.13 165);
+  --primary-foreground: oklch(0.15 0.04 165);
+  --ring: oklch(0.62 0.13 165);
+  --sidebar-primary: oklch(0.62 0.13 165);
 }
 
 :root {

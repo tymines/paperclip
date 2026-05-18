@@ -15,6 +15,11 @@ import {
   Settings,
   MessageSquare,
   Megaphone,
+  Home as HomeIcon,
+  Hexagon,
+  Bot,
+  Layers,
+  MoreHorizontal,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -49,6 +54,7 @@ export function Sidebar() {
   });
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
+  const uiV1 = experimentalSettings?.enableUiV1 === true;
 
   const pluginContext = {
     companyId: selectedCompanyId,
@@ -74,75 +80,183 @@ export function Sidebar() {
         </Button>
       </div>
 
-      <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
-        <div className="flex flex-col gap-0.5">
-          {/* New Issue button aligned with nav items */}
-          <button
-            onClick={() => openNewIssue()}
-            className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
-          >
-            <SquarePen className="h-4 w-4 shrink-0" />
-            <span className="truncate">New Issue</span>
-          </button>
-          <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
-          <SidebarNavItem
-            to="/inbox"
-            label="Inbox"
-            icon={Inbox}
-            badge={inboxBadge.inbox}
-            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
-            alert={inboxBadge.failedRuns > 0}
-          />
-          <PluginSlotOutlet
-            slotTypes={["sidebar"]}
-            context={pluginContext}
-            className="flex flex-col gap-0.5"
-            itemClassName="text-[13px] font-medium"
-            missingBehavior="placeholder"
-          />
-        </div>
+      {uiV1 ? (
+        <SidebarV1
+          openNewIssue={openNewIssue}
+          inboxBadge={inboxBadge}
+          liveRunCount={liveRunCount}
+          showWorkspacesLink={showWorkspacesLink}
+          pluginContext={pluginContext}
+        />
+      ) : (
+        <SidebarLegacy
+          openNewIssue={openNewIssue}
+          inboxBadge={inboxBadge}
+          liveRunCount={liveRunCount}
+          showWorkspacesLink={showWorkspacesLink}
+          pluginContext={pluginContext}
+        />
+      )}
+    </aside>
+  );
+}
 
-        <SidebarSection label="Work">
-          <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
-          <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-          <PluginLauncherOutlet
-            placementZones={["sidebar"]}
-            context={pluginContext}
-            className="flex flex-col gap-0.5"
-            itemClassName="text-[13px] font-medium"
-          />
-          <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-          {showWorkspacesLink ? (
-            <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
-          ) : null}
-        </SidebarSection>
+interface SidebarSharedProps {
+  openNewIssue: () => void;
+  inboxBadge: ReturnType<typeof useInboxBadge>;
+  liveRunCount: number;
+  showWorkspacesLink: boolean;
+  pluginContext: { companyId: string | null; companyPrefix: string | null };
+}
 
-        <SidebarProjects />
-
-        <SidebarAgents />
-
-        <SidebarSection label="Collaboration">
-          <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
-          <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
-        </SidebarSection>
-
-        <SidebarSection label="Company">
-          <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
-          <SidebarNavItem to="/org" label="Org" icon={Network} />
-          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
-          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-          <SidebarNavItem to="/activity" label="Activity" icon={History} />
-          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
-        </SidebarSection>
-
+function SidebarLegacy({
+  openNewIssue,
+  inboxBadge,
+  liveRunCount,
+  showWorkspacesLink,
+  pluginContext,
+}: SidebarSharedProps) {
+  return (
+    <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
+      <div className="flex flex-col gap-0.5">
+        <button
+          onClick={openNewIssue}
+          className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+        >
+          <SquarePen className="h-4 w-4 shrink-0" />
+          <span className="truncate">New Issue</span>
+        </button>
+        <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
+        <SidebarNavItem
+          to="/inbox"
+          label="Inbox"
+          icon={Inbox}
+          badge={inboxBadge.inbox}
+          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+          alert={inboxBadge.failedRuns > 0}
+        />
         <PluginSlotOutlet
-          slotTypes={["sidebarPanel"]}
+          slotTypes={["sidebar"]}
           context={pluginContext}
-          className="flex flex-col gap-3"
-          itemClassName="rounded-lg border border-border p-3"
+          className="flex flex-col gap-0.5"
+          itemClassName="text-[13px] font-medium"
           missingBehavior="placeholder"
         />
-      </nav>
-    </aside>
+      </div>
+
+      <SidebarSection label="Work">
+        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+        <PluginLauncherOutlet
+          placementZones={["sidebar"]}
+          context={pluginContext}
+          className="flex flex-col gap-0.5"
+          itemClassName="text-[13px] font-medium"
+        />
+        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {showWorkspacesLink ? (
+          <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
+        ) : null}
+      </SidebarSection>
+
+      <SidebarProjects />
+
+      <SidebarAgents />
+
+      <SidebarSection label="Collaboration">
+        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+      </SidebarSection>
+
+      <SidebarSection label="Company">
+        <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
+        <SidebarNavItem to="/org" label="Org" icon={Network} />
+        <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+        <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+        <SidebarNavItem to="/activity" label="Activity" icon={History} />
+        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+      </SidebarSection>
+
+      <PluginSlotOutlet
+        slotTypes={["sidebarPanel"]}
+        context={pluginContext}
+        className="flex flex-col gap-3"
+        itemClassName="rounded-lg border border-border p-3"
+        missingBehavior="placeholder"
+      />
+    </nav>
+  );
+}
+
+/**
+ * v1 Sidebar — trimmed per the redesign decision sheet (decision 7).
+ * Six top-level items (Home, Issues, Agents, Projects, Work, Inbox) plus a
+ * collapsible "More" disclosure that holds the long tail. Settings is in
+ * the More group too; the explicit user-flow path is ⌘K → "Settings".
+ */
+function SidebarV1({
+  openNewIssue,
+  inboxBadge,
+  liveRunCount,
+  showWorkspacesLink,
+  pluginContext,
+}: SidebarSharedProps) {
+  return (
+    <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
+      <div className="flex flex-col gap-0.5">
+        <button
+          onClick={openNewIssue}
+          className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+        >
+          <SquarePen className="h-4 w-4 shrink-0" />
+          <span className="truncate">New Issue</span>
+        </button>
+        <SidebarNavItem to="/home" label="Home" icon={HomeIcon} liveCount={liveRunCount} />
+        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+        <SidebarNavItem to="/agents" label="Agents" icon={Bot} />
+        <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
+        <SidebarNavItem to="/work" label="Work" icon={Layers} />
+        <SidebarNavItem
+          to="/inbox"
+          label="Inbox"
+          icon={Inbox}
+          badge={inboxBadge.inbox}
+          badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+          alert={inboxBadge.failedRuns > 0}
+        />
+        <PluginSlotOutlet
+          slotTypes={["sidebar"]}
+          context={pluginContext}
+          className="flex flex-col gap-0.5"
+          itemClassName="text-[13px] font-medium"
+          missingBehavior="placeholder"
+        />
+      </div>
+
+      <SidebarSection label="More">
+        <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
+        <SidebarNavItem to="/org" label="Org" icon={Network} />
+        <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+        <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+        <SidebarNavItem to="/activity" label="Activity" icon={History} />
+        <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
+        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {showWorkspacesLink ? (
+          <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
+        ) : null}
+        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+      </SidebarSection>
+
+      <PluginSlotOutlet
+        slotTypes={["sidebarPanel"]}
+        context={pluginContext}
+        className="flex flex-col gap-3"
+        itemClassName="rounded-lg border border-border p-3"
+        missingBehavior="placeholder"
+      />
+    </nav>
   );
 }

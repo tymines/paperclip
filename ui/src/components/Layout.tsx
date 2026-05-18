@@ -11,6 +11,7 @@ import { NewIssueDialog } from "./NewIssueDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NewGoalDialog } from "./NewGoalDialog";
 import { NewAgentDialog } from "./NewAgentDialog";
+import { CreateComposer } from "./CreateComposer";
 import { KeyboardShortcutsCheatsheet } from "./KeyboardShortcutsCheatsheet";
 import { ToastViewport } from "./ToastViewport";
 import { MobileBottomNav } from "./MobileBottomNav";
@@ -18,13 +19,14 @@ import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { ResizableSidebarPane } from "./ResizableSidebarPane";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
-import { useDialogActions } from "../context/DialogContext";
+import { useDialogActions, useDialogState } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
 import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
+import { useUiV1 } from "../hooks/useUiV1";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
@@ -62,6 +64,8 @@ function readRememberedInstanceSettingsPath(): string {
 }
 
 export function Layout() {
+  // Mirrors the `enableUiV1` instance flag onto <html> so the v1 theme tokens activate.
+  useUiV1();
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialogActions();
   const { togglePanelVisible } = usePanel();
@@ -447,6 +451,7 @@ export function Layout() {
       </div>
       {isMobile && <MobileBottomNav visible={mobileNavVisible} />}
       <CommandPalette />
+      <CreateComposerMount />
       <NewIssueDialog />
       <NewProjectDialog />
       <NewGoalDialog />
@@ -455,5 +460,16 @@ export function Layout() {
       <ToastViewport />
       </div>
     </GeneralSettingsProvider>
+  );
+}
+
+function CreateComposerMount() {
+  const { createComposerOpen } = useDialogState();
+  const { closeCreateComposer, openCreateComposer } = useDialogActions();
+  return (
+    <CreateComposer
+      open={createComposerOpen}
+      onOpenChange={(v) => (v ? openCreateComposer() : closeCreateComposer())}
+    />
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "@/lib/router";
+import { Link, Navigate, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
+import { useUiV1 } from "../hooks/useUiV1";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
@@ -35,6 +36,19 @@ function getRecentIssues(issues: Issue[]): Issue[] {
 }
 
 export function Dashboard() {
+  // When UI v1 is on, replace Dashboard with Home at the same URL slot so
+  // the company root and the legacy sidebar both land on the new surface.
+  // Routed through a wrapper to keep the hook order in DashboardLegacy stable.
+  const uiV1 = useUiV1();
+  const location = useLocation();
+  if (uiV1) {
+    const target = location.pathname.replace(/\/dashboard(\/?.*)$/, "/home");
+    return <Navigate to={target === location.pathname ? "/home" : target} replace />;
+  }
+  return <DashboardLegacy />;
+}
+
+function DashboardLegacy() {
   const { selectedCompanyId, companies } = useCompany();
   const { openOnboarding } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();

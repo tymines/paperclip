@@ -29,7 +29,10 @@ import {
   SquarePen,
   Plus,
   Search,
+  Home as HomeIcon,
+  Layers,
 } from "lucide-react";
+import { useUiV1 } from "../hooks/useUiV1";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
 
@@ -45,7 +48,8 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
   const { selectedCompanyId } = useCompany();
-  const { openNewIssue, openNewAgent } = useDialogActions();
+  const { openNewIssue, openNewAgent, openCreateComposer } = useDialogActions();
+  const uiV1 = useUiV1();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
 
@@ -167,6 +171,18 @@ export function CommandPalette() {
         {showSearchAll ? <CommandSeparator /> : null}
 
         <CommandGroup heading="Actions">
+          {uiV1 ? (
+            <CommandItem
+              onSelect={() => {
+                setOpen(false);
+                openCreateComposer();
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Create…
+              <span className="ml-auto text-xs text-muted-foreground">C</span>
+            </CommandItem>
+          ) : null}
           <CommandItem
             onSelect={() => {
               setOpen(false);
@@ -195,6 +211,18 @@ export function CommandPalette() {
         <CommandSeparator />
 
         <CommandGroup heading="Pages">
+          {uiV1 ? (
+            <>
+              <CommandItem onSelect={() => go("/home")}>
+                <HomeIcon className="mr-2 h-4 w-4" />
+                Home
+              </CommandItem>
+              <CommandItem onSelect={() => go("/work")}>
+                <Layers className="mr-2 h-4 w-4" />
+                Work
+              </CommandItem>
+            </>
+          ) : null}
           <CommandItem onSelect={() => go("/dashboard")}>
             <LayoutDashboard className="mr-2 h-4 w-4" />
             Dashboard
