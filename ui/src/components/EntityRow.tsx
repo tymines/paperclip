@@ -27,7 +27,7 @@ export function EntityRow({
 }: EntityRowProps) {
   const isClickable = !!(to || onClick);
   const classes = cn(
-    "flex items-center gap-3 px-4 py-2 text-sm border-b border-border last:border-b-0 transition-colors",
+    "flex items-center gap-3 px-3 py-3 text-sm border-b border-border last:border-b-0 transition-colors md:px-4 md:py-2 md:min-h-0 min-h-[48px]",
     isClickable && "cursor-pointer hover:bg-accent/50",
     selected && "bg-accent/30",
     className

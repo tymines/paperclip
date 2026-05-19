@@ -74,14 +74,14 @@ export function AgentStrip({ companyId, className }: AgentStripProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 overflow-x-auto border-b border-border bg-background/60 px-4 py-2 text-[13px] scrollbar-auto-hide",
+        "flex items-center gap-3 overflow-x-auto border-b border-border bg-background/60 px-3 py-2 text-[13px] scrollbar-auto-hide md:px-4",
         className,
       )}
     >
       <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         Agents
       </span>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3 md:gap-4">
         {sortedAgents.map((agent) => {
           const isRunning = runningAgentIds.has(agent.id);
           const dot: DotKind = isRunning
@@ -98,13 +98,13 @@ export function AgentStrip({ companyId, className }: AgentStripProps) {
               key={agent.id}
               to={agentUrl(agent)}
               className={cn(
-                "flex shrink-0 items-center gap-1.5 hover:underline",
+                "flex h-8 shrink-0 items-center gap-1.5 hover:underline",
                 TEXT_CLASS[dot],
               )}
               title={`${agent.name} — ${dot}`}
             >
-              <span className={cn("h-2 w-2 rounded-full", DOT_CLASS[dot])} />
-              <span className="truncate">{agent.name}</span>
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
+              <span className="max-w-[140px] truncate">{agent.name}</span>
             </Link>
           );
         })}

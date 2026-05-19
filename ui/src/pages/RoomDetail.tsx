@@ -18,6 +18,7 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
+import { useSidebar } from "../context/SidebarContext";
 import { queryKeys } from "../lib/queryKeys";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { EmptyState } from "../components/EmptyState";
@@ -164,17 +165,17 @@ function MemberSidebar({
   onClose: () => void;
 }) {
   return (
-    <div className="flex w-56 shrink-0 flex-col border-l border-border">
+    <div className="flex h-full w-full shrink-0 flex-col border-l border-border bg-background md:w-56">
       <div className="flex items-center justify-between px-3 py-2">
         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
           Members ({members.length})
         </span>
         <div className="flex items-center gap-1">
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={onAddClick}>
-            <Plus className="h-3.5 w-3.5" />
+          <Button size="icon" variant="ghost" className="h-8 w-8 md:h-6 md:w-6" onClick={onAddClick} aria-label="Add member">
+            <Plus className="h-4 w-4 md:h-3.5 md:w-3.5" />
           </Button>
-          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={onClose}>
-            <X className="h-3.5 w-3.5" />
+          <Button size="icon" variant="ghost" className="h-8 w-8 md:h-6 md:w-6" onClick={onClose} aria-label="Close members panel">
+            <X className="h-4 w-4 md:h-3.5 md:w-3.5" />
           </Button>
         </div>
       </div>
@@ -189,7 +190,7 @@ function MemberSidebar({
             return (
               <div
                 key={member.id}
-                className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent/50"
+                className="group flex min-h-[36px] items-center gap-2 rounded-md px-2 py-2 hover:bg-accent/50 md:min-h-0 md:py-1.5"
               >
                 {member.agentId ? (
                   <Bot className="h-3.5 w-3.5 text-primary" />
@@ -204,10 +205,11 @@ function MemberSidebar({
                 </Badge>
                 <button
                   type="button"
-                  className="hidden group-hover:block"
+                  className="flex h-7 w-7 items-center justify-center opacity-100 md:h-auto md:w-auto md:opacity-0 md:group-hover:opacity-100"
                   onClick={() => onRemove(member.id)}
+                  aria-label="Remove member"
                 >
-                  <UserMinus className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                  <UserMinus className="h-3.5 w-3.5 text-muted-foreground hover:text-destructive" />
                 </button>
               </div>
             );
@@ -225,9 +227,13 @@ export function RoomDetail() {
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
 
+  const { isMobile } = useSidebar();
   const [messageInput, setMessageInput] = useState("");
   const [addMemberOpen, setAddMemberOpen] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return window.innerWidth >= 768;
+  });
   const [memberType, setMemberType] = useState<"agent" | "user">("agent");
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -352,24 +358,25 @@ export function RoomDetail() {
   const messages = messagesData?.messages ?? [];
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] flex-col">
+    <div className="flex h-[calc(100dvh-7rem)] flex-col md:h-[calc(100vh-8rem)]">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-2">
-        <MessageSquare className="h-4 w-4 text-muted-foreground" />
-        <h1 className="text-sm font-semibold">{room.name}</h1>
-        <Badge variant={room.status === "active" ? "default" : "secondary"} className="text-xs">
+      <div className="flex items-center gap-3 border-b border-border px-3 py-2 md:px-4">
+        <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <h1 className="truncate text-sm font-semibold">{room.name}</h1>
+        <Badge variant={room.status === "active" ? "default" : "secondary"} className="shrink-0 text-xs">
           {room.status}
         </Badge>
         {room.description && (
-          <span className="text-xs text-muted-foreground truncate">{room.description}</span>
+          <span className="hidden truncate text-xs text-muted-foreground md:inline">{room.description}</span>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex shrink-0 items-center gap-1">
           <Button
             size="icon"
             variant="ghost"
-            className="h-7 w-7"
+            className="h-9 w-9 md:h-7 md:w-7"
             onClick={() => setSidebarOpen((v) => !v)}
             title={sidebarOpen ? "Hide members" : "Show members"}
+            aria-label={sidebarOpen ? "Hide members" : "Show members"}
           >
             {sidebarOpen ? (
               <X className="h-4 w-4" />
@@ -381,10 +388,10 @@ export function RoomDetail() {
       </div>
 
       {/* Body: messages + sidebar */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="relative flex flex-1 overflow-hidden">
         {/* Messages area */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          <ScrollArea className="flex-1 px-4" ref={scrollAreaRef}>
+          <ScrollArea className="flex-1 px-3 md:px-4" ref={scrollAreaRef}>
             <div className="space-y-0.5 py-4">
               {messagesLoading && messages.length === 0 && (
                 <p className="text-center text-xs text-muted-foreground py-8">Loading messages...</p>
@@ -416,6 +423,7 @@ export function RoomDetail() {
                 size="icon"
                 onClick={handleSend}
                 disabled={!messageInput.trim() || sendMutation.isPending}
+                aria-label="Send message"
               >
                 <Send className="h-4 w-4" />
               </Button>
@@ -423,15 +431,31 @@ export function RoomDetail() {
           </div>
         </div>
 
-        {/* Member sidebar — collapsible */}
-        {sidebarOpen && (
-          <MemberSidebar
-            members={members}
-            agentMap={agentMap}
-            onRemove={(memberId) => removeMemberMutation.mutate(memberId)}
-            onAddClick={() => setAddMemberOpen(true)}
-            onClose={() => setSidebarOpen(false)}
+        {/* Member sidebar — overlay on mobile, push on desktop */}
+        {sidebarOpen && isMobile && (
+          <button
+            type="button"
+            className="absolute inset-0 z-10 bg-black/40"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close members panel"
           />
+        )}
+        {sidebarOpen && (
+          <div
+            className={
+              isMobile
+                ? "absolute inset-y-0 right-0 z-20 w-[min(280px,80vw)] bg-background shadow-lg"
+                : "relative"
+            }
+          >
+            <MemberSidebar
+              members={members}
+              agentMap={agentMap}
+              onRemove={(memberId) => removeMemberMutation.mutate(memberId)}
+              onAddClick={() => setAddMemberOpen(true)}
+              onClose={() => setSidebarOpen(false)}
+            />
+          </div>
         )}
       </div>
 

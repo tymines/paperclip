@@ -100,15 +100,15 @@ export function Home() {
     <div className="flex flex-col">
       <AgentStrip companyId={selectedCompanyId} />
 
-      <div className="flex items-center justify-between border-b border-border px-5 py-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5">
+        <div className="flex min-w-0 items-center gap-3">
           <h1 className="text-base font-semibold">Now</h1>
-          <span className="text-xs text-muted-foreground">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
             {waitingItems.length} waiting on you
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="outline" size="sm" disabled className="hidden md:inline-flex">
             <SlidersHorizontal className="h-3.5 w-3.5" />
             Filters
           </Button>
@@ -124,7 +124,7 @@ export function Home() {
       </div>
 
       <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <section className="border-b border-border px-5 py-4 lg:border-b-0 lg:border-r">
+        <section className="border-b border-border px-3 py-4 md:px-5 lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Goals
@@ -148,7 +148,7 @@ export function Home() {
           )}
         </section>
 
-        <section className="px-5 py-4">
+        <section className="px-3 py-4 md:px-5">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Waiting on you
@@ -167,7 +167,7 @@ export function Home() {
                   <button
                     type="button"
                     onClick={() => goToIssue(issue)}
-                    className="flex w-full items-start gap-3 rounded-lg border border-border bg-card px-3 py-2.5 text-left transition-colors hover:border-border hover:bg-accent/40"
+                    className="flex min-h-[44px] w-full items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-border hover:bg-accent/40 md:py-2.5"
                   >
                     <span
                       className={
