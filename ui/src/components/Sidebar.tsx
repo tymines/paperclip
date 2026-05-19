@@ -189,10 +189,11 @@ function SidebarLegacy({
 }
 
 /**
- * v1 Sidebar — trimmed per the redesign decision sheet (decision 7).
- * Six top-level items (Home, Issues, Agents, Projects, Work, Inbox) plus a
- * collapsible "More" disclosure that holds the long tail. Settings is in
- * the More group too; the explicit user-flow path is ⌘K → "Settings".
+ * v1.1 Sidebar — trimmed to the 5 items the UX agents converged on:
+ * Home, Inbox, Agents, Routines, Settings. Everything else (Issues,
+ * Projects, Work, Goals, Rooms, Social, etc.) lives behind a "More"
+ * disclosure or is reachable via ⌘K. The 5 are picked for what an
+ * operator-CEO checks daily, not for catalog completeness.
  */
 function SidebarV1({
   openNewIssue,
@@ -212,10 +213,6 @@ function SidebarV1({
           <span className="truncate">New Issue</span>
         </button>
         <SidebarNavItem to="/home" label="Home" icon={HomeIcon} liveCount={liveRunCount} />
-        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
-        <SidebarNavItem to="/agents" label="Agents" icon={Bot} />
-        <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
-        <SidebarNavItem to="/work" label="Work" icon={Layers} />
         <SidebarNavItem
           to="/inbox"
           label="Inbox"
@@ -224,6 +221,9 @@ function SidebarV1({
           badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
           alert={inboxBadge.failedRuns > 0}
         />
+        <SidebarNavItem to="/agents" label="Agents" icon={Bot} />
+        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         <PluginSlotOutlet
           slotTypes={["sidebar"]}
           context={pluginContext}
@@ -234,20 +234,21 @@ function SidebarV1({
       </div>
 
       <SidebarSection label="More">
+        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+        <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
+        <SidebarNavItem to="/work" label="Work" icon={Layers} />
+        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+        <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
-        <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
-        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
-        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
-        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
         ) : null}
-        <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
       </SidebarSection>
 
       <PluginSlotOutlet

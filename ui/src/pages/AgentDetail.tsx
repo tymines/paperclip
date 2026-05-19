@@ -83,6 +83,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Input } from "@/components/ui/input";
 import { AgentIcon, AgentIconPicker } from "../components/AgentIconPicker";
+import { AgentProfileTab } from "../components/AgentProfileTab";
 import { RunTranscriptView, type TranscriptMode } from "../components/transcript/RunTranscriptView";
 import {
   isUuidLike,
@@ -269,9 +270,10 @@ function scrollToContainerBottom(container: ScrollContainer, behavior: ScrollBeh
   container.scrollTo({ top: container.scrollHeight, behavior });
 }
 
-type AgentDetailView = "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget";
+type AgentDetailView = "profile" | "dashboard" | "instructions" | "configuration" | "skills" | "runs" | "budget";
 
 function parseAgentDetailView(value: string | null): AgentDetailView {
+  if (value === "profile") return "profile";
   if (value === "instructions" || value === "prompts") return "instructions";
   if (value === "configure" || value === "configuration") return "configuration";
   if (value === "skills") return "skills";
@@ -677,8 +679,9 @@ export function AgentDetail() {
   const [moreOpen, setMoreOpen] = useState(false);
   const activeView = urlRunId ? "runs" as AgentDetailView : parseAgentDetailView(urlTab ?? null);
   const needsDashboardData = activeView === "dashboard";
+  const needsProfileData = activeView === "profile";
   const needsRunData = activeView === "runs" || Boolean(urlRunId);
-  const shouldLoadHeartbeats = needsDashboardData || needsRunData;
+  const shouldLoadHeartbeats = needsDashboardData || needsRunData || needsProfileData;
   const [configDirty, setConfigDirty] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const saveConfigActionRef = useRef<(() => void) | null>(null);
@@ -726,7 +729,7 @@ export function AgentDetail() {
   const { data: allAgents } = useQuery({
     queryKey: queryKeys.agents.list(resolvedCompanyId!),
     queryFn: () => agentsApi.list(resolvedCompanyId!),
-    enabled: !!resolvedCompanyId && needsDashboardData,
+    enabled: !!resolvedCompanyId && (needsDashboardData || needsProfileData),
   });
 
   const { data: budgetOverview } = useQuery({
@@ -786,7 +789,9 @@ export function AgentDetail() {
       return;
     }
     const canonicalTab =
-      activeView === "instructions"
+      activeView === "profile"
+        ? "profile"
+        : activeView === "instructions"
         ? "instructions"
         : activeView === "configuration"
           ? "configuration"
@@ -971,6 +976,8 @@ export function AgentDetail() {
         crumbs.push({ label: "Runs" });
       } else if (activeView === "budget") {
         crumbs.push({ label: "Budget" });
+      } else if (activeView === "profile") {
+        crumbs.push({ label: "Profile" });
       } else {
         crumbs.push({ label: "Dashboard" });
       }
@@ -1118,6 +1125,7 @@ export function AgentDetail() {
           <PageTabBar
             items={[
               { value: "dashboard", label: "Dashboard" },
+              { value: "profile", label: "Profile" },
               { value: "instructions", label: "Instructions" },
               { value: "skills", label: "Skills" },
               { value: "configuration", label: "Configuration" },
@@ -1196,6 +1204,16 @@ export function AgentDetail() {
       )}
 
       {/* View content */}
+      {activeView === "profile" && (
+        <AgentProfileTab
+          agent={agent}
+          runs={heartbeats ?? []}
+          directReports={directReports}
+          agentRouteId={canonicalAgentRef}
+          onTalk={() => openNewIssue({ assigneeAgentId: agent.id })}
+        />
+      )}
+
       {activeView === "dashboard" && (
         <AgentOverview
           agent={agent}

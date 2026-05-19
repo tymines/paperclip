@@ -213,6 +213,25 @@ export function Layout() {
     onToggleSidebar: toggleSidebar,
     onTogglePanel: togglePanel,
     onShowShortcuts: () => setShortcutsOpen(true),
+    onGoto: (target) => {
+      switch (target) {
+        case "home":
+          navigate("/home");
+          return;
+        case "inbox":
+          navigate("/inbox");
+          return;
+        case "agents":
+          navigate("/agents/all");
+          return;
+        case "routines":
+          navigate("/routines");
+          return;
+        case "settings":
+          navigate("/company/settings");
+          return;
+      }
+    },
   });
 
   useEffect(() => {
