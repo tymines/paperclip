@@ -222,7 +222,7 @@ function SidebarV1({
           alert={inboxBadge.failedRuns > 0}
         />
         <SidebarNavItem to="/agents" label="Fleet" icon={Bot} />
-        <SidebarNavItem to="/routines" label="Playbooks" icon={Repeat} />
+        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         <PluginSlotOutlet
           slotTypes={["sidebar"]}

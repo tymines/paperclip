@@ -68,7 +68,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
               onClick: () => openCreateComposer(),
             },
             { type: "link", to: "/agents/all", label: "Fleet", icon: Users },
-            { type: "link", to: "/routines", label: "Playbooks", icon: Repeat },
+            { type: "link", to: "/routines", label: "Routines", icon: Repeat },
           ]
         : [
             { type: "link", to: "/dashboard", label: "Home", icon: House },

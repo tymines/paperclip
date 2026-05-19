@@ -446,7 +446,7 @@ export function RoutineDetail() {
 
   useEffect(() => {
     if (!routine) return;
-    setBreadcrumbs([{ label: "Playbooks", href: "/routines" }, { label: routine.title }]);
+    setBreadcrumbs([{ label: "Routines", href: "/routines" }, { label: routine.title }]);
     if (!routineDefaults) return;
 
     const changedRoutine = hydratedRoutineIdRef.current !== routine.id;

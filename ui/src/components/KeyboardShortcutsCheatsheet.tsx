@@ -40,7 +40,7 @@ const sections: ShortcutSection[] = [
       { keys: ["g", "h"], label: "Home" },
       { keys: ["g", "i"], label: "Action Queue" },
       { keys: ["g", "a"], label: "Fleet" },
-      { keys: ["g", "r"], label: "Playbooks" },
+      { keys: ["g", "r"], label: "Routines" },
       { keys: ["g", "s"], label: "Settings" },
     ],
   },
