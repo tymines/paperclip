@@ -12,7 +12,7 @@ interface ShortcutSection {
 
 const sections: ShortcutSection[] = [
   {
-    title: "Inbox",
+    title: "Action Queue",
     shortcuts: [
       { keys: ["j"], label: "Move down" },
       { keys: ["↓"], label: "Move down" },
@@ -30,7 +30,7 @@ const sections: ShortcutSection[] = [
   {
     title: "Issue detail",
     shortcuts: [
-      { keys: ["y"], label: "Quick-archive back to inbox" },
+      { keys: ["y"], label: "Quick-archive back to Action Queue" },
       { keys: ["g", "c"], label: "Focus comment composer" },
     ],
   },
@@ -38,9 +38,9 @@ const sections: ShortcutSection[] = [
     title: "Go to",
     shortcuts: [
       { keys: ["g", "h"], label: "Home" },
-      { keys: ["g", "i"], label: "Inbox" },
-      { keys: ["g", "a"], label: "Agents" },
-      { keys: ["g", "r"], label: "Routines" },
+      { keys: ["g", "i"], label: "Action Queue" },
+      { keys: ["g", "a"], label: "Fleet" },
+      { keys: ["g", "r"], label: "Playbooks" },
       { keys: ["g", "s"], label: "Settings" },
     ],
   },

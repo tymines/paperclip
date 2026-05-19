@@ -57,7 +57,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
             {
               type: "link",
               to: "/inbox",
-              label: "Inbox",
+              label: "Action Queue",
               icon: Inbox,
               badge: inboxBadge.inbox,
             },
@@ -67,8 +67,8 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
               icon: SquarePen,
               onClick: () => openCreateComposer(),
             },
-            { type: "link", to: "/agents/all", label: "Agents", icon: Users },
-            { type: "link", to: "/routines", label: "Routines", icon: Repeat },
+            { type: "link", to: "/agents/all", label: "Fleet", icon: Users },
+            { type: "link", to: "/routines", label: "Playbooks", icon: Repeat },
           ]
         : [
             { type: "link", to: "/dashboard", label: "Home", icon: House },

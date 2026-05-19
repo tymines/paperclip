@@ -215,14 +215,14 @@ function SidebarV1({
         <SidebarNavItem to="/home" label="Home" icon={HomeIcon} liveCount={liveRunCount} />
         <SidebarNavItem
           to="/inbox"
-          label="Inbox"
+          label="Action Queue"
           icon={Inbox}
           badge={inboxBadge.inbox}
           badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
           alert={inboxBadge.failedRuns > 0}
         />
-        <SidebarNavItem to="/agents" label="Agents" icon={Bot} />
-        <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+        <SidebarNavItem to="/agents" label="Fleet" icon={Bot} />
+        <SidebarNavItem to="/routines" label="Playbooks" icon={Repeat} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
         <PluginSlotOutlet
           slotTypes={["sidebar"]}

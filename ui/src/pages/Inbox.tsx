@@ -703,7 +703,7 @@ export function Inbox() {
   const issueLinkState = useMemo(
     () =>
       createIssueDetailLocationState(
-        "Inbox",
+        "Action Queue",
         `${location.pathname}${location.search}${location.hash}`,
         "inbox",
       ),
@@ -741,7 +741,7 @@ export function Inbox() {
   });
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Inbox" }]);
+    setBreadcrumbs([{ label: "Action Queue" }]);
   }, [setBreadcrumbs]);
 
   useEffect(() => {

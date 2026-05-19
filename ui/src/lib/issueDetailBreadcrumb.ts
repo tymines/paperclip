@@ -130,7 +130,7 @@ function inferIssueDetailSource(
 }
 
 function breadcrumbForSource(source: IssueDetailSource): IssueDetailBreadcrumb {
-  if (source === "inbox") return { label: "Inbox", href: "/inbox" };
+  if (source === "inbox") return { label: "Action Queue", href: "/inbox" };
   return { label: "Issues", href: "/issues" };
 }
 

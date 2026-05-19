@@ -132,7 +132,7 @@ describe("IssueRow", () => {
     const root = createRoot(container);
     const issue = createIssue();
     const state = {
-      issueDetailBreadcrumb: { label: "Inbox", href: "/PAP/inbox/mine" },
+      issueDetailBreadcrumb: { label: "Action Queue", href: "/PAP/inbox/mine" },
       issueDetailSource: "inbox",
     };
 

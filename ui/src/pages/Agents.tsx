@@ -116,7 +116,7 @@ export function Agents() {
   }, [agents]);
 
   useEffect(() => {
-    setBreadcrumbs([{ label: "Agents" }]);
+    setBreadcrumbs([{ label: "Fleet" }]);
   }, [setBreadcrumbs]);
 
   if (!selectedCompanyId) {

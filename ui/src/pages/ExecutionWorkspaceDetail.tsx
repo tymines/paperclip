@@ -738,7 +738,7 @@ export function ExecutionWorkspaceDetail() {
               { value: "services", label: "Services" },
               { value: "configuration", label: "Configuration" },
               { value: "runtime_logs", label: "Runtime logs" },
-              { value: "routines", label: "Routines" },
+              { value: "routines", label: "Playbooks" },
             ]}
             align="start"
             value={activeTab ?? "issues"}
