@@ -379,6 +379,70 @@ describe("IssueChatThread", () => {
     });
   });
 
+  it("renders chat messages on a unified avatar rail grid", () => {
+    const root = createRoot(container);
+
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <IssueChatThread
+            comments={[
+              {
+                id: "comment-user",
+                companyId: "company-1",
+                issueId: "issue-1",
+                authorAgentId: null,
+                authorUserId: "user-1",
+                body: "User update",
+                authorType: "user",
+                presentation: null,
+                metadata: null,
+                createdAt: new Date("2026-04-06T12:00:00.000Z"),
+                updatedAt: new Date("2026-04-06T12:00:00.000Z"),
+              },
+              {
+                id: "comment-agent",
+                companyId: "company-1",
+                issueId: "issue-1",
+                authorAgentId: "agent-1",
+                authorUserId: null,
+                body: "Agent update",
+                authorType: "agent",
+                presentation: null,
+                metadata: null,
+                createdAt: new Date("2026-04-06T12:01:00.000Z"),
+                updatedAt: new Date("2026-04-06T12:01:00.000Z"),
+              },
+            ]}
+            linkedRuns={[]}
+            timelineEvents={[]}
+            liveRuns={[]}
+            agentMap={issueChatLongThreadAgentMap}
+            currentUserId="user-1"
+            onAdd={async () => {}}
+            showComposer={false}
+            enableLiveTranscriptPolling={false}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const rows = Array.from(container.querySelectorAll('[data-testid="issue-chat-message-row"]'));
+    const userLayout = rows.find((row) => row.getAttribute("data-message-role") === "user")
+      ?.firstElementChild?.firstElementChild as HTMLElement | null;
+    const assistantLayout = rows.find((row) => row.getAttribute("data-message-role") === "assistant")
+      ?.firstElementChild?.firstElementChild as HTMLElement | null;
+
+    expect(userLayout?.className).toContain("grid-cols-[36px_minmax(0,72ch)_36px]");
+    expect(assistantLayout?.className).toContain("grid-cols-[36px_minmax(0,72ch)_36px]");
+    expect(userLayout?.className).toContain("items-start");
+    expect(assistantLayout?.className).toContain("items-start");
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("renders the composer in planning mode when the issue is in planning mode", () => {
     const root = createRoot(container);
 

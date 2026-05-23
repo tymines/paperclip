@@ -1294,13 +1294,13 @@ function IssueChatUserMessage({
     userProfileMap,
   });
   const authorAvatar = (
-    <Avatar size="sm" className="shrink-0">
+    <Avatar size="md" className="mx-auto">
       {avatarUrl ? <AvatarImage src={avatarUrl} alt={resolvedAuthorName} /> : null}
       <AvatarFallback>{initialsForName(resolvedAuthorName)}</AvatarFallback>
     </Avatar>
   );
   const messageBody = (
-    <div className={cn("flex min-w-0 max-w-[85%] flex-col", isCurrentUser && "items-end")}>
+    <div className={cn("flex min-w-0 max-w-[72ch] flex-col", isCurrentUser && "items-end")}>
       <div className={cn("mb-1 flex items-center gap-2 px-1", isCurrentUser ? "justify-end" : "justify-start")}>
         <span className="text-sm font-medium text-foreground">{resolvedAuthorName}</span>
         {followUpRequested ? (
@@ -1400,9 +1400,10 @@ function IssueChatUserMessage({
 
   return (
     <div id={anchorId}>
-      <div className={cn("group flex items-start gap-2.5", isCurrentUser && "justify-end")}>
+      <div className="group grid grid-cols-[36px_minmax(0,72ch)_36px] items-start gap-3 py-1.5">
         {isCurrentUser ? (
           <>
+            <div aria-hidden />
             {messageBody}
             {authorAvatar}
           </>
@@ -1410,6 +1411,7 @@ function IssueChatUserMessage({
           <>
             {authorAvatar}
             {messageBody}
+            <div aria-hidden />
           </>
         )}
       </div>
@@ -1496,8 +1498,8 @@ function IssueChatAssistantMessage({
 
   return (
     <div id={anchorId}>
-      <div className="flex items-start gap-2.5 py-1.5">
-        <Avatar size="sm" className="shrink-0">
+      <div className="grid grid-cols-[36px_minmax(0,72ch)_36px] items-start gap-3 py-1.5">
+        <Avatar size="md" className="mx-auto">
           {agentIcon ? (
             <AvatarFallback><AgentIcon icon={agentIcon} className="h-3.5 w-3.5" /></AvatarFallback>
           ) : (
@@ -1505,7 +1507,7 @@ function IssueChatAssistantMessage({
           )}
         </Avatar>
 
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 max-w-[72ch]">
           {isFoldable ? (
             <button
               type="button"
@@ -1661,6 +1663,7 @@ function IssueChatAssistantMessage({
             </>
           ) : null}
         </div>
+        <div aria-hidden />
       </div>
     </div>
   );
