@@ -399,6 +399,8 @@ export type {
   SocialPostAnalytics,
   SocialPostDetail,
   SocialPostListItem,
+  SocialAppCredentialPublic,
+  SocialAppCredentialTestResult,
 } from "./social.js";
 export type {
   JsonSchema,

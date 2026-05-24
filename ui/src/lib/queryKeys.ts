@@ -199,6 +199,10 @@ export const queryKeys = {
       ["social", "feed", companyId, platform, accountId ?? "default"] as const,
     queue: (companyId: string, accountId: string | null) =>
       ["social", "queue", companyId, accountId ?? "all"] as const,
+    wizardSpecs: ["social", "wizard", "specs"] as const,
+    credentials: ["social", "credentials"] as const,
+    credentialsByPlatform: (platform: string) =>
+      ["social", "credentials", platform] as const,
   },
   plugins: {
     all: ["plugins"] as const,

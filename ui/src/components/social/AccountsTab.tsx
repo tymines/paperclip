@@ -11,8 +11,9 @@
  * a stub account row. Real OAuth flow will redirect to the platform and
  * come back via /oauth/callback later.
  */
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ClipboardList, ExternalLink, Link2, Loader2, Plus, ShieldAlert, X } from "lucide-react";
+import { AlertTriangle, ClipboardList, ExternalLink, Loader2, Plus, ShieldAlert, X } from "lucide-react";
 import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
 import { socialApi, type FeatureStatus } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
@@ -20,6 +21,7 @@ import { useToastActions } from "../../context/ToastContext";
 import { Button } from "@/components/ui/button";
 import { PLATFORM_META, TYLER_PRIORITY_PLATFORMS } from "./platform-meta";
 import { cn } from "../../lib/utils";
+import { SocialConnectWizard } from "./wizard/SocialConnectWizard";
 
 /** Status-chip color + label per feasibility status. */
 const STATUS_TONE: Record<FeatureStatus, { bg: string; fg: string; label: string; symbol: string }> = {
@@ -41,6 +43,8 @@ interface AccountsTabProps {
 export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
+  const [wizardPlatform, setWizardPlatform] = useState<SocialPlatform | null>(null);
+
   const platformsQuery = useQuery({
     queryKey: queryKeys.social.platforms,
     queryFn: () => socialApi.platforms(),
@@ -53,26 +57,6 @@ export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) 
     queryKey: ["social", "feasibility"],
     queryFn: () => socialApi.feasibility(),
     staleTime: 5 * 60_000,
-  });
-
-  const connectMutation = useMutation({
-    mutationFn: async (platform: SocialPlatform) => {
-      // Stub: start + finish in one shot. Real flow will redirect to the
-      // platform between start and finish.
-      const { state } = await socialApi.oauthStart(companyId, platform);
-      return socialApi.oauthFinish(companyId, platform, "stub_code", state);
-    },
-    onSuccess: (account) => {
-      pushToast({ title: `Connected ${PLATFORM_META[account.platform].label}`, tone: "success" });
-      queryClient.invalidateQueries({ queryKey: queryKeys.social.accounts(companyId) });
-    },
-    onError: (err) => {
-      pushToast({
-        title: "Couldn't connect account",
-        body: err instanceof Error ? err.message : String(err),
-        tone: "error",
-      });
-    },
   });
 
   const disconnectMutation = useMutation({
@@ -180,25 +164,35 @@ export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) 
                 key={platform}
                 variant="outline"
                 size="sm"
-                onClick={() => connectMutation.mutate(platform)}
-                disabled={!supported || connectMutation.isPending}
-                title={!supported ? "Adapter not wired yet" : `Connect ${meta.label}`}
+                onClick={() => setWizardPlatform(platform)}
+                disabled={!supported}
+                title={!supported ? "Adapter not wired yet" : `Connect new ${meta.label} account`}
+                data-testid={`connect-new-account-${platform}`}
                 style={!supported ? undefined : { borderColor: `${meta.color}66` }}
               >
                 <Plus className="h-3.5 w-3.5" />
                 <Icon className="h-3.5 w-3.5" style={{ color: meta.color }} />
-                Connect {meta.label}
+                Connect new {meta.label}
               </Button>
             );
           })}
         </div>
-        <p className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Link2 className="h-3.5 w-3.5" />
-          Connect-flows are stubbed today: clicking creates a placeholder account.
-          Real OAuth wiring needs Tyler's Meta App / X Developer / Reddit app
-          credentials.
+        <p className="mt-3 text-xs text-muted-foreground">
+          Click any platform to launch the guided OAuth wizard — register the app,
+          paste credentials, connect the account, all in one flow.
         </p>
       </section>
+
+      {wizardPlatform ? (
+        <SocialConnectWizard
+          open={wizardPlatform !== null}
+          onOpenChange={(open) => {
+            if (!open) setWizardPlatform(null);
+          }}
+          companyId={companyId}
+          platform={wizardPlatform}
+        />
+      ) : null}
 
       {/* Feasibility matrix — per Hermes's social-platform-apis.md research.
           Shows Tyler what each platform actually supports today so he knows
