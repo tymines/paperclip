@@ -367,5 +367,18 @@ export function costRoutes(
     res.json(cards);
   });
 
+  // ── Cost Watcher ─────────────────────────────────────────────────────────
+  // GET /companies/:companyId/cost-watcher
+  // Unified payload merging bridge cost_events, provider-credit balances,
+  // and per-agent attribution. 30s server-side cache so panel reloads don't
+  // hammer provider APIs.
+  router.get("/companies/:companyId/cost-watcher", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { getCostWatcherPayload } = await import("../services/cost-watcher.js");
+    const payload = await getCostWatcherPayload(db, companyId);
+    res.json(payload);
+  });
+
   return router;
 }

@@ -20,6 +20,7 @@ import {
   Bot,
   Layers,
   MoreHorizontal,
+  Gauge,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -188,6 +189,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+        <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
       </SidebarSection>
@@ -262,6 +264,7 @@ function SidebarV1({
         <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+        <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
