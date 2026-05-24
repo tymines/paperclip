@@ -8,8 +8,17 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { socialService, logActivity } from "../services/index.js";
-import { notFound } from "../errors.js";
+import {
+  getSocialAdapter,
+  listSupportedSocialPlatforms,
+} from "../services/social-scheduler/index.js";
+import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
+import { notFound, badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+
+function isSocialPlatform(value: string): value is SocialPlatform {
+  return (SOCIAL_PLATFORMS as readonly string[]).includes(value);
+}
 
 /** Strip token fields before sending to client */
 function redactAccount(account: Record<string, unknown>) {
@@ -256,6 +265,186 @@ export function socialRoutes(db: Db) {
       entityId: post.id,
     });
     res.json(post);
+  });
+
+  // ── Scheduler (multi-platform) ────────────────────────────────────────────
+
+  // GET /social/platforms — which platforms have a server adapter wired?
+  // Used by UI to render only-supported platforms in compose / connect flow.
+  router.get("/social/platforms", (_req, res) => {
+    res.json({
+      all: SOCIAL_PLATFORMS,
+      supported: listSupportedSocialPlatforms(),
+    });
+  });
+
+  // POST /companies/:companyId/social/oauth/start
+  // Body: { platform }
+  // Returns { authUrl, state } — caller redirects user to authUrl.
+  router.post("/companies/:companyId/social/oauth/start", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platform = String(req.body?.platform ?? "");
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter) throw badRequest(`platform ${platform} is not yet wired`);
+    const redirectUri =
+      typeof req.body?.redirectUri === "string"
+        ? req.body.redirectUri
+        : `${req.protocol}://${req.get("host")}/social/oauth/callback`;
+    const start = await adapter.startConnect({ companyId, redirectUri });
+    res.json(start);
+  });
+
+  // POST /companies/:companyId/social/oauth/finish
+  // Body: { platform, code, state }
+  // Returns the persisted SocialAccount row (token redacted).
+  router.post("/companies/:companyId/social/oauth/finish", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platform = String(req.body?.platform ?? "");
+    const code = String(req.body?.code ?? "");
+    const state = String(req.body?.state ?? "");
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter) throw badRequest(`platform ${platform} is not yet wired`);
+
+    const stubAccount = await adapter.finishConnect({ code, state, companyId });
+    const actor = getActorInfo(req);
+    // Persist into our DB so the rest of the UI can use the account.
+    const persisted = await svc.createAccount(companyId, {
+      platform: stubAccount.platform,
+      platformAccountId: stubAccount.platformAccountId,
+      displayName: stubAccount.displayName,
+      username: stubAccount.username,
+      avatarUrl: stubAccount.avatarUrl,
+      accessToken: stubAccount.accessToken,
+      refreshToken: stubAccount.refreshToken,
+      tokenExpiresAt: stubAccount.tokenExpiresAt,
+      status: stubAccount.status,
+      metadata: stubAccount.metadata as Record<string, unknown> | null,
+      createdBy: actor.actorId,
+    });
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      action: "social.account.connected",
+      entityType: "social_account",
+      entityId: persisted.id,
+      details: { platform, stub: true },
+    });
+    res.status(201).json(redactAccount(persisted));
+  });
+
+  // POST /companies/:companyId/social/posts/validate
+  // Body: { platforms: SocialPlatform[], post: PostDraftPayload }
+  // Returns { [platform]: PostValidation } so the composer can render
+  // per-platform warnings/errors as the user types.
+  router.post("/companies/:companyId/social/posts/validate", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platforms: unknown = req.body?.platforms;
+    const post = req.body?.post;
+    if (!Array.isArray(platforms) || !post || typeof post !== "object") {
+      throw badRequest("validate requires { platforms: string[], post: object }");
+    }
+    const out: Record<string, unknown> = {};
+    for (const raw of platforms) {
+      const platform = String(raw);
+      if (!isSocialPlatform(platform)) continue;
+      const adapter = getSocialAdapter(platform);
+      if (!adapter) {
+        out[platform] = { ok: false, errors: [`platform ${platform} is not wired`], warnings: [] };
+        continue;
+      }
+      out[platform] = adapter.validatePost({
+        baseCaption: typeof post.baseCaption === "string" ? post.baseCaption : "",
+        caption: typeof post.caption === "string" ? post.caption : null,
+        postType: post.postType ?? "text",
+        mediaUrls: Array.isArray(post.mediaUrls) ? post.mediaUrls : [],
+        firstComment: typeof post.firstComment === "string" ? post.firstComment : null,
+        metadata: typeof post.metadata === "object" && post.metadata ? post.metadata : {},
+      });
+    }
+    res.json(out);
+  });
+
+  // GET /companies/:companyId/social/feed/:platform?accountId=...&limit=...
+  // For the IG grid: returns published posts from the platform + any
+  // scheduled-but-not-yet-published Paperclip posts targeting that account.
+  router.get("/companies/:companyId/social/feed/:platform", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const platform = String(req.params.platform);
+    assertCompanyAccess(req, companyId);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter) throw badRequest(`platform ${platform} is not yet wired`);
+
+    const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+    const limit = Math.min(60, Math.max(6, Number.parseInt(String(req.query.limit ?? "33"), 10) || 33));
+
+    const accounts = await svc.listAccounts(companyId);
+    const account = accountId
+      ? accounts.find((a) => a.id === accountId)
+      : accounts.find((a) => a.platform === platform && a.status === "connected");
+    if (!account) {
+      res.json({ published: [], scheduled: [], hasAccount: false });
+      return;
+    }
+
+    // Cast: socialAccounts rows store platform as `text` so TS widens to
+    // `string` even though we only ever insert values from SocialPlatform.
+    const adapterAccount = account as unknown as Parameters<typeof adapter.listRecentPosts>[0];
+    const [{ posts: publishedRaw }, scheduledPosts] = await Promise.all([
+      adapter.listRecentPosts(adapterAccount, { limit }),
+      svc.listPosts(companyId, "scheduled"),
+    ]);
+
+    // Project scheduled rows down to the same lightweight shape as published
+    // so the UI can merge into a single grid sorted by publishAt DESC.
+    const scheduledForAccount = scheduledPosts.filter((p) =>
+      Array.isArray(p.mediaUrls) && p.mediaUrls.length > 0,
+    );
+
+    res.json({
+      hasAccount: true,
+      account: redactAccount(account),
+      published: publishedRaw,
+      scheduled: scheduledForAccount.map((p) => ({
+        id: p.id,
+        scheduledAt: p.scheduledAt,
+        caption: p.content,
+        mediaUrl: Array.isArray(p.mediaUrls) ? (p.mediaUrls as string[])[0] ?? null : null,
+      })),
+    });
+  });
+
+  // GET /companies/:companyId/social/queue?accountId=...
+  // Returns the per-account chronological queue (scheduled + draft) for the
+  // Buffer-style queue view.
+  router.get("/companies/:companyId/social/queue", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+
+    const scheduled = await svc.listPosts(companyId, "scheduled");
+    const drafts = await svc.listPosts(companyId, "draft");
+    const all = [...scheduled, ...drafts];
+
+    if (!accountId) {
+      res.json(all);
+      return;
+    }
+    // Filter to posts that target the requested account via post_targets.
+    const withTargets = await Promise.all(
+      all.map(async (p) => ({ post: p, targets: await svc.getPostTargets(p.id) })),
+    );
+    const filtered = withTargets
+      .filter(({ targets }) => targets.some((t) => t.accountId === accountId))
+      .map(({ post }) => post);
+    res.json(filtered);
   });
 
   return router;

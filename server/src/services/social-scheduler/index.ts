@@ -1,0 +1,32 @@
+/**
+ * Registry of social-platform adapters. Lookup by SocialPlatform name.
+ *
+ * Every platform Paperclip ships gets an entry. v1 only registers the
+ * adapters Tyler asked for (Instagram, X, Facebook, Threads, Reddit);
+ * LinkedIn / TikTok / etc. land later behind their own adapter files.
+ */
+import type { SocialPlatform } from "@paperclipai/shared";
+import type { SocialPlatformAdapter } from "./types.js";
+import { instagramAdapter } from "./instagram.js";
+import { xAdapter } from "./x.js";
+import { facebookAdapter } from "./facebook.js";
+import { threadsAdapter } from "./threads.js";
+import { redditAdapter } from "./reddit.js";
+
+const REGISTRY: Partial<Record<SocialPlatform, SocialPlatformAdapter>> = {
+  instagram: instagramAdapter,
+  twitter: xAdapter,
+  facebook: facebookAdapter,
+  threads: threadsAdapter,
+  reddit: redditAdapter,
+};
+
+export function getSocialAdapter(platform: SocialPlatform): SocialPlatformAdapter | null {
+  return REGISTRY[platform] ?? null;
+}
+
+export function listSupportedSocialPlatforms(): SocialPlatform[] {
+  return Object.keys(REGISTRY) as SocialPlatform[];
+}
+
+export type { SocialPlatformAdapter, PostDraftPayload, PostValidation, PublishedPostRef } from "./types.js";

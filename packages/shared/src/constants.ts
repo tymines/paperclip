@@ -646,6 +646,7 @@ export const SOCIAL_PLATFORMS = [
   "threads",
   "bluesky",
   "mastodon",
+  "reddit",
 ] as const;
 export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 

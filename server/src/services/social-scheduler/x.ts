@@ -1,0 +1,104 @@
+/**
+ * X (Twitter) adapter — stub implementation.
+ *
+ * Real wiring requires:
+ *   - X Developer account with Project + App
+ *   - OAuth 2.0 (PKCE) client with `tweet.read tweet.write users.read
+ *     offline.access` scopes
+ *   - Paid plan if Tyler expects to post more than 50 tweets / 24h
+ *     (free tier limit on API v2 as of mid-2026)
+ *
+ * Publish path: POST /2/tweets with body { text, media: { media_ids: [..] } }.
+ * Threads = chain via { reply: { in_reply_to_tweet_id } } on subsequent
+ * tweets after the first.
+ */
+import type { SocialAccount } from "@paperclipai/shared";
+import type {
+  AccountMetrics,
+  ConnectAuthStart,
+  PostDraftPayload,
+  PostValidation,
+  PublishedPostRef,
+  SocialPlatformAdapter,
+} from "./types.js";
+import {
+  caption,
+  mockAccountMetrics,
+  mockConnectAccount,
+  mockConnectStart,
+  mockPublishedRef,
+  mockRecentPosts,
+} from "./stub-helpers.js";
+
+const X_TWEET_MAX = 280;
+const X_MEDIA_MAX = 4;
+
+export const xAdapter: SocialPlatformAdapter = {
+  platform: "twitter",
+
+  async startConnect() {
+    return mockConnectStart("twitter");
+  },
+
+  async finishConnect(opts) {
+    return mockConnectAccount({
+      platform: "twitter",
+      companyId: opts.companyId,
+      username: "stub_x_handle",
+      displayName: "Stub X Account",
+    });
+  },
+
+  async refreshAuth(account) {
+    return { ...account, tokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60 * 2) };
+  },
+
+  async disconnect() {},
+
+  async listRecentPosts(account, opts) {
+    return {
+      posts: mockRecentPosts(account, opts?.limit ?? 20),
+      nextCursor: null,
+    };
+  },
+
+  async getAccountMetrics(account): Promise<AccountMetrics> {
+    return mockAccountMetrics(account);
+  },
+
+  async publishPost(account, post): Promise<PublishedPostRef> {
+    return mockPublishedRef(account, post);
+  },
+
+  validatePost(post): PostValidation {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    const text = caption(post);
+
+    if (post.postType === "thread") {
+      // For threads, the editor splits text on blank lines; each segment is a tweet.
+      const segments = text.split(/\n\s*\n+/).map((s) => s.trim()).filter(Boolean);
+      segments.forEach((seg, i) => {
+        if (seg.length > X_TWEET_MAX) {
+          errors.push(`Thread segment #${i + 1} is ${seg.length}/${X_TWEET_MAX} chars.`);
+        }
+      });
+      if (segments.length < 2) {
+        warnings.push("Thread has only one segment — separate tweets with a blank line.");
+      }
+    } else {
+      if (text.length > X_TWEET_MAX) {
+        errors.push(`Tweet is ${text.length}/${X_TWEET_MAX} chars.`);
+      }
+      if (text.length === 0 && post.mediaUrls.length === 0) {
+        errors.push("Tweet needs either text or media.");
+      }
+    }
+
+    if (post.mediaUrls.length > X_MEDIA_MAX) {
+      errors.push(`X allows at most ${X_MEDIA_MAX} media items per tweet.`);
+    }
+
+    return { ok: errors.length === 0, errors, warnings };
+  },
+};
