@@ -27,6 +27,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { useUiV1 } from "../hooks/useUiV1";
+import { useUiV2 } from "../hooks/useUiV2";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
@@ -66,6 +67,8 @@ function readRememberedInstanceSettingsPath(): string {
 export function Layout() {
   // Mirrors the `enableUiV1` instance flag onto <html> so the v1 theme tokens activate.
   useUiV1();
+  // Same for `enableUiV2` — activates the v2 sidebar shell tokens.
+  const uiV2 = useUiV2();
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialogActions();
   const { togglePanelVisible } = usePanel();
@@ -419,7 +422,11 @@ export function Layout() {
         ) : (
           <div className="flex h-full flex-col shrink-0">
             <div className="flex flex-1 min-h-0">
-              <ResizableSidebarPane open={sidebarOpen} resizable className="h-full shrink-0">
+              <ResizableSidebarPane
+                open={sidebarOpen}
+                resizable
+                className={cn("h-full shrink-0", uiV2 && "pp-sidebar-pane-v2")}
+              >
                 {isInstanceSettingsRoute ? (
                   <InstanceSidebar />
                 ) : isCompanySettingsRoute ? (

@@ -287,6 +287,29 @@ export function InstanceExperimentalSettings() {
       <section className="rounded-xl border border-border bg-card p-5">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1.5">
+            <h2 className="text-sm font-semibold">UI v2 — ChatGPT-shell sidebar (pass 1: shell only)</h2>
+            <p className="max-w-2xl text-sm text-muted-foreground">
+              Re-skins the desktop sidebar to the dark ChatGPT-style shell: 228px pinned width,
+              workspace switcher pill, white "New Issue" button, 38px rounded nav rows, and the
+              dark account chip at the bottom. Nav items, plugin slots, badges, and routing are
+              unchanged — pass 1 is visual only. Topbar, page content, and the mobile drawer are
+              not affected.
+            </p>
+          </div>
+          <ToggleSwitch
+            checked={experimentalQuery.data?.enableUiV2 === true}
+            onCheckedChange={() =>
+              toggleMutation.mutate({ enableUiV2: !(experimentalQuery.data?.enableUiV2 === true) })
+            }
+            disabled={toggleMutation.isPending}
+            aria-label="Toggle UI v2"
+          />
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1.5">
             <h2 className="text-sm font-semibold">Enable Environments</h2>
             <p className="max-w-2xl text-sm text-muted-foreground">
               Show environment management in company settings and allow project and agent environment assignment

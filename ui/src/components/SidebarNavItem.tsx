@@ -39,11 +39,12 @@ export function SidebarNavItem({
       state={SIDEBAR_SCROLL_RESET_STATE}
       end={end}
       onClick={() => { if (isMobile) setSidebarOpen(false); }}
+      data-pp-sidebar-nav-item="true"
       className={({ isActive }) =>
         cn(
           "flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors",
           isActive
-            ? "bg-accent text-foreground"
+            ? "bg-accent text-foreground pp-nav-active"
             : "text-foreground/80 hover:bg-accent/50 hover:text-foreground",
           className,
         )
@@ -79,6 +80,7 @@ export function SidebarNavItem({
       )}
       {badge != null && badge > 0 && (
         <span
+          data-pp-sidebar-badge="true"
           className={cn(
             "ml-auto rounded-full px-1.5 py-0.5 text-xs leading-none",
             badgeTone === "danger"

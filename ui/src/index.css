@@ -64,6 +64,185 @@
   --sidebar-primary: oklch(0.62 0.13 165);
 }
 
+/* UI v2 — ChatGPT-shell sidebar pass 1.
+   Activated via [data-ui-v2="true"] on <html> by useUiV2(). Pass 1 scope is the
+   desktop sidebar shell only: bg, width, workspace pill, nav rows, MORE label,
+   and bottom account chip. Topbar / page content / mobile drawer untouched.
+   Tokens lifted from home-v2-chatgpt-shell.html :root block. */
+:root[data-ui-v2="true"] {
+  --pp-v2-sidebar-bg: #0f1014;
+  --pp-v2-sidebar-bg-2: #121319;
+  --pp-v2-sidebar-line: rgba(255, 255, 255, 0.08);
+  --pp-v2-sidebar-line-strong: rgba(255, 255, 255, 0.14);
+  --pp-v2-sidebar-text: #f4f4f5;
+  --pp-v2-sidebar-muted: #a1a1aa;
+  --pp-v2-sidebar-faint: #71717a;
+  --pp-v2-sidebar-hover-bg: rgba(255, 255, 255, 0.045);
+  --pp-v2-sidebar-selected-bg: rgba(255, 255, 255, 0.07);
+}
+
+/* Pin pane to spec width. !important beats the inline width from the resize
+   logic — pass 1 ships the sidebar at a fixed 228px and skips resize. */
+:root[data-ui-v2="true"] .pp-sidebar-pane-v2 {
+  width: 228px !important;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] {
+  background: var(--pp-v2-sidebar-bg);
+  color: var(--pp-v2-sidebar-text);
+  border-right: 1px solid var(--pp-v2-sidebar-line);
+  padding: 14px;
+  gap: 16px;
+}
+
+/* Workspace switcher pill: wraps SidebarCompanyMenu + Search icon as one chip. */
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] {
+  height: 42px;
+  padding: 0 8px 0 10px;
+  gap: 8px;
+  border: 1px solid var(--pp-v2-sidebar-line);
+  border-radius: 15px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025)),
+    var(--pp-v2-sidebar-bg-2);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] button {
+  background: transparent;
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Strip the nav stack's own padding so the 14px shell padding is the outer margin. */
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] > nav {
+  padding: 0;
+  gap: 4px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] > nav > div {
+  gap: 4px;
+}
+
+/* Nav rows: 38px tall, 13px rounded, 17px icons. */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] {
+  min-height: 38px;
+  padding: 0 10px;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  color: var(--pp-v2-sidebar-muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"]:hover {
+  color: var(--pp-v2-sidebar-text);
+  background: var(--pp-v2-sidebar-hover-bg);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active {
+  color: var(--pp-v2-sidebar-text);
+  background: var(--pp-v2-sidebar-selected-bg);
+  border-color: var(--pp-v2-sidebar-line);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Unread badge: red soft pill (Action Queue style from the mockup). */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] [data-pp-sidebar-badge="true"] {
+  min-width: 22px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #fee2e2;
+  background: rgba(248, 113, 113, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* New Issue: white pill button, dark text, subtle shadow. */
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] {
+  min-height: 38px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: 13px;
+  color: #09090b;
+  background: #f4f4f5;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 7px;
+  box-shadow: 0 10px 28px rgba(244, 244, 245, 0.12);
+}
+
+:root[data-ui-v2="true"] [data-pp-new-issue="true"]:hover {
+  color: #09090b;
+  background: #f4f4f5;
+}
+
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* "MORE" section label */
+:root[data-ui-v2="true"] .pp-sidebar-section-label {
+  color: var(--pp-v2-sidebar-faint) !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-family: inherit;
+  margin: 16px 0 7px;
+  padding: 0 8px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] .group\/sidebar-section {
+  padding: 0;
+}
+
+/* Bottom account chip: 54px tall, 18px rounded, dark-on-dark surface. */
+:root[data-ui-v2="true"] [data-pp-sidebar-account-row="true"] {
+  background: var(--pp-v2-sidebar-bg);
+  border-top: 1px solid var(--pp-v2-sidebar-line);
+  border-right: 1px solid var(--pp-v2-sidebar-line);
+  padding: 14px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"] {
+  min-height: 54px;
+  padding: 9px;
+  gap: 10px;
+  border: 1px solid var(--pp-v2-sidebar-line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"]:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"] [data-slot="avatar"] {
+  width: 34px;
+  height: 34px;
+  border-radius: 13px;
+}
+
 :root {
   color-scheme: light;
   --radius: 0;

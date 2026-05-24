@@ -55,6 +55,7 @@ export function Sidebar() {
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const uiV1 = experimentalSettings?.enableUiV1 === true;
+  const uiV2 = experimentalSettings?.enableUiV2 === true;
 
   const pluginContext = {
     companyId: selectedCompanyId,
@@ -62,9 +63,16 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-full h-full min-h-0 border-r border-border bg-background flex flex-col">
-      {/* Top bar: Company name (bold) + Search — aligned with top sections (no visible border) */}
-      <div className="flex items-center gap-1 px-3 h-12 shrink-0">
+    <aside
+      className="w-full h-full min-h-0 border-r border-border bg-background flex flex-col"
+      data-pp-sidebar-shell={uiV2 ? "true" : undefined}
+    >
+      {/* Top bar: Company name (bold) + Search — aligned with top sections (no visible border).
+          Under UI v2, this row is restyled into the workspace switcher pill via CSS. */}
+      <div
+        className="flex items-center gap-1 px-3 h-12 shrink-0"
+        data-pp-sidebar-top={uiV2 ? "true" : undefined}
+      >
         <SidebarCompanyMenu />
         <Button
           asChild
@@ -122,6 +130,7 @@ function SidebarLegacy({
         <button
           onClick={openNewIssue}
           className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+          data-pp-new-issue="true"
         >
           <SquarePen className="h-4 w-4 shrink-0" />
           <span className="truncate">New Issue</span>
@@ -208,6 +217,7 @@ function SidebarV1({
         <button
           onClick={openNewIssue}
           className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
+          data-pp-new-issue="true"
         >
           <SquarePen className="h-4 w-4 shrink-0" />
           <span className="truncate">New Issue</span>
