@@ -521,6 +521,20 @@ export function Costs() {
       0,
     );
 
+  // True if the data loaded successfully but contains zero cost events
+  // across every dimension. We use this to surface a diagnostic banner
+  // instead of leaving the page as a wall of misleading "$0.00 / 0 tokens"
+  // tiles when the runtime simply isn't reporting usage. (Common cause:
+  // OpenClaw gateway bridge not forwarding `usage` / `cost_usd` from the
+  // CLI back to Paperclip's cost-event recorder.)
+  const hasNoCostEvents =
+    !spendLoading &&
+    !spendError &&
+    spendData != null &&
+    spendData.summary.spendCents === 0 &&
+    inferenceTokenTotal === 0 &&
+    (spendData.byAgent?.length ?? 0) === 0;
+
   const topFinanceEvents = (financeData?.events ?? []) as FinanceEvent[];
   const budgetPolicies = budgetData?.policies ?? [];
   const activeBudgetIncidents = budgetData?.activeIncidents ?? [];
@@ -578,6 +592,23 @@ export function Costs() {
                 onChange={(event) => setCustomTo(event.target.value)}
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
               />
+            </div>
+          ) : null}
+
+          {hasNoCostEvents ? (
+            <div className="rounded-md border border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+              <p className="font-medium">No usage events recorded for this period.</p>
+              <p className="mt-1 leading-5">
+                The numbers below are real zeros, not stale data — but if you've been running agents, the runtime
+                may not be forwarding token usage. The OpenClaw gateway bridge (the
+                <code className="mx-1 rounded bg-amber-200/60 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">openclaw</code>
+                npm package running on your machine) needs to populate
+                <code className="mx-1 rounded bg-amber-200/60 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">agentMeta.usage</code>
+                and
+                <code className="mx-1 rounded bg-amber-200/60 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">cost_usd</code>
+                in run-completed messages for cost tracking to work. Local <code className="mx-1 rounded bg-amber-200/60 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">claude_local</code> /
+                <code className="mx-1 rounded bg-amber-200/60 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">codex_local</code> adapters do this automatically.
+              </p>
             </div>
           ) : null}
 

@@ -934,10 +934,24 @@ function parseUsage(value: unknown): AdapterExecutionResult["usage"] | undefined
   const record = asRecord(value);
   if (!record) return undefined;
 
-  const inputTokens = asNumber(record.inputTokens ?? record.input, 0);
-  const outputTokens = asNumber(record.outputTokens ?? record.output, 0);
+  // Accept all common shapes the bridge or upstream provider might send:
+  //   camelCase (paperclip internal):  inputTokens / outputTokens / cachedInputTokens
+  //   Anthropic API native:            input_tokens / output_tokens / cache_read_input_tokens
+  //   short form (openclaw legacy):    input / output / cacheRead / cache_read
+  const inputTokens = asNumber(
+    record.inputTokens ?? record.input_tokens ?? record.input,
+    0,
+  );
+  const outputTokens = asNumber(
+    record.outputTokens ?? record.output_tokens ?? record.output,
+    0,
+  );
   const cachedInputTokens = asNumber(
-    record.cachedInputTokens ?? record.cached_input_tokens ?? record.cacheRead ?? record.cache_read,
+    record.cachedInputTokens ??
+      record.cached_input_tokens ??
+      record.cache_read_input_tokens ??
+      record.cacheRead ??
+      record.cache_read,
     0,
   );
 
@@ -1414,11 +1428,33 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         asRecord(mergedMeta.agentMeta) ??
         asRecord(acceptedMeta?.agentMeta) ??
         asRecord(latestMeta?.agentMeta);
-      const usage = parseUsage(agentMeta?.usage ?? mergedMeta.usage);
+      // Try to pick up usage / cost from every place the bridge or upstream
+      // payload might park it. Older openclaw bridge builds always leave
+      // agentMeta.usage and mergedMeta.usage null even on successful runs;
+      // the raw payload from the CLI (latestResultPayload / acceptedPayload)
+      // sometimes carries it under its own top-level `usage` or nested
+      // `result.usage`. Without these fallbacks every run lands with
+      // usage_json = null and the Costs page shows zeros.
+      const usage =
+        parseUsage(agentMeta?.usage ?? mergedMeta.usage) ??
+        parseUsage(asRecord(latestResultPayload)?.usage) ??
+        parseUsage(asRecord(asRecord(latestResultPayload)?.result)?.usage) ??
+        parseUsage(asRecord(acceptedPayload)?.usage) ??
+        parseUsage(asRecord(asRecord(acceptedPayload)?.result)?.usage);
       const runtimeServices = extractRuntimeServicesFromMeta(agentMeta ?? mergedMeta);
       const provider = nonEmpty(agentMeta?.provider) ?? nonEmpty(mergedMeta.provider) ?? "openclaw";
       const model = nonEmpty(agentMeta?.model) ?? nonEmpty(mergedMeta.model) ?? null;
-      const costUsd = asNumber(agentMeta?.costUsd ?? mergedMeta.costUsd, 0);
+      const costUsd = asNumber(
+        agentMeta?.costUsd ??
+          mergedMeta.costUsd ??
+          asRecord(latestResultPayload)?.cost_usd ??
+          asRecord(latestResultPayload)?.costUsd ??
+          asRecord(asRecord(latestResultPayload)?.result)?.cost_usd ??
+          asRecord(asRecord(latestResultPayload)?.result)?.costUsd ??
+          asRecord(acceptedPayload)?.cost_usd ??
+          asRecord(acceptedPayload)?.costUsd,
+        0,
+      );
 
       await ctx.onLog(
         "stdout",
