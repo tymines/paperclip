@@ -36,6 +36,7 @@ import { CompanyEnvironments } from "./pages/CompanyEnvironments";
 import { CompanyAccess } from "./pages/CompanyAccess";
 import { CompanyInvites } from "./pages/CompanyInvites";
 import { CompanySkills } from "./pages/CompanySkills";
+import { SkillsCatalog } from "./pages/SkillsCatalog";
 import { Secrets } from "./pages/Secrets";
 import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
@@ -89,7 +90,8 @@ function boardRoutes() {
       <Route path="company/export/*" element={<CompanyExport />} />
       <Route path="company/import" element={<CompanyImport />} />
       <Route path="company/settings/secrets" element={<Secrets />} />
-      <Route path="skills/*" element={<CompanySkills />} />
+      <Route path="skills" element={<SkillsCatalog />} />
+      <Route path="skills/library/*" element={<CompanySkills />} />
       <Route path="settings" element={<LegacySettingsRedirect />} />
       <Route path="settings/*" element={<LegacySettingsRedirect />} />
       <Route path="plugins/:pluginId" element={<PluginPage />} />

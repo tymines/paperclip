@@ -4,6 +4,7 @@ import {
   text,
   timestamp,
   jsonb,
+  boolean,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -26,6 +27,13 @@ export const companySkills = pgTable(
     compatibility: text("compatibility").notNull().default("compatible"),
     fileInventory: jsonb("file_inventory").$type<Array<Record<string, unknown>>>().notNull().default([]),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    // Instance-wide on/off switch surfaced in the v2 Skills catalog.
+    // When false, agents skip the skill at routing time even if it's still
+    // listed in adapterConfig.desiredSkills. Default true so the column add
+    // doesn't disable existing skills.
+    enabled: boolean("enabled").notNull().default(true),
+    // Optional Lucide icon name (e.g. "Sparkles") rendered on catalog cards.
+    iconKey: text("icon_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

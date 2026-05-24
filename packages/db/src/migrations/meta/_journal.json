@@ -652,6 +652,13 @@
       "when": 1778976006000,
       "tag": "0092_agent_bridge",
       "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1778976007000,
+      "tag": "0093_company_skills_enabled",
+      "breakpoints": true
     }
   ]
 }

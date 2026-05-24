@@ -1246,6 +1246,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
                 resourceKey: skillKey,
               },
             },
+            enabled: true,
+            iconKey: null,
             createdAt: now,
             updatedAt: now,
           } satisfies CompanySkill;
@@ -1302,6 +1304,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
                 resourceKey: skillKey,
               },
             },
+            enabled: existing.skill?.enabled ?? true,
+            iconKey: existing.skill?.iconKey ?? null,
             createdAt: existing.skill?.createdAt ?? now,
             updatedAt: now,
           } satisfies CompanySkill;
