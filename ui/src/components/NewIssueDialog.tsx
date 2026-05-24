@@ -1237,7 +1237,10 @@ export function NewIssueDialog() {
         }}
       >
         {/* Header bar */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0">
+        <div
+          className="flex items-center justify-between px-4 py-2.5 border-b border-border shrink-0"
+          data-pp-new-issue-header="true"
+        >
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Popover open={companyOpen} onOpenChange={setCompanyOpen}>
               <PopoverTrigger asChild>

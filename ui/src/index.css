@@ -711,6 +711,24 @@
     padding-bottom: 0 !important;
   }
 
+  /* Header sits below the iOS status bar / Dynamic Island. We pad the
+     header itself (rather than the dialog root) so the bordered band
+     extends all the way up to the top edge — the breadcrumb + X chips
+     just float lower inside that band. Also enforce a sane minimum
+     header height so the close button has the 44px iOS HIG hit area. */
+  :root[data-ui-v2="true"] [data-pp-new-issue-header="true"] {
+    padding-top: calc(0.625rem + env(safe-area-inset-top));
+    min-height: calc(44px + env(safe-area-inset-top));
+  }
+
+  /* Bump the close (×) and expand/collapse buttons inside the header up to
+     a 44×44 hit area on mobile so they're reliably tappable when sitting
+     just below the Dynamic Island. */
+  :root[data-ui-v2="true"] [data-pp-new-issue-header="true"] button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   :root[data-ui-v2="true"] [data-pp-new-issue-footer="true"] {
     position: sticky;
     bottom: 0;
