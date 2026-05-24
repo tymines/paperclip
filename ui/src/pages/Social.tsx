@@ -69,6 +69,7 @@ const PLATFORM_COLORS: Record<SocialPlatform, string> = {
   threads: "bg-foreground/80",
   bluesky: "bg-blue-500",
   mastodon: "bg-purple-600",
+  reddit: "bg-orange-600",
 };
 
 const PLATFORM_LABELS: Record<SocialPlatform, string> = {
@@ -82,6 +83,7 @@ const PLATFORM_LABELS: Record<SocialPlatform, string> = {
   threads: "Threads",
   bluesky: "Bluesky",
   mastodon: "Mastodon",
+  reddit: "Reddit",
 };
 
 const STATUS_BADGES: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {

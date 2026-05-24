@@ -1,0 +1,128 @@
+/**
+ * SocialScheduler — multi-platform social-media scheduling tool.
+ *
+ * Replaces the previous in-app /social broadcast feed. Modeled after Buffer /
+ * Later / Hootsuite — five surfaces stitched together by an internal tab bar:
+ *
+ *   - Compose:   multi-platform editor with per-platform previews
+ *   - Calendar:  month + list views of scheduled posts (color-coded by platform)
+ *   - Grid:      Instagram-only 3-col preview of feed-after-scheduled-posts-publish
+ *   - Queue:     Buffer-style chronological queue per account
+ *   - Accounts:  connected social accounts with Connect / Disconnect actions
+ *
+ * Everything runs against the existing /api/companies/:id/social/* endpoints +
+ * the new scheduler endpoints (validate / feed / queue / oauth). When the user
+ * has no accounts connected, every tab degrades to a "connect an account to
+ * start" empty state instead of breaking.
+ *
+ * NOT gated by enableUiV2 — Tyler asked for this as a product change, not a
+ * v2 visual reskin.
+ */
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CalendarDays, Grid3X3, Inbox, Link2, PenSquare, Share2 } from "lucide-react";
+import { socialApi } from "../api/social";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { queryKeys } from "../lib/queryKeys";
+import { EmptyState } from "../components/EmptyState";
+import { Button } from "@/components/ui/button";
+import { cn } from "../lib/utils";
+import { AccountsTab } from "../components/social/AccountsTab";
+import { ComposeTab } from "../components/social/ComposeTab";
+import { CalendarTab } from "../components/social/CalendarTab";
+import { QueueTab } from "../components/social/QueueTab";
+import { InstagramGridTab } from "../components/social/InstagramGridTab";
+
+type SchedulerTab = "compose" | "calendar" | "grid" | "queue" | "accounts";
+
+const TABS: { key: SchedulerTab; label: string; icon: typeof PenSquare }[] = [
+  { key: "compose", label: "Compose", icon: PenSquare },
+  { key: "calendar", label: "Calendar", icon: CalendarDays },
+  { key: "grid", label: "IG Grid", icon: Grid3X3 },
+  { key: "queue", label: "Queue", icon: Inbox },
+  { key: "accounts", label: "Accounts", icon: Link2 },
+];
+
+export function SocialScheduler() {
+  const { selectedCompanyId, selectedCompany } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const [tab, setTab] = useState<SchedulerTab>("compose");
+
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Social" }]);
+  }, [setBreadcrumbs]);
+
+  const accountsQuery = useQuery({
+    queryKey: queryKeys.social.accounts(selectedCompanyId ?? "__none__"),
+    queryFn: () => socialApi.listAccounts(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  if (!selectedCompanyId) {
+    return <EmptyState icon={Share2} message="Select a company to use the scheduler." />;
+  }
+
+  const accounts = accountsQuery.data ?? [];
+  const hasNoAccounts = !accountsQuery.isLoading && accounts.length === 0;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Social</h1>
+          <p className="text-sm text-muted-foreground">
+            Schedule posts across {selectedCompany?.name ?? "your"} connected accounts.
+          </p>
+        </div>
+      </header>
+
+      <nav
+        aria-label="Social scheduler sections"
+        className="flex flex-wrap items-center gap-1 border-b border-border pb-1"
+      >
+        {TABS.map((t) => {
+          const Icon = t.icon;
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={cn(
+                "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                active
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+              )}
+              aria-current={active ? "page" : undefined}
+            >
+              <Icon className="h-4 w-4" />
+              {t.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {hasNoAccounts && tab !== "accounts" ? (
+        <div className="rounded-md border border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+          <p className="font-medium">No social accounts connected.</p>
+          <p className="mt-1 leading-5">
+            Connect Instagram, X, Facebook, Threads, or Reddit to start composing and scheduling posts.
+          </p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={() => setTab("accounts")}>
+            Open the Accounts tab
+          </Button>
+        </div>
+      ) : null}
+
+      <section className="min-h-0">
+        {tab === "compose" ? <ComposeTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "calendar" ? <CalendarTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "grid" ? <InstagramGridTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "queue" ? <QueueTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "accounts" ? <AccountsTab companyId={selectedCompanyId} accounts={accounts} loading={accountsQuery.isLoading} /> : null}
+      </section>
+    </div>
+  );
+}

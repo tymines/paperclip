@@ -52,7 +52,11 @@ import { OrgChart } from "./pages/OrgChart";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
 import { RoomDetail } from "./pages/RoomDetail";
-import { Social } from "./pages/Social";
+// /social now points at the multi-platform scheduler (Buffer/Later-style).
+// The legacy in-app broadcast feed `Social.tsx` is no longer routed —
+// SocialScheduler replaces it. The legacy page file is kept for now until
+// SocialPostDetail and any deep-links can be cleaned up.
+import { SocialScheduler } from "./pages/SocialScheduler";
 import { SocialPostDetail } from "./pages/SocialPostDetail";
 import { NewAgent } from "./pages/NewAgent";
 import { AuthPage } from "./pages/Auth";
@@ -91,7 +95,7 @@ function boardRoutes() {
       <Route path="knowledge-graph" element={<KnowledgeGraph />} />
       <Route path="rooms" element={<Rooms />} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
-      <Route path="social" element={<Social />} />
+      <Route path="social" element={<SocialScheduler />} />
       <Route path="social/posts/:postId" element={<SocialPostDetail />} />
       <Route path="agents" element={<Navigate to="/agents/all" replace />} />
       <Route path="agents/all" element={<Agents />} />
