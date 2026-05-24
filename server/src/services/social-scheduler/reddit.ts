@@ -30,6 +30,7 @@ import {
   mockPublishedRef,
   mockRecentPosts,
 } from "./stub-helpers.js";
+import { expansionStubs } from "./expansion-stubs.js";
 
 const REDDIT_TITLE_MAX = 300;
 const REDDIT_BODY_MAX = 40_000;
@@ -90,4 +91,6 @@ export const redditAdapter: SocialPlatformAdapter = {
 
     return { ok: errors.length === 0, errors, warnings };
   },
+
+  ...expansionStubs("reddit"),
 };

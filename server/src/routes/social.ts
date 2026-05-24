@@ -421,6 +421,165 @@ export function socialRoutes(db: Db) {
     });
   });
 
+  // ── Expansion-pass: Inbox / Competitors / Analytics / Hashtags ─────────
+
+  // GET /companies/:companyId/social/inbox?accountId=...
+  router.get("/companies/:companyId/social/inbox", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+
+    const accounts = await svc.listAccounts(companyId);
+    const targets = accountId
+      ? accounts.filter((a) => a.id === accountId)
+      : accounts.filter((a) => a.status === "connected");
+
+    const out: Array<{ accountId: string; platform: string; threads: unknown[] }> = [];
+    for (const account of targets) {
+      const adapter = getSocialAdapter(account.platform as SocialPlatform);
+      if (!adapter?.listDirectMessageThreads) {
+        out.push({ accountId: account.id, platform: account.platform, threads: [] });
+        continue;
+      }
+      try {
+        const threads = await adapter.listDirectMessageThreads(
+          account as unknown as Parameters<NonNullable<typeof adapter.listDirectMessageThreads>>[0],
+          { limit: 30 },
+        );
+        out.push({ accountId: account.id, platform: account.platform, threads });
+      } catch (err) {
+        out.push({
+          accountId: account.id,
+          platform: account.platform,
+          threads: [],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any);
+      }
+    }
+    res.json(out);
+  });
+
+  // GET /companies/:companyId/social/inbox/:accountId/:threadId
+  router.get("/companies/:companyId/social/inbox/:accountId/:threadId", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = req.params.accountId as string;
+    const threadId = req.params.threadId as string;
+    const account = await svc.getAccount(accountId);
+    if (!account || account.companyId !== companyId) throw notFound("account");
+    const adapter = getSocialAdapter(account.platform as SocialPlatform);
+    if (!adapter?.listDirectMessages) {
+      res.json([]);
+      return;
+    }
+    const messages = await adapter.listDirectMessages(
+      account as unknown as Parameters<NonNullable<typeof adapter.listDirectMessages>>[0],
+      threadId,
+    );
+    res.json(messages);
+  });
+
+  // POST /companies/:companyId/social/inbox/:accountId/:threadId/send
+  // Body: { text }
+  router.post("/companies/:companyId/social/inbox/:accountId/:threadId/send", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = req.params.accountId as string;
+    const threadId = req.params.threadId as string;
+    const text = typeof req.body?.text === "string" ? req.body.text : "";
+    if (!text.trim()) throw badRequest("text is required");
+    const account = await svc.getAccount(accountId);
+    if (!account || account.companyId !== companyId) throw notFound("account");
+    const adapter = getSocialAdapter(account.platform as SocialPlatform);
+    if (!adapter?.sendDirectMessage) throw badRequest("platform does not support sending DMs");
+    const message = await adapter.sendDirectMessage(
+      account as unknown as Parameters<NonNullable<typeof adapter.sendDirectMessage>>[0],
+      threadId,
+      text,
+    );
+    res.status(201).json(message);
+  });
+
+  // GET /companies/:companyId/social/competitors/search?platform=...&q=...
+  router.get("/companies/:companyId/social/competitors/search", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platform = String(req.query.platform ?? "");
+    const query = String(req.query.q ?? "");
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter?.searchCompetitors) {
+      res.json([]);
+      return;
+    }
+    const results = await adapter.searchCompetitors(query);
+    res.json(results);
+  });
+
+  // GET /companies/:companyId/social/competitors/:platform/:handle?from=&to=
+  router.get("/companies/:companyId/social/competitors/:platform/:handle", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platform = String(req.params.platform);
+    const handle = String(req.params.handle);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter?.getCompetitorMetrics) {
+      res.json({ byDay: [], topPosts: [] });
+      return;
+    }
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86_400_000);
+    const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+    const metrics = await adapter.getCompetitorMetrics(handle, { from, to });
+    res.json(metrics);
+  });
+
+  // GET /companies/:companyId/social/analytics?accountId=...&from=...&to=...
+  router.get("/companies/:companyId/social/analytics", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+    const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86_400_000);
+    const to = req.query.to ? new Date(String(req.query.to)) : new Date();
+
+    const accounts = await svc.listAccounts(companyId);
+    const account = accountId
+      ? accounts.find((a) => a.id === accountId)
+      : accounts.find((a) => a.status === "connected");
+    if (!account) {
+      res.json({ followers: [], engagement: [], bestTimes: [], topPosts: [], topHashtags: [] });
+      return;
+    }
+    const adapter = getSocialAdapter(account.platform as SocialPlatform);
+    if (!adapter?.getAccountAnalytics) {
+      res.json({ followers: [], engagement: [], bestTimes: [], topPosts: [], topHashtags: [] });
+      return;
+    }
+    const result = await adapter.getAccountAnalytics(
+      account as unknown as Parameters<NonNullable<typeof adapter.getAccountAnalytics>>[0],
+      { from, to },
+    );
+    res.json(result);
+  });
+
+  // POST /companies/:companyId/social/hashtags/suggest
+  // Body: { platform, text, niche? }
+  router.post("/companies/:companyId/social/hashtags/suggest", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const platform = String(req.body?.platform ?? "");
+    const text = String(req.body?.text ?? "");
+    const niche = typeof req.body?.niche === "string" ? req.body.niche : undefined;
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const adapter = getSocialAdapter(platform);
+    if (!adapter?.suggestHashtags) {
+      res.json([]);
+      return;
+    }
+    const suggestions = await adapter.suggestHashtags({ text, niche });
+    res.json(suggestions);
+  });
+
   // GET /companies/:companyId/social/queue?accountId=...
   // Returns the per-account chronological queue (scheduled + draft) for the
   // Buffer-style queue view.

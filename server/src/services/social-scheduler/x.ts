@@ -29,6 +29,7 @@ import {
   mockPublishedRef,
   mockRecentPosts,
 } from "./stub-helpers.js";
+import { expansionStubs } from "./expansion-stubs.js";
 
 const X_TWEET_MAX = 280;
 const X_MEDIA_MAX = 4;
@@ -101,4 +102,6 @@ export const xAdapter: SocialPlatformAdapter = {
 
     return { ok: errors.length === 0, errors, warnings };
   },
+
+  ...expansionStubs("twitter"),
 };

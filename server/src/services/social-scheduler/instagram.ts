@@ -31,6 +31,7 @@ import {
   mockPublishedRef,
   mockRecentPosts,
 } from "./stub-helpers.js";
+import { expansionStubs } from "./expansion-stubs.js";
 
 const IG_CAPTION_MAX = 2200;
 const IG_HASHTAG_MAX = 30;
@@ -102,4 +103,8 @@ export const instagramAdapter: SocialPlatformAdapter = {
 
     return { ok: errors.length === 0, errors, warnings };
   },
+
+  // Expansion-pass methods (Inbox / Competitors / Analytics / Hashtags).
+  // Real wiring replaces these per-method; stubs return shaped mock data.
+  ...expansionStubs("instagram"),
 };

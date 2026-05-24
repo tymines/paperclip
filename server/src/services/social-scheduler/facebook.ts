@@ -28,6 +28,7 @@ import {
   mockPublishedRef,
   mockRecentPosts,
 } from "./stub-helpers.js";
+import { expansionStubs } from "./expansion-stubs.js";
 
 export const facebookAdapter: SocialPlatformAdapter = {
   platform: "facebook",
@@ -83,4 +84,6 @@ export const facebookAdapter: SocialPlatformAdapter = {
     }
     return { ok: errors.length === 0, errors, warnings };
   },
+
+  ...expansionStubs("facebook"),
 };

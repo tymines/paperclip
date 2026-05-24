@@ -27,6 +27,7 @@ import {
   mockPublishedRef,
   mockRecentPosts,
 } from "./stub-helpers.js";
+import { expansionStubs } from "./expansion-stubs.js";
 
 const THREADS_MAX = 500;
 const THREADS_MEDIA_MAX = 10;
@@ -84,4 +85,6 @@ export const threadsAdapter: SocialPlatformAdapter = {
     }
     return { ok: errors.length === 0, errors, warnings };
   },
+
+  ...expansionStubs("threads"),
 };

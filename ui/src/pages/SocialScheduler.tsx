@@ -20,7 +20,18 @@
  */
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays, Grid3X3, Inbox, Link2, PenSquare, Share2 } from "lucide-react";
+import {
+  BarChart3,
+  CalendarDays,
+  Grid3X3,
+  Hash,
+  Inbox,
+  Link2,
+  Mail,
+  PenSquare,
+  Share2,
+  Users,
+} from "lucide-react";
 import { socialApi } from "../api/social";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -33,14 +44,31 @@ import { ComposeTab } from "../components/social/ComposeTab";
 import { CalendarTab } from "../components/social/CalendarTab";
 import { QueueTab } from "../components/social/QueueTab";
 import { InstagramGridTab } from "../components/social/InstagramGridTab";
+import { InboxTab } from "../components/social/InboxTab";
+import { AnalyticsTab } from "../components/social/AnalyticsTab";
+import { CompetitorsTab } from "../components/social/CompetitorsTab";
+import { HashtagLabTab } from "../components/social/HashtagLabTab";
 
-type SchedulerTab = "compose" | "calendar" | "grid" | "queue" | "accounts";
+type SchedulerTab =
+  | "compose"
+  | "calendar"
+  | "grid"
+  | "queue"
+  | "accounts"
+  | "inbox"
+  | "analytics"
+  | "competitors"
+  | "hashtags";
 
 const TABS: { key: SchedulerTab; label: string; icon: typeof PenSquare }[] = [
   { key: "compose", label: "Compose", icon: PenSquare },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "grid", label: "IG Grid", icon: Grid3X3 },
   { key: "queue", label: "Queue", icon: Inbox },
+  { key: "inbox", label: "Inbox", icon: Mail },
+  { key: "analytics", label: "Analytics", icon: BarChart3 },
+  { key: "competitors", label: "Competitors", icon: Users },
+  { key: "hashtags", label: "Hashtag Lab", icon: Hash },
   { key: "accounts", label: "Accounts", icon: Link2 },
 ];
 
@@ -121,6 +149,10 @@ export function SocialScheduler() {
         {tab === "calendar" ? <CalendarTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "grid" ? <InstagramGridTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "queue" ? <QueueTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "inbox" ? <InboxTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "analytics" ? <AnalyticsTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "competitors" ? <CompetitorsTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "hashtags" ? <HashtagLabTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "accounts" ? <AccountsTab companyId={selectedCompanyId} accounts={accounts} loading={accountsQuery.isLoading} /> : null}
       </section>
     </div>
