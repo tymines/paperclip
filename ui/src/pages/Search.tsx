@@ -350,7 +350,7 @@ export function Search() {
                 }
               }
             }}
-            placeholder="Search issues, comments, documents, agents, projects…"
+            placeholder={`Search ${issueNoun.plural}, comments, documents, agents, projects…`}
             aria-label="Search query"
             className="h-10 pl-9 pr-20 text-sm"
           />

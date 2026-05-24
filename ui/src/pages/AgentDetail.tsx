@@ -13,6 +13,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
 import { usePanel } from "../context/PanelContext";
@@ -675,6 +676,7 @@ export function AgentDetail() {
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const issueNoun = useIssueNoun();
   const [actionError, setActionError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
   const activeView = urlRunId ? "runs" as AgentDetailView : parseAgentDetailView(urlTab ?? null);
@@ -1397,6 +1399,7 @@ function AgentOverview({
   agentId: string;
   agentRouteId: string;
 }) {
+  const issueNoun = useIssueNoun();
   return (
     <div className="space-y-8">
       {/* Latest Run */}
@@ -1407,10 +1410,10 @@ function AgentOverview({
         <ChartCard title="Run Activity" subtitle="Last 14 days">
           <RunActivityChart runs={runs} />
         </ChartCard>
-        <ChartCard title="Issues by Priority" subtitle="Last 14 days">
+        <ChartCard title={`${issueNoun.capPlural} by Priority`} subtitle="Last 14 days">
           <PriorityChart issues={assignedIssues} />
         </ChartCard>
-        <ChartCard title="Issues by Status" subtitle="Last 14 days">
+        <ChartCard title={`${issueNoun.capPlural} by Status`} subtitle="Last 14 days">
           <IssueStatusChart issues={assignedIssues} />
         </ChartCard>
         <ChartCard title="Success Rate" subtitle="Last 14 days">
@@ -1421,7 +1424,7 @@ function AgentOverview({
       {/* Recent Issues */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium">Recent Issues</h3>
+          <h3 className="text-sm font-medium">Recent {issueNoun.capPlural}</h3>
           <Link
             to={`/issues?participantAgentId=${agentId}`}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors"
@@ -1430,7 +1433,7 @@ function AgentOverview({
           </Link>
         </div>
         {assignedIssues.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No recent issues.</p>
+          <p className="text-sm text-muted-foreground">No recent {issueNoun.plural}.</p>
         ) : (
           <div className="border border-border rounded-lg">
             {assignedIssues.slice(0, 10).map((issue) => (
@@ -3146,6 +3149,7 @@ function RunsTab({
 function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }: { run: HeartbeatRun; agentRouteId: string; adapterType: string; adapterConfig: Record<string, unknown> }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const issueNoun = useIssueNoun();
   const { data: hydratedRun } = useQuery({
     queryKey: queryKeys.runDetail(initialRun.id),
     queryFn: () => heartbeatsApi.get(initialRun.id),
@@ -3557,7 +3561,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
       {/* Issues touched by this run */}
       {touchedIssues && touchedIssues.length > 0 && (
         <div className="space-y-2">
-          <span className="text-xs font-medium text-muted-foreground">Issues Touched ({touchedIssues.length})</span>
+          <span className="text-xs font-medium text-muted-foreground">{issueNoun.capPlural} Touched ({touchedIssues.length})</span>
           <div className="border border-border rounded-lg divide-y divide-border">
             {touchedIssues.map((issue) => (
               <Link

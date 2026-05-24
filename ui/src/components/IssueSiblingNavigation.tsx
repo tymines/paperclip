@@ -5,6 +5,7 @@ import { createIssueDetailPath, withIssueDetailHeaderSeed } from "@/lib/issueDet
 import { cn } from "@/lib/utils";
 import { Link } from "@/lib/router";
 import { StatusIcon } from "./StatusIcon";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 
 type IssueSiblingNavigationProps = {
   navigation: IssueSiblingNavigationState | null;
@@ -12,11 +13,12 @@ type IssueSiblingNavigationProps = {
 };
 
 export function IssueSiblingNavigation({ navigation, linkState }: IssueSiblingNavigationProps) {
+  const issueNoun = useIssueNoun();
   if (!navigation) return null;
 
   return (
     <nav
-      aria-label="Sub-issue navigation"
+      aria-label={`Sub-${issueNoun.singular} navigation`}
       className="mt-4 flex flex-col gap-3 sm:mt-6 sm:grid sm:grid-cols-2"
     >
       {navigation.previous ? (

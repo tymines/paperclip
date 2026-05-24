@@ -13,6 +13,7 @@ import {
 } from "../api/heartbeats";
 import { useToastActions } from "../context/ToastContext";
 import { cn, relativeTime } from "../lib/utils";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { queryKeys } from "../lib/queryKeys";
 import { keepPreviousDataForSameQueryTail } from "../lib/query-placeholder-data";
 import { describeRunRetryState } from "../lib/runRetryState";
@@ -491,6 +492,7 @@ export function IssueRunLedgerContent({
   watchdogDecisionError,
   onWatchdogDecision,
 }: IssueRunLedgerContentProps) {
+  const issueNoun = useIssueNoun();
   const ledgerRuns = useMemo(() => mergeRuns(runs, liveRuns, activeRun), [activeRun, liveRuns, runs]);
   const latestRun = ledgerRuns[0] ?? null;
   const latestSilentRun = useMemo(
@@ -535,7 +537,7 @@ export function IssueRunLedgerContent({
   }, [activityEvents, canRenderActivityEvents, ledgerRuns]);
 
   return (
-    <section className="space-y-3" aria-label="Issue run ledger">
+    <section className="space-y-3" aria-label={`${issueNoun.capSingular} run ledger`}>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-sm font-medium text-muted-foreground">Run ledger</h3>

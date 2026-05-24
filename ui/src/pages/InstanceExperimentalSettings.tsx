@@ -141,6 +141,18 @@ export function InstanceExperimentalSettings() {
   const toggleMutation = useMutation({
     mutationFn: async (patch: PatchInstanceExperimentalSettings) =>
       instanceSettingsApi.updateExperimental(patch),
+    // Optimistic update: flip the toggle visually as soon as the user clicks
+    // so v1/v2 don't appear to "revert" while the PATCH round-trips. If the
+    // request fails we restore the previous value in onError.
+    onMutate: async (patch) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.instance.experimentalSettings });
+      const previous = queryClient.getQueryData(queryKeys.instance.experimentalSettings);
+      queryClient.setQueryData(queryKeys.instance.experimentalSettings, (old: unknown) => {
+        if (!old || typeof old !== "object") return old;
+        return { ...(old as Record<string, unknown>), ...patch };
+      });
+      return { previous };
+    },
     onSuccess: async () => {
       setActionError(null);
       await Promise.all([
@@ -148,7 +160,14 @@ export function InstanceExperimentalSettings() {
         queryClient.invalidateQueries({ queryKey: queryKeys.health }),
       ]);
     },
-    onError: (error) => {
+    onError: (error, _patch, context) => {
+      // Revert the optimistic update so the toggle snaps back if the PATCH failed.
+      if (context && typeof context === "object" && "previous" in context) {
+        queryClient.setQueryData(
+          queryKeys.instance.experimentalSettings,
+          (context as { previous: unknown }).previous,
+        );
+      }
       setActionError(error instanceof Error ? error.message : "Failed to update experimental settings.");
     },
   });
@@ -271,6 +290,8 @@ export function InstanceExperimentalSettings() {
               trims the sidebar to 6 top-level items + More, adds a Work page that merges
               Issues / Routines / Goals into filter tabs, and turns ⌘K into the unified
               "+ Create" surface. Theme picks up a soft 8px card radius and the teal accent.
+              Can be combined with UI v2 below — v1 controls the nav structure,
+              v2 controls the visual styling.
             </p>
           </div>
           <ToggleSwitch

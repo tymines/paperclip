@@ -9,6 +9,7 @@ import { Link } from "@/lib/router";
 import { createIssueDetailPath } from "../lib/issueDetailBreadcrumb";
 import { IssueLinkQuicklook } from "./IssueLinkQuicklook";
 import { isAssignedBacklogBlocker } from "../lib/issue-blockers";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import {
   deriveActiveRecoveryDisplayState,
   RECOVERY_CHIP_DEFAULT_TONE,
@@ -47,11 +48,12 @@ export function IssueBlockedNotice({
   successfulRunHandoff?: SuccessfulRunHandoffState | null;
   agentName?: string | null;
 }) {
+  const issueNoun = useIssueNoun();
   if (issueStatus === "done" || issueStatus === "cancelled") return null;
   const showSuccessfulRunHandoff = successfulRunHandoff?.required === true;
   if (!showSuccessfulRunHandoff && blockers.length === 0 && issueStatus !== "blocked") return null;
 
-  const blockerLabel = blockers.length === 1 ? "the linked issue" : "the linked issues";
+  const blockerLabel = blockers.length === 1 ? `the linked ${issueNoun.singular}` : `the linked ${issueNoun.plural}`;
   const terminalBlockers = blockers
     .flatMap((blocker) => blocker.terminalBlockers ?? [])
     .filter((blocker, index, all) => all.findIndex((candidate) => candidate.id === blocker.id) === index);
@@ -126,9 +128,9 @@ export function IssueBlockedNotice({
         <div className="min-w-0 space-y-1.5">
           {showSuccessfulRunHandoff ? (
             <>
-              <p className="font-medium leading-5">This issue still needs a next step.</p>
+              <p className="font-medium leading-5">This {issueNoun.singular} still needs a next step.</p>
               <p className="leading-5">
-                A run finished successfully, but this issue is still open in{" "}
+                A run finished successfully, but this {issueNoun.singular} is still open in{" "}
                 <code className="rounded bg-amber-100 px-1 py-0.5 text-[12px] dark:bg-amber-400/15">
                   in_progress
                 </code>{" "}
@@ -173,10 +175,10 @@ export function IssueBlockedNotice({
                 {blockers.length > 0
                   ? isStalled
                     ? stalledLeafBlockers.length > 1
-                      ? <>Work on this issue is blocked by {blockerLabel}, but the chain is stalled in review without a clear next step. Resolve the stalled reviews below or remove them as blockers.</>
-                      : <>Work on this issue is blocked by {blockerLabel}, but the chain is stalled in review without a clear next step. Resolve the stalled review below or remove it as a blocker.</>
-                    : <>Work on this issue is blocked by {blockerLabel} until {blockers.length === 1 ? "it is" : "they are"} complete. Comments still wake the assignee for questions or triage.</>
-                  : <>Work on this issue is blocked until it is moved back to todo. Comments still wake the assignee for questions or triage.</>}
+                      ? <>Work on this {issueNoun.singular} is blocked by {blockerLabel}, but the chain is stalled in review without a clear next step. Resolve the stalled reviews below or remove them as blockers.</>
+                      : <>Work on this {issueNoun.singular} is blocked by {blockerLabel}, but the chain is stalled in review without a clear next step. Resolve the stalled review below or remove it as a blocker.</>
+                    : <>Work on this {issueNoun.singular} is blocked by {blockerLabel} until {blockers.length === 1 ? "it is" : "they are"} complete. Comments still wake the assignee for questions or triage.</>
+                  : <>Work on this {issueNoun.singular} is blocked until it is moved back to todo. Comments still wake the assignee for questions or triage.</>}
               </p>
               {blockers.length > 0 ? (
                 <div className="flex flex-wrap gap-1.5">

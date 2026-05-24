@@ -28,6 +28,7 @@ import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { useUiV1 } from "../hooks/useUiV1";
 import { useUiV2 } from "../hooks/useUiV2";
+import { IssueNounProvider } from "../hooks/useIssueNoun";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
@@ -413,6 +414,7 @@ export function Layout() {
 
   return (
     <GeneralSettingsProvider value={{ keyboardShortcutsEnabled }}>
+      <IssueNounProvider>
       <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
@@ -528,6 +530,7 @@ export function Layout() {
       <KeyboardShortcutsCheatsheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <ToastViewport />
       </div>
+      </IssueNounProvider>
     </GeneralSettingsProvider>
   );
 }

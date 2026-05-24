@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { Issue } from "@paperclipai/shared";
 import { Columns3 } from "lucide-react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -226,6 +227,7 @@ export function InboxIssueTrailingColumns({
   assigneeContent?: ReactNode;
   onFilterWorkspace?: (workspaceId: string) => void;
 }) {
+  const issueNoun = useIssueNoun();
   const activityText = timeAgo(issue.lastActivityAt ?? issue.lastExternalCommentAt ?? issue.updatedAt);
   const userLabel = assigneeUserName ?? formatAssigneeUserLabel(issue.assigneeUserId, currentUserId) ?? "User";
 
@@ -369,7 +371,7 @@ export function InboxIssueTrailingColumns({
               {parentIdentifier ? (
                 <span className="font-mono">{parentIdentifier}</span>
               ) : (
-                <span className="italic">Sub-issue</span>
+                <span className="italic">Sub-{issueNoun.singular}</span>
               )}
             </span>
           );

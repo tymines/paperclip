@@ -3377,7 +3377,7 @@ export function IssueDetail() {
           {issue.workMode === "planning" ? (
             <span
               className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300 shrink-0"
-              title="This issue is in planning mode."
+              title={`This ${issueNoun.singular} is in planning mode.`}
             >
               Planning
             </span>
@@ -3436,7 +3436,7 @@ export function IssueDetail() {
                 variant="ghost"
                 size="icon-xs"
                 onClick={copyIssueToClipboard}
-                title="Copy issue as markdown"
+                title={`Copy ${issueNoun.singular} as markdown`}
               >
                 {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
               </Button>
@@ -3493,8 +3493,8 @@ export function IssueDetail() {
                   variant="ghost"
                   size="icon-xs"
                   className="shrink-0"
-                  aria-label="More issue actions"
-                  title="More issue actions"
+                  aria-label={`More ${issueNoun.singular} actions`}
+                  title={`More ${issueNoun.singular} actions`}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();

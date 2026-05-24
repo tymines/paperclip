@@ -425,6 +425,7 @@ function IssueSearchInput({
   value: string;
   onDebouncedChange?: (search: string) => void;
 }) {
+  const noun = useIssueNoun();
   const [draftValue, setDraftValue] = useState(value);
   const lastCommittedValueRef = useRef(value);
 
@@ -471,9 +472,9 @@ function IssueSearchInput({
             e.currentTarget.blur();
           }
         }}
-        placeholder="Search issues..."
+        placeholder={`Search ${noun.plural}...`}
         className="pl-7 text-xs sm:text-sm"
-        aria-label="Search issues"
+        aria-label={`Search ${noun.plural}`}
         data-page-search-target="true"
       />
     </div>
@@ -1464,7 +1465,7 @@ export function IssuesList({
             visibleColumnSet={visibleIssueColumnSet}
             onToggleColumn={toggleIssueColumn}
             onResetColumns={() => setIssueColumns(DEFAULT_INBOX_ISSUE_COLUMNS)}
-            title="Choose which issue columns stay visible"
+            title={`Choose which ${issueNoun.singular} columns stay visible`}
             iconOnly
           />
 
@@ -1773,7 +1774,7 @@ export function IssuesList({
                               <span
                                 className="ml-1.5 inline-flex items-center gap-1 rounded-full border border-amber-400/45 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-300/35 dark:bg-amber-400/10 dark:text-amber-300"
                                 aria-label="Needs next step"
-                                title="This issue needs a next step"
+                                title={`This ${issueNoun.singular} needs a next step`}
                               >
                                 <CircleDot className="h-3 w-3" />
                                 Needs next step

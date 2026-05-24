@@ -3,6 +3,7 @@ import type { Agent } from "@paperclipai/shared";
 import { AlertTriangle, CheckCircle2, ChevronRight, CircleDashed, GitBranch, ListChecks, Loader2, MessageSquareQuote, XCircle } from "lucide-react";
 import { Link } from "@/lib/router";
 import { formatAssigneeUserLabel } from "../lib/assignees";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import {
   buildSuggestedTaskTree,
   collectSuggestedTaskClientKeys,
@@ -354,6 +355,7 @@ function SuggestTasksCard({
     reason?: string,
   ) => Promise<void> | void;
 }) {
+  const issueNoun = useIssueNoun();
   const [rejecting, setRejecting] = useState(false);
   const [working, setWorking] = useState<"accept" | "reject" | null>(null);
   const [rejectReason, setRejectReason] = useState(
@@ -452,7 +454,7 @@ function SuggestTasksCard({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{totalTasks === 1 ? "1 draft issue" : `${totalTasks} draft issues`}</span>
+        <span>{totalTasks === 1 ? `1 draft ${issueNoun.singular}` : `${totalTasks} draft ${issueNoun.plural}`}</span>
         {interaction.payload.defaultParentId ? (
           <TaskField label="Default parent" value={interaction.payload.defaultParentId} tone="subtle" />
         ) : null}

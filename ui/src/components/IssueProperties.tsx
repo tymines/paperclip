@@ -11,6 +11,7 @@ import { goalsApi } from "../api/goals";
 import { issuesApi } from "../api/issues";
 import { projectsApi } from "../api/projects";
 import { useCompany } from "../context/CompanyContext";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { queryKeys } from "../lib/queryKeys";
 import { buildCompanyUserInlineOptions, buildCompanyUserLabelMap } from "../lib/company-members";
 import { ISSUE_OVERRIDE_ADAPTER_TYPES, type IssueModelLane } from "../lib/issue-assignee-overrides";
@@ -384,6 +385,7 @@ export function IssueProperties({
   inline,
 }: IssuePropertiesProps) {
   const { selectedCompanyId } = useCompany();
+  const issueNoun = useIssueNoun();
   const queryClient = useQueryClient();
   const companyId = issue.companyId ?? selectedCompanyId;
   const [assigneeOpen, setAssigneeOpen] = useState(false);
@@ -1636,7 +1638,7 @@ export function IssueProperties({
     <>
       <input
         className="w-full px-2 py-1.5 text-xs bg-transparent outline-none border-b border-border mb-1 placeholder:text-muted-foreground/50"
-        placeholder="Search issues..."
+        placeholder={`Search ${issueNoun.plural}...`}
         value={parentSearch}
         onChange={(e) => setParentSearch(e.target.value)}
         autoFocus={!inline}
@@ -1708,11 +1710,11 @@ export function IssueProperties({
     <>
       <input
         className="w-full px-2 py-1.5 text-xs bg-transparent outline-none border-b border-border mb-1 placeholder:text-muted-foreground/50"
-        placeholder="Search issues..."
+        placeholder={`Search ${issueNoun.plural}...`}
         value={blockedBySearch}
         onChange={(e) => setBlockedBySearch(e.target.value)}
         autoFocus={!inline}
-        aria-label="Search issues to add as blockers"
+        aria-label={`Search ${issueNoun.plural} to add as blockers`}
       />
       <div className="max-h-48 overflow-y-auto overscroll-contain">
         <button
@@ -1749,9 +1751,9 @@ export function IssueProperties({
           );
         })}
         {blockerOptionsLoading ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">Searching issues...</div>
+          <div className="px-2 py-2 text-xs text-muted-foreground">Searching {issueNoun.plural}...</div>
         ) : blockerOptions.length === 0 ? (
-          <div className="px-2 py-2 text-xs text-muted-foreground">No matching issues.</div>
+          <div className="px-2 py-2 text-xs text-muted-foreground">No matching {issueNoun.plural}.</div>
         ) : null}
       </div>
     </>

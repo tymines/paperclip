@@ -6,6 +6,7 @@ import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { formatDateTime, issueUrl } from "../lib/utils";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -45,6 +46,7 @@ export function ExecutionWorkspaceCloseDialog({
 }: ExecutionWorkspaceCloseDialogProps) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
+  const issueNoun = useIssueNoun();
   const actionLabel = currentStatus === "cleanup_failed" ? "Retry close" : "Close workspace";
 
   const readinessQuery = useQuery({
@@ -129,7 +131,7 @@ export function ExecutionWorkspaceCloseDialog({
 
             {blockingIssues.length > 0 ? (
               <section className="space-y-2">
-                <h3 className="text-sm font-medium">Blocking issues</h3>
+                <h3 className="text-sm font-medium">Blocking {issueNoun.plural}</h3>
                 <div className="space-y-2">
                   {blockingIssues.map((issue) => (
                     <div key={issue.id} className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm">
@@ -209,7 +211,7 @@ export function ExecutionWorkspaceCloseDialog({
 
             {otherLinkedIssues.length > 0 ? (
               <section className="space-y-2">
-                <h3 className="text-sm font-medium">Other linked issues</h3>
+                <h3 className="text-sm font-medium">Other linked {issueNoun.plural}</h3>
                 <div className="space-y-2">
                   {otherLinkedIssues.map((issue) => (
                     <div key={issue.id} className="rounded-xl border border-border bg-background px-4 py-3 text-sm">

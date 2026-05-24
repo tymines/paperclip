@@ -8,6 +8,7 @@ import {
   withIssueDetailHeaderSeed,
 } from "../lib/issueDetailBreadcrumb";
 import { cn } from "../lib/utils";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { deriveActiveRecoveryDisplayState, RECOVERY_CHIP_DEFAULT_TONE } from "../lib/recovery-display";
 import { StatusIcon } from "./StatusIcon";
 import { productivityReviewTriggerLabel } from "./ProductivityReviewBadge";
@@ -60,6 +61,7 @@ export function IssueRow({
   archiveDisabled,
   className,
 }: IssueRowProps) {
+  const issueNoun = useIssueNoun();
   const issuePathId = issue.identifier ?? issue.id;
   const identifier = issue.identifier ?? issue.id.slice(0, 8);
   const showUnreadSlot = unreadState !== null;
@@ -88,7 +90,7 @@ export function IssueRow({
   const planningModeIndicator = issue.workMode === "planning" ? (
     <span
       className="ml-1.5 inline-flex shrink-0 items-center rounded-full border border-amber-500/60 bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
-      title="This issue is in planning mode."
+      title={`This ${issueNoun.singular} is in planning mode.`}
     >
       Planning
     </span>

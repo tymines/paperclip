@@ -33,6 +33,7 @@ import {
   Layers,
 } from "lucide-react";
 import { useUiV1 } from "../hooks/useUiV1";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { Identity } from "./Identity";
 import { agentUrl, projectUrl } from "../lib/utils";
 
@@ -50,6 +51,7 @@ export function CommandPalette() {
   const { selectedCompanyId } = useCompany();
   const { openNewIssue, openNewAgent, openCreateComposer } = useDialogActions();
   const uiV1 = useUiV1();
+  const issueNoun = useIssueNoun();
   const { isMobile, setSidebarOpen } = useSidebar();
   const searchQuery = query.trim();
 
@@ -125,7 +127,7 @@ export function CommandPalette() {
         if (v && isMobile) setSidebarOpen(false);
       }}>
       <CommandInput
-        placeholder="Search issues, agents, projects..."
+        placeholder={`Search ${issueNoun.plural}, agents, projects...`}
         value={query}
         onValueChange={setQuery}
         onKeyDown={(event) => {

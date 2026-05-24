@@ -12,6 +12,7 @@ import {
 } from "@/lib/issueDetailCache";
 import { queryKeys } from "@/lib/queryKeys";
 import { cn } from "@/lib/utils";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { StatusIcon } from "@/components/StatusIcon";
 
@@ -99,6 +100,7 @@ export const IssueLinkQuicklook = React.forwardRef<
   },
   ref,
 ) {
+  const issueNoun = useIssueNoun();
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const prefetchedState = issuePrefetch ? withIssueDetailHeaderSeed(state, issuePrefetch) : state;
@@ -182,7 +184,7 @@ export const IssueLinkQuicklook = React.forwardRef<
             <div className="h-4 w-full rounded bg-accent/40" />
             <div className="h-4 w-3/4 rounded bg-accent/30" />
             {!isLoading ? (
-              <p className="text-xs text-muted-foreground">Unable to load issue preview.</p>
+              <p className="text-xs text-muted-foreground">Unable to load {issueNoun.singular} preview.</p>
             ) : null}
           </div>
         )}

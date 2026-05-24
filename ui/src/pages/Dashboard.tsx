@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, Navigate, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { useUiV1 } from "../hooks/useUiV1";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { dashboardApi } from "../api/dashboard";
 import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
@@ -52,6 +53,7 @@ function DashboardLegacy() {
   const { selectedCompanyId, companies } = useCompany();
   const { openOnboarding } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const issueNoun = useIssueNoun();
   const [animatedActivityIds, setAnimatedActivityIds] = useState<Set<string>>(new Set());
   const seenActivityIdsRef = useRef<Set<string>>(new Set());
   const hydratedActivityRef = useRef(false);
@@ -309,10 +311,10 @@ function DashboardLegacy() {
             <ChartCard title="Run Activity" subtitle="Last 14 days">
               <RunActivityChart activity={data.runActivity} />
             </ChartCard>
-            <ChartCard title="Issues by Priority" subtitle="Last 14 days">
+            <ChartCard title={`${issueNoun.capPlural} by Priority`} subtitle="Last 14 days">
               <PriorityChart issues={issues ?? []} />
             </ChartCard>
-            <ChartCard title="Issues by Status" subtitle="Last 14 days">
+            <ChartCard title={`${issueNoun.capPlural} by Status`} subtitle="Last 14 days">
               <IssueStatusChart issues={issues ?? []} />
             </ChartCard>
             <ChartCard title="Success Rate" subtitle="Last 14 days">
