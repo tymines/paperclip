@@ -86,3 +86,29 @@ export interface SocialPostListItem extends SocialPost {
   targetCount: number;
   platforms: SocialPlatform[];
 }
+
+/** Public (redacted) view of social_app_credentials. */
+export interface SocialAppCredentialPublic {
+  platform: SocialPlatform;
+  clientId: string;
+  /** Only the trailing 4 chars of the client secret — for confirmation. */
+  clientSecretLast4: string | null;
+  redirectUri: string | null;
+  lastValidatedAt: Date | null;
+  lastValidationStatus: "ok" | "error" | null;
+  lastValidationMessage: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** Result of POST /social/credentials/:platform/test. */
+export interface SocialAppCredentialTestResult {
+  ok: boolean;
+  message: string;
+  /** Echo of platform handle/account the /me-equivalent returned, if any. */
+  identity?: {
+    handle?: string;
+    displayName?: string;
+    accountType?: string;
+  } | null;
+}

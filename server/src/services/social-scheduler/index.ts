@@ -38,3 +38,12 @@ export {
   type FeatureRow,
   type HomeworkItem,
 } from "./feasibility.js";
+export { socialCredentialsService, type SocialCredentialsService } from "./credentials.js";
+export { testCredentialFormat } from "./credential-tester.js";
+export {
+  encryptOAuthSecret,
+  decryptOAuthSecret,
+  isEncryptedEnvelope,
+  last4,
+  type EncryptedEnvelope,
+} from "./oauth-crypto.js";

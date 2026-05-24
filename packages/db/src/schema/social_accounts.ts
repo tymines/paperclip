@@ -21,6 +21,13 @@ export const socialAccounts = pgTable(
     accessToken: text("access_token"),
     refreshToken: text("refresh_token"),
     tokenExpiresAt: timestamp("token_expires_at", { withTimezone: true }),
+    /** Encrypted OAuth tokens written by the connect-wizard /auth callback. */
+    oauthAccessTokenEncrypted: jsonb("oauth_access_token_encrypted"),
+    oauthRefreshTokenEncrypted: jsonb("oauth_refresh_token_encrypted"),
+    /** Granted OAuth scopes (per-platform string array). */
+    scopes: jsonb("scopes").$type<string[]>().notNull().default([]),
+    /** "wizard" when set up by SocialConnectWizard, "stub" for legacy stubs. */
+    connectMethod: text("connect_method"),
     status: text("status").notNull().default("connected"),
     metadata: jsonb("metadata"),
     createdBy: text("created_by"),

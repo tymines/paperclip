@@ -35,6 +35,7 @@ export { roomMembers } from "./room_members.js";
 export { roomMessages } from "./room_messages.js";
 export { socialAccounts } from "./social_accounts.js";
 export { socialPosts, socialPostTargets } from "./social_posts.js";
+export { socialAppCredentials } from "./social_app_credentials.js";
 export { issues } from "./issues.js";
 export { issueRecoveryActions } from "./issue_recovery_actions.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";

@@ -659,6 +659,13 @@
       "when": 1778976007000,
       "tag": "0093_company_skills_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1778976008000,
+      "tag": "0094_social_oauth_wizard",
+      "breakpoints": true
     }
   ]
 }

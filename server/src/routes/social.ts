@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import {
@@ -5,12 +6,18 @@ import {
   updateSocialAccountSchema,
   createSocialPostSchema,
   updateSocialPostSchema,
+  buildOAuthAuthorizeUrl,
+  getWizardSpec,
+  WIZARD_PLATFORM_SPECS,
+  PAPERCLIP_SOCIAL_CALLBACK_BASE,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { socialService, logActivity } from "../services/index.js";
 import {
   getSocialAdapter,
   listSupportedSocialPlatforms,
+  socialCredentialsService,
+  testCredentialFormat,
 } from "../services/social-scheduler/index.js";
 import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
 import { notFound, badRequest } from "../errors.js";
@@ -26,9 +33,51 @@ function redactAccount(account: Record<string, unknown>) {
   return safe;
 }
 
+/**
+ * In-memory mapping of OAuth `state` → { companyId, platform }, used by
+ * the SocialConnectWizard step 4 → /auth/social-callback/:platform flow.
+ *
+ * State tokens expire after 10 minutes; the map is bounded to the most
+ * recent 500 entries to prevent unbounded growth in dev. Production
+ * deployments with multiple replicas would back this with Redis — the
+ * wizard does one round-trip per Connect, so a single-process map is
+ * good enough for v2.
+ */
+interface OAuthStateEntry {
+  companyId: string;
+  platform: SocialPlatform;
+  redirectUri: string;
+  createdAt: number;
+}
+const oauthStateStore = new Map<string, OAuthStateEntry>();
+const OAUTH_STATE_TTL_MS = 10 * 60_000;
+const OAUTH_STATE_MAX_SIZE = 500;
+
+function rememberOAuthState(state: string, entry: OAuthStateEntry) {
+  // Drop oldest entries first if we exceed the cap.
+  if (oauthStateStore.size >= OAUTH_STATE_MAX_SIZE) {
+    const oldestKey = oauthStateStore.keys().next().value;
+    if (oldestKey !== undefined) oauthStateStore.delete(oldestKey);
+  }
+  oauthStateStore.set(state, entry);
+}
+
+function consumeOAuthState(state: string): OAuthStateEntry | null {
+  const entry = oauthStateStore.get(state);
+  if (!entry) return null;
+  oauthStateStore.delete(state);
+  if (Date.now() - entry.createdAt > OAUTH_STATE_TTL_MS) return null;
+  return entry;
+}
+
+export function __testing_oauthStateStore() {
+  return { rememberOAuthState, consumeOAuthState, oauthStateStore };
+}
+
 export function socialRoutes(db: Db) {
   const router = Router();
   const svc = socialService(db);
+  const credentials = socialCredentialsService(db);
 
   // ── Accounts ─────────────────────────────────────────────────────────────
 
@@ -619,5 +668,288 @@ export function socialRoutes(db: Db) {
     res.json(filtered);
   });
 
+  // ── Connect Wizard: per-platform app credentials ───────────────────────
+  //
+  // The SocialConnectWizard (UI) reads + writes these. Client secrets are
+  // AES-256-GCM encrypted at rest; the API only returns the last 4 chars
+  // for confirmation. One row per platform — credentials are instance-
+  // wide (Tyler's Meta App / X app / Reddit app are shared across all
+  // companies he runs from this instance).
+
+  router.get("/social/wizard/specs", (_req, res) => {
+    res.json({
+      callbackBase: PAPERCLIP_SOCIAL_CALLBACK_BASE,
+      specs: WIZARD_PLATFORM_SPECS,
+    });
+  });
+
+  router.get("/social/credentials", async (_req, res) => {
+    const all = await credentials.list();
+    res.json(all);
+  });
+
+  router.get("/social/credentials/:platform", async (req, res) => {
+    const platform = String(req.params.platform);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const row = await credentials.get(platform);
+    if (!row) {
+      res.json(null);
+      return;
+    }
+    res.json(row);
+  });
+
+  router.put("/social/credentials/:platform", async (req, res) => {
+    const platform = String(req.params.platform);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const clientId = typeof req.body?.clientId === "string" ? req.body.clientId.trim() : "";
+    const clientSecret =
+      typeof req.body?.clientSecret === "string" ? req.body.clientSecret.trim() : "";
+    if (!clientId) throw badRequest("clientId is required");
+    if (!clientSecret) throw badRequest("clientSecret is required");
+    const actor = getActorInfo(req);
+    const saved = await credentials.save({
+      platform,
+      clientId,
+      clientSecret,
+      redirectUri:
+        typeof req.body?.redirectUri === "string"
+          ? req.body.redirectUri
+          : `${PAPERCLIP_SOCIAL_CALLBACK_BASE}/${platform}`,
+      createdBy: actor.actorId,
+    });
+    res.status(201).json(saved);
+  });
+
+  router.delete("/social/credentials/:platform", async (req, res) => {
+    const platform = String(req.params.platform);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const ok = await credentials.delete(platform);
+    res.json({ deleted: ok });
+  });
+
+  router.post("/social/credentials/:platform/test", async (req, res) => {
+    const platform = String(req.params.platform);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const clientId = typeof req.body?.clientId === "string" ? req.body.clientId : "";
+    const clientSecret =
+      typeof req.body?.clientSecret === "string" ? req.body.clientSecret : "";
+    const result = testCredentialFormat(platform, clientId, clientSecret);
+    const existing = await credentials.get(platform);
+    if (existing) {
+      await credentials.markValidation(platform, result);
+    }
+    res.json(result);
+  });
+
+  // ── Wizard step 4: launch + finish OAuth on platform's consent screen ─
+
+  router.post("/companies/:companyId/social/wizard/:platform/authorize", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const platform = String(req.params.platform);
+    assertCompanyAccess(req, companyId);
+    if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+    const spec = getWizardSpec(platform);
+    if (!spec) throw badRequest(`${platform} is not yet supported by the connect wizard`);
+    const creds = await credentials.get(platform);
+    if (!creds) throw badRequest(`Save ${platform} app credentials before authorizing`);
+
+    const state = randomBytes(24).toString("base64url");
+    const redirectUri = creds.redirectUri ?? `${PAPERCLIP_SOCIAL_CALLBACK_BASE}/${platform}`;
+    rememberOAuthState(state, {
+      companyId,
+      platform,
+      redirectUri,
+      createdAt: Date.now(),
+    });
+    const authUrl = buildOAuthAuthorizeUrl({
+      spec,
+      clientId: creds.clientId,
+      redirectUri,
+      state,
+    });
+    res.json({ authUrl, state, scopes: spec.oauth.scopes });
+  });
+
+  /**
+   * OAuth callback — the platform redirects Tyler's browser here after he
+   * grants consent. In v2 we don't actually exchange the code for tokens
+   * against the live API (that requires Tyler to have real apps in App
+   * Review); instead we record the connect as successful, persist a
+   * stub-shaped row tagged `connectMethod: "wizard"`, and let the publish
+   * worker pull tokens from credentials when it's time to call the API.
+   *
+   * In v3+ the wizard will hit the platform's token endpoint here using
+   * the stored client secret, then store the encrypted tokens on the
+   * social_accounts row.
+   */
+  router.get("/auth/social-callback/:platform", async (req, res, next) => {
+    try {
+      const platform = String(req.params.platform);
+      if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
+      const code = typeof req.query.code === "string" ? req.query.code : "";
+      const state = typeof req.query.state === "string" ? req.query.state : "";
+      const errorParam = typeof req.query.error === "string" ? req.query.error : null;
+      const errorDescription =
+        typeof req.query.error_description === "string" ? req.query.error_description : null;
+
+      if (errorParam) {
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: errorDescription ?? errorParam,
+          }));
+        return;
+      }
+      if (!state) {
+        res
+          .status(400)
+          .send(callbackHtml({ ok: false, platform, message: "Missing state parameter" }));
+        return;
+      }
+      const entry = consumeOAuthState(state);
+      if (!entry || entry.platform !== platform) {
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: "OAuth state expired or did not match — restart the wizard",
+          }));
+        return;
+      }
+
+      const adapter = getSocialAdapter(platform);
+      if (!adapter) {
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: `${platform} adapter is not wired yet`,
+          }));
+        return;
+      }
+      const spec = getWizardSpec(platform);
+
+      const stubAccount = await adapter.finishConnect({
+        code: code || "wizard_stub_code",
+        state,
+        companyId: entry.companyId,
+      });
+      const persisted = await svc.createAccount(entry.companyId, {
+        platform: stubAccount.platform,
+        platformAccountId: stubAccount.platformAccountId,
+        displayName: stubAccount.displayName,
+        username: stubAccount.username,
+        avatarUrl: stubAccount.avatarUrl,
+        accessToken: stubAccount.accessToken,
+        refreshToken: stubAccount.refreshToken,
+        tokenExpiresAt: stubAccount.tokenExpiresAt,
+        status: stubAccount.status,
+        metadata: stubAccount.metadata as Record<string, unknown> | null,
+        scopes: spec?.oauth.scopes ?? [],
+        connectMethod: "wizard",
+        createdBy: null,
+      } as unknown as Parameters<typeof svc.createAccount>[1]);
+
+      await logActivity(db, {
+        companyId: entry.companyId,
+        actorType: "system",
+        actorId: "social-oauth-callback",
+        action: "social.account.connected",
+        entityType: "social_account",
+        entityId: persisted.id,
+        details: { platform, method: "wizard" },
+      });
+
+      res.status(200).send(callbackHtml({
+        ok: true,
+        platform,
+        message: `Connected ${spec?.label ?? platform}. You can close this tab.`,
+        accountId: persisted.id,
+      }));
+    } catch (err) {
+      next(err);
+    }
+  });
+
   return router;
+}
+
+/**
+ * Tiny HTML page rendered into the OAuth callback popup/tab. Posts a
+ * message back to the opener (the wizard) and auto-closes after 2s.
+ */
+function callbackHtml(opts: {
+  ok: boolean;
+  platform: string;
+  message: string;
+  accountId?: string;
+}): string {
+  const safeMessage = opts.message.replace(/[<>&"]/g, (ch) => {
+    switch (ch) {
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case "&": return "&amp;";
+      case "\"": return "&quot;";
+      default: return ch;
+    }
+  });
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Paperclip — ${opts.platform} ${opts.ok ? "connected" : "error"}</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at top, #1a1d2b, #0a0b13);
+      color: #f4f4f5;
+    }
+    .card {
+      max-width: 380px;
+      padding: 2rem;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      backdrop-filter: blur(8px);
+      text-align: center;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: ${opts.ok ? "rgba(16, 185, 129, 0.15)" : "rgba(239, 68, 68, 0.15)"};
+      color: ${opts.ok ? "#6ee7b7" : "#fca5a5"};
+    }
+    h1 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
+    p { color: rgba(244,244,245,0.7); font-size: 0.92rem; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="card" role="status">
+    <span class="badge">${opts.ok ? "Connected" : "Error"}</span>
+    <h1>Paperclip · ${opts.platform}</h1>
+    <p>${safeMessage}</p>
+  </div>
+  <script>
+    (function () {
+      var payload = { type: "paperclip-social-callback", ok: ${opts.ok ? "true" : "false"}, platform: ${JSON.stringify(opts.platform)}, accountId: ${JSON.stringify(opts.accountId ?? null)}, message: ${JSON.stringify(opts.message)} };
+      try { if (window.opener) window.opener.postMessage(payload, "*"); } catch (e) {}
+      setTimeout(function () { try { window.close(); } catch (e) {} }, 2000);
+    })();
+  </script>
+</body>
+</html>`;
 }

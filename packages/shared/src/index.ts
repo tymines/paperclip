@@ -694,6 +694,8 @@ export type {
   SocialPostAnalytics,
   SocialPostDetail,
   SocialPostListItem,
+  SocialAppCredentialPublic,
+  SocialAppCredentialTestResult,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {
@@ -1216,3 +1218,18 @@ export type {
   EnvironmentProviderCapability,
   EnvironmentSupportStatus,
 } from "./environment-support.js";
+
+export {
+  WIZARD_PLATFORM_SPECS,
+  PAPERCLIP_SOCIAL_CALLBACK_BASE,
+  getWizardSpec,
+  buildOAuthAuthorizeUrl,
+} from "./social/wizard-platform-specs.js";
+export type {
+  WizardCallout,
+  WizardCostNote,
+  WizardGate,
+  WizardGateKind,
+  WizardOAuthConfig,
+  WizardPlatformSpec,
+} from "./social/wizard-platform-specs.js";

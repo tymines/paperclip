@@ -1,14 +1,28 @@
 import type {
   SocialAccountPublic,
+  SocialAppCredentialPublic,
+  SocialAppCredentialTestResult,
   SocialPlatform,
   SocialPostDetail,
   SocialPostListItem,
+  WizardPlatformSpec,
 } from "@paperclipai/shared";
 import { api } from "./client";
 
 export interface SocialPlatformSupport {
   all: SocialPlatform[];
   supported: SocialPlatform[];
+}
+
+export interface WizardSpecsResponse {
+  callbackBase: string;
+  specs: Partial<Record<SocialPlatform, WizardPlatformSpec>>;
+}
+
+export interface WizardAuthorizeResponse {
+  authUrl: string;
+  state: string;
+  scopes: string[];
 }
 
 export interface PostValidationResult {
@@ -187,6 +201,34 @@ export const socialApi = {
       text,
       niche,
     }),
+
+  // ── Connect Wizard ──────────────────────────────────────────────────────
+  wizardSpecs: () => api.get<WizardSpecsResponse>("/social/wizard/specs"),
+
+  listCredentials: () => api.get<SocialAppCredentialPublic[]>("/social/credentials"),
+
+  getCredentials: (platform: SocialPlatform) =>
+    api.get<SocialAppCredentialPublic | null>(`/social/credentials/${platform}`),
+
+  saveCredentials: (
+    platform: SocialPlatform,
+    body: { clientId: string; clientSecret: string; redirectUri?: string },
+  ) => api.put<SocialAppCredentialPublic>(`/social/credentials/${platform}`, body),
+
+  deleteCredentials: (platform: SocialPlatform) =>
+    api.delete<{ deleted: boolean }>(`/social/credentials/${platform}`),
+
+  testCredentials: (
+    platform: SocialPlatform,
+    body: { clientId: string; clientSecret: string },
+  ) =>
+    api.post<SocialAppCredentialTestResult>(`/social/credentials/${platform}/test`, body),
+
+  wizardAuthorize: (companyId: string, platform: SocialPlatform) =>
+    api.post<WizardAuthorizeResponse>(
+      `/companies/${companyId}/social/wizard/${platform}/authorize`,
+      {},
+    ),
 };
 
 export interface DirectMessageThread {
