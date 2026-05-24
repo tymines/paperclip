@@ -700,11 +700,14 @@
     max-height: 100dvh !important;
     top: 0 !important;
     left: 0 !important;
+    /* Tailwind v4 ships the shadcn Dialog centering via the dedicated
+       `translate` CSS property (not legacy `transform`), so we have to
+       neutralise both — clearing only `transform` leaves the dialog at
+       translate(-50%, -50%) and pushes half of it off-screen on mobile. */
     transform: none !important;
+    translate: none !important;
     border-radius: 0 !important;
     border: 0 !important;
-    /* Reserve room above the bottom action bar so scrolled content
-       isn't hidden behind it. */
     padding-bottom: 0 !important;
   }
 
