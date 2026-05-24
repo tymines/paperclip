@@ -1603,11 +1603,39 @@ export function KnowledgeGraph() {
     return LINK_COLOR[link.type];
   }, [viewMode, graphData.nodes]);
 
+  // Boost particles for: (a) edges that lie on an active path highlight, and
+  // (b) edges touching the hovered node — Later-style "traveling particle"
+  // effect that emphasizes which connections light up on focus.
+  // Build edge-count per node so highly-connected memories visually
+  // dominate. Cap at 4× the base size — beyond that the force layout
+  // shoves them off-screen and the visual stops paying off.
+  const edgeCountByNode = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const link of graphData.links) {
+      const s = typeof link.source === "object" ? link.source.id : link.source;
+      const t = typeof link.target === "object" ? link.target.id : link.target;
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+      counts.set(t, (counts.get(t) ?? 0) + 1);
+    }
+    return counts;
+  }, [graphData.links]);
+
+  const sizedNodeVal = useCallback((node: GraphNode): number => {
+    const base = NODE_SIZE[node.type] * (IS_MOBILE ? 5 : 1);
+    const edges = edgeCountByNode.get(node.id) ?? 0;
+    // Logarithmic scale so the first few connections matter a lot,
+    // diminishing returns past ~16 edges. Capped at 4× base.
+    const scale = Math.min(4, 1 + Math.log2(1 + edges) * 0.45);
+    return base * scale;
+  }, [edgeCountByNode]);
+
   const linkParticles = useCallback((link: GraphLink): number => {
     const s = typeof link.source === "object" ? link.source.id : link.source;
     const t = typeof link.target === "object" ? link.target.id : link.target;
-    return pathResultRef.current?.linkIds.has(`${s}|${t}`) ? 6 : 2;
-  }, []);
+    if (pathResultRef.current?.linkIds.has(`${s}|${t}`)) return 6;
+    if (hoveredNode && (s === hoveredNode.id || t === hoveredNode.id)) return 4;
+    return 2;
+  }, [hoveredNode]);
 
   const linkParticleSpeed = useCallback((link: GraphLink): number => {
     const tgt = typeof link.target === "object" ? (link.target as GraphNode) : graphData.nodes.find(n => n.id === link.target);
@@ -1778,7 +1806,7 @@ export function KnowledgeGraph() {
             nodeLabel={(n) => `[${n.type.toUpperCase()}] ${n.label}`}
             nodeThreeObject={nodeThreeObject}
             nodeThreeObjectExtend={false}
-            nodeVal={(n) => NODE_SIZE[n.type] * (IS_MOBILE ? 5 : 1)}
+            nodeVal={sizedNodeVal}
             linkColor={linkColor}
             linkWidth={viewMode === "neuromorphic" ? 0 : (IS_MOBILE ? 3 : 1.2)}
             linkCurvature={viewMode === "neuromorphic" ? 0 : 0.15}
@@ -2150,6 +2178,45 @@ export function KnowledgeGraph() {
         {isTimeTraveling && <span className="shrink-0 rounded bg-cyan-950 px-2 py-0.5 text-[10px] font-medium text-cyan-400">{formatSliderLabel(timeFilterDate!)}</span>}
         {isTimeTraveling && <button onClick={() => setTimeFilterMs(null)} className="shrink-0 rounded border border-gray-700 px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200">Reset</button>}
       </div>
+
+      {/* Hover detail card — floats top-right (desktop) / top below the
+          toolbar (mobile), only when the user hovers a node. Shows the
+          memory's label, type, description, edge count, and a count of
+          incoming + outgoing connections. Hidden when nothing is hovered
+          so it doesn't compete with the canvas. */}
+      {hoveredNode && !IS_MOBILE ? (
+        <div
+          className="pointer-events-none absolute z-20 max-w-[320px] rounded-2xl border border-white/10 bg-zinc-950/85 p-3 text-xs text-gray-200 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-md"
+          style={{ top: "84px", right: "20px" }}
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-sm"
+              style={{ backgroundColor: NODE_COLOR[hoveredNode.type] }}
+              aria-hidden
+            />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
+              {hoveredNode.type}
+            </span>
+            <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-gray-300">
+              {edgeCountByNode.get(hoveredNode.id) ?? 0} link
+              {(edgeCountByNode.get(hoveredNode.id) ?? 0) === 1 ? "" : "s"}
+            </span>
+          </div>
+          <div className="mt-1.5 line-clamp-3 font-medium text-gray-100">
+            {hoveredNode.label}
+          </div>
+          {hoveredNode.description ? (
+            <div className="mt-1.5 line-clamp-4 text-[11px] leading-snug text-gray-400">
+              {hoveredNode.description}
+            </div>
+          ) : null}
+          <div className="mt-2 text-[10px] text-gray-500">
+            Added {new Date(hoveredNode.createdAt).toLocaleDateString()}
+          </div>
+        </div>
+      ) : null}
 
       {/* Floating glass camera-control panel. Bottom-right on desktop, bottom-
           center on mobile so it never collides with the iOS home-indicator. */}
