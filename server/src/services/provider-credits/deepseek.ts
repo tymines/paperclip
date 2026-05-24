@@ -21,9 +21,14 @@ const FETCH_TIMEOUT_MS = 8_000;
 
 export const deepseekAdapter: ProviderCreditAdapter = {
   meta: {
+    // Default-card currency; the live response's `currency` field per
+    // balance entry is the source of truth. International accounts on
+    // platform.deepseek.com default to USD; mainland-China accounts
+    // default to CNY. Showing CNY here is the safer default until we
+    // see a real call back.
     key: "deepseek",
     name: "DeepSeek",
-    currency: "USD",
+    currency: "CNY",
     balanceSupported: true,
     spendingSupported: false,
     dashboardUrl: "https://platform.deepseek.com/usage",
@@ -57,9 +62,15 @@ export const deepseekAdapter: ProviderCreditAdapter = {
       if (!info) {
         throw new Error("deepseek balance: empty balance_infos");
       }
+      if (!info.currency) {
+        // The currency field is always returned in practice; treating
+        // its absence as malformed avoids silently rendering CNY
+        // balances as USD (or vice versa) on Tyler's card.
+        throw new Error("deepseek balance: missing currency field");
+      }
       const result: ProviderBalanceSnapshot = {
         balance: Number(info.total_balance ?? 0),
-        currency: info.currency ?? "USD",
+        currency: info.currency,
         fetchedAt: new Date(),
         breakdown: {
           granted: Number(info.granted_balance ?? 0),
