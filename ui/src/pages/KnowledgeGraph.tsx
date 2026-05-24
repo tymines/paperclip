@@ -14,6 +14,9 @@ import {
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { KnowledgeGraphControls } from "../components/knowledge-graph/v2-controls";
+import { KnowledgeGraphDetailPanel, type DetailPanelNode } from "../components/knowledge-graph/v2-detail-panel";
+import { useKnowledgeGraphGestures } from "../components/knowledge-graph/v2-gestures";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1777,6 +1780,59 @@ export function KnowledgeGraph() {
     fgRef.current?.zoomToFit(600, 50);
   }, []);
 
+  // v2 mobile gestures — pinch / single-tap / double-tap-fly /
+  // swipe-pan (delegated to OrbitControls) / pull-down-reset.
+  useKnowledgeGraphGestures({
+    canvasRef: containerRef,
+    enabled: IS_MOBILE,
+    onPinchZoom: (scaleDelta) => {
+      const fg = fgRef.current;
+      if (!fg) return;
+      const cam = fg.camera() as THREE.PerspectiveCamera;
+      const p = cam.position;
+      // Spec §8: clamp distance to [30, 1200] world units.
+      const len = p.length();
+      const next = Math.max(30, Math.min(1200, len / scaleDelta));
+      const k = next / len;
+      fg.cameraPosition({ x: p.x * k, y: p.y * k, z: p.z * k }, undefined, 80);
+    },
+    onDoubleTap: (clientX, clientY) => {
+      // Raycast at the tap coordinate via react-force-graph helpers.
+      const fg = fgRef.current;
+      if (!fg) return;
+      // Convert screen → world via the camera's projection inverse.
+      // react-force-graph exposes `screen2GraphCoords` for 2D; for 3D we
+      // approximate by zooming to the closest visible node within 40px.
+      const targetEl = containerRef.current;
+      if (!targetEl) return;
+      const rect = targetEl.getBoundingClientRect();
+      const localX = clientX - rect.left;
+      const localY = clientY - rect.top;
+      let closest: GraphNode | null = null;
+      let closestDist = 40 * 40;
+      const cam = fg.camera() as THREE.PerspectiveCamera;
+      for (const n of graphData.nodes) {
+        if (typeof n.x !== "number" || typeof n.y !== "number" || typeof n.z !== "number") continue;
+        const v = new THREE.Vector3(n.x, n.y, n.z).project(cam);
+        const sx = ((v.x + 1) / 2) * rect.width;
+        const sy = ((-v.y + 1) / 2) * rect.height;
+        const dsq = (sx - localX) ** 2 + (sy - localY) ** 2;
+        if (dsq < closestDist) {
+          closestDist = dsq;
+          closest = n;
+        }
+      }
+      if (closest && typeof closest.x === "number") {
+        fg.cameraPosition(
+          { x: closest.x, y: closest.y!, z: (closest.z ?? 0) + 60 },
+          closest as unknown as { x: number; y: number; z: number },
+          1200,
+        );
+      }
+    },
+    onPullDownReset: handleResetView,
+  });
+
   return (
     <div
       className="relative flex w-full flex-col overflow-hidden"
@@ -2179,108 +2235,55 @@ export function KnowledgeGraph() {
         {isTimeTraveling && <button onClick={() => setTimeFilterMs(null)} className="shrink-0 rounded border border-gray-700 px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200">Reset</button>}
       </div>
 
-      {/* Hover detail card — floats top-right (desktop) / top below the
-          toolbar (mobile), only when the user hovers a node. Shows the
-          memory's label, type, description, edge count, and a count of
-          incoming + outgoing connections. Hidden when nothing is hovered
-          so it doesn't compete with the canvas. */}
-      {hoveredNode && !IS_MOBILE ? (
-        <div
-          className="pointer-events-none absolute z-20 max-w-[320px] rounded-2xl border border-white/10 bg-zinc-950/85 p-3 text-xs text-gray-200 shadow-[0_12px_40px_rgba(0,0,0,0.45)] backdrop-blur-md"
-          style={{ top: "84px", right: "20px" }}
-          aria-live="polite"
-        >
-          <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block h-2.5 w-2.5 rounded-sm"
-              style={{ backgroundColor: NODE_COLOR[hoveredNode.type] }}
-              aria-hidden
-            />
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
-              {hoveredNode.type}
-            </span>
-            <span className="ml-auto rounded-full bg-white/5 px-1.5 py-0.5 text-[10px] font-semibold text-gray-300">
-              {edgeCountByNode.get(hoveredNode.id) ?? 0} link
-              {(edgeCountByNode.get(hoveredNode.id) ?? 0) === 1 ? "" : "s"}
-            </span>
-          </div>
-          <div className="mt-1.5 line-clamp-3 font-medium text-gray-100">
-            {hoveredNode.label}
-          </div>
-          {hoveredNode.description ? (
-            <div className="mt-1.5 line-clamp-4 text-[11px] leading-snug text-gray-400">
-              {hoveredNode.description}
-            </div>
-          ) : null}
-          <div className="mt-2 text-[10px] text-gray-500">
-            Added {new Date(hoveredNode.createdAt).toLocaleDateString()}
-          </div>
-        </div>
+      {/* v2 right-rail hover detail panel — replaces the inline 280px
+          top-right card. 320px slide-in with auto-dismiss + entity pill
+          + description + Related concepts. Hidden on mobile (its mobile
+          mode renders a bottom sheet but the canvas is already tight
+          there). */}
+      {!IS_MOBILE ? (
+        <KnowledgeGraphDetailPanel
+          node={hoveredNode ? toDetailPanelNode(hoveredNode, edgeCountByNode.get(hoveredNode.id) ?? 0) : null}
+          onRelatedClick={(id) => {
+            const target = graphData.nodes.find((n) => n.id === id);
+            if (target) handleNodeClick(target);
+          }}
+        />
       ) : null}
 
-      {/* Floating glass camera-control panel. Bottom-right on desktop, bottom-
-          center on mobile so it never collides with the iOS home-indicator. */}
+      {/* v2 floating glass camera-control panel. Spec §5 visual treatment
+          (radius 18px, blur 20 + saturate 140%, 1px white-8% border,
+          32px shadow). Bottom-right on desktop, raised above iOS home
+          indicator on mobile. */}
+      <KnowledgeGraphControls
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onFitAll={handleFitAll}
+        onReset={handleResetView}
+        mobile={IS_MOBILE}
+      />
+
+      {/* Vignette overlay — spec §4. Adds the calm radial falloff at the
+          edges so the canvas reads as a depth field, not a flat plane. */}
       <div
-        className="pointer-events-auto absolute z-20 flex flex-col gap-1 rounded-2xl border border-white/10 bg-zinc-950/70 p-1 backdrop-blur-md shadow-[0_12px_40px_rgba(0,0,0,0.4)]"
-        style={
-          IS_MOBILE
-            ? { bottom: "calc(env(safe-area-inset-bottom) + 88px)", right: "12px" }
-            : { bottom: "84px", right: "20px" }
-        }
-        aria-label="Camera controls"
-      >
-        <button
-          type="button"
-          onClick={handleZoomIn}
-          title="Zoom in"
-          aria-label="Zoom in"
-          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <circle cx="11" cy="11" r="7" />
-            <line x1="21" y1="21" x2="16" y2="16" />
-            <line x1="11" y1="8" x2="11" y2="14" />
-            <line x1="8" y1="11" x2="14" y2="11" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={handleZoomOut}
-          title="Zoom out"
-          aria-label="Zoom out"
-          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <circle cx="11" cy="11" r="7" />
-            <line x1="21" y1="21" x2="16" y2="16" />
-            <line x1="8" y1="11" x2="14" y2="11" />
-          </svg>
-        </button>
-        <div className="my-0.5 h-px bg-white/10" aria-hidden />
-        <button
-          type="button"
-          onClick={handleFitAll}
-          title="Fit all"
-          aria-label="Fit all nodes in view"
-          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={handleResetView}
-          title="Reset view"
-          aria-label="Reset view"
-          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <path d="M3 12a9 9 0 1 0 3-6.7" />
-            <polyline points="3 4 3 10 9 10" />
-          </svg>
-        </button>
-      </div>
+        aria-hidden
+        className="pointer-events-none absolute inset-0 z-10"
+        style={{
+          background:
+            "radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.4) 100%)",
+        }}
+      />
     </div>
   );
+}
+
+/** Map the page's internal GraphNode to the v2 detail-panel shape. */
+function toDetailPanelNode(node: GraphNode, edgeCount: number): DetailPanelNode {
+  return {
+    id: node.id,
+    type: node.type,
+    label: node.label,
+    description: node.description ?? null,
+    createdAt: node.createdAt,
+    edgeCount,
+  };
 }
