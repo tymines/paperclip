@@ -47,6 +47,7 @@ export const instanceExperimentalSettingsSchema = z.object({
     .max(MAX_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS)
     .default(DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS),
   enableUiV1: z.boolean().default(true),
+  enableUiV2: z.boolean().default(false),
 }).strict();
 
 export const patchInstanceExperimentalSettingsSchema = instanceExperimentalSettingsSchema.partial();

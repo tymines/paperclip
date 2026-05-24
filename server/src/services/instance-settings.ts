@@ -47,6 +47,7 @@ function normalizeExperimentalSettings(raw: unknown): InstanceExperimentalSettin
         parsed.data.issueGraphLivenessAutoRecoveryLookbackHours ??
         DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
       enableUiV1: parsed.data.enableUiV1 ?? true,
+      enableUiV2: parsed.data.enableUiV2 ?? false,
     };
   }
   return {
@@ -57,6 +58,7 @@ function normalizeExperimentalSettings(raw: unknown): InstanceExperimentalSettin
     issueGraphLivenessAutoRecoveryLookbackHours:
       DEFAULT_ISSUE_GRAPH_LIVENESS_AUTO_RECOVERY_LOOKBACK_HOURS,
     enableUiV1: true,
+    enableUiV2: false,
   };
 }
 

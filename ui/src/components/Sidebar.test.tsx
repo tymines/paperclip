@@ -184,4 +184,51 @@ describe("Sidebar", () => {
       root.unmount();
     });
   });
+
+  it("renders the v2 shell when enableUiV2 is on", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIsolatedWorkspaces: false,
+      enableUiV1: true,
+      enableUiV2: true,
+    });
+    const root = await renderSidebar();
+
+    const v2Shell = container.querySelector('aside[data-sidebar-v2="true"]');
+    expect(v2Shell).not.toBeNull();
+    // v2 swaps the legacy SidebarCompanyMenu header for a workspace switcher chip.
+    expect(container.textContent).not.toContain("Company menu");
+    // v2 keeps the full 18-item structure (sample a few labels from MORE).
+    const labels = [...container.querySelectorAll('a[data-sidebar-nav-item]')].map(
+      (a) => a.textContent?.trim(),
+    );
+    expect(labels).toEqual(expect.arrayContaining(["Home", "Action Queue", "Fleet", "Routines"]));
+    expect(labels).toEqual(expect.arrayContaining(["Issues", "Projects", "Knowledge Graph"]));
+    // The v2 New Issue button is a distinct white-pill button (not a nav link).
+    const newIssue = container.querySelector('button[data-sidebar-new-issue="v2"]');
+    expect(newIssue?.textContent).toContain("New Issue");
+    // MORE section label is present in v2.
+    const moreLabel = container.querySelector('[data-sidebar-section-label="v2"]');
+    expect(moreLabel?.textContent).toBe("MORE");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("renders the legacy/v1 shell when enableUiV2 is off", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+      enableIsolatedWorkspaces: false,
+      enableUiV1: true,
+      enableUiV2: false,
+    });
+    const root = await renderSidebar();
+
+    expect(container.querySelector('aside[data-sidebar-v2="true"]')).toBeNull();
+    // Legacy/v1 still uses the company menu header.
+    expect(container.textContent).toContain("Company menu");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

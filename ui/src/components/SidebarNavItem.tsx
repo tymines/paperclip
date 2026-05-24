@@ -39,6 +39,7 @@ export function SidebarNavItem({
       state={SIDEBAR_SCROLL_RESET_STATE}
       end={end}
       onClick={() => { if (isMobile) setSidebarOpen(false); }}
+      data-sidebar-nav-item="true"
       className={({ isActive }) =>
         cn(
           "flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium transition-colors",

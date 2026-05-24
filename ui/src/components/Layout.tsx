@@ -27,6 +27,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useCompanyPageMemory } from "../hooks/useCompanyPageMemory";
 import { useUiV1 } from "../hooks/useUiV1";
+import { useUiV2 } from "../hooks/useUiV2";
 import { healthApi } from "../api/health";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { shouldSyncCompanySelectionFromRoute } from "../lib/company-selection";
@@ -66,6 +67,8 @@ function readRememberedInstanceSettingsPath(): string {
 export function Layout() {
   // Mirrors the `enableUiV1` instance flag onto <html> so the v1 theme tokens activate.
   useUiV1();
+  // Mirrors `enableUiV2` onto <html> for the v2 sidebar pass-1 visual skin.
+  useUiV2();
   const { sidebarOpen, setSidebarOpen, toggleSidebar, isMobile } = useSidebar();
   const { openNewIssue, openOnboarding } = useDialogActions();
   const { togglePanelVisible } = usePanel();

@@ -20,6 +20,8 @@ import {
   Bot,
   Layers,
   MoreHorizontal,
+  Plus,
+  ChevronDown,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -29,6 +31,7 @@ import { SidebarProjects } from "./SidebarProjects";
 import { SidebarAgents } from "./SidebarAgents";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import type { Company } from "@paperclipai/shared";
 import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
@@ -55,11 +58,28 @@ export function Sidebar() {
   const liveRunCount = liveRuns?.length ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const uiV1 = experimentalSettings?.enableUiV1 === true;
+  const uiV2 = experimentalSettings?.enableUiV2 === true;
 
   const pluginContext = {
     companyId: selectedCompanyId,
     companyPrefix: selectedCompany?.issuePrefix ?? null,
   };
+
+  // v2 sidebar (pass 1) renders a self-contained shell with its own top
+  // workspace switcher and bottom account chip — it doesn't share the
+  // legacy company-menu + search header above.
+  if (uiV2) {
+    return (
+      <SidebarV2
+        openNewIssue={openNewIssue}
+        inboxBadge={inboxBadge}
+        liveRunCount={liveRunCount}
+        showWorkspacesLink={showWorkspacesLink}
+        pluginContext={pluginContext}
+        company={selectedCompany}
+      />
+    );
+  }
 
   return (
     <aside className="w-full h-full min-h-0 border-r border-border bg-background flex flex-col">
@@ -259,5 +279,133 @@ function SidebarV1({
         missingBehavior="placeholder"
       />
     </nav>
+  );
+}
+
+interface SidebarV2Props extends SidebarSharedProps {
+  company: Company | null;
+}
+
+function initials(text: string | null | undefined, fallback = "??"): string {
+  if (!text) return fallback;
+  const parts = text.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return fallback;
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+}
+
+/**
+ * v2 Sidebar (pass 1) — ChatGPT-shell skin from home-v2-chatgpt-shell.html.
+ * Same 18-item structure as SidebarV1; just a different visual chrome:
+ * workspace switcher chip on top, white-pill New Issue, MORE caps label,
+ * and a bottom account chip. The v2 CSS lives in index.css gated by
+ * :root[data-ui-v2="true"]; this component only stamps the right data
+ * attributes so those rules can attach.
+ */
+function SidebarV2({
+  openNewIssue,
+  inboxBadge,
+  liveRunCount,
+  showWorkspacesLink,
+  pluginContext,
+  company,
+}: SidebarV2Props) {
+  const workspaceLabel = company?.name ?? "Workspace";
+  const workspaceAvatar = initials(company?.issuePrefix ?? company?.name, "??");
+  const accountAvatar = initials(company?.issuePrefix ?? company?.name, "PC");
+  return (
+    <aside
+      aria-label="App navigation"
+      data-sidebar-v2="true"
+      className="flex flex-col"
+    >
+      <div data-sidebar-v2-inner>
+        <NavLink
+          to="/search"
+          data-sidebar-workspace="v2"
+          aria-label="Open workspace switcher / search"
+          title="Open search"
+        >
+          <span className="flex items-center gap-2 min-w-0 flex-1">
+            <span data-sidebar-workspace-avatar="v2" aria-hidden="true">
+              {workspaceAvatar}
+            </span>
+            <span data-sidebar-workspace-name>{workspaceLabel}</span>
+          </span>
+          <span data-sidebar-workspace-actions aria-hidden="true">
+            <ChevronDown className="h-4 w-4" />
+            <Search className="h-4 w-4" />
+          </span>
+        </NavLink>
+
+        <nav data-sidebar-v2-nav-stack className="scrollbar-auto-hide">
+          <button
+            type="button"
+            onClick={() => openNewIssue()}
+            data-sidebar-new-issue="v2"
+            data-sidebar-nav-item="true"
+            className="flex items-center gap-2.5"
+          >
+            <Plus className="h-4 w-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">New Issue</span>
+          </button>
+          <SidebarNavItem to="/home" label="Home" icon={HomeIcon} liveCount={liveRunCount} />
+          <SidebarNavItem
+            to="/inbox"
+            label="Action Queue"
+            icon={Inbox}
+            badge={inboxBadge.inbox}
+            badgeTone={inboxBadge.failedRuns > 0 ? "danger" : "default"}
+            alert={inboxBadge.failedRuns > 0}
+          />
+          <SidebarNavItem to="/agents" label="Fleet" icon={Bot} />
+          <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
+          <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
+          <PluginSlotOutlet
+            slotTypes={["sidebar"]}
+            context={pluginContext}
+            className="flex flex-col gap-0.5"
+            itemClassName="text-[13px] font-medium"
+            missingBehavior="placeholder"
+          />
+
+          <div data-sidebar-section-label="v2">MORE</div>
+
+          <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+          <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
+          <SidebarNavItem to="/work" label="Work" icon={Layers} />
+          <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+          <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
+          <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+          <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
+          <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
+          <SidebarNavItem to="/org" label="Org" icon={Network} />
+          <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+          <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
+          <SidebarNavItem to="/activity" label="Activity" icon={History} />
+          {showWorkspacesLink ? (
+            <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
+          ) : null}
+
+          <PluginSlotOutlet
+            slotTypes={["sidebarPanel"]}
+            context={pluginContext}
+            className="flex flex-col gap-3 mt-2"
+            itemClassName="rounded-lg border border-[color:var(--ui-v2-line)] bg-[rgba(255,255,255,0.035)] p-3"
+            missingBehavior="placeholder"
+          />
+        </nav>
+
+        <div data-sidebar-account-chip="v2">
+          <div data-sidebar-account-avatar="v2" aria-hidden="true">
+            {accountAvatar}
+          </div>
+          <div className="min-w-0 flex-1">
+            <strong data-sidebar-account-name="v2">{company?.name ?? "Paperclip"}</strong>
+            <span data-sidebar-account-sub="v2">{company?.issuePrefix ?? ""}</span>
+          </div>
+        </div>
+      </div>
+    </aside>
   );
 }

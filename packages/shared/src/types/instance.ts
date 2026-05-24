@@ -33,6 +33,7 @@ export interface InstanceExperimentalSettings {
   enableIssueGraphLivenessAutoRecovery: boolean;
   issueGraphLivenessAutoRecoveryLookbackHours: number;
   enableUiV1: boolean;
+  enableUiV2: boolean;
 }
 
 export interface InstanceSettings {
