@@ -22,6 +22,7 @@ import { useSidebar } from "../context/SidebarContext";
 import { queryKeys } from "../lib/queryKeys";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { EmptyState } from "../components/EmptyState";
+import { DetailBackButton } from "../components/DetailBackButton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -361,6 +362,7 @@ export function RoomDetail() {
     <div className="flex h-[calc(100dvh-7rem)] flex-col md:h-[calc(100vh-8rem)]">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-3 py-2 md:px-4">
+        <DetailBackButton fallbackTo="/rooms" />
         <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h1 className="truncate text-sm font-semibold">{room.name}</h1>
         <Badge variant={room.status === "active" ? "default" : "secondary"} className="shrink-0 text-xs">

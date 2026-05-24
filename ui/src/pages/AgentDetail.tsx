@@ -13,6 +13,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { ApiError } from "../api/client";
 import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { DetailBackButton } from "../components/DetailBackButton";
 import { useIssueNoun } from "../hooks/useIssueNoun";
 import { activityApi } from "../api/activity";
 import { issuesApi } from "../api/issues";
@@ -1014,6 +1015,7 @@ export function AgentDetail() {
       {/* Header */}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-3 min-w-0">
+          <DetailBackButton fallbackTo="/agents" />
           <AgentIconPicker
             value={agent.icon}
             onChange={(icon) => updateIcon.mutate(icon)}

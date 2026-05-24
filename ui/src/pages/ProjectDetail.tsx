@@ -17,6 +17,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { ProjectProperties, type ProjectConfigFieldKey, type ProjectFieldSaveState } from "../components/ProjectProperties";
 import { InlineEditor } from "../components/InlineEditor";
+import { DetailBackButton } from "../components/DetailBackButton";
 import { StatusBadge } from "../components/StatusBadge";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
 import { IssuesList } from "../components/IssuesList";
@@ -635,6 +636,9 @@ export function ProjectDetail() {
   return (
     <div className="space-y-6">
       <div className="flex items-start gap-3">
+        <div className="h-7 flex items-center">
+          <DetailBackButton fallbackTo="/projects" />
+        </div>
         <div className="h-7 flex items-center">
           <ColorPicker
             currentColor={project.color ?? "#6366f1"}
