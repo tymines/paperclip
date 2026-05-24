@@ -1718,6 +1718,20 @@ export function IssueDetail() {
     },
   });
 
+  // Delete = hard-remove. Routes back to the previous page (or /issues) on
+  // success because the current detail page no longer has a target.
+  const deleteIssue = useMutation({
+    mutationFn: (id: string) => issuesApi.remove(id),
+    onSuccess: () => {
+      if (selectedCompanyId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.sidebarBadges(selectedCompanyId) });
+      }
+      if (typeof window !== "undefined" && window.history.length > 1) navigate(-1);
+      else navigate(backHref ?? "/issues");
+    },
+  });
+
   const updateIssue = useMutation({
     mutationFn: (data: Record<string, unknown>) => issuesApi.update(issueId!, data),
     onMutate: async (data) => {
@@ -3453,7 +3467,41 @@ export function IssueDetail() {
             </div>
           )}
 
-          <div className="hidden md:flex items-center md:ml-auto shrink-0">
+          <div className="hidden md:flex items-center gap-1 md:ml-auto shrink-0">
+            {/* Primary actions: Mark Done + Delete. Both surface as visible
+                labelled buttons so Tyler doesn't have to hunt for them in
+                a popover — he flagged both as "unreachable" in his report.
+                Status changes still work via the StatusIcon dropdown (which
+                covers backlog / todo / in_progress / in_review / cancelled
+                in addition to "done"); this button is the fast-path for the
+                most common terminal state. */}
+            {issue.status !== "done" && issue.status !== "cancelled" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => updateIssue.mutate({ status: "done" })}
+                disabled={updateIssue.isPending}
+                title="Mark as done"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Mark done
+              </Button>
+            ) : null}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (!issue?.id) return;
+                if (!window.confirm(`Delete ${issueNoun.singular} "${issue.title}"? This cannot be undone.`)) return;
+                deleteIssue.mutate(issue.id);
+              }}
+              disabled={deleteIssue.isPending}
+              title={`Delete ${issueNoun.singular}`}
+              className="text-destructive hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </Button>
             {canArchiveFromInbox && (
               <Button
                 variant="ghost"

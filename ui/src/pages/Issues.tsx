@@ -174,12 +174,71 @@ export function Issues() {
     },
   });
 
+  // Tyler complaint: ~50 stale "Daily health check" tasks were rotting in
+  // his list (most blocked, never followed up on). We surface a one-tap
+  // cleanup button that flips them to "cancelled" so they drop out of the
+  // active view while preserving history. The filter is intentionally
+  // conservative: only cancels tasks that (a) title-match the heartbeat
+  // pattern, (b) are currently in a non-terminal state, and (c) haven't
+  // had activity in the last 7 days.
+  const heartbeatStaleCandidates = useMemo(() => {
+    const STALE_MS = 7 * 24 * 3600 * 1000;
+    const now = Date.now();
+    return issues.filter((issue) => {
+      if (!/daily health check/i.test(issue.title ?? "")) return false;
+      if (issue.status === "done" || issue.status === "cancelled") return false;
+      const updated = new Date(issue.updatedAt ?? issue.createdAt).getTime();
+      return now - updated > STALE_MS;
+    });
+  }, [issues]);
+
+  const cleanupHeartbeatMutation = useMutation({
+    mutationFn: async () => {
+      const targets = heartbeatStaleCandidates;
+      // Issue all PATCHes in parallel — backend handles concurrent updates
+      // and the optimistic UI re-renders progressively.
+      await Promise.all(
+        targets.map((issue) => issuesApi.update(issue.id, { status: "cancelled" })),
+      );
+      return targets.length;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.issues.list(selectedCompanyId!) });
+    },
+  });
+
   if (!selectedCompanyId) {
     return <EmptyState icon={CircleDot} message="Select a company to view issues." />;
   }
 
   return (
-    <IssuesList
+    <>
+      {heartbeatStaleCandidates.length >= 5 ? (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-300/70 bg-amber-50/90 px-3 py-2 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+          <div className="min-w-0">
+            <p className="font-medium">
+              {heartbeatStaleCandidates.length} stale "Daily health check" {issueNoun.plural}
+            </p>
+            <p className="text-xs leading-5">
+              Older than 7 days, not done or cancelled — usually heartbeat
+              routine residue. Cancel them all to clear the list (history
+              preserved).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!window.confirm(`Cancel ${heartbeatStaleCandidates.length} stale health check ${issueNoun.plural}?`)) return;
+              cleanupHeartbeatMutation.mutate();
+            }}
+            disabled={cleanupHeartbeatMutation.isPending}
+            className="shrink-0 rounded-md border border-amber-500/60 bg-amber-100/80 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-200/80 disabled:opacity-50 dark:bg-amber-500/20 dark:text-amber-100 dark:hover:bg-amber-500/30"
+          >
+            {cleanupHeartbeatMutation.isPending ? "Cleaning…" : "Clean up all"}
+          </button>
+        </div>
+      ) : null}
+      <IssuesList
       issues={issues ?? []}
       isLoading={isLoading}
       isLoadingMoreIssues={isFetchingNextPage}
@@ -199,5 +258,6 @@ export function Issues() {
       onUpdateIssue={(id, data) => updateIssue.mutate({ id, data })}
       searchFilters={participantAgentId || workspaceIdFilter ? { participantAgentId, workspaceId: workspaceIdFilter } : undefined}
     />
+    </>
   );
 }
