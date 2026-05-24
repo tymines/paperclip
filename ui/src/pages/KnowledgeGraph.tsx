@@ -1687,10 +1687,33 @@ export function KnowledgeGraph() {
     onError: () => { setIngestStatus("error"); setTimeout(() => setIngestStatus("idle"), 4000); },
   });
 
+  /**
+   * Export the company knowledge graph as an Obsidian zip.
+   *
+   * Mobile-safe approach: append a hidden anchor to the DOM, click it, then
+   * remove it. We use target="_blank" + rel="noopener" so iOS Safari treats
+   * the zip URL as an in-context save (its native download confirmation
+   * sheet is dismissable) instead of trying to render it and trapping the
+   * user in a modal they can't escape without force-closing the tab.
+   *
+   * Even with this fix the button is hidden on small viewports — the
+   * import side of Obsidian only makes sense on desktop, and Tyler asked
+   * for no Obsidian button at all on mobile.
+   */
   const handleObsidianExport = useCallback(() => {
     if (!selectedCompanyId) return;
     const url = knowledgeGraphApi.exportObsidianUrl(selectedCompanyId);
-    const a = document.createElement("a"); a.href = url; a.download = "paperclip-knowledge-graph.zip"; a.click();
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "paperclip-knowledge-graph.zip";
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    requestAnimationFrame(() => {
+      if (a.parentNode) a.parentNode.removeChild(a);
+    });
   }, [selectedCompanyId]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -1885,9 +1908,10 @@ export function KnowledgeGraph() {
             {ingestStatus === "ingesting" && <span className="inline-block h-2.5 w-2.5 animate-spin rounded-full border border-gray-600 border-t-cyan-400" />}
             {ingestStatus === "done" ? "✓" : ingestStatus === "error" ? "✗" : "⬇"} Ingest
           </button>
-          <button onClick={handleObsidianExport} disabled={!selectedCompanyId || knowledgeCount === 0} className="shrink-0 flex items-center gap-1 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-400 disabled:opacity-40">
-            ⬢ Obsidian
-          </button>
+          {/* Obsidian export deliberately hidden on mobile — the zip is only
+              useful on a desktop Obsidian install, and downloading large zips
+              from a navigation trapped Tyler in an iOS Safari modal he
+              couldn't escape. */}
         </div>
       ) : (
         /* Desktop: centered floating toolbar */
