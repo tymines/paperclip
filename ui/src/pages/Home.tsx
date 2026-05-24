@@ -97,10 +97,12 @@ export function Home() {
   }
 
   return (
-    <div className="flex flex-col">
-      <AgentStrip companyId={selectedCompanyId} />
+    <div className="flex flex-col" data-pp-page-v2="home">
+      <div data-pp-agent-strip="true">
+        <AgentStrip companyId={selectedCompanyId} />
+      </div>
 
-      <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5">
+      <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5" data-pp-home-now="true">
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="text-base font-semibold">Now</h1>
           <span className="hidden text-xs text-muted-foreground sm:inline">
@@ -123,7 +125,7 @@ export function Home() {
         </div>
       </div>
 
-      <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+      <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]" data-pp-home-grid="true">
         <section className="border-b border-border px-3 py-4 md:px-5 lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

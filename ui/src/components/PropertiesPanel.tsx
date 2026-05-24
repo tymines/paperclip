@@ -12,6 +12,7 @@ export function PropertiesPanel() {
     <aside
       className="hidden md:flex border-l border-border bg-card flex-col shrink-0 overflow-hidden transition-[width,opacity] duration-200 ease-in-out h-full"
       style={{ width: panelVisible ? 320 : 0, opacity: panelVisible ? 1 : 0 }}
+      data-pp-properties-panel="true"
     >
       <div className="w-80 flex-1 flex flex-col min-w-[320px] min-h-0">
         <div className="flex items-center justify-between px-4 py-2 border-b border-border">

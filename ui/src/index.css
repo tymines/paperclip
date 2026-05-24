@@ -243,6 +243,499 @@
   border-radius: 13px;
 }
 
+/* ============================================================
+   UI v2 — pass 2: full app reskin (all pages, gated by enableUiV2).
+   Tokens lifted from home-v2-chatgpt-shell.html and the per-page
+   mockups under /Users/augi/.openclaw/agents/codex/workspace/*v2*.html.
+   Pattern: override shadcn css vars under [data-ui-v2="true"] so every
+   bg-card / border-border / text-muted-foreground utility automatically
+   picks up the dark v2 palette. Page-specific layout tweaks hang off
+   [data-pp-page-v2="<page>"] hooks added to each page's root div.
+   ============================================================ */
+:root[data-ui-v2="true"] {
+  /* v2 base palette (raw) */
+  --pp-v2-bg: #08090b;
+  --pp-v2-bg-2: #0c0d10;
+  --pp-v2-panel: rgba(18, 19, 23, 0.78);
+  --pp-v2-panel-solid: #121318;
+  --pp-v2-panel-strong: #171920;
+  --pp-v2-text: #f4f4f5;
+  --pp-v2-muted: #a1a1aa;
+  --pp-v2-faint: #71717a;
+  --pp-v2-line: rgba(255, 255, 255, 0.08);
+  --pp-v2-line-strong: rgba(255, 255, 255, 0.14);
+  --pp-v2-soft: #27272a;
+  --pp-v2-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --pp-v2-shadow-card: 0 16px 50px rgba(0, 0, 0, 0.18);
+  --pp-v2-danger: #f87171;
+  --pp-v2-warning: #fbbf24;
+  --pp-v2-success: #34d399;
+  --pp-v2-info: #60a5fa;
+  --pp-v2-accent: #a78bfa;
+  --pp-v2-accent-2: #2dd4bf;
+
+  /* Per-agent accents — used by avatar/border tinting on cards */
+  --pp-v2-agent-ceo: #f87171;
+  --pp-v2-agent-cfo: #60a5fa;
+  --pp-v2-agent-cmo: #f0abfc;
+  --pp-v2-agent-content: #facc15;
+  --pp-v2-agent-coo: #fb923c;
+  --pp-v2-agent-cpo: #c4b5fd;
+  --pp-v2-agent-cto: #93c5fd;
+  --pp-v2-agent-intake: #e5e7eb;
+  --pp-v2-agent-openclaw: #22d3ee;
+
+  /* Override shadcn tokens so every utility class picks up v2 colors.
+     This is what makes the rest of the app inherit the dark v2 palette
+     without per-component edits. */
+  --background: #08090b;
+  --foreground: #f4f4f5;
+  --card: rgba(18, 19, 23, 0.62);
+  --card-foreground: #f4f4f5;
+  --popover: #121318;
+  --popover-foreground: #f4f4f5;
+  --primary: #f4f4f5;
+  --primary-foreground: #09090b;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: #f4f4f5;
+  --muted: rgba(255, 255, 255, 0.04);
+  --muted-foreground: #a1a1aa;
+  --accent: rgba(255, 255, 255, 0.07);
+  --accent-foreground: #f4f4f5;
+  --destructive: #f87171;
+  --destructive-foreground: #fee2e2;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: rgba(255, 255, 255, 0.30);
+  --sidebar: #0f1014;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #f4f4f5;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: rgba(255, 255, 255, 0.07);
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: rgba(255, 255, 255, 0.30);
+
+  /* v2 radii — bigger and softer than v1 */
+  --radius: 14px;
+  --radius-sm: 11px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+
+  color-scheme: dark;
+}
+
+/* Body & html: radial gradient stack from the canonical mockup. */
+:root[data-ui-v2="true"] body {
+  background:
+    radial-gradient(circle at 12% -10%, rgba(167, 139, 250, 0.16), transparent 34rem),
+    radial-gradient(circle at 94% 4%, rgba(45, 212, 191, 0.12), transparent 31rem),
+    radial-gradient(circle at 54% 105%, rgba(134, 239, 172, 0.08), transparent 34rem),
+    var(--pp-v2-bg);
+  color: var(--pp-v2-text);
+}
+
+/* Main content surface — glass over the gradient. */
+:root[data-ui-v2="true"] main#main-content {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 22%);
+}
+
+/* ============================================================
+   v2 BreadcrumbBar — sticky, blurred, glass topbar.
+   The existing component renders <div class="border-b border-border …">,
+   so we target the first border-b sibling under main column.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-topbar="true"],
+:root[data-ui-v2="true"] [data-pp-topbar-wrap="true"] > div {
+  background: rgba(8, 9, 11, 0.78);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border-bottom: 1px solid var(--pp-v2-line);
+  min-height: 56px;
+}
+
+:root[data-ui-v2="true"] [data-pp-topbar="true"] h1 {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--pp-v2-text);
+}
+
+/* ============================================================
+   Shadcn components, retheme.
+   ============================================================ */
+
+/* Cards */
+:root[data-ui-v2="true"] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.014)),
+    rgba(18, 19, 23, 0.62);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--pp-v2-shadow-card);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="card-header"],
+:root[data-ui-v2="true"] [data-slot="card-content"],
+:root[data-ui-v2="true"] [data-slot="card-footer"] {
+  border-color: var(--pp-v2-line);
+}
+
+/* Buttons — restyle by data-slot. Keep size variants intact. */
+:root[data-ui-v2="true"] [data-slot="button"] {
+  border-radius: 999px;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-slot="button"]:hover {
+  transform: translateY(-1px);
+}
+
+/* Default variant becomes the white pill (primary action). */
+:root[data-ui-v2="true"] [data-slot="button"]:not([data-variant]),
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="default"] {
+  background: #f4f4f5;
+  color: #09090b;
+  border: 1px solid transparent;
+  font-weight: 650;
+  box-shadow: 0 10px 30px rgba(244, 244, 245, 0.10);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"]:not([data-variant]):hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="default"]:hover {
+  background: #ffffff;
+  color: #09090b;
+}
+
+/* Outline & ghost & secondary → glass pill */
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="ghost"],
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="secondary"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="outline"]:hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="ghost"]:hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="secondary"]:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--pp-v2-line-strong);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="destructive"] {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.30);
+  color: #fecaca;
+}
+
+/* Link buttons stay flat */
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="link"] {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="link"]:hover {
+  transform: none;
+}
+
+/* Inputs / textareas / selects */
+:root[data-ui-v2="true"] [data-slot="input"],
+:root[data-ui-v2="true"] [data-slot="textarea"],
+:root[data-ui-v2="true"] [data-slot="select-trigger"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+  border-radius: 13px;
+}
+
+:root[data-ui-v2="true"] [data-slot="input"]:focus-visible,
+:root[data-ui-v2="true"] [data-slot="textarea"]:focus-visible,
+:root[data-ui-v2="true"] [data-slot="select-trigger"]:focus-visible {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+}
+
+/* Popover / dropdown / dialog / sheet — solid dark panels */
+:root[data-ui-v2="true"] [data-slot="popover-content"],
+:root[data-ui-v2="true"] [data-slot="dropdown-menu-content"],
+:root[data-ui-v2="true"] [data-slot="select-content"],
+:root[data-ui-v2="true"] [data-slot="dialog-content"],
+:root[data-ui-v2="true"] [data-slot="sheet-content"],
+:root[data-ui-v2="true"] [data-slot="command-dialog"],
+:root[data-ui-v2="true"] [data-slot="tooltip-content"] {
+  background: var(--pp-v2-panel-solid);
+  border: 1px solid var(--pp-v2-line-strong);
+  color: var(--pp-v2-text);
+  border-radius: var(--radius-md);
+  box-shadow: var(--pp-v2-shadow);
+}
+
+:root[data-ui-v2="true"] [data-slot="tooltip-content"] {
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+/* Badges — pill style */
+:root[data-ui-v2="true"] [data-slot="badge"] {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-muted);
+  font-weight: 600;
+}
+
+/* Tabs — segmented pill control */
+:root[data-ui-v2="true"] [data-slot="tabs-list"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: 14px;
+  padding: 3px;
+}
+
+:root[data-ui-v2="true"] [data-slot="tabs-trigger"] {
+  border-radius: 11px;
+  color: var(--pp-v2-muted);
+  background: transparent;
+}
+
+:root[data-ui-v2="true"] [data-slot="tabs-trigger"][data-state="active"] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--pp-v2-text);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
+}
+
+/* Separators get softer */
+:root[data-ui-v2="true"] [data-slot="separator"] {
+  background: var(--pp-v2-line);
+}
+
+/* Table rows */
+:root[data-ui-v2="true"] [data-slot="table"] {
+  color: var(--pp-v2-text);
+}
+:root[data-ui-v2="true"] [data-slot="table"] thead {
+  color: var(--pp-v2-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Switch / checkbox color tweaks */
+:root[data-ui-v2="true"] [data-slot="switch"][data-state="checked"] {
+  background-color: #f4f4f5;
+}
+:root[data-ui-v2="true"] [data-slot="switch"][data-state="unchecked"] {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* PropertiesPanel sidebar */
+:root[data-ui-v2="true"] [data-pp-properties-panel="true"] {
+  background: rgba(8, 9, 11, 0.72);
+  border-left: 1px solid var(--pp-v2-line);
+  backdrop-filter: blur(18px);
+}
+
+/* ============================================================
+   MobileBottomNav — bottom tab bar.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-mobile-bottom-nav="true"] {
+  background: rgba(8, 9, 11, 0.85);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border-top: 1px solid var(--pp-v2-line);
+}
+
+/* ============================================================
+   Home page (data-pp-page-v2="home" — set on <main> by Layout)
+   These rules style descendants only; main keeps its own padding.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-now="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(18, 19, 23, 0.64);
+  box-shadow: var(--pp-v2-shadow-card);
+  padding: 12px 16px;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-now="true"] h1 {
+  font-size: 14px;
+  letter-spacing: -0.015em;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  background: rgba(18, 19, 23, 0.62);
+  box-shadow: var(--pp-v2-shadow-card);
+  overflow: hidden;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] > section {
+  background: transparent;
+  border-color: var(--pp-v2-line) !important;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] .rounded-lg.border {
+  background: rgba(18, 19, 23, 0.78) !important;
+  border-color: var(--pp-v2-line) !important;
+  border-radius: var(--radius-md);
+}
+
+/* AgentStrip card row gets the v2 agent-card look */
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-agent-strip="true"] {
+  padding: 12px;
+  border-bottom: 1px solid var(--pp-v2-line);
+}
+
+/* ============================================================
+   Inbox / Action Queue (data-pp-page-v2="inbox")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] .rounded-md.border,
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] .rounded-lg.border {
+  border-radius: var(--radius-md);
+}
+
+/* Issue rows */
+:root[data-ui-v2="true"] [data-pp-issue-row="true"] {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--pp-v2-line);
+  background: rgba(18, 19, 23, 0.62);
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-pp-issue-row="true"]:hover {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(24, 25, 31, 0.78);
+}
+
+/* ============================================================
+   Issues list
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="issues"] [data-slot="card"] {
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   Fleet / Agents grid (data-pp-page-v2="agents")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="agents"] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(12, 13, 16, 0.82);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+}
+:root[data-ui-v2="true"] [data-pp-page-v2="agents"] [data-slot="card"]:hover {
+  border-color: var(--pp-v2-line-strong);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.024)),
+    rgba(12, 13, 16, 0.88);
+}
+
+/* ============================================================
+   Issue detail (data-pp-page-v2="issue-detail")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="issue-detail"] [data-slot="card"] {
+  border-radius: var(--radius-lg);
+}
+
+/* Chat thread bubbles inherit card-ish background */
+:root[data-ui-v2="true"] [data-pp-page-v2="issue-detail"] [data-pp-chat-bubble="true"] {
+  background: rgba(18, 19, 23, 0.72);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   Rooms list + detail
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="rooms"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="room-detail"] [data-slot="card"] {
+  border-radius: var(--radius-lg);
+}
+
+/* ============================================================
+   Generic page surface — covers projects/work/approvals/goals/
+   routines/social/knowledge-graph/org/agent-detail/settings.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.014)),
+    rgba(18, 19, 23, 0.62);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+}
+
+/* Settings sidebar gets the same dark treatment */
+:root[data-ui-v2="true"] [data-pp-settings-sidebar="true"] {
+  background: var(--pp-v2-bg);
+  border-right: 1px solid var(--pp-v2-line);
+}
+
+/* Account menu popover overlay */
+:root[data-ui-v2="true"] [data-pp-account-menu="true"] {
+  background: var(--pp-v2-panel-solid);
+  border: 1px solid var(--pp-v2-line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--pp-v2-shadow);
+}
+
+/* Knowledge graph + org chart canvases */
+:root[data-ui-v2="true"] [data-pp-page-v2="knowledge-graph"],
+:root[data-ui-v2="true"] [data-pp-page-v2="org-chart"] {
+  background:
+    radial-gradient(circle at 22% 12%, rgba(167, 139, 250, 0.10), transparent 28rem),
+    radial-gradient(circle at 78% 88%, rgba(45, 212, 191, 0.08), transparent 26rem),
+    transparent;
+}
+
+/* Pre-existing v1 selectors that hardcoded light backgrounds: nudge them
+   to the v2 surface when v2 is active. */
+:root[data-ui-v2="true"] .bg-card {
+  background-color: var(--card) !important;
+}
+
+/* Force StatusBadge / pill chrome inside v2 to be muted */
+:root[data-ui-v2="true"] [data-slot="status-badge"],
+:root[data-ui-v2="true"] [data-pp-status-badge="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--pp-v2-muted);
+}
+
+/* Keep checkbox & radio visible on dark */
+:root[data-ui-v2="true"] [data-slot="checkbox"],
+:root[data-ui-v2="true"] [data-slot="radio-group-item"] {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Generic .rounded-{lg,xl} border combos used outside data-slot — soften them. */
+:root[data-ui-v2="true"] [data-pp-page-v2] .rounded-lg.border,
+:root[data-ui-v2="true"] [data-pp-page-v2] .rounded-xl.border {
+  background: rgba(18, 19, 23, 0.62);
+  border-color: var(--pp-v2-line);
+}
+
+/* Hover states using border-border or hover:bg-accent in the dark world */
+:root[data-ui-v2="true"] .hover\:bg-accent\/40:hover,
+:root[data-ui-v2="true"] .hover\:bg-accent\/50:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
 :root {
   color-scheme: light;
   --radius: 0;

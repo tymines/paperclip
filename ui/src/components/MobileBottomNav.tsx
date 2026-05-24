@@ -93,6 +93,7 @@ export function MobileBottomNav({ visible }: MobileBottomNavProps) {
         visible ? "translate-y-0" : "translate-y-full",
       )}
       aria-label="Mobile navigation"
+      data-pp-mobile-bottom-nav="true"
     >
       <div className="grid h-16 grid-cols-5 px-1">
         {items.map((item) => {

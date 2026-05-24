@@ -55,6 +55,48 @@ function getCompanyRouteSegment(pathname: string, companyPrefix: string | undefi
   return segments[1]?.toLowerCase() ?? null;
 }
 
+/**
+ * Maps a pathname to the v2 page-style hook key. Used to set
+ * data-pp-page-v2 on <main> so per-page v2 CSS rules can target
+ * routes without per-component edits. Returns "default" for any
+ * unmatched route so the generic [data-pp-page-v2] CSS still applies.
+ */
+function resolveV2PageKey(pathname: string): string {
+  const segments = pathname.split("/").filter(Boolean);
+  if (segments.length === 0) return "default";
+  // /home, /inbox, /agents/all, /agents/:id, /rooms, /rooms/:id, /issues, /projects,
+  // /activity, /work, /approvals, /goals, /routines, /social,
+  // /knowledge-graph, /org, /company/settings, instance/settings, /search etc.
+  const first = segments[0]?.toLowerCase() ?? "";
+  // Company-prefixed routes: /<PREFIX>/<segment>/...
+  const companyPrefixed = first.length >= 2 && first.length <= 16 && first === first.toUpperCase() && /^[A-Z0-9_-]+$/.test(segments[0] ?? "");
+  const route = companyPrefixed && segments.length > 1 ? (segments[1] ?? "").toLowerCase() : first;
+  const sub = companyPrefixed && segments.length > 2 ? (segments[2] ?? "").toLowerCase() : (segments[1] ?? "").toLowerCase();
+
+  if (route === "home" || route === "dashboard") return "home";
+  if (route === "inbox") return "inbox";
+  if (route === "issues") return sub && sub !== "" && !["new"].includes(sub) ? "issue-detail" : "issues";
+  if (route === "agents") return sub && !["all", "active", "paused", "error"].includes(sub) ? "agent-detail" : "agents";
+  if (route === "rooms") return sub ? "room-detail" : "rooms";
+  if (route === "projects") return sub ? "project-detail" : "projects";
+  if (route === "activity") return "activity";
+  if (route === "work") return "work";
+  if (route === "approvals") return "approvals";
+  if (route === "goals") return sub ? "goal-detail" : "goals";
+  if (route === "routines") return sub ? "routine-detail" : "routines";
+  if (route === "social") return "social";
+  if (route === "knowledge-graph") return "knowledge-graph";
+  if (route === "org") return "org-chart";
+  if (route === "skills") return "skills";
+  if (route === "costs") return "costs";
+  if (route === "search") return "search";
+  if (route === "company" && sub === "settings") return "settings";
+  if (route === "instance") return "instance-settings";
+  // Bare issue identifier under /<PREFIX>/<key>
+  if (companyPrefixed && segments.length === 2) return "issue-detail";
+  return "default";
+}
+
 function readRememberedInstanceSettingsPath(): string {
   if (typeof window === "undefined") return DEFAULT_INSTANCE_SETTINGS_PATH;
   try {
@@ -461,6 +503,7 @@ export function Layout() {
                 "flex-1 p-4 outline-none md:p-6",
                 isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
               )}
+              data-pp-page-v2={uiV2 ? resolveV2PageKey(location.pathname) : undefined}
             >
               {hasUnknownCompanyPrefix ? (
                 <NotFoundPage
