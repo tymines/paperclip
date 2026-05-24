@@ -18,6 +18,7 @@ import { useNavigate, useSearchParams } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialogActions } from "../context/DialogContext";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { searchApi } from "../api/search";
 import { agentsApi } from "../api/agents";
 import { queryKeys } from "../lib/queryKeys";
@@ -30,26 +31,30 @@ import type { Agent } from "@paperclipai/shared";
 const SEARCH_DEBOUNCE_MS = 250;
 const IDENTIFIER_PATTERN = /^[A-Z]+-\d+$/;
 
-const SCOPE_LABELS: Record<CompanySearchScope, string> = {
-  all: "All",
-  issues: "Issues",
-  comments: "Comments",
-  documents: "Documents",
-  agents: "Agents",
-  projects: "Projects",
-};
+function buildScopeLabels(issuesLabel: string): Record<CompanySearchScope, string> {
+  return {
+    all: "All",
+    issues: issuesLabel,
+    comments: "Comments",
+    documents: "Documents",
+    agents: "Agents",
+    projects: "Projects",
+  };
+}
 
 type SubGroupKey = "issues" | "comments" | "documents" | "agents" | "projects";
 
 const SUBGROUP_ORDER: SubGroupKey[] = ["issues", "comments", "documents", "agents", "projects"];
 
-const SUBGROUP_LABELS: Record<SubGroupKey, string> = {
-  issues: "Issues",
-  comments: "Comments",
-  documents: "Documents",
-  agents: "Agents",
-  projects: "Projects",
-};
+function buildSubgroupLabels(issuesLabel: string): Record<SubGroupKey, string> {
+  return {
+    issues: issuesLabel,
+    comments: "Comments",
+    documents: "Documents",
+    agents: "Agents",
+    projects: "Projects",
+  };
+}
 
 function classifyResult(result: CompanySearchResult): SubGroupKey {
   if (result.type === "agent") return "agents";
@@ -79,9 +84,9 @@ function isCompanySearchScope(value: string | null): value is CompanySearchScope
   return Boolean(value) && (COMPANY_SEARCH_SCOPES as readonly string[]).includes(value as string);
 }
 
-function describeScope(scope: CompanySearchScope) {
+function describeScope(scope: CompanySearchScope, labels: Record<CompanySearchScope, string>) {
   if (scope === "all") return "All scopes";
-  return SCOPE_LABELS[scope];
+  return labels[scope];
 }
 
 export function buildSearchUrl(href: string, query: string, scope: CompanySearchScope): string {
@@ -114,6 +119,9 @@ export function Search() {
   const { openNewIssue } = useDialogActions();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const issueNoun = useIssueNoun();
+  const scopeLabels = useMemo(() => buildScopeLabels(issueNoun.capPlural), [issueNoun.capPlural]);
+  const subgroupLabels = useMemo(() => buildSubgroupLabels(issueNoun.capPlural), [issueNoun.capPlural]);
 
   const urlQuery = searchParams.get("q") ?? "";
   const urlScopeRaw = searchParams.get("scope");
@@ -284,7 +292,7 @@ export function Search() {
         value,
         label: (
           <span className="flex items-center">
-            {SCOPE_LABELS[value as CompanySearchScope]}
+            {scopeLabels[value as CompanySearchScope]}
             {count !== null ? pill(count) : null}
           </span>
         ),
@@ -446,13 +454,16 @@ function SearchTabContent({
   isFetching,
   agentsById,
 }: SearchTabContentProps) {
+  const issueNoun = useIssueNoun();
+  const scopeLabels = useMemo(() => buildScopeLabels(issueNoun.capPlural), [issueNoun.capPlural]);
+  const subgroupLabels = useMemo(() => buildSubgroupLabels(issueNoun.capPlural), [issueNoun.capPlural]);
   if (showInitialState) {
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 py-10 sm:px-6">
         <div>
           <h2 className="text-lg font-semibold">Type to search company memory.</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Issues, comments, plan documents, agents, projects — same surface, ranked by relevance.
+            {issueNoun.capPlural}, comments, plan documents, agents, projects — same surface, ranked by relevance.
           </p>
         </div>
         {recentSearches.length > 0 ? (
@@ -502,14 +513,14 @@ function SearchTabContent({
         <div className="text-base font-semibold">Couldn’t run that search</div>
         <p className="text-sm text-muted-foreground">
           {status ? `The server returned ${status}.` : "The request failed."} Your input and filters are still here, so
-          you can retry or fall back to the Issues filter.
+          you can retry or fall back to the {issueNoun.capPlural} filter.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
           <Button onClick={refetch} variant="default" size="sm">
             Retry
           </Button>
           <Button onClick={navigateIssuesFallback} variant="outline" size="sm">
-            Open Issues filter view
+            Open {issueNoun.capPlural} filter view
           </Button>
         </div>
       </div>
@@ -546,7 +557,7 @@ function SearchTabContent({
         <FileQuestion className="h-10 w-10 text-muted-foreground" aria-hidden />
         <div className="text-base font-semibold">No results for &ldquo;{trimmedQuery}&rdquo;</div>
         <p className="text-sm text-muted-foreground">
-          We couldn’t find a match in {describeScope(scope).toLowerCase()}. Try widening the scope or rephrasing your
+          We couldn’t find a match in {describeScope(scope, scopeLabels).toLowerCase()}. Try widening the scope or rephrasing your
           query.
         </p>
         <div className="flex flex-wrap items-center justify-center gap-2">
@@ -557,10 +568,10 @@ function SearchTabContent({
           ) : null}
           <Button onClick={openNewIssue} size="sm" variant="default">
             <Plus className="mr-1.5 h-4 w-4" />
-            Create issue from this query
+            Create {issueNoun.singular} from this query
           </Button>
           <Button onClick={navigateIssuesFallback} size="sm" variant="ghost">
-            Open Issues filter view
+            Open {issueNoun.capPlural} filter view
           </Button>
         </div>
         <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground">
@@ -589,11 +600,11 @@ function SearchTabContent({
           subgroups.map((group, groupIndex) => (
             <section
               key={group.key}
-              aria-label={SUBGROUP_LABELS[group.key]}
+              aria-label={subgroupLabels[group.key]}
               className={cn("flex flex-col", groupIndex > 0 && "mt-6")}
             >
               <IssueGroupHeader
-                label={SUBGROUP_LABELS[group.key]}
+                label={subgroupLabels[group.key]}
                 trailing={
                   <span className="text-xs font-normal tabular-nums text-muted-foreground">
                     {group.results.length}

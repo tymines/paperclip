@@ -25,6 +25,7 @@ import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
 import { SidebarSection } from "./SidebarSection";
 import { SidebarNavItem } from "./SidebarNavItem";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { SidebarProjects } from "./SidebarProjects";
 import { SidebarAgents } from "./SidebarAgents";
 import { useDialogActions } from "../context/DialogContext";
@@ -42,6 +43,7 @@ export function Sidebar() {
   const { openNewIssue } = useDialogActions();
   const { selectedCompanyId, selectedCompany } = useCompany();
   const inboxBadge = useInboxBadge(selectedCompanyId);
+  const issueNoun = useIssueNoun();
   const { data: experimentalSettings } = useQuery({
     queryKey: queryKeys.instance.experimentalSettings,
     queryFn: () => instanceSettingsApi.getExperimental(),
@@ -95,6 +97,7 @@ export function Sidebar() {
           liveRunCount={liveRunCount}
           showWorkspacesLink={showWorkspacesLink}
           pluginContext={pluginContext}
+          issueNoun={issueNoun}
         />
       ) : (
         <SidebarLegacy
@@ -103,6 +106,7 @@ export function Sidebar() {
           liveRunCount={liveRunCount}
           showWorkspacesLink={showWorkspacesLink}
           pluginContext={pluginContext}
+          issueNoun={issueNoun}
         />
       )}
     </aside>
@@ -115,6 +119,7 @@ interface SidebarSharedProps {
   liveRunCount: number;
   showWorkspacesLink: boolean;
   pluginContext: { companyId: string | null; companyPrefix: string | null };
+  issueNoun: ReturnType<typeof useIssueNoun>;
 }
 
 function SidebarLegacy({
@@ -123,6 +128,7 @@ function SidebarLegacy({
   liveRunCount,
   showWorkspacesLink,
   pluginContext,
+  issueNoun,
 }: SidebarSharedProps) {
   return (
     <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
@@ -133,7 +139,7 @@ function SidebarLegacy({
           data-pp-new-issue="true"
         >
           <SquarePen className="h-4 w-4 shrink-0" />
-          <span className="truncate">New Issue</span>
+          <span className="truncate">New {issueNoun.capSingular}</span>
         </button>
         <SidebarNavItem to="/dashboard" label="Dashboard" icon={LayoutDashboard} liveCount={liveRunCount} />
         <SidebarNavItem
@@ -154,7 +160,7 @@ function SidebarLegacy({
       </div>
 
       <SidebarSection label="Work">
-        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+        <SidebarNavItem to="/issues" label={issueNoun.capPlural} icon={CircleDot} />
         <SidebarNavItem to="/routines" label="Routines" icon={Repeat} />
         <PluginLauncherOutlet
           placementZones={["sidebar"]}
@@ -210,6 +216,7 @@ function SidebarV1({
   liveRunCount,
   showWorkspacesLink,
   pluginContext,
+  issueNoun,
 }: SidebarSharedProps) {
   return (
     <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
@@ -220,7 +227,7 @@ function SidebarV1({
           data-pp-new-issue="true"
         >
           <SquarePen className="h-4 w-4 shrink-0" />
-          <span className="truncate">New Issue</span>
+          <span className="truncate">New {issueNoun.capSingular}</span>
         </button>
         <SidebarNavItem to="/home" label="Home" icon={HomeIcon} liveCount={liveRunCount} />
         <SidebarNavItem
@@ -244,7 +251,7 @@ function SidebarV1({
       </div>
 
       <SidebarSection label="More">
-        <SidebarNavItem to="/issues" label="Issues" icon={CircleDot} />
+        <SidebarNavItem to="/issues" label={issueNoun.capPlural} icon={CircleDot} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
         <SidebarNavItem to="/work" label="Work" icon={Layers} />
         <SidebarNavItem to="/goals" label="Goals" icon={Target} />

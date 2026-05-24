@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { useDialogActions } from "../context/DialogContext";
 import { useCompany } from "../context/CompanyContext";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { cn } from "../lib/utils";
 
 interface CreateComposerProps {
@@ -25,13 +26,15 @@ interface CreateOption {
   shortcut?: string;
 }
 
-const OPTIONS: CreateOption[] = [
-  { key: "issue", label: "Issue", hint: "Track a unit of work for an agent or user.", icon: CircleDot, shortcut: "I" },
-  { key: "goal", label: "Goal", hint: "Hierarchical company → team → agent goal.", icon: Target, shortcut: "G" },
-  { key: "project", label: "Project", hint: "Group of issues with a shared workspace.", icon: Hexagon, shortcut: "P" },
-  { key: "agent", label: "Agent", hint: "Hire a new agent for this company.", icon: Bot, shortcut: "A" },
-  { key: "routine", label: "Routine", hint: "Recurring scheduled work.", icon: Repeat, shortcut: "R" },
-];
+function buildOptions(noun: ReturnType<typeof useIssueNoun>): CreateOption[] {
+  return [
+    { key: "issue", label: noun.capSingular, hint: "Track a unit of work for an agent or user.", icon: CircleDot, shortcut: "I" },
+    { key: "goal", label: "Goal", hint: "Hierarchical company → team → agent goal.", icon: Target, shortcut: "G" },
+    { key: "project", label: "Project", hint: `Group of ${noun.plural} with a shared workspace.`, icon: Hexagon, shortcut: "P" },
+    { key: "agent", label: "Agent", hint: "Hire a new agent for this company.", icon: Bot, shortcut: "A" },
+    { key: "routine", label: "Routine", hint: "Recurring scheduled work.", icon: Repeat, shortcut: "R" },
+  ];
+}
 
 /**
  * UI v1 Create composer (decision 7's "⌘K extended into the unified Create
@@ -44,6 +47,8 @@ export function CreateComposer({ open, onOpenChange }: CreateComposerProps) {
   const { openNewIssue, openNewGoal, openNewProject, openNewAgent } = useDialogActions();
   const { selectedCompany } = useCompany();
   const navigate = useNavigate();
+  const issueNoun = useIssueNoun();
+  const OPTIONS = buildOptions(issueNoun);
 
   useEffect(() => {
     if (!open) setSelected("issue");

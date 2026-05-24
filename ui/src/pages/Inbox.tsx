@@ -21,6 +21,7 @@ import {
 } from "../lib/blockedInbox";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useIssueNoun } from "../hooks/useIssueNoun";
 import { useGeneralSettings } from "../context/GeneralSettingsContext";
 import { useSidebar } from "../context/SidebarContext";
 import { queryKeys } from "../lib/queryKeys";
@@ -663,6 +664,7 @@ function JoinRequestInboxRow({
 export function Inbox() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const issueNoun = useIssueNoun();
   const { openNewIssue } = useDialogActions();
   const { isMobile } = useSidebar();
   const navigate = useNavigate();
@@ -1495,7 +1497,7 @@ export function Inbox() {
       return { previousData };
     },
     onError: (err, id, context) => {
-      setActionError(err instanceof Error ? err.message : "Failed to archive issue");
+      setActionError(err instanceof Error ? err.message : `Failed to archive ${issueNoun.singular}`);
       setArchivingIssueIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
@@ -2208,7 +2210,7 @@ export function Inbox() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="everything">All categories</SelectItem>
-              <SelectItem value="issues_i_touched">My recent issues</SelectItem>
+              <SelectItem value="issues_i_touched">My recent {issueNoun.plural}</SelectItem>
               <SelectItem value="join_requests">Join requests</SelectItem>
               <SelectItem value="approvals">Approvals</SelectItem>
               <SelectItem value="failed_runs">Failed runs</SelectItem>
