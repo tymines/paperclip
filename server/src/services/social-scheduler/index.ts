@@ -30,3 +30,11 @@ export function listSupportedSocialPlatforms(): SocialPlatform[] {
 }
 
 export type { SocialPlatformAdapter, PostDraftPayload, PostValidation, PublishedPostRef } from "./types.js";
+export {
+  SOCIAL_FEATURE_MATRIX,
+  TYLER_HOMEWORK,
+  BANNED_FEATURES,
+  type FeatureStatus,
+  type FeatureRow,
+  type HomeworkItem,
+} from "./feasibility.js";

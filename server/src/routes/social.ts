@@ -278,6 +278,19 @@ export function socialRoutes(db: Db) {
     });
   });
 
+  // GET /social/feasibility — feature matrix + homework + banned list.
+  // Single source of truth for what each platform actually supports
+  // today, sourced from Hermes's `social-platform-apis.md` research.
+  router.get("/social/feasibility", async (_req, res) => {
+    const { SOCIAL_FEATURE_MATRIX, TYLER_HOMEWORK, BANNED_FEATURES } =
+      await import("../services/social-scheduler/feasibility.js");
+    res.json({
+      matrix: SOCIAL_FEATURE_MATRIX,
+      homework: TYLER_HOMEWORK,
+      banned: BANNED_FEATURES,
+    });
+  });
+
   // POST /companies/:companyId/social/oauth/start
   // Body: { platform }
   // Returns { authUrl, state } — caller redirects user to authUrl.

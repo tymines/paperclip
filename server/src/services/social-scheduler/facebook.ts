@@ -1,15 +1,45 @@
 /**
- * Facebook adapter — stub implementation.
+ * Facebook adapter — stub with documented native-scheduling path.
  *
- * Real wiring requires:
+ * Facebook is the ONLY platform on Tyler's list with native scheduled
+ * publishing in the API (per Hermes's social-platform-apis.md). That
+ * makes it the flagship for v1 scheduling — once OAuth lands the
+ * scheduledAt becomes the literal `scheduled_publish_time` request
+ * parameter instead of Paperclip's own queue.
+ *
+ * Real wiring:
  *   - Meta App (same one as Instagram if Tyler links his IG to a FB Page)
  *   - Permissions: pages_manage_posts, pages_read_engagement, pages_show_list
  *   - OAuth flow returning a long-lived Page access token (not user token)
  *   - Personal-profile posting is no longer supported by Graph API; this
  *     adapter targets Facebook Pages only.
  *
- * Publish path: POST /{page-id}/feed for text/link posts, POST
- * /{page-id}/photos for image posts (or POST /{page-id}/videos for video).
+ * Publish — immediate (text/link):
+ *   POST https://graph.facebook.com/{page-id}/feed
+ *   Body: { message, link?, access_token }
+ *
+ * Publish — image:
+ *   POST https://graph.facebook.com/{page-id}/photos
+ *   Body: { url | source, caption, access_token }
+ *
+ * Publish — scheduled (NATIVE — flagship feature):
+ *   POST https://graph.facebook.com/{page-id}/feed
+ *   Body: {
+ *     message,
+ *     published: false,
+ *     scheduled_publish_time: <UNIX SECONDS>,   // ≥10 min in future
+ *     access_token,
+ *   }
+ *   Constraints:
+ *     - min 10 minutes in the future
+ *     - max ~75 days (UI says 75; community sources sometimes say 6
+ *       months; conservative cap is 75 days)
+ *     - slots align to :00/:10/:20/:30/:40/:50 in the UI; the API may
+ *       not enforce that — pass an exact UNIX timestamp and let FB
+ *       round.
+ *
+ * Rate ceiling: community-reported ~50 posts/day/page; no documented
+ * hard cap. We rate-limit in Paperclip rather than rely on FB.
  */
 import type { SocialAccount } from "@paperclipai/shared";
 import type {

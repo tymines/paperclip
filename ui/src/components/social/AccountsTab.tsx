@@ -12,14 +12,25 @@
  * come back via /oauth/callback later.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link2, Loader2, Plus, X } from "lucide-react";
+import { AlertTriangle, ClipboardList, ExternalLink, Link2, Loader2, Plus, ShieldAlert, X } from "lucide-react";
 import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
-import { socialApi } from "../../api/social";
+import { socialApi, type FeatureStatus } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
 import { useToastActions } from "../../context/ToastContext";
 import { Button } from "@/components/ui/button";
 import { PLATFORM_META, TYLER_PRIORITY_PLATFORMS } from "./platform-meta";
 import { cn } from "../../lib/utils";
+
+/** Status-chip color + label per feasibility status. */
+const STATUS_TONE: Record<FeatureStatus, { bg: string; fg: string; label: string; symbol: string }> = {
+  ok:      { bg: "bg-emerald-500/15", fg: "text-emerald-300", label: "Works", symbol: "✓" },
+  review:  { bg: "bg-amber-500/15", fg: "text-amber-300", label: "App Review", symbol: "⚠️" },
+  paid:    { bg: "bg-amber-500/15", fg: "text-amber-300", label: "Paid tier", symbol: "💰" },
+  self:    { bg: "bg-sky-500/15", fg: "text-sky-300", label: "Self-managed", symbol: "🚧" },
+  blocked: { bg: "bg-rose-500/15", fg: "text-rose-300", label: "Gated", symbol: "🔒" },
+  missing: { bg: "bg-zinc-500/15", fg: "text-zinc-400", label: "No API", symbol: "—" },
+  banned:  { bg: "bg-rose-500/20", fg: "text-rose-300", label: "Banned", symbol: "❌" },
+};
 
 interface AccountsTabProps {
   companyId: string;
@@ -37,6 +48,12 @@ export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) 
 
   const supportedPlatforms: SocialPlatform[] =
     platformsQuery.data?.supported ?? TYLER_PRIORITY_PLATFORMS;
+
+  const feasibilityQuery = useQuery({
+    queryKey: ["social", "feasibility"],
+    queryFn: () => socialApi.feasibility(),
+    staleTime: 5 * 60_000,
+  });
 
   const connectMutation = useMutation({
     mutationFn: async (platform: SocialPlatform) => {
@@ -182,6 +199,165 @@ export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) 
           credentials.
         </p>
       </section>
+
+      {/* Feasibility matrix — per Hermes's social-platform-apis.md research.
+          Shows Tyler what each platform actually supports today so he knows
+          which features will light up when OAuth is wired vs which are
+          permanently gated. */}
+      {feasibilityQuery.data ? (
+        <>
+          <section>
+            <header className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Platform feasibility
+              </h2>
+            </header>
+            <p className="mt-1 text-xs text-muted-foreground">
+              What each platform supports today via its API. ✓ Works · ⚠️ App Review / Paid ·
+              🚧 Self-managed by Paperclip · 🔒 Gated · — No API · ❌ Banned.
+            </p>
+            <div className="mt-3 overflow-x-auto rounded-md border border-border bg-card">
+              <table className="min-w-[640px] w-full text-xs">
+                <thead className="border-b border-border bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Feature</th>
+                    {TYLER_PRIORITY_PLATFORMS.map((p) => (
+                      <th key={p} className="px-3 py-2 text-left font-medium">
+                        {PLATFORM_META[p].label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {feasibilityQuery.data.matrix.map((row, i) => (
+                    <tr
+                      key={row.feature}
+                      className={cn(i % 2 === 0 ? "bg-transparent" : "bg-muted/20")}
+                    >
+                      <td className="px-3 py-2 font-medium">{row.feature}</td>
+                      {TYLER_PRIORITY_PLATFORMS.map((p) => {
+                        const cell = row.byPlatform[p];
+                        if (!cell) {
+                          return (
+                            <td key={p} className="px-3 py-2 text-muted-foreground">
+                              —
+                            </td>
+                          );
+                        }
+                        const tone = STATUS_TONE[cell.status];
+                        return (
+                          <td key={p} className="px-3 py-2">
+                            <div
+                              className={cn(
+                                "inline-flex max-w-full items-center gap-1 rounded-full px-1.5 py-0.5",
+                                tone.bg,
+                                tone.fg,
+                              )}
+                              title={cell.note ?? tone.label}
+                            >
+                              <span aria-hidden>{tone.symbol}</span>
+                              <span className="truncate">{tone.label}</span>
+                            </div>
+                            {cell.note ? (
+                              <div className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground">
+                                {cell.note}
+                              </div>
+                            ) : null}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Tyler's Homework — the app-registration + OAuth setup steps
+              Paperclip can't do for him. */}
+          <section>
+            <header className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-amber-400" />
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Tyler's Homework
+              </h2>
+            </header>
+            <p className="mt-1 text-xs text-muted-foreground">
+              App registrations + OAuth setup Paperclip can't do for you. Each is required
+              before the corresponding platform lights up beyond stub data.
+            </p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {feasibilityQuery.data.homework.map((item) => (
+                <li
+                  key={item.title}
+                  className="flex items-start gap-3 rounded-md border border-border bg-card p-3"
+                >
+                  <span
+                    className={cn(
+                      "mt-0.5 inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                      item.importance === "blocker"
+                        ? "bg-rose-500/15 text-rose-300"
+                        : "bg-sky-500/15 text-sky-300",
+                    )}
+                  >
+                    {item.importance}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">{item.title}</div>
+                    <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {item.description}
+                    </div>
+                  </div>
+                  <a
+                    href={item.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                  >
+                    Open
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {/* Hard never-ship list — surfaces directly so Tyler (and any
+              future operator) sees the line. Implementing any of these is
+              an instant-ban risk and is explicitly forbidden in the
+              adapter contract. */}
+          <section>
+            <header className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-rose-400" />
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Banned features — never ship
+              </h2>
+            </header>
+            <p className="mt-1 text-xs text-muted-foreground">
+              These exist as growth shortcuts on every "scheduling-tool"
+              landing page. Don't build any of them — every named platform
+              treats them as instant-ban grounds. From Hermes's research,
+              verified against current Meta / X / Reddit ToS.
+            </p>
+            <ul className="mt-3 flex flex-col gap-2">
+              {feasibilityQuery.data.banned.map((item) => (
+                <li
+                  key={item.title}
+                  className="flex items-start gap-3 rounded-md border border-rose-500/20 bg-rose-500/5 p-3"
+                >
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-rose-400" />
+                  <div className="min-w-0">
+                    <div className="font-medium text-rose-200">{item.title}</div>
+                    <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {item.detail}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }

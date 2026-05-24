@@ -39,9 +39,31 @@ export interface SocialFeedResponse {
   scheduled: FeedScheduled[];
 }
 
+export type FeatureStatus = "ok" | "review" | "paid" | "self" | "blocked" | "missing" | "banned";
+export interface FeatureRow {
+  feature: string;
+  byPlatform: Partial<Record<SocialPlatform, { status: FeatureStatus; note?: string }>>;
+}
+export interface HomeworkItem {
+  title: string;
+  description: string;
+  href: string;
+  importance: "blocker" | "recommended";
+}
+export interface BannedFeature {
+  title: string;
+  detail: string;
+}
+export interface FeasibilityResponse {
+  matrix: FeatureRow[];
+  homework: HomeworkItem[];
+  banned: BannedFeature[];
+}
+
 export const socialApi = {
   // ── Discovery ───────────────────────────────────────────────────────────
   platforms: () => api.get<SocialPlatformSupport>("/social/platforms"),
+  feasibility: () => api.get<FeasibilityResponse>("/social/feasibility"),
 
   // ── Accounts ────────────────────────────────────────────────────────────
   listAccounts: (companyId: string) =>
