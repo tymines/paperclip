@@ -8,7 +8,14 @@ import {
 import { forbidden } from "../errors.js";
 import { validate } from "../middleware/validate.js";
 import { heartbeatService, instanceSettingsService, logActivity } from "../services/index.js";
+import {
+  isProviderKey,
+  listRedactedKeys,
+  setKey as setProviderApiKey,
+} from "../services/provider-api-keys/index.js";
+import { getProviderCreditAdapter } from "../services/provider-credits/index.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
+import { badRequest } from "../errors.js";
 
 function assertCanManageInstanceSettings(req: Request) {
   if (req.actor.type !== "board") {
@@ -146,6 +153,88 @@ export function instanceSettingsRoutes(db: Db) {
       res.json(result);
     },
   );
+
+  // ── Provider API Keys ─────────────────────────────────────────────────
+  // GET → returns a list of providers with last-4 + lastUpdated (no
+  //       full secret ever leaves the server).
+  router.get("/instance/settings/provider-keys", async (req, res) => {
+    assertBoardOrgAccess(req);
+    const keys = await listRedactedKeys();
+    res.json(keys);
+  });
+
+  // PATCH → upsert a single provider's API key (or clear with empty body).
+  // Body: { provider: ProviderKey, value: string }
+  router.patch("/instance/settings/provider-keys", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    const provider = req.body?.provider;
+    const value = typeof req.body?.value === "string" ? req.body.value : "";
+    if (!isProviderKey(provider)) {
+      throw badRequest(`unknown provider: ${String(provider)}`);
+    }
+    const updated = await setProviderApiKey(provider, value);
+    const actor = getActorInfo(req);
+    const companyIds = await svc.listCompanyIds();
+    await Promise.all(
+      companyIds.map((companyId) =>
+        logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "instance.provider_api_key_updated",
+          entityType: "instance",
+          entityId: "default",
+          details: { provider, cleared: value.length === 0 },
+        }),
+      ),
+    );
+    res.json(updated);
+  });
+
+  // POST → test the stored key by attempting a live balance fetch.
+  // Returns { ok, balance, currency, error? } so the UI can show
+  // green/red feedback inline.
+  router.post("/instance/settings/provider-keys/:provider/test", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+    const provider = req.params.provider;
+    if (!isProviderKey(provider)) throw badRequest(`unknown provider: ${provider}`);
+    const adapter = getProviderCreditAdapter(provider);
+    if (!adapter) throw badRequest(`no adapter registered for ${provider}`);
+    if (!adapter.meta.balanceSupported) {
+      res.json({
+        ok: false,
+        balance: null,
+        currency: adapter.meta.currency,
+        error: `${adapter.meta.name} does not expose balance via API.`,
+      });
+      return;
+    }
+    // Pull the stored raw key for the test — avoids needing the caller
+    // to repost the value just to verify it.
+    const { getRawKey } = await import("../services/provider-api-keys/index.js");
+    const apiKey = await getRawKey(provider);
+    if (!apiKey) {
+      res.json({ ok: false, balance: null, currency: adapter.meta.currency, error: "No key saved yet." });
+      return;
+    }
+    try {
+      const snapshot = await adapter.fetchBalance({ apiKey });
+      res.json({
+        ok: true,
+        balance: snapshot.balance,
+        currency: snapshot.currency,
+      });
+    } catch (err) {
+      res.json({
+        ok: false,
+        balance: null,
+        currency: adapter.meta.currency,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
 
   return router;
 }

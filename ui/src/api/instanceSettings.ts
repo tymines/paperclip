@@ -37,4 +37,20 @@ export const instanceSettingsApi = {
       "/instance/settings/experimental/issue-graph-liveness-auto-recovery/run",
       input,
     ),
+
+  // ── Provider API Keys ────────────────────────────────────────────────
+  listProviderKeys: () =>
+    api.get<Array<{ provider: string; hasKey: boolean; last4: string | null; updatedAt: string | null }>>(
+      "/instance/settings/provider-keys",
+    ),
+  setProviderKey: (provider: string, value: string) =>
+    api.patch<{ provider: string; hasKey: boolean; last4: string | null; updatedAt: string | null }>(
+      "/instance/settings/provider-keys",
+      { provider, value },
+    ),
+  testProviderKey: (provider: string) =>
+    api.post<{ ok: boolean; balance: number | null; currency: string; error?: string }>(
+      `/instance/settings/provider-keys/${provider}/test`,
+      {},
+    ),
 };

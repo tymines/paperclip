@@ -14,6 +14,11 @@ import { openaiAdapter } from "./openai.js";
 import { anthropicAdapter } from "./anthropic.js";
 import { geminiAdapter } from "./gemini.js";
 import { unknownAdapter } from "./unknown.js";
+import {
+  getRawKey,
+  SUPPORTED_PROVIDERS,
+  type ProviderKey as ApiKeyProviderKey,
+} from "../provider-api-keys/index.js";
 
 const REGISTRY: Record<ProviderKey, ProviderCreditAdapter> = {
   deepseek: deepseekAdapter,
@@ -43,14 +48,24 @@ export async function fetchProviderCreditCards(): Promise<ProviderCreditCard[]> 
   const now = new Date();
   const from = new Date(now.getTime() - 30 * 86_400_000);
 
+  // Resolve all keys up-front in parallel so per-card resolution stays cheap.
+  const keys: Partial<Record<ProviderKey, string>> = {};
+  await Promise.all(
+    SUPPORTED_PROVIDERS.map(async (provider: ApiKeyProviderKey) => {
+      const raw = await getRawKey(provider);
+      if (raw) keys[provider as ProviderKey] = raw;
+    }),
+  );
+
   const cards = await Promise.all(
     adapters.map(async (adapter): Promise<ProviderCreditCard> => {
+      const apiKey = keys[adapter.meta.key] ?? null;
       const [balance, spending] = await Promise.all([
         adapter.meta.balanceSupported
-          ? adapter.fetchBalance({ apiKey: null }).catch(() => null)
+          ? adapter.fetchBalance({ apiKey }).catch(() => null)
           : Promise.resolve(null),
         adapter.meta.spendingSupported
-          ? adapter.fetchSpending({ apiKey: null, from, to: now }).catch(() => null)
+          ? adapter.fetchSpending({ apiKey, from, to: now }).catch(() => null)
           : Promise.resolve(null),
       ]);
 
@@ -65,8 +80,11 @@ export async function fetchProviderCreditCards(): Promise<ProviderCreditCard[]> 
         dailySeries: spending?.daily ?? [],
         dashboardUrl: adapter.meta.dashboardUrl,
         brandColor: adapter.meta.brandColor,
-        hasApiKey: false,
-        isStub: true,
+        hasApiKey: apiKey != null,
+        // The card is "stub" only when there's no real key — adapters
+        // that received a real key are expected to attempt a live call
+        // and fall back to mock data on failure.
+        isStub: apiKey == null,
       };
     }),
   );
