@@ -23,6 +23,7 @@ import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
+import { ProviderCreditsSection } from "../components/ProviderCreditsSection";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
@@ -982,6 +983,12 @@ export function Costs() {
         </TabsContent>
 
         <TabsContent value="providers" className="mt-4 space-y-4">
+          {/* Provider-credits dashboard — current balance + 30-day spend per
+              provider (DeepSeek/Moonshot/OpenAI/Anthropic/Gemini + fallback).
+              Reads from /api/companies/:id/provider-credits. Server-side
+              adapters are stubs until Tyler ships per-provider API keys. */}
+          <ProviderCreditsSection companyId={selectedCompanyId} />
+
           {showCustomPrompt ? (
             <p className="text-sm text-muted-foreground">Select a start and end date to load data.</p>
           ) : (

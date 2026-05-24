@@ -354,5 +354,18 @@ export function costRoutes(
     res.json(updated);
   });
 
+  // ── Provider credits ─────────────────────────────────────────────────────
+  // GET /companies/:companyId/provider-credits
+  // Returns one card per registered provider with current balance + 30-day
+  // spending. v1 uses stub adapters; real impls light up automatically once
+  // Tyler ships per-provider API keys.
+  router.get("/companies/:companyId/provider-credits", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { fetchProviderCreditCards } = await import("../services/provider-credits/index.js");
+    const cards = await fetchProviderCreditCards();
+    res.json(cards);
+  });
+
   return router;
 }
