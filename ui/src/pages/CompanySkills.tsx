@@ -238,7 +238,9 @@ function parseSkillRoute(routePath: string | undefined) {
 }
 
 function skillRoute(skillId: string, filePath?: string | null) {
-  return filePath ? `/skills/${skillId}/files/${encodeSkillFilePath(filePath)}` : `/skills/${skillId}`;
+  return filePath
+    ? `/skills/library/${skillId}/files/${encodeSkillFilePath(filePath)}`
+    : `/skills/library/${skillId}`;
 }
 
 function parentDirectoryPaths(filePath: string) {
@@ -798,6 +800,7 @@ export function CompanySkills() {
   useEffect(() => {
     setBreadcrumbs([
       { label: "Skills", href: "/skills" },
+      { label: "Library", href: "/skills/library" },
       ...(routeSkillId ? [{ label: "Detail" }] : []),
     ]);
   }, [routeSkillId, setBreadcrumbs]);

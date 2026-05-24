@@ -5,6 +5,10 @@ import {
   companySkillFileUpdateSchema,
   companySkillImportSchema,
   companySkillProjectScanRequestSchema,
+  companySkillToggleEnabledSchema,
+  companySkillToggleAgentSchema,
+  companySkillInvokeRequestSchema,
+  companySkillManifestInstallSchema,
 } from "@paperclipai/shared";
 import { trackSkillImported } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
@@ -288,6 +292,130 @@ export function companySkillRoutes(db: Db) {
 
     res.json(result);
   });
+
+  router.patch(
+    "/companies/:companyId/skills/:skillId/enabled",
+    validate(companySkillToggleEnabledSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.setEnabled(companyId, skillId, Boolean(req.body.enabled));
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: req.body.enabled ? "company.skill_enabled" : "company.skill_disabled",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: { slug: result.slug, name: result.name },
+      });
+
+      res.json(result);
+    },
+  );
+
+  router.get("/companies/:companyId/skills/:skillId/agents", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const skillId = req.params.skillId as string;
+    assertCompanyAccess(req, companyId);
+    const result = await svc.listAgentGrants(companyId, skillId);
+    if (!result) {
+      res.status(404).json({ error: "Skill not found" });
+      return;
+    }
+    res.json({
+      skillId: result.skill.id,
+      skillKey: result.skill.key,
+      grants: result.grants,
+    });
+  });
+
+  router.patch(
+    "/companies/:companyId/skills/:skillId/agents/:agentId",
+    validate(companySkillToggleAgentSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      const agentId = req.params.agentId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.setAgentGrant(companyId, skillId, agentId, Boolean(req.body.granted));
+      if (!result) {
+        res.status(404).json({ error: "Skill or agent not found" });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: req.body.granted ? "company.skill_granted" : "company.skill_revoked",
+        entityType: "company_skill",
+        entityId: skillId,
+        details: { agentId, agentName: result.agentName },
+      });
+
+      res.json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/skills/:skillId/invoke",
+    validate(companySkillInvokeRequestSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const skillId = req.params.skillId as string;
+      assertCompanyAccess(req, companyId);
+      const input = (req.body?.input && typeof req.body.input === "object")
+        ? (req.body.input as Record<string, unknown>)
+        : {};
+      const result = await svc.invokePreview(companyId, skillId, input);
+      if (!result) {
+        res.status(404).json({ error: "Skill not found" });
+        return;
+      }
+      res.json(result);
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/skills/install-manifest",
+    validate(companySkillManifestInstallSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      await assertCanMutateCompanySkills(req, companyId);
+      const result = await svc.installFromManifest(companyId, {
+        manifestUrl: req.body?.manifestUrl ?? null,
+        manifest: req.body?.manifest ?? null,
+      });
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "company.skill_installed_from_manifest",
+        entityType: "company_skill",
+        entityId: result.id,
+        details: { slug: result.slug, name: result.name },
+      });
+
+      res.status(201).json(result);
+    },
+  );
 
   router.post("/companies/:companyId/skills/:skillId/install-update", async (req, res) => {
     const companyId = req.params.companyId as string;

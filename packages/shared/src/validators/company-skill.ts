@@ -25,17 +25,83 @@ export const companySkillSchema = z.object({
   compatibility: companySkillCompatibilitySchema,
   fileInventory: z.array(companySkillFileInventoryEntrySchema).default([]),
   metadata: z.record(z.string(), z.unknown()).nullable(),
+  enabled: z.boolean().default(true),
+  iconKey: z.string().nullable().default(null),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
 
+export const companySkillUsageStatsSchema = z.object({
+  invocations: z.number().int().nonnegative(),
+  successRate: z.number().min(0).max(1).nullable(),
+  avgLatencyMs: z.number().nonnegative().nullable(),
+  totalCostCents: z.number().nonnegative(),
+});
+
 export const companySkillListItemSchema = companySkillSchema.extend({
   attachedAgentCount: z.number().int().nonnegative(),
+  totalAgentCount: z.number().int().nonnegative(),
+  usage30d: companySkillUsageStatsSchema,
   editable: z.boolean(),
   editableReason: z.string().nullable(),
   sourceLabel: z.string().nullable(),
   sourceBadge: companySkillSourceBadgeSchema,
 });
+
+export const companySkillAgentGrantSchema = z.object({
+  agentId: z.string().uuid(),
+  agentName: z.string().min(1),
+  agentUrlKey: z.string().min(1),
+  adapterType: z.string().min(1),
+  granted: z.boolean(),
+});
+
+export const companySkillAgentGrantsResponseSchema = z.object({
+  skillId: z.string().uuid(),
+  skillKey: z.string().min(1),
+  grants: z.array(companySkillAgentGrantSchema),
+});
+
+export const companySkillToggleEnabledSchema = z.object({
+  enabled: z.boolean(),
+});
+
+export const companySkillToggleAgentSchema = z.object({
+  granted: z.boolean(),
+});
+
+export const companySkillInvokeRequestSchema = z.object({
+  input: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const companySkillInvokeResponseSchema = z.object({
+  status: z.enum(["ok", "error"]),
+  startedAt: z.coerce.date(),
+  finishedAt: z.coerce.date(),
+  latencyMs: z.number().int().nonnegative(),
+  echo: z.record(z.string(), z.unknown()),
+  preview: z.string(),
+  warnings: z.array(z.string()),
+});
+
+export const companySkillManifestSchema = z.object({
+  name: z.string().min(1).max(120),
+  slug: z.string().min(1).max(120).nullable().optional(),
+  description: z.string().max(2000).nullable().optional(),
+  markdown: z.string().max(200_000).nullable().optional(),
+  iconKey: z.string().max(60).nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+export const companySkillManifestInstallSchema = z
+  .object({
+    manifestUrl: z.string().url().nullable().optional(),
+    manifest: companySkillManifestSchema.nullable().optional(),
+  })
+  .refine(
+    (value) => Boolean(value.manifestUrl) || Boolean(value.manifest),
+    { message: "Provide either manifestUrl or an inline manifest." },
+  );
 
 export const companySkillUsageAgentSchema = z.object({
   id: z.string().uuid(),
@@ -50,6 +116,8 @@ export const companySkillUsageAgentSchema = z.object({
 
 export const companySkillDetailSchema = companySkillSchema.extend({
   attachedAgentCount: z.number().int().nonnegative(),
+  totalAgentCount: z.number().int().nonnegative(),
+  usage30d: companySkillUsageStatsSchema,
   usedByAgents: z.array(companySkillUsageAgentSchema).default([]),
   editable: z.boolean(),
   editableReason: z.string().nullable(),
@@ -135,3 +203,7 @@ export type CompanySkillImport = z.infer<typeof companySkillImportSchema>;
 export type CompanySkillProjectScan = z.infer<typeof companySkillProjectScanRequestSchema>;
 export type CompanySkillCreate = z.infer<typeof companySkillCreateSchema>;
 export type CompanySkillFileUpdate = z.infer<typeof companySkillFileUpdateSchema>;
+export type CompanySkillToggleEnabled = z.infer<typeof companySkillToggleEnabledSchema>;
+export type CompanySkillToggleAgent = z.infer<typeof companySkillToggleAgentSchema>;
+export type CompanySkillInvoke = z.infer<typeof companySkillInvokeRequestSchema>;
+export type CompanySkillManifestInstall = z.infer<typeof companySkillManifestInstallSchema>;

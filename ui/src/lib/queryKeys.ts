@@ -11,6 +11,8 @@ export const queryKeys = {
       ["company-skills", companyId, skillId, "update-status"] as const,
     file: (companyId: string, skillId: string, relativePath: string) =>
       ["company-skills", companyId, skillId, "file", relativePath] as const,
+    agentGrants: (companyId: string, skillId: string) =>
+      ["company-skills", companyId, skillId, "agents"] as const,
   },
   agents: {
     list: (companyId: string) => ["agents", companyId] as const,

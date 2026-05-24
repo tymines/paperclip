@@ -25,6 +25,10 @@ import type {
   CompanySkillTrustLevel,
   CompanySkillUpdateStatus,
   CompanySkillUsageAgent,
+  CompanySkillUsageStats,
+  CompanySkillAgentGrant,
+  CompanySkillManifest,
+  CompanySkillInvokeResponse,
 } from "@paperclipai/shared";
 import { normalizeAgentUrlKey } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
@@ -49,6 +53,8 @@ type CompanySkillListDbRow = Pick<
   | "compatibility"
   | "fileInventory"
   | "metadata"
+  | "enabled"
+  | "iconKey"
   | "createdAt"
   | "updatedAt"
 >;
@@ -67,6 +73,8 @@ type CompanySkillListRow = Pick<
   | "compatibility"
   | "fileInventory"
   | "metadata"
+  | "enabled"
+  | "iconKey"
   | "createdAt"
   | "updatedAt"
 >;
@@ -167,6 +175,8 @@ function selectCompanySkillColumns() {
     compatibility: companySkills.compatibility,
     fileInventory: companySkills.fileInventory,
     metadata: companySkills.metadata,
+    enabled: companySkills.enabled,
+    iconKey: companySkills.iconKey,
     createdAt: companySkills.createdAt,
     updatedAt: companySkills.updatedAt,
   };
@@ -1216,6 +1226,8 @@ function toCompanySkill(row: CompanySkillRow): CompanySkill {
       })
       : [],
     metadata: isPlainRecord(row.metadata) ? row.metadata : null,
+    enabled: row.enabled ?? true,
+    iconKey: row.iconKey ?? null,
   };
 }
 
@@ -1238,6 +1250,8 @@ function toCompanySkillListRow(row: CompanySkillListDbRow): CompanySkillListRow 
       })
       : [],
     metadata: isPlainRecord(row.metadata) ? row.metadata : null,
+    enabled: row.enabled ?? true,
+    iconKey: row.iconKey ?? null,
   };
 }
 
@@ -1509,17 +1523,46 @@ function deriveSkillSourceInfo(skill: SkillSourceInfoTarget): {
   };
 }
 
-function enrichSkill(skill: CompanySkill, attachedAgentCount: number, usedByAgents: CompanySkillUsageAgent[] = []) {
+/**
+ * Empty usage stats stub. The catalog UI surfaces invocations / success rate /
+ * latency / cost — until the tool-invocation telemetry sink lands, we hand
+ * the UI all-zero rollups so the rendering path stays identical to the real
+ * one. Swap this for an aggregation against `activity_log` once the
+ * `tool.invoked` events have a target column.
+ */
+function emptyUsageStats(): CompanySkillUsageStats {
+  return {
+    invocations: 0,
+    successRate: null,
+    avgLatencyMs: null,
+    totalCostCents: 0,
+  };
+}
+
+function enrichSkill(
+  skill: CompanySkill,
+  attachedAgentCount: number,
+  totalAgentCount: number,
+  usedByAgents: CompanySkillUsageAgent[] = [],
+  usage30d: CompanySkillUsageStats = emptyUsageStats(),
+) {
   const source = deriveSkillSourceInfo(skill);
   return {
     ...skill,
     attachedAgentCount,
+    totalAgentCount,
+    usage30d,
     usedByAgents,
     ...source,
   };
 }
 
-function toCompanySkillListItem(skill: CompanySkillListRow, attachedAgentCount: number): CompanySkillListItem {
+function toCompanySkillListItem(
+  skill: CompanySkillListRow,
+  attachedAgentCount: number,
+  totalAgentCount: number,
+  usage30d: CompanySkillUsageStats = emptyUsageStats(),
+): CompanySkillListItem {
   const source = deriveSkillSourceInfo(skill);
   return {
     id: skill.id,
@@ -1534,9 +1577,13 @@ function toCompanySkillListItem(skill: CompanySkillListRow, attachedAgentCount: 
     trustLevel: skill.trustLevel,
     compatibility: skill.compatibility,
     fileInventory: skill.fileInventory,
+    enabled: skill.enabled,
+    iconKey: skill.iconKey,
     createdAt: skill.createdAt,
     updatedAt: skill.updatedAt,
     attachedAgentCount,
+    totalAgentCount,
+    usage30d,
     editable: source.editable,
     editableReason: source.editableReason,
     sourceLabel: source.sourceLabel,
@@ -1649,6 +1696,8 @@ export function companySkillService(db: Db) {
         compatibility: companySkills.compatibility,
         fileInventory: companySkills.fileInventory,
         metadata: companySkills.metadata,
+        enabled: companySkills.enabled,
+        iconKey: companySkills.iconKey,
         createdAt: companySkills.createdAt,
         updatedAt: companySkills.updatedAt,
       })
@@ -1657,12 +1706,13 @@ export function companySkillService(db: Db) {
       .orderBy(asc(companySkills.name), asc(companySkills.key))
       .then((entries) => entries.map((entry) => toCompanySkillListRow(entry as CompanySkillListDbRow)));
     const agentRows = await agents.list(companyId);
+    const totalAgentCount = agentRows.length;
     return rows.map((skill) => {
       const attachedAgentCount = agentRows.filter((agent) => {
         const desiredSkills = resolveDesiredSkillKeys(rows, agent.adapterConfig as Record<string, unknown>);
         return desiredSkills.includes(skill.key);
       }).length;
-      return toCompanySkillListItem(skill, attachedAgentCount);
+      return toCompanySkillListItem(skill, attachedAgentCount, totalAgentCount);
     });
   }
 
@@ -1729,8 +1779,193 @@ export function companySkillService(db: Db) {
     await ensureSkillInventoryCurrent(companyId);
     const skill = await getById(companyId, id);
     if (!skill) return null;
-    const usedByAgents = await usage(companyId, skill.key);
-    return enrichSkill(skill, usedByAgents.length, usedByAgents);
+    const [usedByAgents, agentRows] = await Promise.all([
+      usage(companyId, skill.key),
+      agents.list(companyId),
+    ]);
+    return enrichSkill(skill, usedByAgents.length, agentRows.length, usedByAgents);
+  }
+
+  /**
+   * Toggle the instance-wide enabled flag. Returns the updated detail row so
+   * the catalog can swap its cached entry without a re-fetch.
+   */
+  async function setEnabled(
+    companyId: string,
+    skillId: string,
+    enabled: boolean,
+  ): Promise<CompanySkillDetail | null> {
+    const existing = await getById(companyId, skillId);
+    if (!existing) return null;
+    if (existing.enabled === enabled) {
+      return detail(companyId, skillId);
+    }
+    await db
+      .update(companySkills)
+      .set({ enabled, updatedAt: new Date() })
+      .where(and(eq(companySkills.companyId, companyId), eq(companySkills.id, skillId)));
+    return detail(companyId, skillId);
+  }
+
+  /**
+   * Per-agent enablement table for the catalog drawer.
+   *
+   * "Granted" mirrors whether the skill key is present in the agent's
+   * `adapterConfig.desiredSkills` array — that's the existing source of
+   * truth across the runtime, so we don't introduce a separate join table.
+   */
+  async function listAgentGrants(
+    companyId: string,
+    skillId: string,
+  ): Promise<{ skill: CompanySkill; grants: CompanySkillAgentGrant[] } | null> {
+    const skill = await getById(companyId, skillId);
+    if (!skill) return null;
+    const skillRefs = await listReferenceTargets(companyId);
+    const agentRows = await agents.list(companyId);
+    const grants: CompanySkillAgentGrant[] = agentRows
+      .map((agent) => {
+        const desiredSkills = resolveDesiredSkillKeys(
+          skillRefs,
+          agent.adapterConfig as Record<string, unknown>,
+        );
+        return {
+          agentId: agent.id,
+          agentName: agent.name,
+          agentUrlKey: agent.urlKey,
+          adapterType: agent.adapterType,
+          granted: desiredSkills.includes(skill.key),
+        };
+      })
+      .sort((a, b) => a.agentName.localeCompare(b.agentName));
+    return { skill, grants };
+  }
+
+  /**
+   * Add or remove the skill key from an agent's desiredSkills list.
+   *
+   * We mutate the agent's adapterConfig (a free-form JSONB blob) rather than
+   * introducing a new join table — the existing routing code already reads
+   * `desiredSkills` and that's all that needs to flip.
+   */
+  async function setAgentGrant(
+    companyId: string,
+    skillId: string,
+    agentId: string,
+    granted: boolean,
+  ): Promise<CompanySkillAgentGrant | null> {
+    const skill = await getById(companyId, skillId);
+    if (!skill) return null;
+    const agent = await agents.getById(agentId);
+    if (!agent || agent.companyId !== companyId) return null;
+
+    const adapterConfig = (agent.adapterConfig && isPlainRecord(agent.adapterConfig)
+      ? { ...(agent.adapterConfig as Record<string, unknown>) }
+      : {});
+    const existingRaw = adapterConfig.desiredSkills;
+    const desiredKeys = new Set<string>(
+      Array.isArray(existingRaw)
+        ? existingRaw.filter((value): value is string => typeof value === "string")
+        : [],
+    );
+    if (granted) {
+      desiredKeys.add(skill.key);
+    } else {
+      desiredKeys.delete(skill.key);
+    }
+    adapterConfig.desiredSkills = Array.from(desiredKeys);
+    await agents.update(agentId, { adapterConfig });
+
+    return {
+      agentId: agent.id,
+      agentName: agent.name,
+      agentUrlKey: agent.urlKey,
+      adapterType: agent.adapterType,
+      granted,
+    };
+  }
+
+  /**
+   * "Try it" preview endpoint. Echoes the supplied input and returns the
+   * first paragraph of the skill's SKILL.md as a synthetic preview so the
+   * UI can demonstrate the wiring before real adapter invocation lands.
+   */
+  async function invokePreview(
+    companyId: string,
+    skillId: string,
+    input: Record<string, unknown>,
+  ): Promise<CompanySkillInvokeResponse | null> {
+    const skill = await getById(companyId, skillId);
+    if (!skill) return null;
+    const startedAt = new Date();
+    const warnings: string[] = [];
+    if (!skill.enabled) {
+      warnings.push("Skill is currently disabled — runtime invocations will be skipped.");
+    }
+    if (skill.compatibility !== "compatible") {
+      warnings.push(`Skill compatibility is "${skill.compatibility}" — preview only.`);
+    }
+    const previewSource = skill.description ?? skill.markdown ?? "";
+    const stripped = previewSource
+      .replace(/^---[\s\S]*?---/, "")
+      .trim()
+      .split(/\n{2,}/)[0]
+      .trim();
+    const preview = stripped.length > 0
+      ? stripped.slice(0, 600)
+      : `Skill "${skill.name}" has no preview content.`;
+    const finishedAt = new Date();
+    return {
+      status: "ok",
+      startedAt,
+      finishedAt,
+      latencyMs: Math.max(1, finishedAt.getTime() - startedAt.getTime()),
+      echo: input,
+      preview,
+      warnings,
+    };
+  }
+
+  /**
+   * Install a custom skill from a manifest (inline or fetched from URL).
+   *
+   * The manifest validator already enforces the field shape; this routine
+   * delegates to `createLocalSkill` so the row goes through the same path
+   * (slug/key uniqueness, file inventory bootstrap) as the existing UI.
+   */
+  async function installFromManifest(
+    companyId: string,
+    payload: { manifestUrl?: string | null; manifest?: CompanySkillManifest | null },
+  ): Promise<CompanySkill> {
+    let manifest = payload.manifest ?? null;
+    if (!manifest && payload.manifestUrl) {
+      const response = await fetch(payload.manifestUrl);
+      if (!response.ok) {
+        throw unprocessable(`Manifest fetch failed: ${response.status} ${response.statusText}`);
+      }
+      const text = await response.text();
+      try {
+        manifest = JSON.parse(text) as CompanySkillManifest;
+      } catch {
+        throw unprocessable("Manifest URL did not return valid JSON.");
+      }
+    }
+    if (!manifest) {
+      throw unprocessable("Provide either manifestUrl or an inline manifest.");
+    }
+    const created = await createLocalSkill(companyId, {
+      name: manifest.name,
+      slug: manifest.slug ?? null,
+      description: manifest.description ?? null,
+      markdown: manifest.markdown ?? null,
+    });
+    if (manifest.iconKey) {
+      await db
+        .update(companySkills)
+        .set({ iconKey: manifest.iconKey, updatedAt: new Date() })
+        .where(eq(companySkills.id, created.id));
+      created.iconKey = manifest.iconKey;
+    }
+    return created;
   }
 
   async function updateStatus(companyId: string, skillId: string): Promise<CompanySkillUpdateStatus | null> {
@@ -2474,5 +2709,10 @@ export function companySkillService(db: Db) {
     importPackageFiles,
     installUpdate,
     listRuntimeSkillEntries,
+    setEnabled,
+    listAgentGrants,
+    setAgentGrant,
+    invokePreview,
+    installFromManifest,
   };
 }
