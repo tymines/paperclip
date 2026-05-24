@@ -1721,10 +1721,50 @@ export function KnowledgeGraph() {
   const timeRangeMs = timeMax.getTime() - timeMin.getTime();
   const knowledgeCount = kgData?.entities.length ?? 0;
 
+  // Camera helpers for the floating glass control panel. zoomToFit drives the
+  // Fit button; Zoom in/out scale the camera distance about the current target;
+  // Reset pulls back to the default fit + clears any active selection.
+  const handleZoomIn = useCallback(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const cam = fg.camera() as THREE.PerspectiveCamera;
+    const p = cam.position;
+    const scale = 0.8;
+    fg.cameraPosition({ x: p.x * scale, y: p.y * scale, z: p.z * scale }, undefined, 300);
+  }, []);
+  const handleZoomOut = useCallback(() => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const cam = fg.camera() as THREE.PerspectiveCamera;
+    const p = cam.position;
+    const scale = 1.25;
+    fg.cameraPosition({ x: p.x * scale, y: p.y * scale, z: p.z * scale }, undefined, 300);
+  }, []);
+  const handleFitAll = useCallback(() => {
+    fgRef.current?.zoomToFit(600, 30);
+  }, []);
+  const handleResetView = useCallback(() => {
+    setSelectedNode(null);
+    setPathEndNode(null);
+    fgRef.current?.zoomToFit(600, 50);
+  }, []);
+
   return (
     <div
-      className="relative flex w-full flex-col overflow-hidden bg-gray-950"
-      style={IS_MOBILE ? { position: "fixed", left: 0, right: 0, bottom: 0, top: "calc(env(safe-area-inset-top) + 48px)" } : { height: "100dvh" }}
+      className="relative flex w-full flex-col overflow-hidden"
+      style={{
+        ...(IS_MOBILE
+          ? { position: "fixed", left: 0, right: 0, bottom: 0, top: "calc(env(safe-area-inset-top) + 48px)" }
+          : { height: "100dvh" }),
+        // Modern v2 backdrop: deep base + radial gradients matching the rest
+        // of the app, visible at the canvas edges (force-graph paints over the
+        // center with its own backgroundColor, so this just frames it).
+        background:
+          "radial-gradient(circle at 18% 8%, rgba(167, 139, 250, 0.10), transparent 28rem)," +
+          "radial-gradient(circle at 92% 12%, rgba(45, 212, 191, 0.08), transparent 26rem)," +
+          "radial-gradient(circle at 50% 100%, rgba(134, 239, 172, 0.06), transparent 30rem)," +
+          "#08090b",
+      }}
     >
       <div ref={containerRef} className="relative flex-1 min-h-0" style={{ height: IS_MOBILE ? "100%" : "calc(100dvh - 3.5rem)" }}>
         {graphData.nodes.length > 0 && dimensions.width > 0 && dimensions.height > 0 ? (
@@ -1734,7 +1774,7 @@ export function KnowledgeGraph() {
             width={dimensions.width}
             height={Math.max(dimensions.height, 1)}
             graphData={graphData}
-            backgroundColor="#030712"
+            backgroundColor="rgba(8,9,11,0)"
             nodeLabel={(n) => `[${n.type.toUpperCase()}] ${n.label}`}
             nodeThreeObject={nodeThreeObject}
             nodeThreeObjectExtend={false}
@@ -2109,6 +2149,70 @@ export function KnowledgeGraph() {
         <span className="shrink-0 text-[10px] text-gray-600">Now</span>
         {isTimeTraveling && <span className="shrink-0 rounded bg-cyan-950 px-2 py-0.5 text-[10px] font-medium text-cyan-400">{formatSliderLabel(timeFilterDate!)}</span>}
         {isTimeTraveling && <button onClick={() => setTimeFilterMs(null)} className="shrink-0 rounded border border-gray-700 px-2 py-0.5 text-[10px] text-gray-400 hover:text-gray-200">Reset</button>}
+      </div>
+
+      {/* Floating glass camera-control panel. Bottom-right on desktop, bottom-
+          center on mobile so it never collides with the iOS home-indicator. */}
+      <div
+        className="pointer-events-auto absolute z-20 flex flex-col gap-1 rounded-2xl border border-white/10 bg-zinc-950/70 p-1 backdrop-blur-md shadow-[0_12px_40px_rgba(0,0,0,0.4)]"
+        style={
+          IS_MOBILE
+            ? { bottom: "calc(env(safe-area-inset-bottom) + 88px)", right: "12px" }
+            : { bottom: "84px", right: "20px" }
+        }
+        aria-label="Camera controls"
+      >
+        <button
+          type="button"
+          onClick={handleZoomIn}
+          title="Zoom in"
+          aria-label="Zoom in"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16" y2="16" />
+            <line x1="11" y1="8" x2="11" y2="14" />
+            <line x1="8" y1="11" x2="14" y2="11" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={handleZoomOut}
+          title="Zoom out"
+          aria-label="Zoom out"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16" y2="16" />
+            <line x1="8" y1="11" x2="14" y2="11" />
+          </svg>
+        </button>
+        <div className="my-0.5 h-px bg-white/10" aria-hidden />
+        <button
+          type="button"
+          onClick={handleFitAll}
+          title="Fit all"
+          aria-label="Fit all nodes in view"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+            <path d="M3 7V4h3M21 7V4h-3M3 17v3h3M21 17v3h-3" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={handleResetView}
+          title="Reset view"
+          aria-label="Reset view"
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+            <path d="M3 12a9 9 0 1 0 3-6.7" />
+            <polyline points="3 4 3 10 9 10" />
+          </svg>
+        </button>
       </div>
     </div>
   );
