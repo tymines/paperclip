@@ -122,6 +122,37 @@ export function JarvisPage() {
     );
   }, []);
 
+  // Daily morning-briefing auto-greet. Fires once per UTC day per company,
+  // tracked via localStorage so a stale tab doesn't keep re-firing on refresh.
+  // The greeting goes through the same /api/jarvis/voice path as a normal
+  // turn so the brain has full data context — Tyler hears real numbers.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const storageKey = `paperclip.jarvis.lastGreet.${selectedCompanyId}`;
+    const last = (() => {
+      try {
+        return window.localStorage.getItem(storageKey);
+      } catch {
+        return null;
+      }
+    })();
+    if (last === today) return;
+    try {
+      window.localStorage.setItem(storageKey, today);
+    } catch {
+      // Storage blocked — still allow the greeting to fire this session.
+    }
+    const hour = new Date().getHours();
+    const timeOfDay = hour < 5 ? "good night" : hour < 12 ? "good morning" : hour < 17 ? "good afternoon" : "good evening";
+    // Defer slightly so the page paints + AudioContext can resume on first click.
+    const t = window.setTimeout(() => {
+      void dispatchTranscript(`${timeOfDay} — give me today's briefing`);
+    }, 800);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyId]);
+
   // Auto-scroll the chat to bottom whenever messages change.
   useEffect(() => {
     const el = chatScrollRef.current;

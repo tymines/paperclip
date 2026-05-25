@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { Link, useNavigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, RefreshCcw, SlidersHorizontal } from "lucide-react";
+import { AlertCircle, RefreshCcw, SlidersHorizontal, Sparkles } from "lucide-react";
 import { goalsApi } from "../api/goals";
 import { issuesApi } from "../api/issues";
 import { useCompany } from "../context/CompanyContext";
@@ -100,6 +100,32 @@ export function Home() {
     <div className="flex flex-col" data-pp-page-v2="home">
       <div data-pp-agent-strip="true">
         <AgentStrip companyId={selectedCompanyId} />
+      </div>
+
+      <div className="border-b border-border bg-gradient-to-r from-cyan-500/10 via-cyan-500/5 to-transparent px-3 py-3 md:px-5">
+        <button
+          type="button"
+          onClick={() => navigate("/jarvis")}
+          className="group flex w-full items-center gap-3 rounded-lg border border-cyan-500/30 bg-cyan-500/5 px-4 py-3 text-left transition-colors hover:border-cyan-500/60 hover:bg-cyan-500/10 focus:outline-none focus:ring-2 focus:ring-cyan-500/40"
+          aria-label="Wake Augi — open Jarvis voice mode"
+          data-pp-jarvis-launcher="true"
+        >
+          <span
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-400 transition-transform group-hover:scale-105"
+            style={{ boxShadow: "0 0 16px rgba(0, 212, 255, 0.45)" }}
+          >
+            <Sparkles className="h-4 w-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-semibold text-foreground">Wake Augi</div>
+            <div className="text-xs text-muted-foreground">
+              Voice-first briefing — ask anything, hands-free
+            </div>
+          </div>
+          <span className="hidden text-xs uppercase tracking-widest text-cyan-400 md:inline">
+            Jarvis ›
+          </span>
+        </button>
       </div>
 
       <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5" data-pp-home-now="true">
