@@ -96,7 +96,10 @@ interface LocalVadSession {
   rafHandle: number | null;
 }
 
-const REALTIME_BASE_URL = "https://api.openai.com/v1/realtime";
+// GA endpoint: browsers POST the WebRTC SDP offer to /v1/realtime/calls
+// using the ephemeral key minted server-side from /v1/realtime/client_secrets.
+// The Beta path /v1/realtime (with ?model=...) was retired May 2026.
+const REALTIME_BASE_URL = "https://api.openai.com/v1/realtime/calls";
 
 export function createBargeInController(opts: BargeInOptions): BargeInController {
   let mode: BargeInMode = "disabled";
