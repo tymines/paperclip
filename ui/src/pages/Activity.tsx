@@ -127,6 +127,12 @@ export function Activity() {
     return map;
   }, [data]);
 
+  const topCostAgents = useMemo(() => {
+    return [...(costByAgent ?? [])]
+      .filter((row) => (row.costCents ?? 0) > 0 || (row.inputTokens ?? 0) + (row.outputTokens ?? 0) > 0)
+      .slice(0, 10);
+  }, [costByAgent]);
+
   if (!selectedCompanyId) {
     return <EmptyState icon={History} message="Select a company to view activity." />;
   }
@@ -143,12 +149,6 @@ export function Activity() {
   const entityTypes = data
     ? [...new Set(data.map((e) => e.entityType))].sort()
     : [];
-
-  const topCostAgents = useMemo(() => {
-    return [...(costByAgent ?? [])]
-      .filter((row) => (row.costCents ?? 0) > 0 || (row.inputTokens ?? 0) + (row.outputTokens ?? 0) > 0)
-      .slice(0, 10);
-  }, [costByAgent]);
 
   return (
     <div className="space-y-4">
