@@ -1886,7 +1886,20 @@ export function KnowledgeGraph() {
       className="relative flex w-full flex-col overflow-hidden"
       style={{
         ...(IS_MOBILE
-          ? { position: "fixed", left: 0, right: 0, bottom: 0, top: "calc(env(safe-area-inset-top) + 48px)" }
+          ? {
+              position: "fixed",
+              left: 0,
+              right: 0,
+              // 48px = BreadcrumbBar (h-12). Layout already pads safe-area-top
+              // but this container is `position: fixed` (viewport-relative),
+              // so we re-add it here.
+              top: "calc(env(safe-area-inset-top) + 48px)",
+              // 4rem = MobileBottomNav (grid h-16) + safe-area-inset-bottom
+              // built in to the nav. Without this, the canvas + time-travel
+              // slider + zoom controls + floating tooltip all sit behind
+              // the bottom nav on iOS.
+              bottom: "calc(4rem + env(safe-area-inset-bottom))",
+            }
           : { height: "100dvh" }),
         // Modern v2 backdrop: deep base + radial gradients matching the rest
         // of the app, visible at the canvas edges (force-graph paints over the
@@ -2119,7 +2132,10 @@ export function KnowledgeGraph() {
 
       {/* Toolbar */}
       {IS_MOBILE ? (
-        /* Mobile: full-width scrollable strip pinned just below the 56px app header */
+        /* Mobile: full-width scrollable strip pinned just below the 48px app
+           header. Safe-area-inset-top is already baked into the outer
+           container's `top:` so we don't re-add it here — doubling would
+           push the pills 47px too far down on iPhone. */
         <div className="absolute left-0 right-0 z-20 flex items-center gap-1.5 overflow-x-auto border-b border-gray-800 bg-gray-950/95 px-2 py-1.5 backdrop-blur-sm" style={{ top: 0, WebkitOverflowScrolling: "touch", scrollbarWidth: "none" } as CSSProperties}>
           <input type="text" value={searchText} onChange={(e) => setSearchText(e.target.value)} placeholder="Search…" className="min-w-0 w-28 shrink-0 rounded border border-gray-700 bg-gray-900 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 outline-none focus:border-gray-500" />
           {searchText && <button onClick={() => setSearchText("")} className="shrink-0 rounded p-0.5 text-gray-500"><X className="h-3 w-3" /></button>}
