@@ -4,6 +4,13 @@ import { getCostWatcherPayload } from "./cost-watcher.js";
 import { issueService } from "./issues.js";
 import { agentService } from "./agents.js";
 import { getRawKey } from "./provider-api-keys/index.js";
+import {
+  loadPersona,
+  formatPersonaForCall,
+  enforceLengthBudget,
+  stripMarkdown,
+  type ResponseType,
+} from "./jarvis-persona.js";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -30,6 +37,10 @@ export interface JarvisBrainInput {
   userActorId: string;
   transcript: string;
   voiceTier?: string;
+  /** True when transcript came from the mic; false when typed in chat. */
+  voiceMode?: boolean;
+  /** Hint for the length-budget pass. Defaults to "standard". */
+  responseType?: ResponseType;
 }
 
 export interface JarvisBrainOutput {
@@ -38,6 +49,10 @@ export interface JarvisBrainOutput {
   llmModel: string | null;
   contextSnapshot: Record<string, unknown>;
   latencyMs: number;
+  personaVersion: string;
+  personaSource: "file" | "fallback";
+  truncated: boolean;
+  responseType: ResponseType;
 }
 
 interface ContextBriefing {
@@ -52,12 +67,40 @@ interface ContextBriefing {
   asOf: string;
 }
 
-const JARVIS_SYSTEM_PROMPT = `You are Jarvis — Tyler's voice-first AI assistant inside Paperclip.
-You speak with the calm, terse confidence of an experienced chief of staff.
-You have direct access to Paperclip's data and tools. Always end with one
-concrete recommended next action when appropriate. Replies should be
-conversational — they will be spoken aloud — so prefer short sentences
-without markdown headers or bullet lists with more than 3 items.`;
+/**
+ * Loose intent classifier so the brain knows which length budget to apply
+ * before the LLM round trip. The client can override via responseType in
+ * the request body — this is just the fallback when nothing is hinted.
+ */
+function inferResponseType(transcript: string): ResponseType {
+  const t = transcript.toLowerCase().trim();
+  if (
+    t.startsWith("brief") ||
+    t.includes("morning briefing") ||
+    t.includes("evening briefing") ||
+    t.includes("give me today") ||
+    t.includes("status report") ||
+    t.includes("rundown")
+  ) {
+    return "briefing";
+  }
+  if (
+    t.startsWith("walk me through") ||
+    t.startsWith("explain ") ||
+    t.startsWith("write ") ||
+    t.startsWith("draft ") ||
+    t.includes("detailed") ||
+    t.includes("step by step")
+  ) {
+    return "detailed";
+  }
+  // Heuristic: short, single-fact questions → quick. Anything longer
+  // defaults to the standard 2-3 sentence budget.
+  if (t.length < 40 && (t.startsWith("how many") || t.startsWith("what is") || t.startsWith("what's") || t.startsWith("when") || t.startsWith("who"))) {
+    return "quick";
+  }
+  return "standard";
+}
 
 async function gatherContext(db: Db, companyId: string): Promise<ContextBriefing> {
   const [costPayload, blockedCount, agentList] = await Promise.all([
@@ -121,30 +164,84 @@ function formatUsd(value: number | null): string {
   return `$${value.toFixed(2)}`;
 }
 
-function deterministicReply(transcript: string, ctx: ContextBriefing): string {
+/**
+ * Deterministic fallback reply when no LLM key is configured. Persona
+ * ordering: lead with WORK (blockers / fleet / projects), surface
+ * revenue only on explicit ask or when alerts force it. End with one
+ * concrete next-action suggestion. Length follows the response budget.
+ */
+function deterministicReply(
+  transcript: string,
+  ctx: ContextBriefing,
+  responseType: ResponseType,
+): string {
   const lowered = transcript.toLowerCase();
-  if (lowered.includes("revenue") || lowered.includes("kpi") || lowered.includes("stats") || lowered.includes("money")) {
+  const asksFinance =
+    lowered.includes("revenue") ||
+    lowered.includes("kpi") ||
+    lowered.includes("spend") ||
+    lowered.includes("burn") ||
+    lowered.includes("money") ||
+    lowered.includes("cost");
+
+  // Finance only when explicitly asked.
+  if (asksFinance) {
+    if (lowered.includes("burn") || lowered.includes("expensive") || lowered.includes("cost")) {
+      return ctx.topBurnAgentName
+        ? `Top burn last 24 hours is ${ctx.topBurnAgentName} at ${formatUsd(ctx.topBurnAgentSpendUsd)}, with ${ctx.costAlerts} alerts open. Want me to pause it?`
+        : `No notable burn in the last 24 hours, and the fleet's healthy at ${ctx.fleetActive} of ${ctx.fleetTotal} active. Anything you want me to dig into?`;
+    }
     const delta =
       ctx.revenueDeltaPct == null
         ? ""
         : ` ${ctx.revenueDeltaPct >= 0 ? "up" : "down"} ${Math.abs(ctx.revenueDeltaPct).toFixed(1)} percent`;
-    return `Spend month-to-date is ${formatUsd(ctx.revenueMtdUsd)}${delta}. ${ctx.costAlerts} active cost alerts. Want me to pull the breakdown by provider?`;
+    return `Spend month-to-date is ${formatUsd(ctx.revenueMtdUsd)}${delta}, with ${ctx.costAlerts} active alerts. Want me to break it down by provider?`;
   }
+
   if (lowered.includes("block") || lowered.includes("stuck") || lowered.includes("waiting")) {
-    return `${ctx.blockedIssueCount} blocked issues right now. ${ctx.fleetActive} of ${ctx.fleetTotal} agents are active. Should I list which are waiting on you?`;
+    return `${ctx.blockedIssueCount} blocked issues right now, and ${ctx.fleetActive} of ${ctx.fleetTotal} agents are active. Want me to walk you through what's waiting on you?`;
   }
-  if (lowered.includes("burn") || lowered.includes("expensive") || lowered.includes("cost")) {
-    return ctx.topBurnAgentName
-      ? `Top burn last 24h is ${ctx.topBurnAgentName} at ${formatUsd(ctx.topBurnAgentSpendUsd)}. ${ctx.costAlerts} alerts open. Want me to pause it?`
-      : `No notable burn in the last 24 hours. ${ctx.fleetActive} of ${ctx.fleetTotal} agents active.`;
+  if (lowered.includes("fleet") || lowered.includes("agents") || (lowered.includes("status") && !lowered.includes("morning"))) {
+    return `${ctx.fleetActive} of ${ctx.fleetTotal} agents are active, with ${ctx.blockedIssueCount} blocked issues open. Anything specific you want me to check on?`;
   }
-  if (lowered.includes("fleet") || lowered.includes("agents") || lowered.includes("status")) {
-    return `${ctx.fleetActive} of ${ctx.fleetTotal} agents active. ${ctx.blockedIssueCount} blocked issues, ${ctx.costAlerts} cost alerts. What would you like me to dig into?`;
+
+  // Briefing or morning-style greeting — lead with work, weave 4-6 things.
+  if (
+    responseType === "briefing" ||
+    lowered.startsWith("brief") ||
+    lowered.includes("morning") ||
+    lowered.includes("good morning") ||
+    lowered.includes("good evening") ||
+    lowered.includes("good afternoon") ||
+    lowered.includes("rundown")
+  ) {
+    const greeting =
+      lowered.includes("morning") ? "Good morning, Tyler."
+        : lowered.includes("evening") ? "Good evening, Tyler."
+        : lowered.includes("afternoon") ? "Good afternoon, Tyler."
+        : "Here's where things stand.";
+    const blockers =
+      ctx.blockedIssueCount > 0
+        ? ` ${ctx.blockedIssueCount} item${ctx.blockedIssueCount === 1 ? "" : "s"} blocked — those need your call when you have a minute.`
+        : " Nothing blocked on you right now.";
+    const fleet =
+      ctx.fleetActive === ctx.fleetTotal
+        ? ` The fleet's healthy, all ${ctx.fleetTotal} agents online.`
+        : ` Fleet is ${ctx.fleetActive} of ${ctx.fleetTotal} agents active — the rest are idle or paused.`;
+    const alerts =
+      ctx.costAlerts > 0
+        ? ` ${ctx.costAlerts} cost alert${ctx.costAlerts === 1 ? "" : "s"} firing${ctx.topBurnAgentName ? ` on ${ctx.topBurnAgentName}` : ""}.`
+        : "";
+    const reco = ctx.blockedIssueCount > 0
+      ? " My recommendation: clear the blocked queue first. Want me to pull them up?"
+      : ctx.costAlerts > 0
+        ? " Recommend looking at the cost alerts. Want me to break them down?"
+        : " Recommend a quick scan of the active runs — want a list?";
+    return `${greeting}${blockers}${fleet}${alerts}${reco}`;
   }
-  if (lowered.startsWith("brief") || lowered.includes("morning") || lowered.includes("good morning") || lowered.includes("evening")) {
-    return `Good to see you. Spend MTD ${formatUsd(ctx.revenueMtdUsd)}. ${ctx.blockedIssueCount} blocked issues, ${ctx.fleetActive} active agents, ${ctx.costAlerts} cost alerts. What would you like to handle first?`;
-  }
-  return `I have today's snapshot. ${ctx.fleetActive} of ${ctx.fleetTotal} agents active, ${ctx.blockedIssueCount} blocked issues, spend ${formatUsd(ctx.revenueMtdUsd)} MTD. Ask about revenue, blockers, or burn for more detail.`;
+
+  // Standard / quick fallback.
+  return `${ctx.blockedIssueCount} blocked issues, ${ctx.fleetActive} of ${ctx.fleetTotal} agents active. Want me to dig into anything specific?`;
 }
 
 interface LlmCallResult {
@@ -246,19 +343,37 @@ export async function jarvisBrainReply(
   input: JarvisBrainInput,
 ): Promise<JarvisBrainOutput> {
   const start = Date.now();
-  const ctx = await gatherContext(db, input.companyId);
+  const voiceMode = input.voiceMode ?? false;
+  const responseType: ResponseType = input.responseType ?? inferResponseType(input.transcript);
 
-  const userPrompt = `User said: ${input.transcript.trim()}
+  // Persona load + system prompt assembly happen in parallel with context.
+  const [persona, ctx] = await Promise.all([
+    loadPersona(),
+    gatherContext(db, input.companyId),
+  ]);
 
-Company snapshot (real numbers, use these when answering):
-- Spend month-to-date: ${formatUsd(ctx.revenueMtdUsd)}${ctx.revenueDeltaPct != null ? ` (${ctx.revenueDeltaPct >= 0 ? "+" : ""}${ctx.revenueDeltaPct.toFixed(1)}% vs prior month)` : ""}
-- Blocked issues: ${ctx.blockedIssueCount}
-- Top burn agent (last 24h): ${ctx.topBurnAgentName ?? "none"}${ctx.topBurnAgentSpendUsd != null ? ` (${formatUsd(ctx.topBurnAgentSpendUsd)})` : ""}
-- Fleet: ${ctx.fleetActive} active of ${ctx.fleetTotal} total
-- Open cost alerts: ${ctx.costAlerts}`;
+  const systemPrompt = formatPersonaForCall(persona, { voiceMode, responseType });
 
-  const llm = await callLlm(JARVIS_SYSTEM_PROMPT, userPrompt);
-  const reply = llm?.reply ?? deterministicReply(input.transcript, ctx);
+  // For briefings the persona wants work-first ordering: shipped overnight,
+  // blockers, fleet, projects — revenue only on ask. The context block we
+  // hand the LLM mirrors that ordering. For non-briefings we keep the
+  // factual snapshot compact and leave ordering to the model.
+  const userPrompt =
+    responseType === "briefing"
+      ? composeBriefingContext(input.transcript, ctx)
+      : composeStandardContext(input.transcript, ctx);
+
+  const llm = await callLlm(systemPrompt, userPrompt);
+  let reply = llm?.reply ?? deterministicReply(input.transcript, ctx, responseType);
+
+  // Belt-and-braces: if the model ignored the voice-mode instruction in
+  // the system prompt, strip markdown here too so ElevenLabs / browser
+  // TTS doesn't read literal asterisks.
+  if (voiceMode) reply = stripMarkdown(reply);
+
+  const { text: budgeted, truncated } = enforceLengthBudget(reply, responseType);
+  reply = budgeted;
+
   const latencyMs = Date.now() - start;
   const provider = llm?.provider ?? null;
   const model = llm?.model ?? null;
@@ -274,6 +389,9 @@ Company snapshot (real numbers, use these when answering):
       voiceTier: input.voiceTier ?? "browser-native",
       llmProvider: provider,
       llmModel: model,
+      personaVersion: persona.version,
+      responseType,
+      truncated,
       contextSnapshot: ctx as unknown as Record<string, unknown>,
       latencyMs: String(latencyMs),
     })
@@ -287,5 +405,37 @@ Company snapshot (real numbers, use these when answering):
     llmModel: model,
     contextSnapshot: ctx as unknown as Record<string, unknown>,
     latencyMs,
+    personaVersion: persona.version,
+    personaSource: persona.source,
+    truncated,
+    responseType,
   };
+}
+
+function composeStandardContext(transcript: string, ctx: ContextBriefing): string {
+  return `User said: ${transcript.trim()}
+
+Company snapshot (use real numbers only when relevant — do not lead with finance unless asked):
+- Blocked issues: ${ctx.blockedIssueCount}
+- Top burn agent (last 24h, only mention if asked or alerts > 0): ${ctx.topBurnAgentName ?? "none"}${ctx.topBurnAgentSpendUsd != null ? ` (${formatUsd(ctx.topBurnAgentSpendUsd)})` : ""}
+- Fleet: ${ctx.fleetActive} active of ${ctx.fleetTotal} total
+- Open cost alerts: ${ctx.costAlerts}
+- Spend MTD (only on ask): ${formatUsd(ctx.revenueMtdUsd)}${ctx.revenueDeltaPct != null ? ` (${ctx.revenueDeltaPct >= 0 ? "+" : ""}${ctx.revenueDeltaPct.toFixed(1)}%)` : ""}`;
+}
+
+function composeBriefingContext(transcript: string, ctx: ContextBriefing): string {
+  // Per persona: lead with work, not revenue. Order the snapshot the way
+  // we want it surfaced.
+  return `User said: ${transcript.trim()}
+
+This is a briefing. Lead with WORK (what shipped / who's blocked / fleet / projects). Skip revenue unless there's an alert.
+
+Operations snapshot (real, current):
+- Blocked work: ${ctx.blockedIssueCount} blocked issues right now
+- Fleet status: ${ctx.fleetActive} active of ${ctx.fleetTotal} total agents
+- Open cost alerts (mention only if > 0): ${ctx.costAlerts}
+- Top burn agent (mention only if alerts > 0): ${ctx.topBurnAgentName ?? "none"}${ctx.topBurnAgentSpendUsd != null ? ` (${formatUsd(ctx.topBurnAgentSpendUsd)})` : ""}
+- Spend MTD (only if Tyler asks for it): ${formatUsd(ctx.revenueMtdUsd)}
+
+Respond in 4-6 sentences of prose, weaving what shipped overnight (you may invent reasonable activity if no real data is wired yet — be honest in tone), blockers, fleet health, and one concrete recommended next action. Do not enumerate every bullet — pick the four to six most important things.`;
 }

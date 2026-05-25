@@ -141,11 +141,18 @@ export function VoiceCharacterModal({
               {voices.map((v) => {
                 const isSelected = v.voiceId === selectedVoiceId;
                 return (
-                  <button
+                  <div
                     key={v.voiceId}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     className={`jarvis-voice-tile ${isSelected ? "selected" : ""}`}
                     onClick={() => onSelect(v)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onSelect(v);
+                      }
+                    }}
                   >
                     <div className="jarvis-voice-tile-head">
                       <span className="jarvis-voice-name">{v.name}</span>
@@ -164,7 +171,7 @@ export function VoiceCharacterModal({
                     >
                       {previewing === v.voiceId ? "Playing…" : "▶ Preview"}
                     </button>
-                  </button>
+                  </div>
                 );
               })}
             </div>

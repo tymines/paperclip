@@ -680,6 +680,13 @@
       "when": 1779062400000,
       "tag": "0096_jarvis_conversations",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1779148800000,
+      "tag": "0097_jarvis_persona_version",
+      "breakpoints": true
     }
   ]
 }
