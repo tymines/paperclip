@@ -17,6 +17,7 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { KnowledgeGraphControls } from "../components/knowledge-graph/v2-controls";
 import { KnowledgeGraphDetailPanel, type DetailPanelNode } from "../components/knowledge-graph/v2-detail-panel";
 import { useKnowledgeGraphGestures } from "../components/knowledge-graph/v2-gestures";
+import { V2Renderer } from "../components/knowledge-graph/v2-renderer";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1852,46 +1853,80 @@ export function KnowledgeGraph() {
     >
       <div ref={containerRef} className="relative flex-1 min-h-0" style={{ height: IS_MOBILE ? "100%" : "calc(100dvh - 3.5rem)" }}>
         {graphData.nodes.length > 0 && dimensions.width > 0 && dimensions.height > 0 ? (
-          <ForceGraph3D<GraphNode, GraphLink>
-            key={viewMode}
-            ref={fgRef}
-            width={dimensions.width}
-            height={Math.max(dimensions.height, 1)}
-            graphData={graphData}
-            backgroundColor="rgba(8,9,11,0)"
-            nodeLabel={(n) => `[${n.type.toUpperCase()}] ${n.label}`}
-            nodeThreeObject={nodeThreeObject}
-            nodeThreeObjectExtend={false}
-            nodeVal={sizedNodeVal}
-            linkColor={linkColor}
-            linkWidth={viewMode === "neuromorphic" ? 0 : (IS_MOBILE ? 3 : 1.2)}
-            linkCurvature={viewMode === "neuromorphic" ? 0 : 0.15}
-            linkOpacity={viewMode === "neuromorphic" ? 0 : (IS_MOBILE ? 0.75 : 0.55)}
-            linkDirectionalArrowLength={viewMode === "neuromorphic" ? 0 : (IS_MOBILE ? 8 : 4)}
-            linkDirectionalArrowRelPos={1}
-            linkDirectionalParticles={viewMode === "neuromorphic" ? 0 : linkParticles}
-            linkDirectionalParticleSpeed={linkParticleSpeed}
-            linkDirectionalParticleWidth={IS_MOBILE ? 4 : 1.8}
-            linkDirectionalParticleColor={linkParticleColor}
-            {...(viewMode === "neuromorphic" ? {
+          viewMode === "neuromorphic" ? (
+            <ForceGraph3D<GraphNode, GraphLink>
+              key={viewMode}
+              ref={fgRef}
+              width={dimensions.width}
+              height={Math.max(dimensions.height, 1)}
+              graphData={graphData}
+              backgroundColor="rgba(8,9,11,0)"
+              nodeLabel={(n) => `[${n.type.toUpperCase()}] ${n.label}`}
+              nodeThreeObject={nodeThreeObject}
+              nodeThreeObjectExtend={false}
+              nodeVal={sizedNodeVal}
+              linkColor={linkColor}
+              linkWidth={0}
+              linkCurvature={0}
+              linkOpacity={0}
+              linkDirectionalArrowLength={0}
+              linkDirectionalArrowRelPos={1}
+              linkDirectionalParticles={0}
+              linkDirectionalParticleSpeed={linkParticleSpeed}
+              linkDirectionalParticleWidth={IS_MOBILE ? 4 : 1.8}
+              linkDirectionalParticleColor={linkParticleColor}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              linkThreeObject: linkThreeObject as any,
-              linkThreeObjectExtend: false,
+              linkThreeObject={linkThreeObject as any}
+              linkThreeObjectExtend={false}
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              linkPositionUpdate: linkPositionUpdate as any,
-            } : {})}
-            onNodeClick={handleNodeClick}
-            onNodeHover={(n) => setHoveredNode(n ?? null)}
-            onBackgroundClick={() => { setSelectedNode(null); setPathEndNode(null); }}
-            onEngineStop={handleEngineStop}
-            enableNodeDrag
-            enableNavigationControls
-            showNavInfo={false}
-            warmupTicks={IS_MOBILE ? 100 : (physicsReady ? 10 : 80)}
-            cooldownTicks={IS_MOBILE ? 60 : (physicsReady ? 80 : 200)}
-            d3AlphaDecay={IS_MOBILE ? 0.04 : 0.0228}
-            d3VelocityDecay={IS_MOBILE ? 0.5 : 0.4}
-          />
+              linkPositionUpdate={linkPositionUpdate as any}
+              onNodeClick={handleNodeClick}
+              onNodeHover={(n) => setHoveredNode(n ?? null)}
+              onBackgroundClick={() => { setSelectedNode(null); setPathEndNode(null); }}
+              onEngineStop={handleEngineStop}
+              enableNodeDrag
+              enableNavigationControls
+              showNavInfo={false}
+              warmupTicks={IS_MOBILE ? 100 : (physicsReady ? 10 : 80)}
+              cooldownTicks={IS_MOBILE ? 60 : (physicsReady ? 80 : 200)}
+              d3AlphaDecay={IS_MOBILE ? 0.04 : 0.0228}
+              d3VelocityDecay={IS_MOBILE ? 0.5 : 0.4}
+            />
+          ) : (
+            <V2Renderer<GraphNode, GraphLink>
+              graphData={graphData}
+              width={dimensions.width}
+              height={dimensions.height}
+              fgRef={fgRef}
+              hoveredId={hoveredNode?.id ?? null}
+              selectedId={selectedNode?.id ?? null}
+              edgeCountByNode={edgeCountByNode}
+              isMobile={IS_MOBILE}
+              warmupTicks={IS_MOBILE ? 100 : (physicsReady ? 10 : 80)}
+              cooldownTicks={IS_MOBILE ? 60 : (physicsReady ? 80 : 200)}
+              d3AlphaDecay={IS_MOBILE ? 0.04 : 0.0228}
+              d3VelocityDecay={IS_MOBILE ? 0.5 : 0.4}
+              onNodeClick={handleNodeClick}
+              onNodeHover={(n) => setHoveredNode(n ?? null)}
+              onBackgroundClick={() => { setSelectedNode(null); setPathEndNode(null); }}
+              onEngineStop={handleEngineStop}
+              linkParticles={linkParticles}
+              linkParticleSpeed={linkParticleSpeed}
+              linkParticleColor={linkParticleColor}
+              // Preserve path / dim-non-highlighted tinting from the page.
+              linkColorOverride={(link) => {
+                const s = typeof link.source === "object" ? link.source.id : link.source;
+                const t = typeof link.target === "object" ? link.target.id : link.target;
+                if (pathResultRef.current?.linkIds.has(`${s}|${t}`)) return "#22d3ee";
+                const hlIds = highlightedIdsRef.current;
+                if (hlIds && !(hlIds.has(s) && hlIds.has(t))) return "#1f293722";
+                return null;
+              }}
+              // Page's InstancedMesh draws run/issue on desktop — let the
+              // renderer return invisible placeholders for those.
+              isPlaceholderNode={(n) => !IS_MOBILE && (n.type === "run" || n.type === "issue")}
+            />
+          )
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-gray-500">Loading graph data…</div>
         )}
