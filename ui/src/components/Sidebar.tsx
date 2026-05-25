@@ -22,6 +22,7 @@ import {
   MoreHorizontal,
   Gauge,
   Sparkles,
+  Mic,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -256,6 +257,7 @@ function SidebarV1({
 
       <SidebarSection label="More">
         <SidebarNavItem to="/jarvis" label="Jarvis" icon={Sparkles} />
+        <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
         <SidebarNavItem to="/issues" label={issueNoun.capPlural} icon={CircleDot} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
         <SidebarNavItem to="/work" label="Work" icon={Layers} />
