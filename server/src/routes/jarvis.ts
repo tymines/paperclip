@@ -3,23 +3,23 @@ import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
+import { jarvisBrainReply } from "../services/jarvis-brain.js";
 
 /**
  * Jarvis voice endpoint.
  *
- * Commit 2 ships the plumbing — accepts a transcript from the browser
- * (which handles STT client-side via SpeechRecognition) and returns a
- * placeholder reply. Commit 3 swaps the placeholder for a real Augi
- * dispatch through the OpenClaw bridge with tools, streaming, and
- * conversation persistence. Commit 5 layers OpenAI Realtime + ElevenLabs
- * on top for premium voice; the endpoint contract stays stable.
+ * Accepts a finalized transcript (client handles STT), dispatches to the
+ * Jarvis brain (data-rich context + LLM call + persistence), and returns
+ * the agent reply. Streaming (SSE) + tool-use lands in Commit 5; the
+ * endpoint contract stays stable through that change.
  */
 const voiceRequestSchema = z.object({
   transcript: z.string().min(1).max(4000),
   conversationId: z.string().uuid().optional(),
+  voiceTier: z.enum(["browser-native", "standard", "premium"]).optional(),
 });
 
-export function jarvisRoutes(_db: Db) {
+export function jarvisRoutes(db: Db) {
   const router = Router();
 
   router.post(
@@ -29,36 +29,34 @@ export function jarvisRoutes(_db: Db) {
       const { companyId } = req.params as { companyId: string };
       assertCompanyAccess(req, companyId);
 
-      const { transcript } = req.body as z.infer<typeof voiceRequestSchema>;
+      const { transcript, voiceTier } = req.body as z.infer<typeof voiceRequestSchema>;
 
-      // Commit 2 placeholder reply. Swapped in Commit 3 for Augi dispatch.
-      const reply = synthesizeStubReply(transcript);
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : "unknown";
+
+      const out = await jarvisBrainReply(db, {
+        companyId,
+        userActorId,
+        transcript,
+        voiceTier,
+      });
 
       res.json({
-        reply,
-        tier: "browser-native",
-        latencyMs: 0,
-        // Empty for now; populated in Commit 3 with the Augi conversation id
-        // saved to the jarvis_conversations table.
+        reply: out.reply,
+        tier: voiceTier ?? "browser-native",
+        latencyMs: out.latencyMs,
+        llmProvider: out.llmProvider,
+        llmModel: out.llmModel,
+        contextSnapshot: out.contextSnapshot,
         conversationId: null,
       });
     }
   );
 
   return router;
-}
-
-function synthesizeStubReply(transcript: string): string {
-  const trimmed = transcript.trim();
-  const lowered = trimmed.toLowerCase();
-  if (lowered.includes("revenue") || lowered.includes("kpi") || lowered.includes("stats")) {
-    return "Revenue month-to-date is up twelve point four percent to eighty-four point two thousand. Real numbers will come from cost-watcher once Augi dispatch lands in commit three.";
-  }
-  if (lowered.startsWith("search") || lowered.includes("find ")) {
-    return "Searching across issues, agents, rooms, and skills. The actual semantic search lands in commit three.";
-  }
-  if (lowered.includes("schedule") || lowered.includes("remind")) {
-    return "I can schedule that for you. The routine and approval wiring lands in commit three.";
-  }
-  return `I heard: ${trimmed}. Full Augi dispatch arrives in commit three.`;
 }
