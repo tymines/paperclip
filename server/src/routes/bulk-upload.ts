@@ -24,8 +24,17 @@ import multer from "multer";
 import type { Db } from "@paperclipai/db";
 import type { StorageService } from "../storage/types.js";
 import { bulkUploadService } from "../services/bulk-upload.js";
+import {
+  BULK_UPLOAD_PLATFORMS,
+  computeBestTimes,
+  type BulkUploadPlatform,
+} from "../services/best-time/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
+
+function isBulkUploadPlatform(value: string): value is BulkUploadPlatform {
+  return (BULK_UPLOAD_PLATFORMS as readonly string[]).includes(value);
+}
 
 /** What the bulk-upload tab will accept. Conservatively narrow on purpose. */
 const ALLOWED_MIME_TYPES = new Set<string>([
@@ -55,6 +64,30 @@ export function bulkUploadRoutes(db: Db, storage: StorageService) {
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_BATCH },
   });
+
+  // ── Best times ──────────────────────────────────────────────────────────
+  // GET /companies/:companyId/social/bulk-upload/best-times?platform=instagram
+  // (also exposed under the friendlier alias /best-times so the UI can
+  // call the same endpoint regardless of which bulk-upload subtree it's
+  // currently in)
+  router.get(
+    "/companies/:companyId/social/bulk-upload/best-times",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const platformParam = String(req.query.platform ?? "").toLowerCase();
+      if (!isBulkUploadPlatform(platformParam)) {
+        throw badRequest(
+          `Unknown or unsupported platform: '${platformParam || "(missing)"}'. Use one of: ${BULK_UPLOAD_PLATFORMS.join(", ")}`,
+        );
+      }
+      // No user-audience data source wired yet (the social_account_analytics
+      // table doesn't exist on this branch). The engine falls back to the
+      // 2026 industry baseline automatically.
+      const result = await computeBestTimes(companyId, platformParam);
+      res.json(result);
+    },
+  );
 
   // ── Drafts ───────────────────────────────────────────────────────────────
 
