@@ -13,7 +13,7 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, KeyRound, Loader2, X } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, Share2, Sparkles, X } from "lucide-react";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { costsApi } from "@/api/costs";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -23,7 +23,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn, formatCostUsdCompact, formatTokens } from "../lib/utils";
 
-type ProviderKey = "deepseek" | "moonshot" | "openai" | "anthropic" | "gemini";
+type ProviderKey =
+  | "deepseek"
+  | "moonshot"
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "elevenlabs";
 
 interface ProviderMeta {
   key: ProviderKey;
@@ -80,6 +86,15 @@ const PROVIDERS: ProviderMeta[] = [
     dashboardUrl: "https://aistudio.google.com/apikey",
     testReturnsBalance: false,
     note: "Real wiring requires a GCP project with the Cloud Billing API enabled. Stub adapter accepts any non-empty string for now.",
+  },
+  {
+    key: "elevenlabs",
+    name: "ElevenLabs",
+    description: "Streaming TTS for Jarvis premium voice. The Webhook configuration subsection below registers the receiver for voice-removal + transcription events.",
+    placeholder: "xi-…",
+    dashboardUrl: "https://elevenlabs.io/app/settings/api-keys",
+    testReturnsBalance: false,
+    note: "ElevenLabs doesn't expose credit balance via API — Test connection only verifies the key shape. Webhook secret and URL live in the Webhook configuration subsection below.",
   },
 ];
 
@@ -339,6 +354,225 @@ function ProviderRow({ meta, hasKey, last4, updatedAt, spend30d, onSaved }: Prov
           </Button>
         </div>
       ) : null}
+
+      {meta.key === "elevenlabs" ? <ElevenLabsWebhookSection /> : null}
     </section>
+  );
+}
+
+function ElevenLabsWebhookSection() {
+  const queryClient = useQueryClient();
+  const webhookQuery = useQuery({
+    queryKey: ["instance", "elevenlabs-webhook"],
+    queryFn: () => instanceSettingsApi.getElevenLabsWebhook(),
+  });
+
+  // Holds the raw secret returned by the most recent generate call so
+  // the operator can copy it once before it disappears. Subsequent reads
+  // only return last4 — there is no way to surface the full value again.
+  const [revealedSecret, setRevealedSecret] = useState<string | null>(null);
+  const [urlCopyState, setUrlCopyState] = useState<"idle" | "copied" | "shared" | "unavailable">("idle");
+  const [secretCopyState, setSecretCopyState] = useState<"idle" | "copied" | "shared" | "unavailable">("idle");
+
+  const generateMutation = useMutation({
+    mutationFn: () => instanceSettingsApi.generateElevenLabsWebhookSecret(),
+    onSuccess: (data) => {
+      setRevealedSecret(data.secret);
+      setSecretCopyState("idle");
+      queryClient.invalidateQueries({ queryKey: ["instance", "elevenlabs-webhook"] });
+    },
+  });
+
+  const url = webhookQuery.data?.url ?? "";
+  const configured = webhookQuery.data?.configured ?? false;
+  const last4 = webhookQuery.data?.last4 ?? null;
+  const updatedAt = webhookQuery.data?.updatedAt ?? null;
+
+  async function copyOrShare(
+    value: string,
+    setter: (state: "idle" | "copied" | "shared" | "unavailable") => void,
+    shareTitle: string,
+  ) {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        setter("copied");
+        window.setTimeout(() => setter("idle"), 1600);
+        return;
+      }
+    } catch {
+      // Fall through to share sheet.
+    }
+    if (typeof navigator !== "undefined" && typeof (navigator as Navigator).share === "function") {
+      try {
+        await (navigator as Navigator).share({ title: shareTitle, text: value });
+        setter("shared");
+        window.setTimeout(() => setter("idle"), 1600);
+        return;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          setter("idle");
+          return;
+        }
+      }
+    }
+    setter("unavailable");
+    window.setTimeout(() => setter("idle"), 2400);
+  }
+
+  return (
+    <div className="mt-5 rounded-lg border border-dashed border-border bg-muted/30 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Webhook configuration
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Paste both values into your ElevenLabs webhook config at{" "}
+            <a
+              href="https://elevenlabs.io/app/settings/webhooks"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline-offset-2 hover:underline"
+            >
+              elevenlabs.io/app/settings/webhooks
+            </a>
+            .
+          </p>
+        </div>
+        {configured ? (
+          <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-300">
+            Secret saved · …{last4}
+          </span>
+        ) : (
+          <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-300">
+            Not configured
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 space-y-3">
+        <div>
+          <Label className="text-[11px] font-medium text-muted-foreground">Webhook URL</Label>
+          <div className="mt-1 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Input
+              readOnly
+              value={url}
+              className="font-mono text-xs"
+              data-testid="elevenlabs-webhook-url"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => copyOrShare(url, setUrlCopyState, "Paperclip ElevenLabs webhook URL")}
+              disabled={!url}
+            >
+              {urlCopyState === "copied" ? (
+                <>
+                  <Check className="h-3.5 w-3.5" /> Copied
+                </>
+              ) : urlCopyState === "shared" ? (
+                <>
+                  <Share2 className="h-3.5 w-3.5" /> Shared
+                </>
+              ) : urlCopyState === "unavailable" ? (
+                "Copy unavailable"
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" /> Copy
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <Label className="text-[11px] font-medium text-muted-foreground">Webhook secret</Label>
+          {revealedSecret ? (
+            <div className="mt-1 space-y-2">
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <Input
+                  readOnly
+                  value={revealedSecret}
+                  className="font-mono text-xs"
+                  data-testid="elevenlabs-webhook-secret"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    copyOrShare(revealedSecret, setSecretCopyState, "Paperclip ElevenLabs webhook secret")
+                  }
+                >
+                  {secretCopyState === "copied" ? (
+                    <>
+                      <Check className="h-3.5 w-3.5" /> Copied
+                    </>
+                  ) : secretCopyState === "shared" ? (
+                    <>
+                      <Share2 className="h-3.5 w-3.5" /> Shared
+                    </>
+                  ) : secretCopyState === "unavailable" ? (
+                    "Copy unavailable"
+                  ) : (
+                    <>
+                      <Copy className="h-3.5 w-3.5" /> Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                Shown once. Paste into ElevenLabs now — the value will be redacted to …{revealedSecret.slice(-4)} on the next page load.
+              </p>
+            </div>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {configured ? (
+                <>Secret on file · last 4 …{last4}. Generate a new one to rotate.</>
+              ) : (
+                <>No secret yet — generate one to register the receiver.</>
+              )}
+            </p>
+          )}
+        </div>
+
+        <div className="flex items-center justify-between gap-3">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              if (configured && !window.confirm("Rotate the ElevenLabs webhook secret? The old value stops working immediately.")) return;
+              generateMutation.mutate();
+            }}
+            disabled={generateMutation.isPending}
+          >
+            {generateMutation.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <>
+                <Sparkles className="h-3.5 w-3.5" />
+                {configured ? "Rotate secret" : "Generate webhook secret"}
+              </>
+            )}
+          </Button>
+          {updatedAt ? (
+            <span className="text-[10px] text-muted-foreground">
+              Last rotated {new Date(updatedAt).toLocaleString()}
+            </span>
+          ) : null}
+        </div>
+
+        {generateMutation.isError ? (
+          <div className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
+            <X className="h-3 w-3" />
+            {generateMutation.error instanceof Error
+              ? generateMutation.error.message
+              : "Failed to generate secret"}
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }

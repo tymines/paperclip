@@ -36,6 +36,10 @@ import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
 import { inboxDismissalRoutes } from "./routes/inbox-dismissals.js";
 import { instanceSettingsRoutes } from "./routes/instance-settings.js";
 import {
+  webhookReceiverRoutes,
+  elevenlabsWebhookSecretRoutes,
+} from "./routes/webhooks.js";
+import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
 } from "./routes/instance-database-backups.js";
@@ -172,6 +176,11 @@ export async function createApp(
       resolveSession: opts.resolveSession,
     }),
   );
+  // Public webhook receivers are mounted OUTSIDE the `/api` router so
+  // they skip the board-mutation guard — third-party services have no
+  // Paperclip session/key to present. Auth comes from HMAC verification
+  // inside the handler.
+  app.use("/api/webhooks", webhookReceiverRoutes(db));
   app.use("/api/auth", authRoutes(db));
   if (opts.betterAuthHandler) {
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
@@ -223,6 +232,7 @@ export async function createApp(
   api.use(sidebarPreferenceRoutes(db));
   api.use(inboxDismissalRoutes(db));
   api.use(instanceSettingsRoutes(db));
+  api.use(elevenlabsWebhookSecretRoutes(db));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
