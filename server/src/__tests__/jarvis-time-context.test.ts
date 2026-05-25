@@ -14,14 +14,14 @@ import {
  *   22–04 → late_night   ("Burning the midnight oil")
  *
  * The "8am → Good morning, 2pm → Good afternoon, 7pm → Good evening" test
- * is the canonical contract for the time-aware greeting.
+ * is the canonical contract for the time-aware greeting. Boundaries are
+ * pinned to America/New_York since Tyler lives on the Florida east coast.
  */
 describe("jarvis-time-context", () => {
-  it("maps 8am Vancouver to 'Good morning'", () => {
-    // 16:00 UTC on May 25 2026 is 09:00 PDT — May has DST, so PDT not PST.
-    // Use 15:00 UTC for 8am Vancouver local.
-    const now = new Date("2026-05-25T15:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+  it("maps 8am ET to 'Good morning'", () => {
+    // 12:00 UTC on May 25 2026 is 08:00 EDT — May has DST, so EDT not EST.
+    const now = new Date("2026-05-25T12:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     expect(ctx.hour).toBe(8);
     expect(ctx.partOfDay).toBe("morning");
     expect(ctx.greeting).toBe("Good morning");
@@ -29,39 +29,39 @@ describe("jarvis-time-context", () => {
     expect(ctx.dayName).toBe("Monday");
   });
 
-  it("maps 2pm Vancouver to 'Good afternoon'", () => {
-    // 21:00 UTC on May 25 2026 is 14:00 PDT.
-    const now = new Date("2026-05-25T21:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+  it("maps 2pm ET to 'Good afternoon'", () => {
+    // 18:00 UTC on May 25 2026 is 14:00 EDT.
+    const now = new Date("2026-05-25T18:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     expect(ctx.hour).toBe(14);
     expect(ctx.partOfDay).toBe("afternoon");
     expect(ctx.greeting).toBe("Good afternoon");
     expect(ctx.currentTime).toMatch(/^2:00 PM$/);
   });
 
-  it("maps 7pm Vancouver to 'Good evening'", () => {
-    // 02:00 UTC May 26 2026 is 19:00 PDT May 25.
-    const now = new Date("2026-05-26T02:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+  it("maps 7pm ET to 'Good evening'", () => {
+    // 23:00 UTC May 25 2026 is 19:00 EDT May 25.
+    const now = new Date("2026-05-25T23:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     expect(ctx.hour).toBe(19);
     expect(ctx.partOfDay).toBe("evening");
     expect(ctx.greeting).toBe("Good evening");
     expect(ctx.currentTime).toMatch(/^7:00 PM$/);
   });
 
-  it("maps 11pm Vancouver to late_night with midnight-oil greeting", () => {
-    // 06:00 UTC May 26 2026 is 23:00 PDT May 25.
-    const now = new Date("2026-05-26T06:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+  it("maps 11pm ET to late_night with midnight-oil greeting", () => {
+    // 03:00 UTC May 26 2026 is 23:00 EDT May 25.
+    const now = new Date("2026-05-26T03:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     expect(ctx.hour).toBe(23);
     expect(ctx.partOfDay).toBe("late_night");
     expect(ctx.greeting).toBe("Burning the midnight oil");
   });
 
-  it("maps 2am Vancouver to late_night", () => {
-    // 09:00 UTC May 26 2026 is 02:00 PDT May 26.
-    const now = new Date("2026-05-26T09:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+  it("maps 2am ET to late_night", () => {
+    // 06:00 UTC May 26 2026 is 02:00 EDT May 26.
+    const now = new Date("2026-05-26T06:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     expect(ctx.hour).toBe(2);
     expect(ctx.partOfDay).toBe("late_night");
     expect(ctx.greeting).toBe("Burning the midnight oil");
@@ -81,11 +81,11 @@ describe("jarvis-time-context", () => {
   });
 
   it("formats a TIME CONTEXT block with all four fields rendered", () => {
-    const now = new Date("2026-05-25T15:00:00Z");
-    const ctx = buildTimeContext({ now, timezone: "America/Vancouver" });
+    const now = new Date("2026-05-25T12:00:00Z");
+    const ctx = buildTimeContext({ now, timezone: "America/New_York" });
     const block = formatTimeContextBlock(ctx);
     expect(block).toContain("TIME CONTEXT");
-    expect(block).toContain("America/Vancouver");
+    expect(block).toContain("America/New_York");
     expect(block).toContain("8:00 AM");
     expect(block).toContain("Monday, May 25");
     expect(block).toContain("morning");
@@ -99,10 +99,10 @@ describe("jarvis-time-context", () => {
     expect(greetingForPartOfDay("late_night")).toBe("Burning the midnight oil");
   });
 
-  it("uses America/Vancouver as the default timezone when none supplied", () => {
-    const now = new Date("2026-05-25T15:00:00Z");
+  it("uses America/New_York as the default timezone when none supplied", () => {
+    const now = new Date("2026-05-25T12:00:00Z");
     const ctx = buildTimeContext({ now });
-    expect(ctx.timezone).toBe("America/Vancouver");
+    expect(ctx.timezone).toBe("America/New_York");
     expect(ctx.hour).toBe(8);
   });
 });

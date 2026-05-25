@@ -4,7 +4,12 @@
  * Tyler wants the greeting to adapt to when he's actually asking — "Good
  * afternoon" at 2pm, "Burning the midnight oil" at 2am. This helper
  * computes a per-call snapshot of local time in Tyler's timezone (default
- * America/Vancouver) and renders it into a system-prompt block.
+ * America/New_York — Tyler is on the Florida east coast) and renders it
+ * into a system-prompt block.
+ *
+ * TODO: expose a per-user timezone override via the Jarvis settings
+ * popover so non-ET users (and Tyler if he travels) can pick their own
+ * zone instead of relying on this fallback.
  *
  * Computed once per reply, injected as TIME CONTEXT immediately after the
  * persona base. The persona doc references {{currentTime}}, {{currentDate}},
@@ -30,7 +35,7 @@ export interface JarvisTimeContext {
   greeting: string;
 }
 
-const DEFAULT_TIMEZONE = "America/Vancouver";
+const DEFAULT_TIMEZONE = "America/New_York";
 
 /**
  * Map a 0..23 local hour to one of four bands per Tyler's spec:
@@ -101,7 +106,7 @@ function extractParts(now: Date, timezone: string): DateParts {
 export interface TimeContextOptions {
   /** Override `new Date()` for tests. */
   now?: Date;
-  /** Override Tyler's timezone. Defaults to America/Vancouver. */
+  /** Override Tyler's timezone. Defaults to America/New_York (ET). */
   timezone?: string;
 }
 
