@@ -42,12 +42,37 @@ function NoBoardAccessPage() {
   );
 }
 
+function SubtreeCrashPage() {
+  return (
+    <div className="mx-auto max-w-xl py-10">
+      <div className="rounded-lg border border-border bg-card p-6">
+        <h1 className="text-xl font-semibold">This page failed to render</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Something went wrong while building this view. Your account access is fine — this is a client-side error.
+          Check the browser console for details, then reload.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-4 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-sm hover:bg-muted/50"
+        >
+          Reload page
+        </button>
+      </div>
+    </div>
+  );
+}
+
 type GateErrorBoundaryState = { hasError: boolean };
 
 // If anything in the authenticated subtree throws during render (a stale or
 // malformed cache, a context that wasn't ready for an empty-companies user,
-// etc.), fall back to NoBoardAccessPage instead of unmounting the entire app
-// and showing a blank screen. Fresh-invite users hit this path first.
+// a WebGL init failure on a page like Knowledge Graph, etc.), fall back to a
+// truthful "render failed" page instead of unmounting the app and showing a
+// blank screen. We deliberately do NOT fall back to NoBoardAccessPage here —
+// that page accuses the user of lacking access, which is a lie when the real
+// problem is a client-side render bug. The access checks above this boundary
+// already gate users who actually lack access.
 class GateErrorBoundary extends Component<{ children: ReactNode }, GateErrorBoundaryState> {
   override state: GateErrorBoundaryState = { hasError: false };
 
@@ -60,7 +85,7 @@ class GateErrorBoundary extends Component<{ children: ReactNode }, GateErrorBoun
   }
 
   override render() {
-    if (this.state.hasError) return <NoBoardAccessPage />;
+    if (this.state.hasError) return <SubtreeCrashPage />;
     return this.props.children;
   }
 }
