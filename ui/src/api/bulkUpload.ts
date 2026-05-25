@@ -119,4 +119,79 @@ export const bulkUploadApi = {
       `${base(companyId)}/drafts/${draftId}/reorder`,
       { ids },
     ),
+
+  bestTimes: (companyId: string, platform: string) =>
+    api.get<BestTimeResult>(
+      `${base(companyId)}/best-times?platform=${encodeURIComponent(platform)}`,
+    ),
+
+  preview: (companyId: string, draftId: string, strategy: ScheduleStrategy) =>
+    api.post<PreviewResponse>(
+      `${base(companyId)}/drafts/${draftId}/preview`,
+      { strategy },
+    ),
+
+  commit: (companyId: string, draftId: string, strategy: ScheduleStrategy) =>
+    api.post<CommitResponse>(
+      `${base(companyId)}/drafts/${draftId}/commit`,
+      { strategy },
+    ),
 };
+
+export interface BestTimeSlot {
+  weekday: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  hour: number;
+  score: number;
+}
+
+export interface BestTimeResult {
+  platform: string;
+  source: "your-audience-30d" | "industry-2026" | "fallback";
+  slots: BestTimeSlot[];
+  detail?: string;
+}
+
+export interface EvenSpreadConfig {
+  kind: "even";
+  startDate: string;
+  dayCount: number;
+  postsPerDayPerPlatform: number;
+}
+export interface BestTimesConfig {
+  kind: "best-times";
+  startDate: string;
+}
+export interface CustomQueueSlot {
+  weekday: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  hour: number;
+  minute: number;
+}
+export interface CustomQueueConfig {
+  kind: "custom-queue";
+  startDate: string;
+  perPlatform: Record<string, CustomQueueSlot[]>;
+}
+export type ScheduleStrategy =
+  | EvenSpreadConfig
+  | BestTimesConfig
+  | CustomQueueConfig;
+
+export interface PreviewItem {
+  uploadId: string;
+  platform: string;
+  scheduledAt: string;
+}
+export interface PreviewResponse {
+  items: PreviewItem[];
+  unscheduled: Array<{ uploadId: string; platform: string; reason: string }>;
+}
+export interface CommitResponse {
+  committed: Array<{
+    uploadId: string;
+    platform: string;
+    postId: string;
+    scheduledAt: string;
+  }>;
+  unscheduled: Array<{ uploadId: string; platform: string; reason: string }>;
+  errors: Array<{ uploadId: string; platform: string; reason: string }>;
+}

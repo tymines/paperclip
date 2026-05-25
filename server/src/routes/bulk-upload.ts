@@ -24,10 +24,15 @@ import multer from "multer";
 import type { Db } from "@paperclipai/db";
 import type { StorageService } from "../storage/types.js";
 import { bulkUploadService } from "../services/bulk-upload.js";
+import { socialService } from "../services/social.js";
 import {
   BULK_UPLOAD_PLATFORMS,
+  autoSchedule,
   computeBestTimes,
   type BulkUploadPlatform,
+  type BestTimeSlot,
+  type ScheduleStrategy,
+  type ScheduleUpload,
 } from "../services/best-time/index.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
@@ -57,9 +62,64 @@ function detectType(mimeType: string): "image" | "video" | null {
   return null;
 }
 
+function parseStrategy(input: unknown): ScheduleStrategy | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const kind = obj.kind;
+  if (kind === "even") {
+    const startDate = String(obj.startDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return null;
+    const dayCount =
+      typeof obj.dayCount === "number" && obj.dayCount > 0
+        ? Math.min(Math.floor(obj.dayCount), 90)
+        : 7;
+    const postsPerDayPerPlatform =
+      typeof obj.postsPerDayPerPlatform === "number" && obj.postsPerDayPerPlatform > 0
+        ? Math.min(Math.floor(obj.postsPerDayPerPlatform), 10)
+        : 3;
+    return { kind: "even", startDate, dayCount, postsPerDayPerPlatform };
+  }
+  if (kind === "best-times") {
+    const startDate = String(obj.startDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return null;
+    return { kind: "best-times", startDate };
+  }
+  if (kind === "custom-queue") {
+    const startDate = String(obj.startDate ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) return null;
+    const raw = (obj.perPlatform ?? {}) as Record<string, unknown>;
+    const perPlatform: Partial<
+      Record<BulkUploadPlatform, Array<{ weekday: 0|1|2|3|4|5|6; hour: number; minute: number }>>
+    > = {};
+    for (const [k, v] of Object.entries(raw)) {
+      if (!isBulkUploadPlatform(k)) continue;
+      if (!Array.isArray(v)) continue;
+      const slots: Array<{ weekday: 0|1|2|3|4|5|6; hour: number; minute: number }> = [];
+      for (const s of v) {
+        if (!s || typeof s !== "object") continue;
+        const so = s as Record<string, unknown>;
+        const weekday = Number(so.weekday ?? 0);
+        const hour = Number(so.hour ?? 12);
+        const minute = Number(so.minute ?? 0);
+        if (
+          Number.isInteger(weekday) && weekday >= 0 && weekday <= 6 &&
+          Number.isInteger(hour) && hour >= 0 && hour <= 23 &&
+          Number.isInteger(minute) && minute >= 0 && minute <= 59
+        ) {
+          slots.push({ weekday: weekday as 0|1|2|3|4|5|6, hour, minute });
+        }
+      }
+      perPlatform[k] = slots;
+    }
+    return { kind: "custom-queue", startDate, perPlatform };
+  }
+  return null;
+}
+
 export function bulkUploadRoutes(db: Db, storage: StorageService) {
   const router = Router();
   const svc = bulkUploadService(db);
+  const social = socialService(db);
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: MAX_FILE_BYTES, files: MAX_FILES_PER_BATCH },
@@ -354,6 +414,145 @@ export function bulkUploadRoutes(db: Db, storage: StorageService) {
         : [];
       const uploads = await svc.reorderUploads(draft.id, ids);
       res.json({ uploads });
+    },
+  );
+
+  // ── Schedule preview + commit ────────────────────────────────────────────
+
+  async function buildSchedule(
+    companyId: string,
+    draftId: string,
+    rawStrategy: unknown,
+  ) {
+    const draft = await svc.getDraft(draftId);
+    if (!draft || draft.companyId !== companyId) throw notFound("Draft not found");
+    const strategy = parseStrategy(rawStrategy);
+    if (!strategy) throw badRequest("Invalid schedule strategy");
+
+    const uploads = await svc.listUploads(draftId);
+    const scheduleUploads: ScheduleUpload[] = uploads
+      .filter((u) => Array.isArray(u.platforms) && (u.platforms as unknown[]).length > 0)
+      .map((u) => ({
+        id: u.id,
+        platforms: (u.platforms as unknown[])
+          .filter((p): p is string => typeof p === "string")
+          .filter(isBulkUploadPlatform),
+        orderIndex: u.orderIndex,
+      }))
+      .filter((u) => u.platforms.length > 0);
+
+    // Pre-fetch best-time slots for every platform referenced in the
+    // schedule (used by the "best-times" strategy; harmless for the others).
+    const platformsInUse = new Set<BulkUploadPlatform>();
+    for (const u of scheduleUploads) {
+      for (const p of u.platforms) platformsInUse.add(p);
+    }
+    const bestSlotsByPlatform = new Map<BulkUploadPlatform, BestTimeSlot[]>();
+    if (strategy.kind === "best-times") {
+      for (const p of platformsInUse) {
+        const res = await computeBestTimes(companyId, p);
+        bestSlotsByPlatform.set(p, res.slots);
+      }
+    }
+
+    const result = autoSchedule(scheduleUploads, strategy, bestSlotsByPlatform);
+    return { draft, uploads, result, strategy };
+  }
+
+  router.post(
+    "/companies/:companyId/social/bulk-upload/drafts/:draftId/preview",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const built = await buildSchedule(
+        companyId,
+        req.params.draftId as string,
+        (req.body ?? {}).strategy,
+      );
+      res.json({
+        items: built.result.items.map((i) => ({
+          uploadId: i.uploadId,
+          platform: i.platform,
+          scheduledAt: i.scheduledAt.toISOString(),
+        })),
+        unscheduled: built.result.unscheduled,
+      });
+    },
+  );
+
+  router.post(
+    "/companies/:companyId/social/bulk-upload/drafts/:draftId/commit",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const actor = getActorInfo(req);
+      const built = await buildSchedule(
+        companyId,
+        req.params.draftId as string,
+        (req.body ?? {}).strategy,
+      );
+
+      // Map platform → first connected social_account on that platform.
+      const accounts = await social.listAccounts(companyId);
+      const accountByPlatform = new Map<string, string>();
+      for (const a of accounts) {
+        if (!accountByPlatform.has(a.platform)) {
+          accountByPlatform.set(a.platform, a.id);
+        }
+      }
+
+      const uploadById = new Map(built.uploads.map((u) => [u.id, u] as const));
+      const created: Array<{ uploadId: string; platform: string; postId: string; scheduledAt: string }> = [];
+      const errors: Array<{ uploadId: string; platform: string; reason: string }> = [];
+
+      for (const item of built.result.items) {
+        const accountId = accountByPlatform.get(item.platform);
+        if (!accountId) {
+          errors.push({
+            uploadId: item.uploadId,
+            platform: item.platform,
+            reason: "No connected account for this platform",
+          });
+          continue;
+        }
+        const upload = uploadById.get(item.uploadId);
+        if (!upload) continue;
+        const post = await social.createPost(
+          companyId,
+          {
+            title: null,
+            content: upload.caption ?? "",
+            postType: upload.detectedType === "video" ? "video" : "image",
+            status: "scheduled",
+            scheduledAt: item.scheduledAt,
+            mediaUrls: [upload.storageKey],
+            tags: Array.isArray(upload.hashtags) ? (upload.hashtags as string[]) : [],
+            metadata: { bulkUploadId: upload.id, draftId: built.draft.id },
+            createdBy: actor?.actorId ?? null,
+          },
+          [accountId],
+        );
+        await svc.updateUpload(upload.id, { scheduledPostId: post.id });
+        created.push({
+          uploadId: upload.id,
+          platform: item.platform,
+          postId: post.id,
+          scheduledAt: item.scheduledAt.toISOString(),
+        });
+      }
+
+      await svc.updateDraft(built.draft.id, {
+        step: "schedule",
+        strategy: built.strategy.kind,
+        strategyConfig: built.strategy as unknown as Record<string, unknown>,
+      });
+      await svc.markDraftCommitted(built.draft.id);
+
+      res.json({
+        committed: created,
+        unscheduled: built.result.unscheduled,
+        errors,
+      });
     },
   );
 
