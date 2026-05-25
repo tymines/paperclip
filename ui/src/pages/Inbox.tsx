@@ -65,7 +65,13 @@ import { BlockedInboxView } from "../components/BlockedInboxView";
 import { SwipeToArchive } from "../components/SwipeToArchive";
 
 import { StatusIcon } from "../components/StatusIcon";
-import { cn } from "../lib/utils";
+import {
+  cn,
+  formatCostUsdCompact,
+  formatTokens,
+  readRunTokens,
+  visibleRunCostUsd,
+} from "../lib/utils";
 import { StatusBadge } from "../components/StatusBadge";
 import { approvalLabel, defaultTypeIcon, typeIcon } from "../components/ApprovalPayload";
 import { timeAgo } from "../lib/timeAgo";
@@ -270,6 +276,12 @@ export function FailedRunInboxRow({
   const displayError = runFailureMessage(run);
   const showUnreadSlot = unreadState !== null;
   const showUnreadDot = unreadState === "visible" || unreadState === "fading";
+  // A failed run that burned $5 should not look identical to one that burned
+  // $0 — pull cost + tokens off the usage payload when the bridge emitted it.
+  const usagePayload = (run.usageJson ?? null) as Record<string, unknown> | null;
+  const resultPayload = (run.resultJson ?? null) as Record<string, unknown> | null;
+  const runCostUsd = visibleRunCostUsd(usagePayload, resultPayload);
+  const runTokens = readRunTokens(usagePayload);
 
   return (
     <div className={cn(
@@ -340,6 +352,24 @@ export function FailedRunInboxRow({
               {linkedAgentName && issue ? <span>{linkedAgentName}</span> : null}
               <span className="truncate max-w-[300px]">{displayError}</span>
               <span>{timeAgo(run.createdAt)}</span>
+              {runCostUsd > 0 ? (
+                <span
+                  className="rounded-sm bg-rose-500/10 px-1 font-mono text-[10px] tabular-nums text-rose-300"
+                  data-pp-failed-run-cost={run.id}
+                  title={`Burned $${runCostUsd.toFixed(4)} before failing`}
+                >
+                  {formatCostUsdCompact(runCostUsd)}
+                </span>
+              ) : null}
+              {runTokens.total > 0 ? (
+                <span
+                  className="rounded-sm bg-muted/40 px-1 font-mono text-[10px] tabular-nums text-muted-foreground"
+                  data-pp-failed-run-tokens={run.id}
+                  title={`${runTokens.input} input + ${runTokens.output} output tokens`}
+                >
+                  {formatTokens(runTokens.total)}t
+                </span>
+              ) : null}
             </span>
           </span>
         </Link>

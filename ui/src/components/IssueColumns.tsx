@@ -16,12 +16,21 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatAssigneeUserLabel } from "../lib/assignees";
 import type { InboxIssueColumn } from "../lib/inbox";
-import { cn } from "../lib/utils";
+import { cn, formatCostUsdCompact, formatTokens } from "../lib/utils";
 import { timeAgo } from "../lib/timeAgo";
 import { Identity } from "./Identity";
 import { StatusIcon } from "./StatusIcon";
 
-export const issueTrailingColumns: InboxIssueColumn[] = ["assignee", "project", "workspace", "parent", "labels", "updated"];
+export const issueTrailingColumns: InboxIssueColumn[] = [
+  "assignee",
+  "project",
+  "workspace",
+  "parent",
+  "labels",
+  "cost",
+  "tokens",
+  "updated",
+];
 
 const issueColumnLabels: Record<InboxIssueColumn, string> = {
   status: "Status",
@@ -31,6 +40,8 @@ const issueColumnLabels: Record<InboxIssueColumn, string> = {
   workspace: "Workspace",
   parent: "Parent issue",
   labels: "Tags",
+  cost: "Spend",
+  tokens: "Tokens",
   updated: "Last updated",
 };
 
@@ -42,6 +53,8 @@ const issueColumnDescriptions: Record<InboxIssueColumn, string> = {
   workspace: "Execution or project workspace used for the issue.",
   parent: "Parent issue identifier and title.",
   labels: "Issue labels and tags.",
+  cost: "USD spend rolled up from runs on this issue.",
+  tokens: "Total input + output tokens for this issue.",
   updated: "Latest visible activity time.",
 };
 
@@ -57,6 +70,8 @@ function issueTrailingGridTemplate(columns: InboxIssueColumn[]): string {
       if (column === "workspace") return "minmax(6rem, 9rem)";
       if (column === "parent") return "minmax(3.5rem, 5.5rem)";
       if (column === "labels") return "minmax(3rem, 6rem)";
+      if (column === "cost") return "minmax(3rem, 4rem)";
+      if (column === "tokens") return "minmax(3rem, 4rem)";
       return "minmax(3.5rem, 4.5rem)";
     })
     .join(" ");
@@ -373,6 +388,56 @@ export function InboxIssueTrailingColumns({
               ) : (
                 <span className="italic">Sub-{issueNoun.singular}</span>
               )}
+            </span>
+          );
+        }
+
+        if (column === "cost") {
+          const cents = issue.costCents ?? 0;
+          if (cents <= 0) {
+            return (
+              <span
+                key={column}
+                className="min-w-0 truncate text-right font-mono text-[11px] text-muted-foreground/50 tabular-nums"
+                aria-hidden="true"
+              >
+                —
+              </span>
+            );
+          }
+          return (
+            <span
+              key={column}
+              className="min-w-0 truncate text-right font-mono text-[11px] font-medium tabular-nums text-foreground/80"
+              data-pp-issue-cost={issue.id}
+              title={`Spend: $${(cents / 100).toFixed(2)}`}
+            >
+              {formatCostUsdCompact(cents / 100)}
+            </span>
+          );
+        }
+
+        if (column === "tokens") {
+          const total = (issue.inputTokens ?? 0) + (issue.outputTokens ?? 0);
+          if (total <= 0) {
+            return (
+              <span
+                key={column}
+                className="min-w-0 truncate text-right font-mono text-[11px] text-muted-foreground/50 tabular-nums"
+                aria-hidden="true"
+              >
+                —
+              </span>
+            );
+          }
+          return (
+            <span
+              key={column}
+              className="min-w-0 truncate text-right font-mono text-[11px] tabular-nums text-muted-foreground"
+              data-pp-issue-tokens={issue.id}
+              title={`${issue.inputTokens ?? 0} input + ${issue.outputTokens ?? 0} output tokens`}
+            >
+              {formatTokens(total)}
             </span>
           );
         }
