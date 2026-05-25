@@ -193,10 +193,6 @@ export function JarvisPage() {
   // can't fire two manual briefings before the server-side dedupe window
   // is even consulted.
   const briefMeRef = useRef<number>(0);
-  // Track strict-mode double-mount of the auto-fire effect — the first
-  // mount stamps this ref so the second cleanup → re-mount returns early
-  // before it queues a second fireBriefing().
-  const autoBriefEffectRanRef = useRef(false);
   const [capabilities, setCapabilities] = useState<JarvisCapability[] | null>(null);
   const [capabilitiesGeneratedAt, setCapabilitiesGeneratedAt] = useState<string | null>(null);
   const [capabilitiesRefreshing, setCapabilitiesRefreshing] = useState(false);
@@ -354,16 +350,6 @@ export function JarvisPage() {
       if (timer) clearInterval(timer);
     };
   }, [selectedCompanyId]);
-
-  // Debounced "Brief me" handler — 2 second floor between manual fires so a
-  // double-click can't queue two briefings before the server-side dedupe
-  // window (5 minutes) is consulted.
-  const onBriefMe = useCallback(() => {
-    const now = Date.now();
-    if (now - briefMeRef.current < 2000) return;
-    briefMeRef.current = now;
-    void fireBriefing({ source: "manual" });
-  }, []);
 
   const onToggleAutoBrief = useCallback(
     async (next: boolean) => {
@@ -565,6 +551,18 @@ export function JarvisPage() {
     [selectedCompanyId, voice, voiceTier],
   );
 
+  // Debounced "Brief me" handler — 2 second floor between manual fires so a
+  // double-click can't queue two briefings before the server-side dedupe
+  // window (5 minutes) is consulted. Declared after fireBriefing so the
+  // useCallback dep can pick up the latest closure (when selectedCompanyId
+  // resolves) instead of capturing the first-render null version.
+  const onBriefMe = useCallback(() => {
+    const now = Date.now();
+    if (now - briefMeRef.current < 2000) return;
+    briefMeRef.current = now;
+    void fireBriefing({ source: "manual" });
+  }, [fireBriefing]);
+
   // Initialize the barge-in controller once per company. The controller's
   // start() is idempotent and only opens transport on the first call;
   // dispatchTranscript triggers start() right before each speak() turn so
@@ -668,17 +666,16 @@ export function JarvisPage() {
   // wanted briefings on ask only, not on page load. Mac-wake + the
   // scheduled cron remain the hands-free triggers.
   //
-  // Strict-mode safety: the effectRan ref guards against React's
-  // dev-mode double-mount re-firing the briefing.
-  // Pre-stamp safety: the localStorage timestamp is set *before* the
-  // call kicks off so even if the effect somehow re-runs, the second
-  // pass sees a fresh timestamp and bails inside the 4-hour debounce.
+  // Strict-mode safety: the pre-stamped localStorage timestamp is the
+  // single source of truth for the 4hr cooldown. The first dev-mount
+  // stamps; the cleanup-then-remount second pass sees that stamp and
+  // bails. (An earlier ref-based guard blocked the second mount from
+  // ever scheduling, so the cancelled-first-mount setTimeout meant the
+  // briefing never fired at all in dev.)
   useEffect(() => {
     if (!selectedCompanyId) return;
     if (!settingsLoaded) return;
     if (!settings.autoBriefOnLoad) return;
-    if (autoBriefEffectRanRef.current) return;
-    autoBriefEffectRanRef.current = true;
 
     const storageKey = `paperclip.jarvis.lastBriefingTimestamp.${selectedCompanyId}`;
     const lastMs = (() => {
@@ -699,10 +696,7 @@ export function JarvisPage() {
       window.localStorage.setItem(storageKey, String(Date.now()));
     } catch {}
 
-    const t = window.setTimeout(() => {
-      void fireBriefing();
-    }, 800);
-    return () => window.clearTimeout(t);
+    void fireBriefing();
   }, [selectedCompanyId, fireBriefing, settingsLoaded, settings.autoBriefOnLoad]);
 
   // Auto-hide the recommended-action CTA after 60s so it doesn't linger
