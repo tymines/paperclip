@@ -88,3 +88,4 @@ export { pluginJobs, pluginJobRuns } from "./plugin_jobs.js";
 export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export { jarvisConversations } from "./jarvis_conversations.js";
+export { webhookEventLog } from "./webhook_event_log.js";
