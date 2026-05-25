@@ -145,6 +145,7 @@ export function Home() {
             size="sm"
             onClick={() => issuesQuery.refetch()}
             aria-label="Refresh"
+            className="min-h-[44px] min-w-[44px]"
           >
             <RefreshCcw className="h-3.5 w-3.5" />
           </Button>
@@ -159,7 +160,7 @@ export function Home() {
             </span>
             <Link
               to={companyPrefix ? `/${companyPrefix}/goals` : "/goals"}
-              className="text-xs text-primary hover:underline"
+              className="-my-3 inline-flex min-h-[44px] items-center px-2 text-xs text-primary hover:underline"
             >
               Open all
             </Link>

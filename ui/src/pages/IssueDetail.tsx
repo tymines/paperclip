@@ -3955,6 +3955,11 @@ export function IssueDetail() {
 
       <Separator />
 
+      {/* Chat is the default tab (useState("chat") above) and mounts the
+          IssueChatThread composer on first paint — i.e. the comment input
+          IS visible without clicking the tab. Audit locators that grep
+          for <textarea> miss it because the composer is a contenteditable
+          MarkdownEditor; use [data-pp-comment-input] or [data-testid="issue-chat-composer"]. */}
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
         <TabsList variant="line" className="w-full justify-start gap-1">
           <TabsTrigger value="chat" className="gap-1.5">

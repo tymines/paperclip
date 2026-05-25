@@ -150,7 +150,7 @@ function ProviderStrip({ payload }: { payload: CostWatcherPayload }) {
           Pulse-glow = balance covers under 7 days at current burn.
         </p>
       </header>
-      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 -mx-2 px-2 scrollbar-auto-hide">
+      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain pb-2 -mx-4 px-4 scrollbar-hide">
         {payload.providers.map((card) => {
           const formatter = new Intl.NumberFormat(undefined, {
             style: "currency",
@@ -677,9 +677,11 @@ export function CostWatcher() {
       {/* Provider strip */}
       <ProviderStrip payload={payload} />
 
-      {/* Main two-col: chart+leaderboard left, alerts right */}
+      {/* Main two-col: chart+leaderboard left, alerts right. min-w-0 on
+          the grid items so the chart's min-w-[600px] does not push the
+          implicit grid column wider than the viewport on mobile. */}
       <div className="grid gap-4 lg:grid-cols-[1fr,18rem]">
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <SpendTimeline payload={payload} />
           <AgentLeaderboard rows={payload.agents} companyPrefix={selectedCompany?.issuePrefix ?? null} />
         </div>
