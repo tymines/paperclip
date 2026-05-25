@@ -666,6 +666,13 @@
       "when": 1778976008000,
       "tag": "0094_social_oauth_wizard",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1778976009000,
+      "tag": "0095_bulk_upload_drafts",
+      "breakpoints": true
     }
   ]
 }
