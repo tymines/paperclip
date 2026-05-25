@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
+import { jarvisConversations } from "@paperclipai/db";
+import { and, desc, eq } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
@@ -36,6 +38,38 @@ const voiceRequestSchema = z.object({
 
 export function jarvisRoutes(db: Db) {
   const router = Router();
+
+  /**
+   * Health probe — confirms jarvisRoutes() is registered and the LLM-key
+   * surface is reachable. Returns the providers that actually have keys
+   * configured so the UI can show an accurate "no real LLM wired" banner
+   * when every provider is missing.
+   */
+  router.get("/jarvis/health", async (_req, res) => {
+    const [deepseek, openai, anthropic, moonshot, elevenlabs, openaiRealtime] =
+      await Promise.all([
+        getRawKey("deepseek").catch(() => null),
+        getRawKey("openai").catch(() => null),
+        getRawKey("anthropic").catch(() => null),
+        getRawKey("moonshot").catch(() => null),
+        getRawKey("elevenlabs").catch(() => null),
+        getRawKey("openai_realtime").catch(() => null),
+      ]);
+    res.json({
+      ok: true,
+      version: 1,
+      llm: {
+        deepseek: !!deepseek,
+        openai: !!openai,
+        anthropic: !!anthropic,
+        moonshot: !!moonshot,
+      },
+      voice: {
+        elevenlabs: !!elevenlabs,
+        openaiRealtime: !!openaiRealtime,
+      },
+    });
+  });
 
   router.post(
     "/companies/:companyId/jarvis/voice",
@@ -79,6 +113,56 @@ export function jarvisRoutes(db: Db) {
         conversationId: null,
       });
     }
+  );
+
+  /**
+   * Conversation history — pulls the user's recent turns out of
+   * jarvis_conversations so the chat panel can hydrate with REAL history
+   * instead of the mock "Sentiment +8.2pp WoW" stub. Returned newest-last
+   * so the client can render in order without re-sorting.
+   */
+  router.get(
+    "/companies/:companyId/jarvis/conversations",
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const limit = Math.min(
+        Math.max(Number.parseInt(String(req.query.limit ?? "20"), 10) || 20, 1),
+        100,
+      );
+
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : null;
+
+      const where = userActorId
+        ? and(
+            eq(jarvisConversations.companyId, companyId),
+            eq(jarvisConversations.userActorId, userActorId),
+          )
+        : eq(jarvisConversations.companyId, companyId);
+
+      const rows = await db
+        .select({
+          id: jarvisConversations.id,
+          userTranscript: jarvisConversations.userTranscript,
+          agentReply: jarvisConversations.agentReply,
+          llmProvider: jarvisConversations.llmProvider,
+          llmModel: jarvisConversations.llmModel,
+          responseType: jarvisConversations.responseType,
+          createdAt: jarvisConversations.createdAt,
+        })
+        .from(jarvisConversations)
+        .where(where)
+        .orderBy(desc(jarvisConversations.createdAt))
+        .limit(limit);
+
+      res.json({ conversations: rows.reverse() });
+    },
   );
 
   /**

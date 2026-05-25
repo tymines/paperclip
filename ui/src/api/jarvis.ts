@@ -79,6 +79,27 @@ export interface JarvisCapabilitiesResponse {
   capabilities: JarvisCapability[];
 }
 
+export interface JarvisConversationTurn {
+  id: string;
+  userTranscript: string;
+  agentReply: string;
+  llmProvider: string | null;
+  llmModel: string | null;
+  responseType: string | null;
+  createdAt: string;
+}
+
+export interface JarvisConversationsResponse {
+  conversations: JarvisConversationTurn[];
+}
+
+export interface JarvisHealthResponse {
+  ok: boolean;
+  version: number;
+  llm: { deepseek: boolean; openai: boolean; anthropic: boolean; moonshot: boolean };
+  voice: { elevenlabs: boolean; openaiRealtime: boolean };
+}
+
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
@@ -116,4 +137,21 @@ export const jarvisApi = {
   /** Probes what Augi can actually do on this host. ?refresh=1 re-probes. */
   capabilities: (companyId: string, refresh = false): Promise<JarvisCapabilitiesResponse> =>
     api.get(`/api/companies/${companyId}/jarvis/capabilities${refresh ? "?refresh=1" : ""}`),
+
+  /**
+   * Returns the user's recent Jarvis conversation turns so the chat panel
+   * hydrates with real history instead of mock data.
+   */
+  conversations: (
+    companyId: string,
+    limit = 20,
+  ): Promise<JarvisConversationsResponse> =>
+    api.get(`/api/companies/${companyId}/jarvis/conversations?limit=${limit}`),
+
+  /**
+   * Health probe — confirms /api/jarvis routes are mounted and reports
+   * which LLM / voice provider keys are configured. Used by the UI to
+   * surface "no real LLM wired" when every provider is missing.
+   */
+  health: (): Promise<JarvisHealthResponse> => api.get(`/api/jarvis/health`),
 };
