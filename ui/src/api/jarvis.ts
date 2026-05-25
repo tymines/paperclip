@@ -97,6 +97,26 @@ export interface JarvisConversationsResponse {
   conversations: JarvisConversationTurn[];
 }
 
+export interface JarvisDaddysHomeRequest {
+  voiceTier?: JarvisVoiceTierId;
+  source?: "manual" | "mac-wake" | "schedule";
+}
+
+export interface JarvisDaddysHomeResponse {
+  briefingText: string;
+  recommendedAction: string;
+  tier: string;
+  latencyMs: number;
+  llmProvider: string | null;
+  llmModel: string | null;
+  personaVersion: string;
+  personaSource: "file" | "fallback";
+  responseType: "briefing";
+  truncated: boolean;
+  briefingPayload: Record<string, unknown>;
+  conversationId: string | null;
+}
+
 export interface JarvisHealthResponse {
   ok: boolean;
   version: number;
@@ -139,6 +159,12 @@ export const jarvisApi = {
    */
   voice: (companyId: string, body: JarvisVoiceRequest): Promise<JarvisVoiceResponse> =>
     api.post(`/companies/${companyId}/jarvis/voice`, body),
+
+  daddysHome: (
+    companyId: string,
+    body: JarvisDaddysHomeRequest = {},
+  ): Promise<JarvisDaddysHomeResponse> =>
+    api.post(`/companies/${companyId}/jarvis/daddys-home`, body),
 
   /**
    * Reports which voice tiers are currently available based on configured

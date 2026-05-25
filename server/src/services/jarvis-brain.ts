@@ -1,5 +1,5 @@
 import type { Db } from "@paperclipai/db";
-import { jarvisConversations } from "@paperclipai/db";
+import { jarvisConversations, agentBridgeReplyAttempts } from "@paperclipai/db";
 import { getCostWatcherPayload } from "./cost-watcher.js";
 import { issueService } from "./issues.js";
 import { agentService } from "./agents.js";
@@ -42,6 +42,23 @@ export interface JarvisBrainInput {
   voiceMode?: boolean;
   /** Hint for the length-budget pass. Defaults to "standard". */
   responseType?: ResponseType;
+  /**
+   * Persistence tag — written to jarvis_conversations.source so we can
+   * separate scheduled briefings from interactive turns later. Known values:
+   * "voice" | "chat" | "daddys_home" | "mac-wake" | "schedule". Defaults to
+   * null when omitted (legacy interactive turn).
+   */
+  source?: string;
+  /**
+   * When set, replaces the default compose{Standard,Briefing}Context output —
+   * lets the daddys-home endpoint hand the brain a richer user prompt that's
+   * been pre-composed from briefing-only data (shipped overnight, routine
+   * failures, etc.). Persisted verbatim to contextSnapshot when paired with
+   * customContextSnapshot.
+   */
+  customUserPrompt?: string;
+  /** When set, replaces the ContextBriefing snapshot written to the row. */
+  customContextSnapshot?: Record<string, unknown>;
 }
 
 export interface JarvisBrainOutput {
@@ -432,10 +449,12 @@ export async function jarvisBrainReply(
   // blockers, fleet, projects — revenue only on ask. The context block we
   // hand the LLM mirrors that ordering. For non-briefings we keep the
   // factual snapshot compact and leave ordering to the model.
-  const userPrompt =
-    responseType === "briefing"
+  // The daddys-home endpoint pre-composes its own richer prompt and passes
+  // it via customUserPrompt — use that verbatim when supplied.
+  const userPrompt = input.customUserPrompt
+    ?? (responseType === "briefing"
       ? composeBriefingContext(input.transcript, ctx)
-      : composeStandardContext(input.transcript, ctx);
+      : composeStandardContext(input.transcript, ctx));
 
   const llm = await callLlm(systemPrompt, userPrompt);
   let reply = llm?.reply ?? deterministicReply(input.transcript, ctx, responseType);
@@ -445,12 +464,44 @@ export async function jarvisBrainReply(
   // TTS doesn't read literal asterisks.
   if (voiceMode) reply = stripMarkdown(reply);
 
-  const { text: budgeted, truncated } = enforceLengthBudget(reply, responseType);
+  const enforcement = enforceLengthBudget(reply, responseType);
+  const { text: budgeted, truncated } = enforcement;
   reply = budgeted;
+
+  // Length-budget over-run telemetry. agent_bridge_reply_attempts is the
+  // closest cross-cutting "model went off the rails" log we already have —
+  // every reply that needed truncation lands a row with the pre-trim length
+  // so the persona can be tuned (raise/lower the cap, shorten the system
+  // prompt, etc.). companyId is required on the row schema so we always
+  // include it; agentId/roomId are null since this isn't a room turn.
+  if (truncated) {
+    void db
+      .insert(agentBridgeReplyAttempts)
+      .values({
+        companyId: input.companyId,
+        roomId: null,
+        agentId: null,
+        contentLength: enforcement.originalLength,
+        outcome: "length_overrun",
+        metadata: {
+          responseType,
+          budgetSentences: enforcement.budgetSentences,
+          truncatedLength: budgeted.length,
+          source: input.source ?? "voice",
+          personaVersion: persona.version,
+        },
+      })
+      .catch((err) => {
+        logger.warn({ err }, "jarvis-brain: length-overrun log failed");
+      });
+  }
 
   const latencyMs = Date.now() - start;
   const provider = llm?.provider ?? null;
   const model = llm?.model ?? null;
+
+  const persistedContext = input.customContextSnapshot
+    ?? (ctx as unknown as Record<string, unknown>);
 
   // Fire-and-forget persist; never fail the user's reply on a write error.
   void db
@@ -466,7 +517,8 @@ export async function jarvisBrainReply(
       personaVersion: persona.version,
       responseType,
       truncated,
-      contextSnapshot: ctx as unknown as Record<string, unknown>,
+      source: input.source ?? null,
+      contextSnapshot: persistedContext,
       latencyMs: String(latencyMs),
     })
     .catch((err) => {
@@ -477,7 +529,7 @@ export async function jarvisBrainReply(
     reply,
     llmProvider: provider,
     llmModel: model,
-    contextSnapshot: ctx as unknown as Record<string, unknown>,
+    contextSnapshot: persistedContext,
     latencyMs,
     personaVersion: persona.version,
     personaSource: persona.source,

@@ -708,6 +708,13 @@
       "when": 1779408000000,
       "tag": "0100_jarvis_barge_in",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1779494400000,
+      "tag": "0101_jarvis_conversation_source",
+      "breakpoints": true
     }
   ]
 }

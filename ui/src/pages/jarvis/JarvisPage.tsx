@@ -184,6 +184,9 @@ export function JarvisPage() {
   const [capabilities, setCapabilities] = useState<JarvisCapability[] | null>(null);
   const [capabilitiesGeneratedAt, setCapabilitiesGeneratedAt] = useState<string | null>(null);
   const [capabilitiesRefreshing, setCapabilitiesRefreshing] = useState(false);
+  // Surfaces the "want me to..." follow-up from the last Daddy's Home
+  // briefing as a clickable CTA over the orb. Cleared on click + after 60s.
+  const [recommendedAction, setRecommendedAction] = useState<string | null>(null);
 
   // Probe the real capability surface once per page load (server caches it
   // for 10 min). "Run Diagnostics" forces a refresh.
@@ -332,6 +335,65 @@ export function JarvisPage() {
     );
   }, []);
 
+  // Fires the Daddy's Home briefing: server returns prose + a recommended
+  // follow-up action. Reused by the 4hr auto-trigger and the manual
+  // "Brief me" topbar button — the latter passes source:"manual" so the
+  // server can tag the conversation row.
+  const fireBriefing = useCallback(
+    async (opts: { source?: "manual" | "mac-wake" | "schedule" } = {}) => {
+      if (!selectedCompanyId) return;
+      setState("processing");
+      try {
+        const resp = await jarvisApi.daddysHome(selectedCompanyId, {
+          voiceTier,
+          source: opts.source,
+        });
+        const stamp = formatNow();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `r-briefing-${Date.now()}`,
+            author: "agent",
+            authorLabel: `Jarvis · ${stamp}`,
+            text: resp.briefingText,
+            timestamp: stamp,
+          },
+        ]);
+        // Surface the CTA only when it's actually distinct from the briefing
+        // tail — server already guarantees that, but cheap to double-check.
+        if (resp.recommendedAction && resp.recommendedAction.trim()) {
+          setRecommendedAction(resp.recommendedAction.trim());
+        }
+        // Stamp the debounce timestamp ONLY on success so a failed network
+        // call retries on the next mount instead of silently swallowing the
+        // briefing for 4 hours.
+        try {
+          window.localStorage.setItem(
+            `paperclip.jarvis.lastBriefingTimestamp.${selectedCompanyId}`,
+            String(Date.now()),
+          );
+        } catch {}
+        setState("speaking");
+        await voice.speak(resp.briefingText);
+      } catch (err) {
+        const stamp = formatNow();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `r-briefing-err-${Date.now()}`,
+            author: "agent",
+            authorLabel: `Jarvis · ${stamp}`,
+            text: `Briefing failed: ${(err as Error).message}`,
+            timestamp: stamp,
+          },
+        ]);
+      } finally {
+        setState((cur) => (cur === "interrupted" ? "interrupted" : "idle"));
+      }
+    },
+    [selectedCompanyId, voice, voiceTier],
+  );
+
   // Initialize the barge-in controller once per company. The controller's
   // start() is idempotent and only opens transport on the first call;
   // dispatchTranscript triggers start() right before each speak() turn so
@@ -430,39 +492,36 @@ export function JarvisPage() {
     }
   }, [state]);
 
-  // Daily morning-briefing auto-greet. Fires once per UTC day per company,
-  // tracked via localStorage so a stale tab doesn't keep re-firing on refresh.
-  // The greeting goes through the same /api/jarvis/voice path as a normal
-  // turn so the brain has full data context — Tyler hears real numbers.
+  // Auto-fire the Daddy's Home briefing on mount when the last successful
+  // briefing is older than 4 hours (or has never run). Tracked per-company
+  // via localStorage so a stale tab refresh doesn't keep re-firing.
   useEffect(() => {
     if (!selectedCompanyId) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const storageKey = `paperclip.jarvis.lastGreet.${selectedCompanyId}`;
-    const last = (() => {
+    const storageKey = `paperclip.jarvis.lastBriefingTimestamp.${selectedCompanyId}`;
+    const lastMs = (() => {
       try {
-        return window.localStorage.getItem(storageKey);
+        const raw = window.localStorage.getItem(storageKey);
+        return raw ? Number(raw) : 0;
       } catch {
-        return null;
+        return 0;
       }
     })();
-    if (last === today) return;
-    try {
-      window.localStorage.setItem(storageKey, today);
-    } catch {
-      // Storage blocked — still allow the greeting to fire this session.
-    }
-    const hour = new Date().getHours();
-    const timeOfDay = hour < 5 ? "good night" : hour < 12 ? "good morning" : hour < 17 ? "good afternoon" : "good evening";
+    const FOUR_HOURS = 4 * 60 * 60 * 1000;
+    if (lastMs && Date.now() - lastMs < FOUR_HOURS) return;
     // Defer slightly so the page paints + AudioContext can resume on first click.
     const t = window.setTimeout(() => {
-      void dispatchTranscript(`${timeOfDay} — give me today's briefing`, {
-        voiceMode: true,
-        responseType: "briefing",
-      });
+      void fireBriefing();
     }, 800);
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCompanyId]);
+  }, [selectedCompanyId, fireBriefing]);
+
+  // Auto-hide the recommended-action CTA after 60s so it doesn't linger
+  // forever if Tyler walks away from the desk.
+  useEffect(() => {
+    if (!recommendedAction) return;
+    const t = window.setTimeout(() => setRecommendedAction(null), 60_000);
+    return () => window.clearTimeout(t);
+  }, [recommendedAction]);
 
   // Auto-scroll the chat to bottom whenever messages change.
   useEffect(() => {
@@ -646,6 +705,14 @@ export function JarvisPage() {
 
         <div className="jarvis-top-actions">
           <span className="jarvis-online-pill">Online</span>
+          <button
+            type="button"
+            className="jarvis-topbar__brief-me"
+            onClick={() => void fireBriefing({ source: "manual" })}
+            title="Run the Daddy's Home briefing now"
+          >
+            Brief me
+          </button>
           <VoiceTierPicker tiers={tiers} selected={voiceTier} onSelect={onTierSelect} />
           <button
             type="button"
@@ -841,6 +908,19 @@ export function JarvisPage() {
             </div>
             <div className="jarvis-reactor" ref={reactorRef}>
               <Reactor />
+              {recommendedAction ? (
+                <button
+                  type="button"
+                  className="jarvis-orb__cta"
+                  onClick={() => {
+                    const action = recommendedAction;
+                    setRecommendedAction(null);
+                    void dispatchTranscript(action, { voiceMode: true });
+                  }}
+                >
+                  {recommendedAction}
+                </button>
+              ) : null}
             </div>
             <div className="jarvis-reactor-label">
               JARVIS PRIME ONLINE
