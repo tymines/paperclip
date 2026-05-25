@@ -687,6 +687,13 @@
       "when": 1779148800000,
       "tag": "0097_jarvis_persona_version",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1779235200000,
+      "tag": "0098_agent_bridge_observability",
+      "breakpoints": true
     }
   ]
 }

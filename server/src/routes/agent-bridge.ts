@@ -1,7 +1,13 @@
 import { Router } from "express";
-import { eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq, gte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents } from "@paperclipai/db";
+import {
+  agents,
+  agentBridgeReplyAttempts,
+  bridgeHealth,
+  roomMessages,
+} from "@paperclipai/db";
 import { ROOM_MESSAGE_HARD_CAP } from "@paperclipai/shared";
 import {
   roomService,
@@ -26,124 +32,434 @@ export function agentBridgeRoutes(db: Db) {
   const svc = roomService(db);
   const heartbeat = heartbeatService(db);
 
-  router.post("/agent-bridge/reply", async (req, res) => {
-    const header = (req.headers.authorization ?? "").trim();
-    const match = header.match(/^bearer\s+(.+)$/i);
-    if (!match) throw unauthorized("Missing bearer token");
-    const presentedToken = match[1]!.trim();
-
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const agentId = typeof body.agentId === "string" ? body.agentId : null;
-    const roomId = typeof body.roomId === "string" ? body.roomId : null;
-    const content = typeof body.content === "string" ? body.content.trim() : "";
-    const parentMessageId =
-      typeof body.parentMessageId === "string" && body.parentMessageId.length > 0
-        ? body.parentMessageId
-        : null;
-
-    if (!agentId || !roomId) throw badRequest("agentId and roomId are required");
-    if (content.length === 0) throw badRequest("content must be a non-empty string");
-
-    const [agent] = await db
-      .select({
-        id: agents.id,
-        companyId: agents.companyId,
-        agentBridge: agents.agentBridge,
-      })
-      .from(agents)
-      .where(eq(agents.id, agentId))
-      .limit(1);
-    if (!agent) throw notFound("Agent not found");
-
-    const bridge = agent.agentBridge as AgentBridgeConfig | null;
-    if (!bridge || typeof bridge.authToken !== "string") {
-      throw forbidden("Agent has no bridge configured");
+  async function recordAttempt(input: {
+    companyId: string | null;
+    roomId: string | null;
+    agentId: string | null;
+    contentLength: number;
+    outcome: "persisted" | "rejected" | "errored";
+    errorDetail?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }) {
+    try {
+      await db.insert(agentBridgeReplyAttempts).values({
+        companyId: input.companyId ?? undefined,
+        roomId: input.roomId ?? undefined,
+        agentId: input.agentId ?? undefined,
+        contentLength: input.contentLength,
+        outcome: input.outcome,
+        errorDetail: input.errorDetail ?? null,
+        metadata: input.metadata ?? null,
+      });
+    } catch (err) {
+      logger.error({ err }, "failed to record bridge reply attempt");
     }
-    if (bridge.authToken !== presentedToken) {
-      throw forbidden("Bridge token mismatch");
-    }
+  }
 
-    const room = await svc.getById(roomId);
-    if (!room || room.companyId !== agent.companyId) throw notFound("Room not found");
+  router.post("/agent-bridge/reply", async (req, res, next) => {
+    let agentIdForLog: string | null = null;
+    let roomIdForLog: string | null = null;
+    let companyIdForLog: string | null = null;
+    let contentLengthForLog = 0;
 
-    const messageCount = await svc.countMessages(roomId);
-    if (messageCount >= ROOM_MESSAGE_HARD_CAP) {
-      throw conflict(
-        `Room has hit the hard message cap (${ROOM_MESSAGE_HARD_CAP}).`,
-        { roomId, messageCount, cap: ROOM_MESSAGE_HARD_CAP },
-      );
-    }
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) {
+        await recordAttempt({
+          companyId: null,
+          roomId: null,
+          agentId: null,
+          contentLength: 0,
+          outcome: "rejected",
+          errorDetail: "missing-bearer-token",
+        });
+        throw unauthorized("Missing bearer token");
+      }
+      const presentedToken = match[1]!.trim();
 
-    const message = await svc.sendMessage({
-      roomId,
-      senderId: agent.id,
-      senderType: "agent",
-      content,
-      messageType: "chat",
-      metadata: { source: "agent-bridge", kind: bridge.kind },
-      parentMessageId,
-    });
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const roomId = typeof body.roomId === "string" ? body.roomId : null;
+      const content = typeof body.content === "string" ? body.content.trim() : "";
+      const parentMessageId =
+        typeof body.parentMessageId === "string" && body.parentMessageId.length > 0
+          ? body.parentMessageId
+          : null;
+      agentIdForLog = agentId;
+      roomIdForLog = roomId;
+      contentLengthForLog = content.length;
 
-    publishLiveEvent({
-      companyId: agent.companyId,
-      type: "room.message",
-      payload: {
-        roomId,
-        messageId: message.id,
-        senderId: message.senderId,
-        senderType: message.senderType,
-        content: message.content,
-        messageType: message.messageType,
-        parentMessageId: message.parentMessageId,
-        createdAt: message.createdAt,
-      },
-    });
+      if (!agentId || !roomId) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "missing-agentId-or-roomId",
+        });
+        throw badRequest("agentId and roomId are required");
+      }
+      if (content.length === 0) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: 0,
+          outcome: "rejected",
+          errorDetail: "empty-content",
+        });
+        throw badRequest("content must be a non-empty string");
+      }
 
-    // Cascade to other room members. Re-uses the same dispatcher used by the
-    // primary message endpoint so bridged agents can address one another.
-    void (async () => {
-      const members = await svc.listMembers(roomId);
-      for (const member of members) {
-        if (!member.agentId) continue;
-        if (member.agentId === agent.id) continue;
-        const handled = await dispatchAgentBridge(db, {
-          agentId: member.agentId,
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "agent-not-found",
+        });
+        throw notFound("Agent not found");
+      }
+      companyIdForLog = agent.companyId;
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        await recordAttempt({
           companyId: agent.companyId,
           roomId,
-          messageId: message.id,
-          messageContent: message.content,
-          senderActorType: "agent",
-          senderActorId: agent.id,
-        }).catch((err) => {
-          logger.warn(
-            { err, roomId, agentId: member.agentId },
-            "cascade dispatch failed",
-          );
-          return false;
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "no-bridge-configured",
         });
-        if (handled) continue;
-        heartbeat
-          .wakeup(member.agentId, {
-            source: "automation",
-            triggerDetail: "system",
-            reason: "room_message",
-            payload: { roomId, messageId: message.id },
-            requestedByActorType: "agent",
-            requestedByActorId: agent.id,
-            contextSnapshot: {
-              roomId,
-              messageId: message.id,
-              source: "room.message",
-              wakeReason: "room_message",
-            },
-          })
-          .catch((err) =>
-            logger.warn({ err, roomId, agentId: member.agentId }, "wakeup failed"),
-          );
+        throw forbidden("Agent has no bridge configured");
       }
-    })();
+      if (bridge.authToken !== presentedToken) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "bridge-token-mismatch",
+        });
+        throw forbidden("Bridge token mismatch");
+      }
 
-    res.status(201).json(message);
+      const room = await svc.getById(roomId);
+      if (!room || room.companyId !== agent.companyId) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "room-not-found-or-wrong-company",
+        });
+        throw notFound("Room not found");
+      }
+
+      const messageCount = await svc.countMessages(roomId);
+      if (messageCount >= ROOM_MESSAGE_HARD_CAP) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: `hard-cap-${ROOM_MESSAGE_HARD_CAP}`,
+        });
+        throw conflict(
+          `Room has hit the hard message cap (${ROOM_MESSAGE_HARD_CAP}).`,
+          { roomId, messageCount, cap: ROOM_MESSAGE_HARD_CAP },
+        );
+      }
+
+      let message;
+      try {
+        message = await svc.sendMessage({
+          roomId,
+          senderId: agent.id,
+          senderType: "agent",
+          content,
+          messageType: "chat",
+          metadata: { source: "agent-bridge", kind: bridge.kind },
+          parentMessageId,
+        });
+      } catch (insertErr) {
+        const detail = insertErr instanceof Error ? insertErr.message : String(insertErr);
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: `sendMessage threw: ${detail}`,
+        });
+        logger.error(
+          { err: insertErr, roomId, agentId },
+          "agent-bridge sendMessage threw",
+        );
+        return res.status(500).json({
+          error: "Failed to persist bridge reply",
+          detail,
+        });
+      }
+
+      if (!message || !message.id) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: "sendMessage returned no row",
+        });
+        logger.error(
+          { roomId, agentId },
+          "agent-bridge sendMessage returned no row",
+        );
+        return res.status(500).json({
+          error: "Failed to persist bridge reply",
+          detail: "insert returned no row",
+        });
+      }
+
+      // Round-trip verify the row is queryable. Catches phantom inserts where
+      // the driver returns a row but the row never actually committed.
+      const [verifyRow] = await db
+        .select({ id: roomMessages.id })
+        .from(roomMessages)
+        .where(eq(roomMessages.id, message.id))
+        .limit(1);
+      if (!verifyRow) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: "verify-readback-missing",
+        });
+        logger.error(
+          { roomId, agentId, messageId: message.id },
+          "agent-bridge readback failed — row not queryable after insert",
+        );
+        return res.status(500).json({
+          error: "Bridge reply persisted but readback failed",
+          detail: "verify-readback-missing",
+        });
+      }
+
+      await recordAttempt({
+        companyId: agent.companyId,
+        roomId,
+        agentId,
+        contentLength: content.length,
+        outcome: "persisted",
+        metadata: { messageId: message.id },
+      });
+
+      publishLiveEvent({
+        companyId: agent.companyId,
+        type: "room.message",
+        payload: {
+          roomId,
+          messageId: message.id,
+          senderId: message.senderId,
+          senderType: message.senderType,
+          content: message.content,
+          messageType: message.messageType,
+          parentMessageId: message.parentMessageId,
+          createdAt: message.createdAt,
+        },
+      });
+
+      // Cascade to other room members. Re-uses the same dispatcher used by the
+      // primary message endpoint so bridged agents can address one another.
+      void (async () => {
+        const members = await svc.listMembers(roomId);
+        for (const member of members) {
+          if (!member.agentId) continue;
+          if (member.agentId === agent.id) continue;
+          const handled = await dispatchAgentBridge(db, {
+            agentId: member.agentId,
+            companyId: agent.companyId,
+            roomId,
+            messageId: message.id,
+            messageContent: message.content,
+            senderActorType: "agent",
+            senderActorId: agent.id,
+          }).catch((err) => {
+            logger.warn(
+              { err, roomId, agentId: member.agentId },
+              "cascade dispatch failed",
+            );
+            return false;
+          });
+          if (handled) continue;
+          heartbeat
+            .wakeup(member.agentId, {
+              source: "automation",
+              triggerDetail: "system",
+              reason: "room_message",
+              payload: { roomId, messageId: message.id },
+              requestedByActorType: "agent",
+              requestedByActorId: agent.id,
+              contextSnapshot: {
+                roomId,
+                messageId: message.id,
+                source: "room.message",
+                wakeReason: "room_message",
+              },
+            })
+            .catch((err) =>
+              logger.warn({ err, roomId, agentId: member.agentId }, "wakeup failed"),
+            );
+        }
+      })();
+
+      return res.status(201).json(message);
+    } catch (err) {
+      // Synchronous throws from helpers above already recorded their attempt
+      // before throwing, so we don't double-log here.
+      return next(err);
+    } finally {
+      logger.info(
+        {
+          agentId: agentIdForLog,
+          roomId: roomIdForLog,
+          companyId: companyIdForLog,
+          contentLength: contentLengthForLog,
+        },
+        "agent-bridge reply attempt",
+      );
+    }
+  });
+
+  // Synthetic health check — the bridge daemon pings this on an interval to
+  // verify that POST → persist → readback is intact. The daemon compares the
+  // returned id+checksum to detect silent persistence failures.
+  router.post("/agent-bridge/health", async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = typeof body.token === "string" ? body.token : "";
+    const testMessage = typeof body.testMessage === "string" ? body.testMessage : "";
+
+    const expected =
+      process.env.PAPERCLIP_BRIDGE_HEALTH_TOKEN ?? "bridge-health-dev-token";
+    if (!token || token !== expected) {
+      return res.status(401).json({ error: "invalid health token" });
+    }
+    if (!testMessage) {
+      return res.status(400).json({ error: "testMessage required" });
+    }
+
+    const checksum = createHash("sha256").update(testMessage).digest("hex");
+    try {
+      const [row] = await db
+        .insert(bridgeHealth)
+        .values({
+          testMessage,
+          checksum,
+          source: "bridge-daemon",
+        })
+        .returning();
+
+      if (!row) {
+        return res.status(500).json({
+          ok: false,
+          error: "insert returned no row",
+        });
+      }
+
+      const [verify] = await db
+        .select()
+        .from(bridgeHealth)
+        .where(eq(bridgeHealth.id, row.id))
+        .limit(1);
+
+      if (!verify) {
+        return res.status(500).json({
+          ok: false,
+          error: "readback missing",
+          insertedId: row.id,
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        id: verify.id,
+        checksum: verify.checksum,
+        testMessage: verify.testMessage,
+        createdAt: verify.createdAt,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "bridge health check insert failed");
+      return res.status(500).json({ ok: false, error: detail });
+    }
+  });
+
+  // Read-only: recent bridge reply attempts for one agent. Used by the UI panel
+  // on the agent detail page so operators can see when persistence breaks.
+  router.get("/companies/:companyId/agents/:agentId/bridge-attempts", async (req, res) => {
+    const { companyId, agentId } = req.params;
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1),
+      200,
+    );
+
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select()
+      .from(agentBridgeReplyAttempts)
+      .where(
+        and(
+          eq(agentBridgeReplyAttempts.companyId, companyId),
+          eq(agentBridgeReplyAttempts.agentId, agentId),
+        ),
+      )
+      .orderBy(desc(agentBridgeReplyAttempts.createdAt))
+      .limit(limit);
+
+    const last24h = await db
+      .select()
+      .from(agentBridgeReplyAttempts)
+      .where(
+        and(
+          eq(agentBridgeReplyAttempts.companyId, companyId),
+          eq(agentBridgeReplyAttempts.agentId, agentId),
+          gte(agentBridgeReplyAttempts.createdAt, since24h),
+        ),
+      );
+
+    const counts = {
+      total: last24h.length,
+      persisted: last24h.filter((r) => r.outcome === "persisted").length,
+      rejected: last24h.filter((r) => r.outcome === "rejected").length,
+      errored: last24h.filter((r) => r.outcome === "errored").length,
+    };
+    const hasFailures24h = counts.rejected > 0 || counts.errored > 0;
+
+    return res.status(200).json({
+      attempts: rows,
+      last24hCounts: counts,
+      hasFailures24h,
+      lastOutcome: rows[0]?.outcome ?? null,
+    });
   });
 
   return router;
