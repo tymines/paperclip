@@ -295,6 +295,11 @@ export function App() {
     <>
       <Routes>
         <Route path="auth" element={<AuthPage />} />
+        <Route path="login" element={<Navigate to="/auth" replace />} />
+        <Route path="signup" element={<Navigate to="/auth?mode=sign_up" replace />} />
+        <Route path="forgot-password" element={<Navigate to="/auth" replace />} />
+        <Route path="reset-password" element={<Navigate to="/auth" replace />} />
+        <Route path="sso-callback" element={<Navigate to="/auth" replace />} />
         <Route path="board-claim/:token" element={<BoardClaimPage />} />
         <Route path="cli-auth/:id" element={<CliAuthPage />} />
         <Route path="invite/:token" element={<InviteLandingPage />} />
