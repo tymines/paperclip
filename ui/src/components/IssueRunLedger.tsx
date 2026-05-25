@@ -236,7 +236,10 @@ function liveRunToLedgerRun(run: LiveRunForIssue | ActiveRunForIssue): LedgerRun
     finishedAt: toIsoString(run.finishedAt),
     createdAt: toIsoString(run.createdAt) ?? new Date().toISOString(),
     invocationSource: run.invocationSource,
-    usageJson: null,
+    // Forward usageJson when the live-run query returned it (added in
+    // server/src/routes/agents.ts). Older snapshots without it fall back
+    // to null, and the cost badge silently disappears for that run.
+    usageJson: (run.usageJson ?? null) as Record<string, unknown> | null,
     resultJson: null,
     isLive: run.status === "queued" || run.status === "running",
     outputSilence: run.outputSilence,
@@ -252,21 +255,32 @@ function mergeRuns(
   for (const run of runs) byId.set(run.runId, run);
   for (const run of liveRuns ?? []) {
     const existing = byId.get(run.id);
+    const liveUsage = (run.usageJson ?? null) as Record<string, unknown> | null;
     byId.set(
       run.id,
       existing
-        ? { ...existing, isLive: true, agentName: run.agentName, outputSilence: run.outputSilence }
+        ? {
+            ...existing,
+            isLive: true,
+            agentName: run.agentName,
+            outputSilence: run.outputSilence,
+            // Prefer the live usage snapshot over the historical one because
+            // it's fresher while the run is still in flight.
+            usageJson: liveUsage ?? existing.usageJson,
+          }
         : liveRunToLedgerRun(run),
     );
   }
   if (activeRun) {
     const existing = byId.get(activeRun.id);
+    const activeUsage = (activeRun.usageJson ?? null) as Record<string, unknown> | null;
     if (existing) {
       byId.set(activeRun.id, {
         ...existing,
         isLive: isActiveRun(existing) || isActiveRun(activeRun),
         agentName: activeRun.agentName,
         outputSilence: activeRun.outputSilence,
+        usageJson: activeUsage ?? existing.usageJson,
       });
     } else {
       byId.set(activeRun.id, liveRunToLedgerRun(activeRun));
