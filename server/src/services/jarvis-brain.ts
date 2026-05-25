@@ -11,6 +11,7 @@ import {
   stripMarkdown,
   type ResponseType,
 } from "./jarvis-persona.js";
+import { getCapabilitySnapshot, summarizeForPersona } from "./jarvis-capabilities.js";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -346,13 +347,19 @@ export async function jarvisBrainReply(
   const voiceMode = input.voiceMode ?? false;
   const responseType: ResponseType = input.responseType ?? inferResponseType(input.transcript);
 
-  // Persona load + system prompt assembly happen in parallel with context.
-  const [persona, ctx] = await Promise.all([
+  // Persona load + context + capability snapshot all run in parallel.
+  // Capabilities are appended to the system prompt so Augi can answer
+  // "what can you do?" accurately for THIS machine.
+  const [persona, ctx, capSnapshot] = await Promise.all([
     loadPersona(),
     gatherContext(db, input.companyId),
+    getCapabilitySnapshot().catch(() => null),
   ]);
 
-  const systemPrompt = formatPersonaForCall(persona, { voiceMode, responseType });
+  const basePrompt = formatPersonaForCall(persona, { voiceMode, responseType });
+  const systemPrompt = capSnapshot
+    ? `${basePrompt}\n\nCAPABILITY GROUNDING (real probe of this host, ${capSnapshot.generatedAt}): ${summarizeForPersona(capSnapshot)} When asked what you can do, ground your answer in these — do not promise capabilities marked needs_install or unsupported without flagging the install hint.`
+    : basePrompt;
 
   // For briefings the persona wants work-first ordering: shipped overnight,
   // blockers, fleet, projects — revenue only on ask. The context block we

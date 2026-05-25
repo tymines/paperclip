@@ -60,6 +60,25 @@ export interface JarvisVoicesResponse {
   voices: JarvisVoiceCharacter[];
 }
 
+export type JarvisCapabilityStatus = "ready" | "needs_install" | "needs_permission" | "unsupported";
+export type JarvisCapabilityGroup = "machine" | "phone" | "apps" | "paperclip" | "web";
+
+export interface JarvisCapability {
+  id: string;
+  group: JarvisCapabilityGroup;
+  label: string;
+  status: JarvisCapabilityStatus;
+  detail?: string;
+  installHint?: string;
+  checkMs: number;
+}
+
+export interface JarvisCapabilitiesResponse {
+  generatedAt: string;
+  hostPlatform: string;
+  capabilities: JarvisCapability[];
+}
+
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
@@ -93,4 +112,8 @@ export const jarvisApi = {
     body: { voiceId: string }
   ): Promise<{ elevenlabsConfigured: boolean; previewAudioUrl: string | null }> =>
     api.post(`/api/companies/${companyId}/jarvis/voice/preview`, body),
+
+  /** Probes what Augi can actually do on this host. ?refresh=1 re-probes. */
+  capabilities: (companyId: string, refresh = false): Promise<JarvisCapabilitiesResponse> =>
+    api.get(`/api/companies/${companyId}/jarvis/capabilities${refresh ? "?refresh=1" : ""}`),
 };

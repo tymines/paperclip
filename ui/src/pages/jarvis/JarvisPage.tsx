@@ -3,6 +3,7 @@ import { useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
 import {
   jarvisApi,
+  type JarvisCapability,
   type JarvisResponseType,
   type JarvisVoiceCharacter,
   type JarvisVoiceTier,
@@ -164,6 +165,32 @@ export function JarvisPage() {
     return DEFAULT_VOICE;
   });
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [capabilities, setCapabilities] = useState<JarvisCapability[] | null>(null);
+  const [capabilitiesGeneratedAt, setCapabilitiesGeneratedAt] = useState<string | null>(null);
+  const [capabilitiesRefreshing, setCapabilitiesRefreshing] = useState(false);
+
+  // Probe the real capability surface once per page load (server caches it
+  // for 10 min). "Run Diagnostics" forces a refresh.
+  const refreshCapabilities = useCallback(
+    async (force = false) => {
+      if (!selectedCompanyId) return;
+      setCapabilitiesRefreshing(true);
+      try {
+        const resp = await jarvisApi.capabilities(selectedCompanyId, force);
+        setCapabilities(resp.capabilities);
+        setCapabilitiesGeneratedAt(resp.generatedAt);
+      } catch {
+        // Older server without the endpoint — keep the mock list.
+      } finally {
+        setCapabilitiesRefreshing(false);
+      }
+    },
+    [selectedCompanyId]
+  );
+
+  useEffect(() => {
+    void refreshCapabilities(false);
+  }, [refreshCapabilities]);
 
   const onVoiceCharacterSelect = useCallback((voice: JarvisVoiceCharacter) => {
     setVoiceCharacter(voice);
@@ -544,21 +571,29 @@ export function JarvisPage() {
             <span className="jarvis-corner-tr" /><span className="jarvis-corner-bl" />
             <div className="jarvis-panel-header">
               <h3>Capabilities</h3>
-              <span className="jarvis-meta">{MOCK_CAPABILITIES.length} / {MOCK_CAPABILITIES.length}</span>
+              <span className="jarvis-meta">
+                {capabilities
+                  ? `${capabilities.filter((c) => c.status === "ready").length} / ${capabilities.length}`
+                  : `${MOCK_CAPABILITIES.length} / ${MOCK_CAPABILITIES.length}`}
+              </span>
             </div>
             <div className="jarvis-panel-body">
-              <div className="jarvis-caps-list">
-                {MOCK_CAPABILITIES.map((c) => (
-                  <div key={c.label} className="jarvis-cap">
-                    <span className="jarvis-cap-label">{c.label}</span>
-                    <span className="jarvis-cap-val">{c.value}%</span>
-                    <div
-                      className="jarvis-cap-bar"
-                      style={{ ["--fill" as string]: `${c.value}%` }}
-                    />
-                  </div>
-                ))}
-              </div>
+              {capabilities && capabilities.length > 0 ? (
+                <CapabilityList capabilities={capabilities} />
+              ) : (
+                <div className="jarvis-caps-list">
+                  {MOCK_CAPABILITIES.map((c) => (
+                    <div key={c.label} className="jarvis-cap">
+                      <span className="jarvis-cap-label">{c.label}</span>
+                      <span className="jarvis-cap-val">{c.value}%</span>
+                      <div
+                        className="jarvis-cap-bar"
+                        style={{ ["--fill" as string]: `${c.value}%` }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
               <a
                 className="jarvis-link"
                 href="#"
@@ -606,9 +641,21 @@ export function JarvisPage() {
                   </div>
                 </div>
               </div>
-              <a className="jarvis-link" href="#" onClick={(e) => e.preventDefault()}>
-                Run Diagnostics
+              <a
+                className="jarvis-link"
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  void refreshCapabilities(true);
+                }}
+              >
+                {capabilitiesRefreshing ? "Probing…" : "Run Diagnostics"}
               </a>
+              {capabilitiesGeneratedAt ? (
+                <div className="jarvis-cap-asof">
+                  Last probe: {new Date(capabilitiesGeneratedAt).toLocaleTimeString()}
+                </div>
+              ) : null}
             </div>
           </section>
         </aside>
@@ -840,6 +887,56 @@ export function JarvisPage() {
         onSelect={onVoiceCharacterSelect}
         onClose={() => setVoiceModalOpen(false)}
       />
+    </div>
+  );
+}
+
+function CapabilityList({ capabilities }: { capabilities: JarvisCapability[] }) {
+  // Group + summarize: show one row per (group, status) bucket with a count.
+  // Full per-capability detail is in the tooltip — keeps the rail compact.
+  const ordered: JarvisCapability["group"][] = ["machine", "apps", "phone", "paperclip", "web"];
+  const groupLabels: Record<JarvisCapability["group"], string> = {
+    machine: "Local machine",
+    apps: "Mac apps",
+    phone: "iPhone bridge",
+    paperclip: "Paperclip data",
+    web: "Web",
+  };
+  return (
+    <div className="jarvis-caps-list">
+      {ordered.map((group) => {
+        const inGroup = capabilities.filter((c) => c.group === group);
+        if (inGroup.length === 0) return null;
+        const ready = inGroup.filter((c) => c.status === "ready").length;
+        const needsInstall = inGroup.filter((c) => c.status === "needs_install").length;
+        const needsPerm = inGroup.filter((c) => c.status === "needs_permission").length;
+        const fillPct = Math.round((ready / inGroup.length) * 100);
+        const detail =
+          needsInstall + needsPerm > 0
+            ? inGroup
+                .filter((c) => c.status !== "ready")
+                .map((c) =>
+                  c.installHint
+                    ? `${c.label} — ${c.installHint}`
+                    : `${c.label} (${c.status.replace("_", " ")})`
+                )
+                .join("\n")
+            : inGroup.map((c) => c.label).join(", ");
+        return (
+          <div key={group} className="jarvis-cap" title={detail}>
+            <span className="jarvis-cap-label">{groupLabels[group]}</span>
+            <span className="jarvis-cap-val">
+              {ready}/{inGroup.length}
+              {needsInstall > 0 ? <span className="jarvis-cap-warn"> · {needsInstall} install</span> : null}
+              {needsPerm > 0 ? <span className="jarvis-cap-warn"> · {needsPerm} grant</span> : null}
+            </span>
+            <div
+              className="jarvis-cap-bar"
+              style={{ ["--fill" as string]: `${fillPct}%` }}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
