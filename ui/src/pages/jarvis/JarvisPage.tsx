@@ -4,6 +4,7 @@ import { useCompany } from "@/context/CompanyContext";
 import {
   jarvisApi,
   type JarvisCapability,
+  type JarvisCompanySettings,
   type JarvisConversationTurn,
   type JarvisResponseType,
   type JarvisVoiceCharacter,
@@ -181,6 +182,21 @@ export function JarvisPage() {
     return DEFAULT_VOICE;
   });
   const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<JarvisCompanySettings>({ autoBriefOnLoad: false });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  // Tracks per-message replay state so each agent bubble can show its own
+  // "Speaking…" indicator while the saved reply is being re-played.
+  const [replayingMsgId, setReplayingMsgId] = useState<string | null>(null);
+  // 2-second debounce on the topbar "Brief me" button so a double-click
+  // can't fire two manual briefings before the server-side dedupe window
+  // is even consulted.
+  const briefMeRef = useRef<number>(0);
+  // Track strict-mode double-mount of the auto-fire effect — the first
+  // mount stamps this ref so the second cleanup → re-mount returns early
+  // before it queues a second fireBriefing().
+  const autoBriefEffectRanRef = useRef(false);
   const [capabilities, setCapabilities] = useState<JarvisCapability[] | null>(null);
   const [capabilitiesGeneratedAt, setCapabilitiesGeneratedAt] = useState<string | null>(null);
   const [capabilitiesRefreshing, setCapabilitiesRefreshing] = useState(false);
@@ -210,6 +226,31 @@ export function JarvisPage() {
   useEffect(() => {
     void refreshCapabilities(false);
   }, [refreshCapabilities]);
+
+  // Load per-company Jarvis settings (auto-brief opt-in, etc). Older servers
+  // without the endpoint default to autoBriefOnLoad:false so the page-load
+  // auto-fire stays disabled — this matches Tyler's "respond when I ask"
+  // expectation regardless of which server version answers.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    let cancelled = false;
+    setSettingsLoaded(false);
+    jarvisApi
+      .settings(selectedCompanyId)
+      .then((s) => {
+        if (cancelled) return;
+        setSettings(s);
+        setSettingsLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSettings({ autoBriefOnLoad: false });
+        setSettingsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId]);
 
   // Hydrate the chat panel with the user's real conversation history. If
   // the endpoint 404s on older servers, silently fall through to the empty
@@ -314,6 +355,36 @@ export function JarvisPage() {
     };
   }, [selectedCompanyId]);
 
+  // Debounced "Brief me" handler — 2 second floor between manual fires so a
+  // double-click can't queue two briefings before the server-side dedupe
+  // window (5 minutes) is consulted.
+  const onBriefMe = useCallback(() => {
+    const now = Date.now();
+    if (now - briefMeRef.current < 2000) return;
+    briefMeRef.current = now;
+    void fireBriefing({ source: "manual" });
+  }, []);
+
+  const onToggleAutoBrief = useCallback(
+    async (next: boolean) => {
+      if (!selectedCompanyId) return;
+      setSettings((prev) => ({ ...prev, autoBriefOnLoad: next }));
+      setSettingsSaving(true);
+      try {
+        const updated = await jarvisApi.updateSettings(selectedCompanyId, {
+          autoBriefOnLoad: next,
+        });
+        setSettings(updated);
+      } catch {
+        // Roll back optimistic update on failure.
+        setSettings((prev) => ({ ...prev, autoBriefOnLoad: !next }));
+      } finally {
+        setSettingsSaving(false);
+      }
+    },
+    [selectedCompanyId],
+  );
+
   const onVoiceCharacterSelect = useCallback((voice: JarvisVoiceCharacter) => {
     setVoiceCharacter(voice);
     try {
@@ -406,6 +477,26 @@ export function JarvisPage() {
       });
     },
   });
+
+  // Replay the saved reply for an agent message. No LLM round-trip — just
+  // hands the stored text back through the same TTS adapter the user has
+  // selected via voiceTier. Cancels any in-flight TTS first so we never
+  // end up with two utterances stacked on each other.
+  const onReplayMessage = useCallback(
+    async (msgId: string, text: string) => {
+      if (!text.trim()) return;
+      try {
+        voice.cancelSpeak();
+      } catch {}
+      setReplayingMsgId(msgId);
+      try {
+        await voice.speak(text);
+      } finally {
+        setReplayingMsgId((cur) => (cur === msgId ? null : cur));
+      }
+    },
+    [voice],
+  );
 
   // Capture the SVG <g> with rim ticks for the orb hook to read.
   useEffect(() => {
@@ -572,11 +663,23 @@ export function JarvisPage() {
     }
   }, [state]);
 
-  // Auto-fire the Daddy's Home briefing on mount when the last successful
-  // briefing is older than 4 hours (or has never run). Tracked per-company
-  // via localStorage so a stale tab refresh doesn't keep re-firing.
+  // Auto-fire the Daddy's Home briefing on mount — only when the company
+  // explicitly opted in via the settings toggle. Default is OFF: Tyler
+  // wanted briefings on ask only, not on page load. Mac-wake + the
+  // scheduled cron remain the hands-free triggers.
+  //
+  // Strict-mode safety: the effectRan ref guards against React's
+  // dev-mode double-mount re-firing the briefing.
+  // Pre-stamp safety: the localStorage timestamp is set *before* the
+  // call kicks off so even if the effect somehow re-runs, the second
+  // pass sees a fresh timestamp and bails inside the 4-hour debounce.
   useEffect(() => {
     if (!selectedCompanyId) return;
+    if (!settingsLoaded) return;
+    if (!settings.autoBriefOnLoad) return;
+    if (autoBriefEffectRanRef.current) return;
+    autoBriefEffectRanRef.current = true;
+
     const storageKey = `paperclip.jarvis.lastBriefingTimestamp.${selectedCompanyId}`;
     const lastMs = (() => {
       try {
@@ -588,12 +691,19 @@ export function JarvisPage() {
     })();
     const FOUR_HOURS = 4 * 60 * 60 * 1000;
     if (lastMs && Date.now() - lastMs < FOUR_HOURS) return;
-    // Defer slightly so the page paints + AudioContext can resume on first click.
+
+    // Pre-stamp synchronously so any subsequent effect run (or a parallel
+    // route in another tab) sees the cooldown immediately, without waiting
+    // for the network round trip. fireBriefing re-stamps on success too.
+    try {
+      window.localStorage.setItem(storageKey, String(Date.now()));
+    } catch {}
+
     const t = window.setTimeout(() => {
       void fireBriefing();
     }, 800);
     return () => window.clearTimeout(t);
-  }, [selectedCompanyId, fireBriefing]);
+  }, [selectedCompanyId, fireBriefing, settingsLoaded, settings.autoBriefOnLoad]);
 
   // Auto-hide the recommended-action CTA after 60s so it doesn't linger
   // forever if Tyler walks away from the desk.
@@ -793,7 +903,7 @@ export function JarvisPage() {
           <button
             type="button"
             className="jarvis-topbar__brief-me"
-            onClick={() => void fireBriefing({ source: "manual" })}
+            onClick={onBriefMe}
             title="Run the Daddy's Home briefing now"
           >
             Brief me
@@ -811,7 +921,13 @@ export function JarvisPage() {
             </svg>
             <span className="name">{voiceCharacter.name}</span>
           </button>
-          <button className="jarvis-icon-btn" title="Settings" type="button">
+          <button
+            className="jarvis-icon-btn"
+            title="Settings"
+            type="button"
+            aria-label="Open Jarvis settings"
+            onClick={() => setSettingsOpen((cur) => !cur)}
+          >
             <svg viewBox="0 0 24 24" fill="none">
               <circle cx={12} cy={12} r={3} stroke="currentColor" strokeWidth={1.6} />
               <path
@@ -1211,7 +1327,39 @@ export function JarvisPage() {
                       ) : null}
                     </span>
                     <div className="jarvis-msg-bubble">
-                      {m.text}
+                      <div className="jarvis-msg-bubble__text">{m.text}</div>
+                      {m.author === "agent" && m.text.trim() ? (
+                        <button
+                          type="button"
+                          className="jarvis-msg-replay"
+                          aria-label="Replay this message"
+                          title="Replay this message"
+                          disabled={replayingMsgId === m.id}
+                          onClick={() => void onReplayMessage(m.id, m.text)}
+                        >
+                          {replayingMsgId === m.id ? (
+                            <span className="jarvis-msg-replay__speaking">Speaking…</span>
+                          ) : (
+                            <svg viewBox="0 0 24 24" width={14} height={14} fill="none" aria-hidden>
+                              <path
+                                d="M4 12a8 8 0 1 1 2.34 5.66"
+                                stroke="currentColor"
+                                strokeWidth={1.8}
+                                strokeLinecap="round"
+                                fill="none"
+                              />
+                              <path
+                                d="M4 6v6h6"
+                                stroke="currentColor"
+                                strokeWidth={1.8}
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                fill="none"
+                              />
+                            </svg>
+                          )}
+                        </button>
+                      ) : null}
                       {m.delegationId && (
                         <DelegationChip
                           agent={m.delegationAgent ?? "peer"}
@@ -1264,7 +1412,74 @@ export function JarvisPage() {
         onSelect={onVoiceCharacterSelect}
         onClose={() => setVoiceModalOpen(false)}
       />
+
+      {settingsOpen ? (
+        <JarvisSettingsPopover
+          autoBriefOnLoad={settings.autoBriefOnLoad}
+          saving={settingsSaving}
+          onToggleAutoBrief={onToggleAutoBrief}
+          onClose={() => setSettingsOpen(false)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function JarvisSettingsPopover({
+  autoBriefOnLoad,
+  saving,
+  onToggleAutoBrief,
+  onClose,
+}: {
+  autoBriefOnLoad: boolean;
+  saving: boolean;
+  onToggleAutoBrief: (next: boolean) => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div className="jarvis-settings-backdrop" onClick={onClose} aria-hidden />
+      <div
+        className="jarvis-settings-popover"
+        role="dialog"
+        aria-label="Jarvis settings"
+      >
+        <span className="jarvis-corner-tr" />
+        <span className="jarvis-corner-bl" />
+        <div className="jarvis-settings-header">
+          <h3>Settings</h3>
+          <button
+            type="button"
+            className="jarvis-icon-btn"
+            onClick={onClose}
+            aria-label="Close settings"
+          >
+            <svg viewBox="0 0 24 24" fill="none">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div className="jarvis-settings-body">
+          <label className="jarvis-settings-row">
+            <span className="jarvis-settings-row__label">
+              <strong>Auto-brief on page load</strong>
+              <span className="jarvis-settings-row__hint">
+                Fire the Daddy's Home briefing when you open this page.
+                Off by default — use the <em>Brief me</em> button to ask
+                on demand. Mac wake + the 7am routine still run.
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              className="jarvis-settings-toggle"
+              checked={autoBriefOnLoad}
+              disabled={saving}
+              onChange={(e) => onToggleAutoBrief(e.target.checked)}
+            />
+          </label>
+        </div>
+      </div>
+    </>
   );
 }
 

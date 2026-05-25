@@ -1557,3 +1557,135 @@
   background: rgba(248, 113, 113, 0.1);
   border-color: rgba(248, 113, 113, 0.4);
 }
+
+/* Replay button — sits on the right edge of each agent message bubble */
+.jarvis-msg-bubble {
+  position: relative;
+}
+.jarvis-msg-bubble__text {
+  /* leave room on the right so a one-liner reply doesn't collide with
+     the replay glyph */
+  padding-right: 24px;
+}
+.jarvis-msg-replay {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 6px;
+  border: 1px solid var(--jarvis-line);
+  border-radius: 6px;
+  background: rgba(0, 60, 110, 0.35);
+  color: var(--jarvis-accent);
+  cursor: pointer;
+  font-family: var(--jarvis-font-data);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.jarvis-msg-replay:hover {
+  border-color: var(--jarvis-line-strong);
+  color: var(--jarvis-text-strong);
+  background: rgba(0, 90, 160, 0.45);
+}
+.jarvis-msg-replay:disabled {
+  cursor: default;
+  color: var(--jarvis-text-strong);
+  border-color: var(--jarvis-line-strong);
+  background: rgba(0, 90, 160, 0.5);
+}
+.jarvis-msg-replay__speaking {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9.5px;
+  color: var(--jarvis-accent);
+  animation: jarvis-replay-pulse 1.1s ease-in-out infinite;
+}
+@keyframes jarvis-replay-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Settings popover — anchored to the topbar gear icon */
+.jarvis-settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 13, 0.4);
+  z-index: 80;
+}
+.jarvis-settings-popover {
+  position: fixed;
+  top: 64px;
+  right: 24px;
+  width: 320px;
+  background: rgba(4, 14, 28, 0.96);
+  border: 1px solid var(--jarvis-line-strong);
+  border-radius: 10px;
+  padding: 14px 14px 12px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color: var(--jarvis-text);
+  font-family: var(--jarvis-font-body);
+  z-index: 81;
+}
+.jarvis-settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.jarvis-settings-header h3 {
+  margin: 0;
+  font-family: var(--jarvis-font-display);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--jarvis-text-strong);
+}
+.jarvis-settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.jarvis-settings-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+.jarvis-settings-row__label {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.jarvis-settings-row__label strong {
+  color: var(--jarvis-text-strong);
+  font-weight: 600;
+}
+.jarvis-settings-row__hint {
+  color: var(--jarvis-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.jarvis-settings-toggle {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--jarvis-accent);
+  cursor: pointer;
+}
+.jarvis-settings-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
