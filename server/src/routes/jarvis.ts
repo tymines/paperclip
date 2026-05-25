@@ -17,6 +17,11 @@ import {
   fsSearch,
   consumeConfirmation,
 } from "../services/jarvis-tools.js";
+import {
+  bargeInBus,
+  mintRealtimeEphemeralKey,
+  type BargeInCancelEvent,
+} from "../services/jarvis-barge-in.js";
 
 /**
  * Jarvis voice endpoint.
@@ -154,6 +159,8 @@ export function jarvisRoutes(db: Db) {
           llmProvider: jarvisConversations.llmProvider,
           llmModel: jarvisConversations.llmModel,
           responseType: jarvisConversations.responseType,
+          interruptedAt: jarvisConversations.interruptedAt,
+          interruptedAtChars: jarvisConversations.interruptedAtChars,
           createdAt: jarvisConversations.createdAt,
         })
         .from(jarvisConversations)
@@ -338,6 +345,164 @@ export function jarvisRoutes(db: Db) {
       previewAudioUrl: null,
     });
   });
+
+  /**
+   * Mints a short-lived OpenAI Realtime ephemeral key so the browser can
+   * open a WebRTC session for full-duplex barge-in detection without
+   * exposing the company's long-lived openai_realtime secret.
+   *
+   * Returns 501 when no openai_realtime key is configured; the client
+   * degrades to local-VAD fallback in that case (pause TTS on detected
+   * speech, no realtime ack).
+   */
+  const realtimeTokenSchema = z.object({
+    model: z.string().min(1).max(120).optional(),
+    voice: z.string().min(1).max(40).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/realtime-token",
+    validate(realtimeTokenSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const body = req.body as z.infer<typeof realtimeTokenSchema>;
+      try {
+        const minted = await mintRealtimeEphemeralKey({
+          model: body.model,
+          voice: body.voice,
+        });
+        if (!minted) {
+          res.status(501).json({
+            error: "openai_realtime_not_configured",
+            message:
+              "Connect an openai_realtime key in Fleet → Provider Keys to enable Premium barge-in.",
+          });
+          return;
+        }
+        res.json(minted);
+      } catch (err) {
+        res.status(502).json({
+          error: "openai_realtime_mint_failed",
+          message: (err as Error).message,
+        });
+      }
+    },
+  );
+
+  /**
+   * Cancel an in-flight Jarvis reply because Tyler started speaking. The
+   * client posts here the moment its VAD or OpenAI Realtime VAD fires;
+   * the server marks the conversation row as interrupted (so the chat
+   * history shows the "— interrupted" tag) and broadcasts a cancel
+   * signal on the in-process barge-in bus so any streaming consumer can
+   * tear down its pipe immediately.
+   *
+   * conversationId is optional: barge-in can fire before the reply has
+   * a row yet (Claude is still composing) — in that case we only emit
+   * the cancel signal and the streaming consumer aborts the outbound
+   * write itself.
+   */
+  const cancelResponseSchema = z.object({
+    conversationId: z.string().uuid().nullable().optional(),
+    reason: z.enum(["user_speech", "manual", "timeout"]).default("user_speech"),
+    /** Characters of agent_reply the client actually spoke before cutting. */
+    spokenChars: z.number().int().nonnegative().nullable().optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/cancel-response",
+    validate(cancelResponseSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const { conversationId, reason, spokenChars } = req.body as z.infer<
+        typeof cancelResponseSchema
+      >;
+
+      const interruptedAt = new Date();
+      let updated = false;
+      if (conversationId) {
+        try {
+          const result = await db
+            .update(jarvisConversations)
+            .set({
+              interruptedAt,
+              interruptedAtChars: spokenChars ?? null,
+            })
+            .where(
+              and(
+                eq(jarvisConversations.id, conversationId),
+                eq(jarvisConversations.companyId, companyId),
+              ),
+            )
+            .returning({ id: jarvisConversations.id });
+          updated = result.length > 0;
+        } catch {
+          updated = false;
+        }
+      }
+
+      const event: BargeInCancelEvent = {
+        conversationId: conversationId ?? null,
+        reason,
+        atMs: interruptedAt.getTime(),
+        spokenChars: spokenChars ?? null,
+      };
+      bargeInBus.emit(companyId, event);
+
+      res.json({
+        ok: true,
+        interruptedAt: interruptedAt.toISOString(),
+        persisted: updated,
+      });
+    },
+  );
+
+  /**
+   * SSE feed of barge-in cancellation events. A future streaming voice
+   * endpoint subscribes to this to abort outbound writes the instant
+   * Tyler interrupts. Today it's also useful for debugging — open in a
+   * terminal with `curl -N .../barge-in/stream` to watch interrupts fire
+   * live as you talk over Jarvis.
+   */
+  router.get(
+    "/companies/:companyId/jarvis/barge-in/stream",
+    (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const conversationId = (req.query.conversationId as string) || null;
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+      });
+      res.flushHeaders();
+      res.write(":ok\n\n");
+
+      let closed = false;
+      const unsubscribe = bargeInBus.subscribe(companyId, conversationId, (event) => {
+        if (closed || !res.writable) return;
+        try {
+          res.write(`event: cancel\n`);
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        } catch {
+          // Connection dropped; treat as closed below.
+        }
+      });
+
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        unsubscribe();
+        try {
+          res.end();
+        } catch {}
+      };
+      req.on("close", close);
+      res.on("error", close);
+    },
+  );
 
   /**
    * Reports which Jarvis voice tiers are currently available based on

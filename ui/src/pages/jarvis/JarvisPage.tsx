@@ -20,6 +20,11 @@ import {
   MOCK_CAPABILITIES,
   type JarvisChatMessage,
 } from "./mock-data";
+import {
+  createBargeInController,
+  type BargeInController,
+  type BargeInMode,
+} from "@/lib/jarvis-barge-in";
 import "./Jarvis.css";
 
 const TIER_STORAGE_KEY = "paperclip.jarvis.voiceTier";
@@ -75,7 +80,7 @@ function defaultTier(id: JarvisVoiceTierId): JarvisVoiceTier {
   }
 }
 
-type HudState = "idle" | "listening" | "processing" | "speaking";
+type HudState = "idle" | "listening" | "processing" | "speaking" | "interrupted";
 
 const FONTS_HREF =
   "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap";
@@ -135,8 +140,17 @@ export function JarvisPage() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const interimMsgIdRef = useRef<string | null>(null);
+  // Tracking for barge-in: the message id of the currently-speaking
+  // agent reply, the timestamp the speak started (so we can estimate
+  // chars spoken before the cut), and the full reply text.
+  const speakingMsgIdRef = useRef<string | null>(null);
+  const speakingStartedAtRef = useRef<number>(0);
+  const speakingTextRef = useRef<string>("");
+  const speakingConversationIdRef = useRef<string | null>(null);
+  const bargeInRef = useRef<BargeInController | null>(null);
 
   const [state, setState] = useState<HudState>("idle");
+  const [bargeInMode, setBargeInMode] = useState<BargeInMode>("disabled");
   // Start empty — real history is fetched from /api/companies/:id/jarvis/conversations
   // on mount. Empty state ("Tap the mic or type to start") is rendered when
   // there is no prior conversation for this user.
@@ -318,6 +332,104 @@ export function JarvisPage() {
     );
   }, []);
 
+  // Initialize the barge-in controller once per company. The controller's
+  // start() is idempotent and only opens transport on the first call;
+  // dispatchTranscript triggers start() right before each speak() turn so
+  // mic permission is requested in response to a user gesture.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    const controller = createBargeInController({
+      companyId: selectedCompanyId,
+      onModeChange: (m) => setBargeInMode(m),
+      onSpeechStart: () => {
+        // Tyler is talking. Stop the TTS pipe, mark the in-flight reply
+        // as interrupted, and flag the row server-side so the chat
+        // history shows the cut.
+        const startedAt = speakingStartedAtRef.current;
+        const elapsedSec = startedAt ? (performance.now() - startedAt) / 1000 : 0;
+        // 155 wpm × ~5 chars/word ≈ 12.9 chars/sec. Slightly conservative
+        // (we want to underestimate spokenChars rather than claim Jarvis
+        // spoke more than he did).
+        const spokenChars = Math.min(
+          Math.round(elapsedSec * 12.5),
+          speakingTextRef.current.length,
+        );
+        try {
+          voice.cancelSpeak();
+        } catch {}
+        const msgId = speakingMsgIdRef.current;
+        if (msgId) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId
+                ? { ...m, interrupted: true, interruptedAtChars: spokenChars }
+                : m
+            )
+          );
+        }
+        setState("interrupted");
+        void controller.reportInterrupt({
+          conversationId: speakingConversationIdRef.current,
+          spokenChars,
+        });
+        // Drop back to "listening" once the amber flash has played so
+        // the Realtime ack ("got it") feels like it leads into a fresh
+        // listening window rather than a stuck UI state.
+        window.setTimeout(() => {
+          setState((cur) => (cur === "interrupted" ? "listening" : cur));
+        }, 240);
+      },
+      onSpeechEnd: (transcript) => {
+        // Realtime returned a final transcript — route it through the
+        // main loop as the next turn. Skip if the user immediately
+        // stopped speaking with no recognized words.
+        const text = transcript.trim();
+        if (!text) {
+          controller.clearInterrupt();
+          return;
+        }
+        const stamp = formatNow();
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `u-${Date.now()}`,
+            author: "user",
+            authorLabel: `You · ${stamp}`,
+            text,
+            timestamp: stamp,
+          },
+        ]);
+        controller.clearInterrupt();
+        void dispatchTranscript(text, { voiceMode: true });
+      },
+      onError: () => {
+        // Surface barge-in failures silently for now — they're non-fatal.
+        // The orb's badge already reflects mode "disabled" if the
+        // session never opens, so the UI still tells Tyler something
+        // went wrong.
+      },
+    });
+    bargeInRef.current = controller;
+    return () => {
+      controller.stop();
+      bargeInRef.current = null;
+    };
+    // dispatchTranscript / voice are stable per-company; intentionally
+    // re-running only on companyId change so the controller stays put
+    // across speak() turns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCompanyId]);
+
+  // Tear down the barge-in transport when we return to idle/processing
+  // (no point holding the mic open while Jarvis composes). Re-opens
+  // each time a speak() starts via dispatchTranscript -> start().
+  useEffect(() => {
+    if (state === "idle" || state === "processing") {
+      bargeInRef.current?.stop();
+      setBargeInMode("disabled");
+    }
+  }, [state]);
+
   // Daily morning-briefing auto-greet. Fires once per UTC day per company,
   // tracked via localStorage so a stale tab doesn't keep re-firing on refresh.
   // The greeting goes through the same /api/jarvis/voice path as a normal
@@ -386,6 +498,7 @@ export function JarvisPage() {
       setState("processing");
       const voiceMode = opts.voiceMode ?? false;
       let reply = "";
+      let conversationId: string | null = null;
       try {
         const resp = await jarvisApi.voice(selectedCompanyId, {
           transcript,
@@ -394,23 +507,41 @@ export function JarvisPage() {
           responseType: opts.responseType,
         });
         reply = resp.reply;
+        conversationId = resp.conversationId;
       } catch (err) {
         reply = `Network error reaching Jarvis: ${(err as Error).message}`;
       }
       const stamp = formatNow();
+      const msgId = `r-${Date.now()}`;
       setMessages((prev) => [
         ...prev,
         {
-          id: `r-${Date.now()}`,
+          id: msgId,
           author: "agent",
           authorLabel: `Jarvis · ${stamp}`,
           text: reply,
           timestamp: stamp,
         },
       ]);
+      // Stash so barge-in handler can mark this message interrupted and
+      // post conversation-cancel with an accurate spokenChars value.
+      speakingMsgIdRef.current = msgId;
+      speakingStartedAtRef.current = performance.now();
+      speakingTextRef.current = reply;
+      speakingConversationIdRef.current = conversationId;
       setState("speaking");
+      // Spin up the barge-in controller (idempotent — second-and-later
+      // calls just confirm the existing session). The mode the
+      // controller resolves to drives the Premium/Local-VAD badge.
+      void bargeInRef.current?.start().then((m) => setBargeInMode(m));
+      bargeInRef.current?.clearInterrupt();
       await voice.speak(reply);
-      setState("idle");
+      // If barge-in fired during speak(), state was already set to
+      // "interrupted" by the handler — don't stomp back to idle.
+      speakingMsgIdRef.current = null;
+      speakingTextRef.current = "";
+      speakingConversationIdRef.current = null;
+      setState((cur) => (cur === "interrupted" ? "interrupted" : "idle"));
     },
     [selectedCompanyId, voice, voiceTier]
   );
@@ -711,7 +842,27 @@ export function JarvisPage() {
             <div className="jarvis-reactor" ref={reactorRef}>
               <Reactor />
             </div>
-            <div className="jarvis-reactor-label">JARVIS PRIME ONLINE</div>
+            <div className="jarvis-reactor-label">
+              JARVIS PRIME ONLINE
+              <span
+                className="jarvis-bargein-badge"
+                data-mode={bargeInMode}
+                title={
+                  bargeInMode === "realtime"
+                    ? "OpenAI Realtime barge-in active — talk over me anytime."
+                    : bargeInMode === "local-vad"
+                      ? "Local-VAD barge-in active. Configure openai_realtime for Premium."
+                      : "Barge-in inactive."
+                }
+              >
+                <span className="dot" />
+                {bargeInMode === "realtime"
+                  ? "Barge-in · Premium"
+                  : bargeInMode === "local-vad"
+                    ? "Barge-in · Local"
+                    : ""}
+              </span>
+            </div>
           </div>
 
           <div className="jarvis-quick-actions">
@@ -884,8 +1035,16 @@ export function JarvisPage() {
                 </div>
               ) : (
                 messages.map((m) => (
-                  <div key={m.id} className={`jarvis-msg ${m.author}`}>
-                    <span className="jarvis-msg-author">{m.authorLabel}</span>
+                  <div
+                    key={m.id}
+                    className={`jarvis-msg ${m.author}${m.interrupted ? " interrupted" : ""}`}
+                  >
+                    <span className="jarvis-msg-author">
+                      {m.authorLabel}
+                      {m.interrupted ? (
+                        <span className="jarvis-msg-interrupt-tag">— interrupted</span>
+                      ) : null}
+                    </span>
                     <div className="jarvis-msg-bubble">{m.text}</div>
                   </div>
                 ))
@@ -1052,6 +1211,8 @@ function conversationsToMessages(turns: JarvisConversationTurn[]): JarvisChatMes
       authorLabel: `Jarvis · ${stamp}`,
       text: t.agentReply,
       timestamp: stamp,
+      interrupted: t.interruptedAt != null,
+      interruptedAtChars: t.interruptedAtChars ?? undefined,
     });
   }
   return out;

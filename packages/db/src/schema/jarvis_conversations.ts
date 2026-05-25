@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, boolean, index } from "drizzle-orm/pg-core";
+import { integer, pgTable, uuid, text, timestamp, jsonb, boolean, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 export const jarvisConversations = pgTable(
@@ -25,6 +25,18 @@ export const jarvisConversations = pgTable(
     /** Snapshot of the context briefing fed to the LLM — supports replay + audit. */
     contextSnapshot: jsonb("context_snapshot").$type<Record<string, unknown>>(),
     latencyMs: text("latency_ms"),
+    /**
+     * Set when Tyler barges in mid-reply. NULL means the reply played to
+     * completion. When non-null, this is the wall-clock moment the
+     * client paused TTS playback in response to detected user speech.
+     */
+    interruptedAt: timestamp("interrupted_at", { withTimezone: true }),
+    /**
+     * Number of characters of `agent_reply` that were actually spoken
+     * before barge-in cut the playback. Lets us replay or resume the
+     * truncated portion later if Tyler asks "where were you?".
+     */
+    interruptedAtChars: integer("interrupted_at_chars"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({

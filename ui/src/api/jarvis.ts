@@ -86,6 +86,10 @@ export interface JarvisConversationTurn {
   llmProvider: string | null;
   llmModel: string | null;
   responseType: string | null;
+  /** ISO timestamp the user barged in, or null if the reply played to completion. */
+  interruptedAt: string | null;
+  /** Characters of `agentReply` actually spoken before the cut. */
+  interruptedAtChars: number | null;
   createdAt: string;
 }
 
@@ -98,6 +102,27 @@ export interface JarvisHealthResponse {
   version: number;
   llm: { deepseek: boolean; openai: boolean; anthropic: boolean; moonshot: boolean };
   voice: { elevenlabs: boolean; openaiRealtime: boolean };
+}
+
+export interface JarvisRealtimeTokenResponse {
+  ephemeralKey: string;
+  /** Unix epoch seconds. */
+  expiresAt: number;
+  model: string;
+  voice: string;
+}
+
+export interface JarvisCancelResponseBody {
+  conversationId?: string | null;
+  reason?: "user_speech" | "manual" | "timeout";
+  /** Characters of TTS playback the client got through before pausing. */
+  spokenChars?: number | null;
+}
+
+export interface JarvisCancelResponseResult {
+  ok: boolean;
+  interruptedAt: string;
+  persisted: boolean;
 }
 
 // All paths are RELATIVE to /api — the api client auto-prepends the
@@ -160,4 +185,40 @@ export const jarvisApi = {
    * surface "no real LLM wired" when every provider is missing.
    */
   health: (): Promise<JarvisHealthResponse> => api.get(`/jarvis/health`),
+
+  /**
+   * Mints a short-lived OpenAI Realtime ephemeral key. Returns null when
+   * the server doesn't have an openai_realtime key configured (HTTP 501);
+   * the caller degrades to local-VAD fallback in that case.
+   */
+  realtimeToken: async (
+    companyId: string,
+    body: { model?: string; voice?: string } = {},
+  ): Promise<JarvisRealtimeTokenResponse | null> => {
+    try {
+      return await api.post<JarvisRealtimeTokenResponse>(
+        `/companies/${companyId}/jarvis/realtime-token`,
+        body,
+      );
+    } catch (err) {
+      const status =
+        err && typeof err === "object" && "status" in err
+          ? (err as { status?: number }).status
+          : null;
+      if (status === 501) return null;
+      throw err;
+    }
+  },
+
+  /**
+   * Reports that the user barged in mid-reply. Persists interruptedAt on
+   * the conversation row (when conversationId is known) and broadcasts
+   * the cancel signal on the server-side barge-in bus so any streaming
+   * consumer tears down its pipe.
+   */
+  cancelResponse: (
+    companyId: string,
+    body: JarvisCancelResponseBody,
+  ): Promise<JarvisCancelResponseResult> =>
+    api.post(`/companies/${companyId}/jarvis/cancel-response`, body),
 };
