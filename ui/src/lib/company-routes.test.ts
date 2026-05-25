@@ -35,4 +35,21 @@ describe("company routes", () => {
     expect(applyCompanyPrefix("/search?q=hello%20world", "PAP")).toBe("/PAP/search?q=hello%20world");
     expect(toCompanyRelativePath("/PAP/search?q=foo")).toBe("/search?q=foo");
   });
+
+  it.each([
+    ["/jarvis", "/PAP/jarvis"],
+    ["/home", "/PAP/home"],
+    ["/work", "/PAP/work"],
+    ["/cost-watcher", "/PAP/cost-watcher"],
+    ["/plugins/my-plugin", "/PAP/plugins/my-plugin"],
+  ])("recognizes %s as a board route (not a company prefix)", (input, expected) => {
+    expect(isBoardPathWithoutPrefix(input)).toBe(true);
+    expect(extractCompanyPrefixFromPath(input)).toBeNull();
+    expect(applyCompanyPrefix(input, "PAP")).toBe(expected);
+  });
+
+  it("still treats unknown first segments as a company prefix", () => {
+    expect(extractCompanyPrefixFromPath("/garbage-prefix-xyz")).toBe("GARBAGE-PREFIX-XYZ");
+    expect(isBoardPathWithoutPrefix("/garbage-prefix-xyz")).toBe(false);
+  });
 });

@@ -13,6 +13,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "goals",
   "approvals",
   "costs",
+  "cost-watcher",
   "usage",
   "activity",
   "inbox",
@@ -22,6 +23,10 @@ const BOARD_ROUTE_ROOTS = new Set([
   "knowledge-graph",
   "rooms",
   "social",
+  "home",
+  "work",
+  "jarvis",
+  "plugins",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set([

@@ -360,6 +360,46 @@ export function App() {
           <Route path="rooms/:roomId" element={<UnprefixedBoardRedirect />} />
           <Route path="social" element={<UnprefixedBoardRedirect />} />
           <Route path="social/posts/:postId" element={<UnprefixedBoardRedirect />} />
+          <Route path="jarvis" element={<UnprefixedBoardRedirect />} />
+          <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
+          <Route path="dashboard/live" element={<UnprefixedBoardRedirect />} />
+          <Route path="activity" element={<UnprefixedBoardRedirect />} />
+          <Route path="search" element={<UnprefixedBoardRedirect />} />
+          <Route path="org" element={<UnprefixedBoardRedirect />} />
+          <Route path="design-guide" element={<UnprefixedBoardRedirect />} />
+          <Route path="costs" element={<UnprefixedBoardRedirect />} />
+          <Route path="goals" element={<UnprefixedBoardRedirect />} />
+          <Route path="goals/:goalId" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals/pending" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals/all" element={<UnprefixedBoardRedirect />} />
+          <Route path="approvals/:approvalId" element={<UnprefixedBoardRedirect />} />
+          <Route path="agents/all" element={<UnprefixedBoardRedirect />} />
+          <Route path="agents/active" element={<UnprefixedBoardRedirect />} />
+          <Route path="agents/paused" element={<UnprefixedBoardRedirect />} />
+          <Route path="agents/error" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/mine" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/recent" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/unread" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/blocked" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/all" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/requests" element={<UnprefixedBoardRedirect />} />
+          <Route path="inbox/new" element={<UnprefixedBoardRedirect />} />
+          <Route path="issues/all" element={<UnprefixedBoardRedirect />} />
+          <Route path="issues/active" element={<UnprefixedBoardRedirect />} />
+          <Route path="issues/backlog" element={<UnprefixedBoardRedirect />} />
+          <Route path="issues/done" element={<UnprefixedBoardRedirect />} />
+          <Route path="issues/recent" element={<UnprefixedBoardRedirect />} />
+          <Route path="projects/:projectId/budget" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/secrets" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/export/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/import" element={<UnprefixedBoardRedirect />} />
+          <Route path="plugins/:pluginId" element={<UnprefixedBoardRedirect />} />
           <Route path=":companyPrefix" element={<Layout />}>
             {boardRoutes()}
           </Route>
