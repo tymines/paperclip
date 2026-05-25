@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, useCallback, type FormEvent } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, type FormEvent } from "react";
 import { useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
-import { jarvisApi } from "@/api/jarvis";
+import { jarvisApi, type JarvisVoiceTier, type JarvisVoiceTierId } from "@/api/jarvis";
 import { Reactor } from "./Reactor";
 import { useOrbAudio } from "./useOrbAudio";
 import { useJarvisVoice } from "./useJarvisVoice";
+import { VoiceTierPicker } from "./VoiceTierPicker";
 import {
   MOCK_BRIEFING,
   MOCK_CAPABILITIES,
@@ -12,6 +13,8 @@ import {
   type JarvisChatMessage,
 } from "./mock-data";
 import "./Jarvis.css";
+
+const TIER_STORAGE_KEY = "paperclip.jarvis.voiceTier";
 
 type HudState = "idle" | "listening" | "processing" | "speaking";
 
@@ -80,6 +83,56 @@ export function JarvisPage() {
   );
   const [composer, setComposer] = useState("");
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [tiers, setTiers] = useState<JarvisVoiceTier[] | null>(null);
+  const [voiceTier, setVoiceTier] = useState<JarvisVoiceTierId>(() => {
+    try {
+      const stored = window.localStorage.getItem(TIER_STORAGE_KEY);
+      if (stored === "premium" || stored === "standard" || stored === "browser-native") {
+        return stored;
+      }
+    } catch {}
+    return "browser-native";
+  });
+
+  // Fetch tier availability + pick the highest available as default if the
+  // user hasn't already chosen one (or their previous choice is now stale).
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    let cancelled = false;
+    jarvisApi
+      .voiceTiers(selectedCompanyId)
+      .then((resp) => {
+        if (cancelled) return;
+        setTiers(resp.tiers);
+        try {
+          const stored = window.localStorage.getItem(TIER_STORAGE_KEY) as JarvisVoiceTierId | null;
+          const storedTier = resp.tiers.find((t) => t.id === stored);
+          if (!storedTier || !storedTier.available) {
+            const top = resp.tiers.find((t) => t.available);
+            if (top) setVoiceTier(top.id);
+          }
+        } catch {}
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Endpoint might not exist yet (older server) — fall back silently.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId]);
+
+  const onTierSelect = useCallback((id: JarvisVoiceTierId) => {
+    setVoiceTier(id);
+    try {
+      window.localStorage.setItem(TIER_STORAGE_KEY, id);
+    } catch {}
+  }, []);
+
+  const currentTier = useMemo(
+    () => tiers?.find((t) => t.id === voiceTier) ?? defaultTier(voiceTier),
+    [tiers, voiceTier]
+  );
 
   const orb = useOrbAudio({ reactorRef, tickGroupRef, state });
 
@@ -179,7 +232,10 @@ export function JarvisPage() {
       setState("processing");
       let reply = "";
       try {
-        const resp = await jarvisApi.voice(selectedCompanyId, { transcript });
+        const resp = await jarvisApi.voice(selectedCompanyId, {
+          transcript,
+          voiceTier,
+        });
         reply = resp.reply;
       } catch (err) {
         reply = `Network error reaching Jarvis: ${(err as Error).message}`;
@@ -199,7 +255,7 @@ export function JarvisPage() {
       await voice.speak(reply);
       setState("idle");
     },
-    [selectedCompanyId, voice]
+    [selectedCompanyId, voice, voiceTier]
   );
 
   const onSubmit = useCallback(
@@ -302,6 +358,7 @@ export function JarvisPage() {
 
         <div className="jarvis-top-actions">
           <span className="jarvis-online-pill">Online</span>
+          <VoiceTierPicker tiers={tiers} selected={voiceTier} onSelect={onTierSelect} />
           <button className="jarvis-icon-btn" title="Settings" type="button">
             <svg viewBox="0 0 24 24" fill="none">
               <circle cx={12} cy={12} r={3} stroke="currentColor" strokeWidth={1.6} />
@@ -424,7 +481,11 @@ export function JarvisPage() {
                 <SysRow label="Knowledge Base" value="3,412 docs" tone="ok" />
                 <SysRow
                   label="Voice Tier"
-                  value={MOCK_BRIEFING.voiceTierLabel}
+                  value={
+                    currentTier
+                      ? `${currentTier.label === "Free" ? "Tier 3" : currentTier.label === "Standard" ? "Tier 2" : "Tier 1"} · ${currentTier.label}`
+                      : MOCK_BRIEFING.voiceTierLabel
+                  }
                   tone="gold"
                 />
               </div>
@@ -566,7 +627,16 @@ export function JarvisPage() {
               </button>
             </form>
             <div className="jarvis-input-footer">
-              <span>End-to-end Encrypted</span> ·
+              <span>End-to-end Encrypted</span>
+              {currentTier ? (
+                <span className="jarvis-cost-hint">
+                  · <strong>{currentTier.label} voice</strong> ·
+                  {currentTier.costPerMinUsd > 0
+                    ? ` ~$${currentTier.costPerMinUsd.toFixed(3)}/min`
+                    : " $0/min"}
+                </span>
+              ) : null}
+              <span> · </span>
               <a href="#" onClick={(e) => e.preventDefault()}>Report a Bug</a> ·
               <a href="#" onClick={(e) => e.preventDefault()}>Privacy Policy</a>
             </div>
@@ -708,4 +778,47 @@ function SysRow({
 function formatNow() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Static defaults so the cost hint + System Status row show meaningful values
+// before /jarvis/voice/tiers responds (or when the older server doesn't
+// expose it). The picker dropdown uses its own internal defaults via the
+// same shape.
+function defaultTier(id: JarvisVoiceTierId): JarvisVoiceTier {
+  switch (id) {
+    case "premium":
+      return {
+        id: "premium",
+        label: "Premium",
+        available: false,
+        latencyEstimateMs: 800,
+        monthlyCostUsdAt5min: 45,
+        costPerMinUsd: 0.04,
+        providers: ["openai_realtime", "elevenlabs"],
+        description: "OpenAI Realtime STT + ElevenLabs Turbo v2.5 TTS.",
+      };
+    case "standard":
+      return {
+        id: "standard",
+        label: "Standard",
+        available: false,
+        latencyEstimateMs: 1500,
+        monthlyCostUsdAt5min: 8,
+        costPerMinUsd: 0.007,
+        providers: ["openai"],
+        description: "OpenAI Whisper STT + TTS-1.",
+      };
+    case "browser-native":
+    default:
+      return {
+        id: "browser-native",
+        label: "Free",
+        available: true,
+        latencyEstimateMs: 1800,
+        monthlyCostUsdAt5min: 0,
+        costPerMinUsd: 0,
+        providers: [],
+        description: "Browser SpeechRecognition + SpeechSynthesis.",
+      };
+  }
 }

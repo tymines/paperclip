@@ -230,6 +230,119 @@
   text-shadow: 0 0 10px rgba(0, 212, 255, 0.5);
 }
 
+/* ===== Voice tier picker ===== */
+.jarvis-tier-picker {
+  position: relative;
+  font-family: var(--jarvis-font-data);
+}
+.jarvis-tier-pill {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--jarvis-line-strong);
+  background: rgba(0, 212, 255, 0.08);
+  border-radius: 999px;
+  font-size: 10px;
+  color: var(--jarvis-accent);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+  transition: all 160ms ease;
+}
+.jarvis-tier-pill:hover {
+  background: rgba(0, 212, 255, 0.16);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.35);
+}
+.jarvis-tier-pill-prefix { color: var(--jarvis-muted); margin-right: 2px; }
+.jarvis-tier-pill-label {
+  color: var(--jarvis-text-strong);
+  text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+.jarvis-tier-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--jarvis-panel-strong);
+  border: 1px solid var(--jarvis-line-strong);
+  border-radius: 10px;
+  backdrop-filter: blur(12px);
+  z-index: 50;
+  box-shadow: 0 16px 40px rgba(0, 12, 28, 0.6), 0 0 24px rgba(0, 212, 255, 0.2);
+}
+.jarvis-tier-row {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-family: var(--jarvis-font-data);
+  transition: background 140ms ease;
+}
+.jarvis-tier-row:hover { background: rgba(0, 212, 255, 0.1); }
+.jarvis-tier-row.selected {
+  background: rgba(0, 212, 255, 0.16);
+  box-shadow: inset 0 0 12px rgba(0, 212, 255, 0.28);
+}
+.jarvis-tier-row.unavailable { opacity: 0.65; cursor: pointer; }
+.jarvis-tier-row.unavailable:hover { background: rgba(255, 181, 71, 0.08); opacity: 0.85; }
+.jarvis-tier-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.jarvis-tier-row-name {
+  font-family: var(--jarvis-font-display);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--jarvis-text-strong);
+}
+.jarvis-tier-row-meta {
+  display: flex;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--jarvis-accent);
+  letter-spacing: 0.04em;
+}
+.jarvis-tier-row-desc {
+  font-family: var(--jarvis-font-body);
+  font-size: 11px;
+  color: var(--jarvis-text-dim);
+  line-height: 1.4;
+}
+.jarvis-tier-row-cta {
+  font-size: 10px;
+  color: var(--jarvis-accent-warm);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.jarvis-cost-hint {
+  margin-left: 6px;
+  font-family: var(--jarvis-font-data);
+  font-size: 9px;
+  color: var(--jarvis-muted);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.jarvis-cost-hint strong {
+  color: var(--jarvis-accent);
+  font-weight: 600;
+}
+
 /* ===== STAGE — 3-column ===== */
 .jarvis-stage {
   position: relative;

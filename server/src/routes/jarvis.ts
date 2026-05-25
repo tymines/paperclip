@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
+import { getRawKey } from "../services/provider-api-keys/index.js";
 
 /**
  * Jarvis voice endpoint.
@@ -57,6 +58,61 @@ export function jarvisRoutes(db: Db) {
       });
     }
   );
+
+  /**
+   * Reports which Jarvis voice tiers are currently available based on
+   * configured provider keys. The client uses this to enable/disable the
+   * tier picker rows and pick the highest-available tier by default.
+   *
+   * Cost estimates are rough monthly figures at ~5 minutes of conversation
+   * per day — surfaces "how much will this cost me" without forcing Tyler
+   * to do napkin math. Latency is the typical voice-to-voice round trip.
+   */
+  router.get("/companies/:companyId/jarvis/voice/tiers", async (req, res) => {
+    const { companyId } = req.params as { companyId: string };
+    assertCompanyAccess(req, companyId);
+
+    const [openaiKey, openaiRealtimeKey, elevenlabsKey] = await Promise.all([
+      getRawKey("openai").catch(() => null),
+      getRawKey("openai_realtime").catch(() => null),
+      getRawKey("elevenlabs").catch(() => null),
+    ]);
+
+    const tiers = [
+      {
+        id: "premium",
+        label: "Premium",
+        available: !!(openaiRealtimeKey && elevenlabsKey),
+        latencyEstimateMs: 800,
+        monthlyCostUsdAt5min: 45,
+        costPerMinUsd: 0.04,
+        providers: ["openai_realtime", "elevenlabs"] as const,
+        description: "OpenAI Realtime STT + ElevenLabs Turbo v2.5 TTS. Sub-1s voice-to-voice.",
+      },
+      {
+        id: "standard",
+        label: "Standard",
+        available: !!openaiKey,
+        latencyEstimateMs: 1500,
+        monthlyCostUsdAt5min: 8,
+        costPerMinUsd: 0.007,
+        providers: ["openai"] as const,
+        description: "OpenAI Whisper STT + TTS-1. ~1.5s voice-to-voice.",
+      },
+      {
+        id: "browser-native",
+        label: "Free",
+        available: true,
+        latencyEstimateMs: 1800,
+        monthlyCostUsdAt5min: 0,
+        costPerMinUsd: 0,
+        providers: [] as const,
+        description: "Browser SpeechRecognition + SpeechSynthesis. No keys needed.",
+      },
+    ];
+
+    res.json({ tiers });
+  });
 
   return router;
 }
