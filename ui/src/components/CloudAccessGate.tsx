@@ -1,8 +1,10 @@
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import { accessApi } from "@/api/access";
 import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
+import { getRememberedInvitePath } from "@/lib/invite-memory";
 import { queryKeys } from "@/lib/queryKeys";
 
 function BootstrapPendingPage({ hasActiveInvite = false }: { hasActiveInvite?: boolean }) {
@@ -38,6 +40,29 @@ function NoBoardAccessPage() {
       </div>
     </div>
   );
+}
+
+type GateErrorBoundaryState = { hasError: boolean };
+
+// If anything in the authenticated subtree throws during render (a stale or
+// malformed cache, a context that wasn't ready for an empty-companies user,
+// etc.), fall back to NoBoardAccessPage instead of unmounting the entire app
+// and showing a blank screen. Fresh-invite users hit this path first.
+class GateErrorBoundary extends Component<{ children: ReactNode }, GateErrorBoundaryState> {
+  override state: GateErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): GateErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  override componentDidCatch(error: unknown, info: ErrorInfo): void {
+    console.error("CloudAccessGate subtree crashed", { error, componentStack: info.componentStack });
+  }
+
+  override render() {
+    if (this.state.hasError) return <NoBoardAccessPage />;
+    return this.props.children;
+  }
 }
 
 export function CloudAccessGate() {
@@ -105,10 +130,21 @@ export function CloudAccessGate() {
     isAuthenticatedMode &&
     sessionQuery.data &&
     !boardAccessQuery.data?.isInstanceAdmin &&
-    (boardAccessQuery.data?.companyIds.length ?? 0) === 0
+    (boardAccessQuery.data?.companyIds?.length ?? 0) === 0
   ) {
+    // A user who just authenticated through CF Access but has no company yet
+    // is almost always an invite recipient — send them back to finish the
+    // invite instead of stranding them on a dead-end "No company access" page.
+    const rememberedInvitePath = getRememberedInvitePath();
+    if (rememberedInvitePath && location.pathname !== rememberedInvitePath) {
+      return <Navigate to={rememberedInvitePath} replace />;
+    }
     return <NoBoardAccessPage />;
   }
 
-  return <Outlet />;
+  return (
+    <GateErrorBoundary>
+      <Outlet />
+    </GateErrorBoundary>
+  );
 }

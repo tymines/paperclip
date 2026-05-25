@@ -247,12 +247,14 @@ export function InviteLandingPage() {
     retry: false,
   });
 
+  // Match CompanyProvider's wrapped shape so we don't clobber its cache under the same key.
   const companiesQuery = useQuery({
     queryKey: queryKeys.companies.all,
-    queryFn: () => companiesApi.list(),
+    queryFn: async () => ({ companies: await companiesApi.list(), unauthorized: false }),
     enabled: !!sessionQuery.data && !!inviteQuery.data?.companyId,
     retry: false,
   });
+  const companiesList = companiesQuery.data?.companies ?? [];
 
   useEffect(() => {
     if (token) rememberPendingInviteToken(token);
@@ -264,14 +266,14 @@ export function InviteLandingPage() {
 
   useEffect(() => {
     if (!companiesQuery.data || !inviteQuery.data?.companyId) return;
-    const isMember = companiesQuery.data.some(
+    const isMember = companiesList.some(
       (c) => c.id === inviteQuery.data!.companyId
     );
     if (isMember) {
       clearPendingInviteToken(token);
       navigate("/", { replace: true });
     }
-  }, [companiesQuery.data, inviteQuery.data, token, navigate]);
+  }, [companiesQuery.data, companiesList, inviteQuery.data, token, navigate]);
 
   const invite = inviteQuery.data;
   const isCheckingExistingMembership =
@@ -281,7 +283,7 @@ export function InviteLandingPage() {
   const isCurrentMember =
     Boolean(invite?.companyId) &&
     Boolean(
-      companiesQuery.data?.some((company) => company.id === invite?.companyId),
+      companiesList.some((company) => company.id === invite?.companyId),
     );
   const companyName = invite?.companyName?.trim() || null;
   const companyDisplayName = companyName || "this Paperclip company";
@@ -342,6 +344,9 @@ export function InviteLandingPage() {
       setResult({ kind: asBootstrap ? "bootstrap" : "join", payload });
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
       await queryClient.invalidateQueries({ queryKey: queryKeys.companies.all });
+      // CloudAccessGate reads this cache; without invalidating it the user
+      // bounces through "No company access" before the new membership is visible.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.currentBoardAccess });
       if (invite?.companyId && isApprovedHumanJoinPayload(payload, showsAgentForm)) {
         setSelectedCompanyId(invite.companyId, { source: "manual" });
         navigate("/", { replace: true });
@@ -375,11 +380,14 @@ export function InviteLandingPage() {
       setAuthFeedback(null);
       rememberPendingInviteToken(token);
       await queryClient.invalidateQueries({ queryKey: queryKeys.auth.session });
-      const companies = await queryClient.fetchQuery({
+      await queryClient.invalidateQueries({ queryKey: queryKeys.access.currentBoardAccess });
+      // Wrap the result to match CompanyProvider's cache shape under the same key.
+      const companiesResult = await queryClient.fetchQuery({
         queryKey: queryKeys.companies.all,
-        queryFn: () => companiesApi.list(),
+        queryFn: async () => ({ companies: await companiesApi.list(), unauthorized: false }),
         retry: false,
       });
+      const companies = companiesResult.companies;
 
       if (invite?.companyId && companies.some((company) => company.id === invite.companyId)) {
         clearPendingInviteToken(token);

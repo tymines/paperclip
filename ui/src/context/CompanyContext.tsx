@@ -83,8 +83,15 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
     },
     retry: false,
   });
-  const companies = companiesResult.companies;
-  const companyListUnauthorized = companiesResult.unauthorized;
+  // Defense in depth: if another component populates this query key with a raw
+  // Company[] (legacy shape) or a malformed payload, fall back to a safe shape
+  // instead of letting `.filter` crash and black-screen the app.
+  const companies = Array.isArray(companiesResult?.companies)
+    ? companiesResult.companies
+    : Array.isArray(companiesResult as unknown as Company[])
+      ? (companiesResult as unknown as Company[])
+      : [];
+  const companyListUnauthorized = Boolean(companiesResult?.unauthorized);
   const sidebarCompanies = useMemo(
     () => companies.filter((company) => company.status !== "archived"),
     [companies],
