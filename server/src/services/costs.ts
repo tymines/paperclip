@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
@@ -449,6 +449,46 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
           costEvents.model,
         )
         .orderBy(costEvents.provider, costEvents.biller, costEvents.billingType, costEvents.model);
+    },
+
+    /**
+     * Aggregate cost rollup per issue for a batch of issue ids, in a single
+     * groupBy query. Used by the issues-list endpoint to attach
+     * costCents / inputTokens / outputTokens onto each Issue cheaply.
+     */
+    byIssueIds: async (companyId: string, issueIds: readonly string[]) => {
+      const result = new Map<
+        string,
+        { costCents: number; inputTokens: number; outputTokens: number; cachedInputTokens: number }
+      >();
+      if (issueIds.length === 0) return result;
+      const rows = await db
+        .select({
+          issueId: costEvents.issueId,
+          costCents: sumAsNumber(costEvents.costCents),
+          inputTokens: sumAsNumber(costEvents.inputTokens),
+          outputTokens: sumAsNumber(costEvents.outputTokens),
+          cachedInputTokens: sumAsNumber(costEvents.cachedInputTokens),
+        })
+        .from(costEvents)
+        .where(
+          and(
+            eq(costEvents.companyId, companyId),
+            isNotNull(costEvents.issueId),
+            inArray(costEvents.issueId, issueIds as string[]),
+          ),
+        )
+        .groupBy(costEvents.issueId);
+      for (const row of rows) {
+        if (!row.issueId) continue;
+        result.set(row.issueId, {
+          costCents: Number(row.costCents ?? 0),
+          inputTokens: Number(row.inputTokens ?? 0),
+          outputTokens: Number(row.outputTokens ?? 0),
+          cachedInputTokens: Number(row.cachedInputTokens ?? 0),
+        });
+      }
+      return result;
     },
 
     byProject: async (companyId: string, range?: CostDateRange) => {
