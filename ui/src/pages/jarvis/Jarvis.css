@@ -1128,6 +1128,58 @@
 .jarvis-root[data-state="speaking"] .jarvis-ripple.rp2 { animation: jarvis-ripple-out 2.2s ease-out infinite 0.55s; opacity: 1; }
 .jarvis-root[data-state="speaking"] .jarvis-ripple.rp3 { animation: jarvis-ripple-out 2.2s ease-out infinite 1.1s; opacity: 1; }
 
+/* Barge-in: brief amber flash when the orb detects Tyler talking over the
+   reply. Transitions back into listening within 200ms — the visual
+   anchor for "I heard you, I'm stopping". */
+@keyframes jarvis-interrupt-flash {
+  0% { box-shadow: 0 0 0 0 rgba(255, 181, 71, 0.0); }
+  35% { box-shadow: 0 0 24px 8px rgba(255, 181, 71, 0.55); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 181, 71, 0.0); }
+}
+.jarvis-root[data-state="interrupted"] .jarvis-reactor {
+  animation: jarvis-interrupt-flash 240ms ease-out;
+}
+.jarvis-root[data-state="interrupted"] .jarvis-reactor-label::after {
+  content: " · BARGE-IN";
+  color: #ffb547;
+  letter-spacing: 0.32em;
+}
+
+/* Interrupted message styling — adds a thin amber rule on the left of
+   the bubble + a "— interrupted" suffix on the author line so the chat
+   history surfaces which Jarvis replies got cut short. */
+.jarvis-msg.interrupted .jarvis-msg-bubble {
+  border-left: 2px solid #ffb547;
+  padding-left: 10px;
+}
+.jarvis-msg-interrupt-tag {
+  color: #ffb547;
+  margin-left: 4px;
+}
+
+/* Premium tier "barge-in active" badge near the orb label. */
+.jarvis-bargein-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--jarvis-font-data);
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #4fffb0;
+  margin-left: 8px;
+  opacity: 0.9;
+}
+.jarvis-bargein-badge[data-mode="local-vad"] { color: #ffb547; }
+.jarvis-bargein-badge[data-mode="disabled"] { display: none; }
+.jarvis-bargein-badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
 /* ===== Quick actions ===== */
 .jarvis-quick-actions {
   display: grid;

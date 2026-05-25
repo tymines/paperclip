@@ -36,7 +36,7 @@ export interface UseOrbAudioOptions {
   /** Ref to the <g data-tick-group> SVG group whose children we brighten. */
   tickGroupRef: React.RefObject<SVGGElement | null>;
   /** Current HUD state — controls breathing baseline + scan effects. */
-  state: "idle" | "listening" | "processing" | "speaking";
+  state: "idle" | "listening" | "processing" | "speaking" | "interrupted";
 }
 
 export function useOrbAudio({
