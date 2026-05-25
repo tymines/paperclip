@@ -3,6 +3,7 @@ import { Link, useParams, useNavigate, useLocation, Navigate } from "@/lib/route
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { PROJECT_COLORS, isUuidLike, type BudgetPolicySummary } from "@paperclipai/shared";
 import { budgetsApi } from "../api/budgets";
+import { costsApi } from "../api/costs";
 import { executionWorkspacesApi } from "../api/execution-workspaces";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { projectsApi } from "../api/projects";
@@ -26,7 +27,7 @@ import { PageTabBar } from "../components/PageTabBar";
 import { ProjectWorkspacesContent } from "../components/ProjectWorkspacesContent";
 import { buildProjectWorkspaceSummaries } from "../lib/project-workspaces-tab";
 import { collectLiveIssueIds } from "../lib/liveIssueIds";
-import { projectRouteRef } from "../lib/utils";
+import { formatCostUsdCompact, formatTokens, projectRouteRef } from "../lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs } from "@/components/ui/tabs";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
@@ -62,11 +63,20 @@ function OverviewContent({
   project,
   onUpdate,
   imageUploadHandler,
+  spend,
 }: {
   project: { description: string | null; status: string; targetDate: string | null };
   onUpdate: (data: Record<string, unknown>) => void;
   imageUploadHandler?: (file: File) => Promise<string>;
+  spend?: {
+    costCents: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+  } | null;
 }) {
+  const totalTokens = (spend?.inputTokens ?? 0) + (spend?.outputTokens ?? 0);
+  const hasSpend = !!spend && (spend.costCents > 0 || totalTokens > 0);
   return (
     <div className="space-y-6">
       <InlineEditor
@@ -91,6 +101,35 @@ function OverviewContent({
           <div>
             <span className="text-muted-foreground">Target Date</span>
             <p>{project.targetDate}</p>
+          </div>
+        )}
+      </div>
+
+      <div
+        className="rounded-lg border border-border p-4"
+        data-pp-project-spend-card
+      >
+        <div className="flex items-center justify-between">
+          <h3 className="text-xs font-medium text-muted-foreground">Project spend</h3>
+          <span className="text-[10px] text-muted-foreground/60">All time</span>
+        </div>
+        {!hasSpend ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            No spend recorded for this project yet.
+          </p>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm font-mono tabular-nums">
+            <span className="text-foreground">
+              {formatCostUsdCompact((spend?.costCents ?? 0) / 100)}
+            </span>
+            {totalTokens > 0 ? (
+              <span className="text-muted-foreground text-xs">
+                {formatTokens(totalTokens)} tokens
+                {(spend?.cachedInputTokens ?? 0) > 0
+                  ? ` · ${formatTokens(spend?.cachedInputTokens ?? 0)} cached`
+                  : ""}
+              </span>
+            ) : null}
           </div>
         )}
       </div>
@@ -386,6 +425,28 @@ export function ProjectDetail() {
       projectsApi.update(projectLookupRef, data, resolvedCompanyId ?? lookupCompanyId),
     onSuccess: invalidateProject,
   });
+
+  // Server already aggregates cost_events by project. Filter the company-wide
+  // result down to this project's row so the Overview tab shows total spend.
+  const { data: costByProject } = useQuery({
+    queryKey: [
+      ...queryKeys.projects.list(resolvedCompanyId ?? "__none__"),
+      "cost-by-project",
+    ],
+    queryFn: () => costsApi.byProject(resolvedCompanyId!),
+    enabled: !!resolvedCompanyId,
+  });
+  const projectSpend = useMemo(() => {
+    if (!project?.id || !costByProject) return null;
+    const row = costByProject.find((entry) => entry.projectId === project.id);
+    if (!row) return null;
+    return {
+      costCents: row.costCents,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cachedInputTokens: row.cachedInputTokens,
+    };
+  }, [costByProject, project?.id]);
 
   const archiveProject = useMutation({
     mutationFn: (archived: boolean) =>
@@ -726,6 +787,7 @@ export function ProjectDetail() {
             const asset = await uploadImage.mutateAsync(file);
             return asset.contentPath;
           }}
+          spend={projectSpend ?? null}
         />
       )}
 

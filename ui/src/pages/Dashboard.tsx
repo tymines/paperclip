@@ -21,10 +21,10 @@ import { StatusIcon } from "../components/StatusIcon";
 import { ActivityRow } from "../components/ActivityRow";
 import { Identity } from "../components/Identity";
 import { timeAgo } from "../lib/timeAgo";
-import { cn, formatCents } from "../lib/utils";
-import { Bot, CircleDot, DollarSign, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
+import { cn, formatCents, formatTokens } from "../lib/utils";
+import { Bot, CircleDot, DollarSign, Hash, ShieldCheck, LayoutDashboard, PauseCircle } from "lucide-react";
 import { ActiveAgentsPanel } from "../components/ActiveAgentsPanel";
-import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart } from "../components/ActivityCharts";
+import { ChartCard, RunActivityChart, PriorityChart, IssueStatusChart, SuccessRateChart, SpendActivityChart } from "../components/ActivityCharts";
 import { PageSkeleton } from "../components/PageSkeleton";
 import type { Agent, Issue } from "@paperclipai/shared";
 import { PluginSlotOutlet } from "@/plugins/slots";
@@ -253,7 +253,7 @@ function DashboardLegacy() {
             </div>
           ) : null}
 
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-1 sm:gap-2">
+          <div className="grid grid-cols-2 xl:grid-cols-5 gap-1 sm:gap-2">
             <MetricCard
               icon={Bot}
               value={data.agents.active + data.agents.running + data.agents.paused + data.agents.error}
@@ -293,6 +293,23 @@ function DashboardLegacy() {
               }
             />
             <MetricCard
+              icon={Hash}
+              value={formatTokens(
+                (data.tokens?.monthInputTokens ?? 0) + (data.tokens?.monthOutputTokens ?? 0),
+              )}
+              label="Tokens"
+              to="/costs"
+              description={
+                <span>
+                  {formatTokens(data.tokens?.monthInputTokens ?? 0)} in /{" "}
+                  {formatTokens(data.tokens?.monthOutputTokens ?? 0)} out
+                  {(data.tokens?.monthCachedInputTokens ?? 0) > 0
+                    ? ` · ${formatTokens(data.tokens?.monthCachedInputTokens ?? 0)} cached`
+                    : ""}
+                </span>
+              }
+            />
+            <MetricCard
               icon={ShieldCheck}
               value={data.pendingApprovals + data.budgets.pendingApprovals}
               label="Pending Approvals"
@@ -307,9 +324,12 @@ function DashboardLegacy() {
             />
           </div>
 
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
             <ChartCard title="Run Activity" subtitle="Last 14 days">
               <RunActivityChart activity={data.runActivity} />
+            </ChartCard>
+            <ChartCard title="Spend" subtitle="Last 14 days">
+              <SpendActivityChart activity={data.runActivity} />
             </ChartCard>
             <ChartCard title={`${issueNoun.capPlural} by Priority`} subtitle="Last 14 days">
               <PriorityChart issues={issues ?? []} />

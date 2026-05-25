@@ -61,7 +61,7 @@ import {
 } from "../lib/optimistic-issue-comments";
 import { clearIssueExecutionRun, removeLiveRunById, upsertInterruptedRun } from "../lib/optimistic-issue-runs";
 import { useProjectOrder } from "../hooks/useProjectOrder";
-import { relativeTime, cn, formatDurationMs, formatTokens, visibleRunCostUsd } from "../lib/utils";
+import { relativeTime, cn, formatDurationMs, formatTokens, formatCostUsdCompact, visibleRunCostUsd, readRunTokens } from "../lib/utils";
 import { ApprovalCard } from "../components/ApprovalCard";
 import { InlineEditor } from "../components/InlineEditor";
 import { IssueChatThread, type IssueChatComposerHandle } from "../components/IssueChatThread";
@@ -122,6 +122,7 @@ import {
   Check,
   ChevronRight,
   Copy,
+  DollarSign,
   Eye,
   EyeOff,
   Flag,
@@ -1279,6 +1280,15 @@ export function IssueDetail() {
     enabled: !!issueId,
   });
   const resolvedCompanyId = issue?.companyId ?? selectedCompanyId;
+  // Lightweight cost rollup for the issue tree, so the toolbar burn micro-badge
+  // and properties-rail Cost row both have a single source of truth and don't
+  // each fire their own request. The same data also feeds the activity tab,
+  // which dedupes via React Query.
+  const { data: toolbarCostSummary } = useQuery({
+    queryKey: queryKeys.issues.costSummary(issueId!),
+    queryFn: () => issuesApi.getCostSummary(issueId!),
+    enabled: !!issueId,
+  });
   const commentComposerDisabledReason = useMemo(() => {
     if (!issue?.currentExecutionWorkspace || !isClosedIsolatedExecutionWorkspace(issue.currentExecutionWorkspace)) {
       return null;
@@ -2675,6 +2685,7 @@ export function IssueDetail() {
         childIssues={panelChildIssues}
         onAddSubIssue={openNewSubIssue}
         onUpdate={handleIssuePropertiesUpdate}
+        costSummary={toolbarCostSummary ?? null}
       />
     );
     return () => closePanel();
@@ -2686,6 +2697,7 @@ export function IssueDetail() {
     openPanel,
     panelChildIssues,
     panelIssue,
+    toolbarCostSummary,
   ]);
 
   const goToInboxShortcutArmedRef = useRef(false);
@@ -3468,6 +3480,16 @@ export function IssueDetail() {
           )}
 
           <div className="hidden md:flex items-center gap-1 md:ml-auto shrink-0">
+            {toolbarCostSummary && toolbarCostSummary.costCents > 0 ? (
+              <span
+                className="mr-1 inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 font-mono text-[11px] tabular-nums text-foreground/80"
+                data-pp-issue-toolbar-cost={issue?.id}
+                title={`Spend on this ${issueNoun.singular} tree: $${(toolbarCostSummary.costCents / 100).toFixed(4)} across ${toolbarCostSummary.runCount} run${toolbarCostSummary.runCount === 1 ? "" : "s"}`}
+              >
+                <DollarSign className="h-3 w-3 text-muted-foreground" />
+                {formatCostUsdCompact(toolbarCostSummary.costCents / 100)}
+              </span>
+            ) : null}
             {/* Primary actions: Mark Done + Delete. Both surface as visible
                 labelled buttons so Tyler doesn't have to hunt for them in
                 a popover — he flagged both as "unreachable" in his report.
@@ -4239,6 +4261,7 @@ export function IssueDetail() {
                 onAddSubIssue={openNewSubIssue}
                 onUpdate={(data) => updateIssue.mutate(data)}
                 inline
+                costSummary={toolbarCostSummary ?? null}
               />
             </div>
           </ScrollArea>

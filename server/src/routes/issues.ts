@@ -58,6 +58,7 @@ import {
   agentService,
   companyService,
   companySearchService,
+  costService,
   executionWorkspaceService,
   goalService,
   heartbeatService,
@@ -856,6 +857,7 @@ export function issueRoutes(
   const executionWorkspacesSvc = executionWorkspaceServiceDirect(db);
   const workProductsSvc = workProductService(db);
   const documentsSvc = documentService(db);
+  const costsSvc = costService(db);
   const issueReferencesSvc = issueReferenceService(db);
   const issueThreadInteractionsSvc = issueThreadInteractionService(db);
   const routinesSvc = routineService(db, {
@@ -1744,9 +1746,10 @@ export function issueRoutes(
       offset,
     });
     const issueIds = result.map((issue) => issue.id);
-    const [handoffStates, recoveryActionByIssue] = await Promise.all([
+    const [handoffStates, recoveryActionByIssue, costByIssue] = await Promise.all([
       listSuccessfulRunHandoffStates(db, companyId, issueIds),
       recoveryActionsSvc.listActiveForIssues(companyId, issueIds),
+      costsSvc.byIssueIds(companyId, issueIds),
     ]);
     const actor = getActorInfo(req);
     await Promise.all(result.map(async (issue) => {
@@ -1761,11 +1764,19 @@ export function issueRoutes(
       if (revalidated) recoveryActionByIssue.set(issue.id, revalidated);
       else recoveryActionByIssue.delete(issue.id);
     }));
-    res.json(result.map((issue) => ({
-      ...issue,
-      successfulRunHandoff: handoffStates.get(issue.id) ?? null,
-      activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
-    })));
+    res.json(result.map((issue) => {
+      const cost = costByIssue.get(issue.id);
+      return {
+        ...issue,
+        successfulRunHandoff: handoffStates.get(issue.id) ?? null,
+        activeRecoveryAction: recoveryActionByIssue.get(issue.id) ?? null,
+        // Optional rollup from cost_events keyed by issue_id. Will be undefined
+        // (not zero) when no events tied to this issue exist yet.
+        costCents: cost?.costCents,
+        inputTokens: cost?.inputTokens,
+        outputTokens: cost?.outputTokens,
+      };
+    }));
   });
 
   router.get("/companies/:companyId/issues/count", async (req, res) => {

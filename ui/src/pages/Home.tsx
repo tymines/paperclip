@@ -14,7 +14,7 @@ import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "../components/StatusBadge";
-import { relativeTime } from "../lib/utils";
+import { formatCostUsdCompact, formatTokens, relativeTime } from "../lib/utils";
 import { Target } from "lucide-react";
 import type { Issue } from "@paperclipai/shared";
 
@@ -181,10 +181,31 @@ export function Home() {
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{issue.title}</div>
-                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 truncate text-xs text-muted-foreground">
                         <span className="font-mono">{issue.identifier ?? issue.id.slice(0, 8)}</span>
-                        <span className="mx-1.5">·</span>
+                        <span>·</span>
                         <span>{relativeTime(issue.updatedAt)}</span>
+                        {issue.costCents && issue.costCents > 0 ? (
+                          <>
+                            <span aria-hidden>·</span>
+                            <span
+                              className="rounded-sm bg-muted/40 px-1 font-mono text-[10px] tabular-nums text-foreground/80"
+                              data-pp-waiting-cost={issue.id}
+                              title={`Spend on this issue: $${(issue.costCents / 100).toFixed(2)}`}
+                            >
+                              {formatCostUsdCompact(issue.costCents / 100)}
+                            </span>
+                          </>
+                        ) : null}
+                        {issue.inputTokens || issue.outputTokens ? (
+                          <span
+                            className="rounded-sm bg-muted/30 px-1 font-mono text-[10px] tabular-nums text-foreground/70"
+                            data-pp-waiting-tokens={issue.id}
+                            title="Tokens used on this issue"
+                          >
+                            {formatTokens((issue.inputTokens ?? 0) + (issue.outputTokens ?? 0))}t
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <span className="self-center">

@@ -1,5 +1,6 @@
 import type { DashboardRunActivityDay, HeartbeatRun } from "@paperclipai/shared";
 import { useIssueNoun } from "../hooks/useIssueNoun";
+import { formatCostUsdCompact, formatTokens, readRunTokens, visibleRunCostUsd } from "../lib/utils";
 
 /* ---- Utilities ---- */
 
@@ -63,10 +64,24 @@ type RunChartProps =
   | { activity?: DashboardRunActivityDay[] | null; runs?: never }
   | { runs?: HeartbeatRun[] | null; activity?: never };
 
+function emptyDay(date: string): DashboardRunActivityDay {
+  return {
+    date,
+    succeeded: 0,
+    failed: 0,
+    other: 0,
+    total: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedInputTokens: 0,
+    costCents: 0,
+  };
+}
+
 function aggregateRuns(runs: readonly HeartbeatRun[] = []): DashboardRunActivityDay[] {
   const days = getLast14Days();
   const grouped = new Map<string, DashboardRunActivityDay>();
-  for (const day of days) grouped.set(day, { date: day, succeeded: 0, failed: 0, other: 0, total: 0 });
+  for (const day of days) grouped.set(day, emptyDay(day));
   for (const run of runs) {
     const day = new Date(run.createdAt).toISOString().slice(0, 10);
     const entry = grouped.get(day);
@@ -75,6 +90,13 @@ function aggregateRuns(runs: readonly HeartbeatRun[] = []): DashboardRunActivity
     else if (run.status === "failed" || run.status === "timed_out") entry.failed++;
     else entry.other++;
     entry.total++;
+    const usage = (run.usageJson ?? null) as Record<string, unknown> | null;
+    const result = (run.resultJson ?? null) as Record<string, unknown> | null;
+    const { input, output, cached } = readRunTokens(usage);
+    entry.inputTokens = (entry.inputTokens ?? 0) + input;
+    entry.outputTokens = (entry.outputTokens ?? 0) + output;
+    entry.cachedInputTokens = (entry.cachedInputTokens ?? 0) + cached;
+    entry.costCents = (entry.costCents ?? 0) + Math.round(visibleRunCostUsd(usage, result) * 100);
   }
   return Array.from(grouped.values());
 }
@@ -99,7 +121,7 @@ export function RunActivityChart(props: RunChartProps) {
     <div>
       <div className="flex items-end gap-[3px] h-20">
         {days.map(day => {
-          const entry = grouped.get(day) ?? { date: day, succeeded: 0, failed: 0, other: 0, total: 0 };
+          const entry = grouped.get(day) ?? emptyDay(day);
           const total = entry.total;
           const heightPct = (total / maxValue) * 100;
           return (
@@ -131,7 +153,22 @@ const priorityColors: Record<string, string> = {
 
 const priorityOrder = ["critical", "high", "medium", "low"] as const;
 
-export function PriorityChart({ issues }: { issues: { priority: string; createdAt: Date }[] }) {
+/**
+ * Weight a priority/status chart by issue count (default) or by spend in
+ * USD pulled from the optional Issue.costCents field. `cost` mode silently
+ * degrades to all-zero bars when none of the supplied issues have a cost
+ * — so opting in pre-bridge produces an empty chart rather than a misleading
+ * count chart relabelled as spend.
+ */
+export type IssueChartWeight = "count" | "cost";
+
+export function PriorityChart({
+  issues,
+  weight = "count",
+}: {
+  issues: { priority: string; createdAt: Date; costCents?: number }[];
+  weight?: IssueChartWeight;
+}) {
   const issueNoun = useIssueNoun();
   const days = getLast14Days();
   const grouped = new Map<string, Record<string, number>>();
@@ -140,13 +177,22 @@ export function PriorityChart({ issues }: { issues: { priority: string; createdA
     const day = new Date(issue.createdAt).toISOString().slice(0, 10);
     const entry = grouped.get(day);
     if (!entry) continue;
-    if (issue.priority in entry) entry[issue.priority]++;
+    if (issue.priority in entry) {
+      const value = weight === "cost" ? (issue.costCents ?? 0) : 1;
+      entry[issue.priority] += value;
+    }
   }
 
   const maxValue = Math.max(...Array.from(grouped.values()).map(v => Object.values(v).reduce((a, b) => a + b, 0)), 1);
   const hasData = Array.from(grouped.values()).some(v => Object.values(v).reduce((a, b) => a + b, 0) > 0);
 
-  if (!hasData) return <p className="text-xs text-muted-foreground">No {issueNoun.plural}</p>;
+  if (!hasData) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {weight === "cost" ? `No spend on ${issueNoun.plural}` : `No ${issueNoun.plural}`}
+      </p>
+    );
+  }
 
   return (
     <div>
@@ -196,7 +242,13 @@ const statusLabels: Record<string, string> = {
   backlog: "Backlog",
 };
 
-export function IssueStatusChart({ issues }: { issues: { status: string; createdAt: Date }[] }) {
+export function IssueStatusChart({
+  issues,
+  weight = "count",
+}: {
+  issues: { status: string; createdAt: Date; costCents?: number }[];
+  weight?: IssueChartWeight;
+}) {
   const issueNoun = useIssueNoun();
   const days = getLast14Days();
   const allStatuses = new Set<string>();
@@ -206,8 +258,9 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
     const day = new Date(issue.createdAt).toISOString().slice(0, 10);
     const entry = grouped.get(day);
     if (!entry) continue;
-    entry[issue.status] = (entry[issue.status] ?? 0) + 1;
-    allStatuses.add(issue.status);
+    const value = weight === "cost" ? (issue.costCents ?? 0) : 1;
+    entry[issue.status] = (entry[issue.status] ?? 0) + value;
+    if (value > 0) allStatuses.add(issue.status);
   }
 
   const statusOrder = ["todo", "in_progress", "in_review", "done", "blocked", "cancelled", "backlog"].filter(s => allStatuses.has(s));
@@ -244,6 +297,64 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
   );
 }
 
+/**
+ * Per-day spend overlay sharing the run-activity 14-day window. Bars are
+ * colored by cost intensity. Reads `costCents` off DashboardRunActivityDay,
+ * so it stays empty until cost_events flows.
+ */
+export function SpendActivityChart(props: RunChartProps) {
+  const activity = resolveRunActivity(props);
+  const days = activity.length > 0 ? activity.map((day) => day.date) : getLast14Days();
+  const grouped = new Map(activity.map((day) => [day.date, day]));
+
+  const maxCents = Math.max(...activity.map((v) => v.costCents ?? 0), 1);
+  const hasSpend = activity.some((v) => (v.costCents ?? 0) > 0);
+  const hasTokens = activity.some((v) => (v.inputTokens ?? 0) + (v.outputTokens ?? 0) > 0);
+
+  if (!hasSpend && !hasTokens) {
+    return <p className="text-xs text-muted-foreground">No spend yet</p>;
+  }
+
+  const totalCents = activity.reduce((acc, day) => acc + (day.costCents ?? 0), 0);
+  const totalTokens = activity.reduce(
+    (acc, day) => acc + (day.inputTokens ?? 0) + (day.outputTokens ?? 0),
+    0,
+  );
+
+  return (
+    <div data-pp-chart="spend-activity">
+      <div className="flex items-end gap-[3px] h-20">
+        {days.map((day) => {
+          const entry = grouped.get(day) ?? emptyDay(day);
+          const cents = entry.costCents ?? 0;
+          const heightPct = maxCents > 0 ? (cents / maxCents) * 100 : 0;
+          const dayTokens = (entry.inputTokens ?? 0) + (entry.outputTokens ?? 0);
+          const title = `${day}: ${formatCostUsdCompact(cents / 100)}${
+            dayTokens > 0 ? ` · ${formatTokens(dayTokens)} tokens` : ""
+          }`;
+          return (
+            <div key={day} className="flex-1 h-full flex flex-col justify-end" title={title}>
+              {cents > 0 ? (
+                <div
+                  className="bg-emerald-500/80 rounded-sm"
+                  style={{ height: `${heightPct}%`, minHeight: 2 }}
+                />
+              ) : (
+                <div className="bg-muted/30 rounded-sm" style={{ height: 2 }} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <DateLabels days={days} />
+      <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>Total {formatCostUsdCompact(totalCents / 100)}</span>
+        {totalTokens > 0 ? <span>{formatTokens(totalTokens)} tokens</span> : null}
+      </div>
+    </div>
+  );
+}
+
 export function SuccessRateChart(props: RunChartProps) {
   const activity = resolveRunActivity(props);
   const days = activity.length > 0 ? activity.map((day) => day.date) : getLast14Days();
@@ -256,7 +367,7 @@ export function SuccessRateChart(props: RunChartProps) {
     <div>
       <div className="flex items-end gap-[3px] h-20">
         {days.map(day => {
-          const entry = grouped.get(day) ?? { date: day, succeeded: 0, failed: 0, other: 0, total: 0 };
+          const entry = grouped.get(day) ?? emptyDay(day);
           const rate = entry.total > 0 ? entry.succeeded / entry.total : 0;
           const color = entry.total === 0 ? undefined : rate >= 0.8 ? "#10b981" : rate >= 0.5 ? "#eab308" : "#ef4444";
           return (

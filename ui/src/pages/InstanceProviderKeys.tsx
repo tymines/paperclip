@@ -11,15 +11,17 @@
  * GETs return only last-4 + lastUpdated. Test-connection happens entirely
  * server-side using the stored key so the secret never round-trips.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, KeyRound, Loader2, X } from "lucide-react";
 import { instanceSettingsApi } from "@/api/instanceSettings";
+import { costsApi } from "@/api/costs";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useCompany } from "../context/CompanyContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { cn } from "../lib/utils";
+import { cn, formatCostUsdCompact, formatTokens } from "../lib/utils";
 
 type ProviderKey = "deepseek" | "moonshot" | "openai" | "anthropic" | "gemini";
 
@@ -83,6 +85,7 @@ const PROVIDERS: ProviderMeta[] = [
 
 export function InstanceProviderKeys() {
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { selectedCompanyId, selectedCompany } = useCompany();
   useEffect(() => {
     setBreadcrumbs([{ label: "Instance Settings" }, { label: "Provider API Keys" }]);
   }, [setBreadcrumbs]);
@@ -92,6 +95,32 @@ export function InstanceProviderKeys() {
     queryKey: ["instance", "provider-keys"],
     queryFn: () => instanceSettingsApi.listProviderKeys(),
   });
+
+  // 30-day spend rollup by provider for the currently selected company,
+  // so operators don't need to leave Provider Keys → Costs to see whether
+  // a saved key is actually being used (and how much).
+  const since = useMemo(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 30);
+    return d.toISOString();
+  }, []);
+  const { data: providerSpend } = useQuery({
+    queryKey: ["instance", "provider-keys", "spend", selectedCompanyId ?? "__none__", since],
+    queryFn: () => costsApi.byProvider(selectedCompanyId!, since),
+    enabled: !!selectedCompanyId,
+  });
+  const spendByProviderKey = useMemo(() => {
+    const map = new Map<string, { costCents: number; inputTokens: number; outputTokens: number }>();
+    for (const row of providerSpend ?? []) {
+      const key = row.provider.toLowerCase();
+      const existing = map.get(key) ?? { costCents: 0, inputTokens: 0, outputTokens: 0 };
+      existing.costCents += row.costCents;
+      existing.inputTokens += row.inputTokens;
+      existing.outputTokens += row.outputTokens;
+      map.set(key, existing);
+    }
+    return map;
+  }, [providerSpend]);
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -107,6 +136,15 @@ export function InstanceProviderKeys() {
           only the last four characters + the timestamp. The Providers tab on Costs starts using
           each key within a refresh cycle of saving.
         </p>
+        {selectedCompany ? (
+          <p className="text-xs text-muted-foreground">
+            Spend readouts below are scoped to <span className="font-medium text-foreground">{selectedCompany.name}</span>'s last 30 days.
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Select a company to see per-provider spend.
+          </p>
+        )}
       </header>
 
       <div className="space-y-4">
@@ -119,6 +157,7 @@ export function InstanceProviderKeys() {
               hasKey={status?.hasKey ?? false}
               last4={status?.last4 ?? null}
               updatedAt={status?.updatedAt ?? null}
+              spend30d={spendByProviderKey.get(meta.key) ?? null}
               onSaved={() => queryClient.invalidateQueries({ queryKey: ["instance", "provider-keys"] })}
             />
           );
@@ -133,10 +172,11 @@ interface ProviderRowProps {
   hasKey: boolean;
   last4: string | null;
   updatedAt: string | null;
+  spend30d: { costCents: number; inputTokens: number; outputTokens: number } | null;
   onSaved: () => void;
 }
 
-function ProviderRow({ meta, hasKey, last4, updatedAt, onSaved }: ProviderRowProps) {
+function ProviderRow({ meta, hasKey, last4, updatedAt, spend30d, onSaved }: ProviderRowProps) {
   const [value, setValue] = useState("");
   const [testResult, setTestResult] = useState<
     { ok: boolean; message: string } | null
@@ -205,6 +245,20 @@ function ProviderRow({ meta, hasKey, last4, updatedAt, onSaved }: ProviderRowPro
           {updatedAt ? (
             <p className="mt-0.5 text-[10px] text-muted-foreground">
               Last updated {new Date(updatedAt).toLocaleString()}
+            </p>
+          ) : null}
+          {spend30d && (spend30d.costCents > 0 || spend30d.inputTokens + spend30d.outputTokens > 0) ? (
+            <p
+              className="mt-1 inline-flex items-center gap-2 font-mono text-[11px] tabular-nums text-muted-foreground"
+              data-pp-provider-30d-spend={meta.key}
+              title={`Last 30 days · $${(spend30d.costCents / 100).toFixed(4)} · ${spend30d.inputTokens + spend30d.outputTokens} tokens`}
+            >
+              <span className="text-foreground/80">
+                30d {formatCostUsdCompact(spend30d.costCents / 100)}
+              </span>
+              {spend30d.inputTokens + spend30d.outputTokens > 0 ? (
+                <span>· {formatTokens(spend30d.inputTokens + spend30d.outputTokens)}t</span>
+              ) : null}
             </p>
           ) : null}
         </div>

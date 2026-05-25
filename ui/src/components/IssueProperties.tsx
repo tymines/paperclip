@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { pickTextColorForPillBg } from "@/lib/color-contrast";
 import { Link } from "@/lib/router";
-import type { Issue, IssueLabel, Project, WorkspaceRuntimeService } from "@paperclipai/shared";
+import type { Issue, IssueCostSummary, IssueLabel, Project, WorkspaceRuntimeService } from "@paperclipai/shared";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdapterModel } from "../api/agents";
 import { accessApi } from "../api/access";
@@ -145,6 +145,13 @@ interface IssuePropertiesProps {
   onAddSubIssue?: () => void;
   onUpdate: (data: Record<string, unknown>) => void;
   inline?: boolean;
+  /**
+   * Optional pre-loaded rollup of cost / tokens / runtime tied to the issue
+   * tree (fetched via issuesApi.getCostSummary in the parent). When present
+   * and non-zero, renders a "Cost" row in the properties rail so operators
+   * see burn alongside Assignee / Project / Workspace metadata.
+   */
+  costSummary?: IssueCostSummary | null;
 }
 
 const ISSUE_BLOCKER_SEARCH_LIMIT = 50;
@@ -383,6 +390,7 @@ export function IssueProperties({
   onAddSubIssue,
   onUpdate,
   inline,
+  costSummary,
 }: IssuePropertiesProps) {
   const { selectedCompanyId } = useCompany();
   const issueNoun = useIssueNoun();
@@ -2204,6 +2212,16 @@ export function IssueProperties({
         <PropertyRow label="Updated">
           <span className="text-sm">{timeAgo(issue.updatedAt)}</span>
         </PropertyRow>
+        {costSummary && (costSummary.costCents > 0 || costSummary.runCount > 0) ? (
+          <PropertyRow label="Cost">
+            <span className="text-sm font-mono tabular-nums" data-pp-rail-cost={issue.id}>
+              ${(costSummary.costCents / 100).toFixed(2)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {costSummary.runCount} run{costSummary.runCount === 1 ? "" : "s"}
+            </span>
+          </PropertyRow>
+        ) : null}
       </div>
     </div>
   );

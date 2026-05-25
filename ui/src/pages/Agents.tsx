@@ -13,7 +13,13 @@ import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
 import { EntityRow } from "../components/EntityRow";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
+import {
+  relativeTime,
+  cn,
+  agentRouteRef,
+  agentUrl,
+  formatCostUsdCompact,
+} from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -46,6 +52,44 @@ function getConfiguredModel(agent: Agent): string | null {
   if (typeof value !== "string") return null;
   const model = value.trim();
   return model.length > 0 ? model : null;
+}
+
+/**
+ * Compact monthly-spend chip rendered next to each agent in the list / org
+ * views. Reads pre-aggregated agent.spentMonthlyCents + budgetMonthlyCents;
+ * dims when there's no spend so the chrome stays calm.
+ */
+function AgentSpendChip({ agent }: { agent: Agent }) {
+  const spent = agent.spentMonthlyCents ?? 0;
+  const budget = agent.budgetMonthlyCents ?? 0;
+  if (spent <= 0 && budget <= 0) {
+    return (
+      <span className="font-mono text-[11px] text-muted-foreground/40 tabular-nums" aria-hidden="true">
+        —
+      </span>
+    );
+  }
+  const overBudget = budget > 0 && spent > budget;
+  const pct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : null;
+  const tooltip = budget > 0
+    ? `$${(spent / 100).toFixed(2)} of $${(budget / 100).toFixed(2)} this month`
+    : `$${(spent / 100).toFixed(2)} this month`;
+  return (
+    <span
+      className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums"
+      data-pp-agent-list-spend={agent.id}
+      title={tooltip}
+    >
+      <span className={overBudget ? "text-rose-300" : "text-foreground/80"}>
+        {formatCostUsdCompact(spent / 100)}
+      </span>
+      {pct !== null ? (
+        <span className="hidden text-muted-foreground sm:inline">
+          {" "}/ {pct}%
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean): OrgNode[] {
@@ -207,7 +251,20 @@ export function Agents() {
       </div>
 
       {filtered.length > 0 && (
-        <p className="text-xs text-muted-foreground">{filtered.length} agent{filtered.length !== 1 ? "s" : ""}</p>
+        <p className="text-xs text-muted-foreground">
+          {filtered.length} agent{filtered.length !== 1 ? "s" : ""}
+          {(() => {
+            const totalSpend = filtered.reduce((acc, a) => acc + (a.spentMonthlyCents ?? 0), 0);
+            const totalBudget = filtered.reduce((acc, a) => acc + (a.budgetMonthlyCents ?? 0), 0);
+            if (totalSpend <= 0 && totalBudget <= 0) return null;
+            return (
+              <span className="ml-2 font-mono" data-pp-agents-total-spend>
+                · {formatCostUsdCompact(totalSpend / 100)}
+                {totalBudget > 0 ? ` / ${formatCostUsdCompact(totalBudget / 100)}` : ""} this month
+              </span>
+            );
+          })()}
+        </p>
       )}
 
       {error && <p className="text-sm text-destructive">{error.message}</p>}
@@ -268,6 +325,9 @@ export function Agents() {
                         title={getConfiguredModel(agent) ?? undefined}
                       >
                         {getConfiguredModel(agent) ?? "—"}
+                      </span>
+                      <span className="w-24 flex justify-end">
+                        <AgentSpendChip agent={agent} />
                       </span>
                       <span className="text-xs text-muted-foreground w-16 text-right">
                         {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
@@ -377,6 +437,9 @@ function OrgTreeNode({
                   title={getConfiguredModel(agent) ?? undefined}
                 >
                   {getConfiguredModel(agent) ?? "—"}
+                </span>
+                <span className="w-24 flex justify-end">
+                  <AgentSpendChip agent={agent} />
                 </span>
                 <span className="text-xs text-muted-foreground w-16 text-right">
                   {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
