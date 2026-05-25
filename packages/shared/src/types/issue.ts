@@ -496,6 +496,15 @@ export interface Issue {
   lastExternalCommentAt?: Date | null;
   lastActivityAt?: Date | null;
   isUnreadForMe?: boolean;
+  /**
+   * Optional pre-aggregated cost rollup for the issue (sum of cost_events
+   * tied to this issue or its runs). Populated when the issues list is
+   * fetched with cost summaries; undefined means "not loaded" — render as
+   * "—" or omit, not as $0.
+   */
+  costCents?: number;
+  inputTokens?: number;
+  outputTokens?: number;
   createdAt: Date;
   updatedAt: Date;
 }

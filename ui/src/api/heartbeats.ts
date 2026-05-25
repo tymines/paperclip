@@ -36,6 +36,12 @@ export interface ActiveRunForIssue {
   lastUsefulActionAt?: string | Date | null;
   nextAction?: string | null;
   outputSilence?: HeartbeatRun["outputSilence"];
+  /**
+   * Live snapshot of the bridge's usage payload for the in-flight run, so
+   * IssueDetail / AgentStrip can show burn before the run finishes. Optional
+   * because legacy adapters may not emit it.
+   */
+  usageJson?: Record<string, unknown> | null;
 }
 
 export interface LiveRunForIssue {
@@ -60,6 +66,12 @@ export interface LiveRunForIssue {
   lastUsefulActionAt?: string | null;
   nextAction?: string | null;
   outputSilence?: HeartbeatRun["outputSilence"];
+  /**
+   * Live snapshot of the bridge's usage payload for the in-flight run, so
+   * AgentStrip and IssueDetail can show burn before the run finishes.
+   * Optional because legacy adapters may not emit it.
+   */
+  usageJson?: Record<string, unknown> | null;
 }
 
 export interface WatchdogDecisionInput {

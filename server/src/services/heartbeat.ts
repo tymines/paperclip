@@ -915,6 +915,7 @@ const heartbeatRunIssueSummaryColumns = {
   lastOutputStream: heartbeatRuns.lastOutputStream,
   lastOutputBytes: heartbeatRuns.lastOutputBytes,
   issueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`.as("issueId"),
+  usageJson: heartbeatRuns.usageJson,
 } as const;
 
 function appendExcerpt(prev: string, chunk: string) {

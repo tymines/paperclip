@@ -163,6 +163,37 @@ export function visibleRunCostUsd(
   return readRunCostUsd(usage) || readRunCostUsd(result);
 }
 
+/**
+ * Read input/output/cached token counts from a usage payload, tolerating the
+ * camelCase fields emitted by the bridge as well as the snake_case fields
+ * adapters sometimes emit directly.
+ */
+export function readRunTokens(
+  usage: Record<string, unknown> | null,
+): { input: number; output: number; cached: number; total: number } {
+  if (!usage) return { input: 0, output: 0, cached: 0, total: 0 };
+  const pick = (...keys: string[]): number => {
+    for (const key of keys) {
+      const value = usage[key];
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+    }
+    return 0;
+  };
+  const input = pick("inputTokens", "input_tokens");
+  const output = pick("outputTokens", "output_tokens");
+  const cached = pick("cachedInputTokens", "cached_input_tokens", "cache_read_input_tokens");
+  return { input, output, cached, total: input + output };
+}
+
+/** Compact USD micro-text like "$0.04" / "$1.20" / "$12" — for tight chrome. */
+export function formatCostUsdCompact(usd: number): string {
+  if (!Number.isFinite(usd) || usd === 0) return "$0";
+  if (usd < 0.01) return "<$0.01";
+  if (usd < 10) return `$${usd.toFixed(2)}`;
+  if (usd < 100) return `$${usd.toFixed(1)}`;
+  return `$${Math.round(usd).toLocaleString("en-US")}`;
+}
+
 export function financeEventKindDisplayName(eventKind: FinanceEventKind): string {
   const map: Record<FinanceEventKind, string> = {
     inference_charge: "Inference charge",
