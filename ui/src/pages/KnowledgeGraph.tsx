@@ -1000,7 +1000,7 @@ export function KnowledgeGraph() {
   const [pathEndNode, setPathEndNode] = useState<GraphNode | null>(null);
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [collapsedHubs, setCollapsedHubs] = useState<Set<string>>(new Set());
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(IS_MOBILE);
   const [zoomLevel, setZoomLevel] = useState<ZoomLevel>("mid");
   const [physicsReady, setPhysicsReady] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>("standard");
@@ -1993,10 +1993,11 @@ export function KnowledgeGraph() {
       {IS_MOBILE && sidebarCollapsed && (
         <button
           onClick={() => setSidebarCollapsed(false)}
-          className="absolute left-2 z-20 flex h-8 w-8 items-center justify-center rounded-md border border-gray-800 bg-gray-900/90 backdrop-blur-sm"
-          style={{ top: "52px" }}
+          aria-label="Show legend"
+          className="absolute left-2 z-30 flex h-9 w-9 items-center justify-center rounded-md border border-gray-700 bg-gray-900/90 shadow-md backdrop-blur-sm"
+          style={{ top: viewMode === "neuromorphic" ? "84px" : "44px" }}
         >
-          <PanelLeft className="h-4 w-4 text-gray-400" />
+          <PanelLeft className="h-4 w-4 text-gray-300" />
         </button>
       )}
 
@@ -2046,17 +2047,33 @@ export function KnowledgeGraph() {
         )}
       </div>
 
-      {/* Mini-map */}
-      <div
-        className="absolute bottom-20 left-4 z-10 rounded-md border border-gray-800 overflow-hidden shadow-lg transition-transform duration-200"
-        style={IS_MOBILE && sidebarCollapsed ? { transform: "translateX(calc(-100% - 20px))" } : {}}
-      >
-        <div className="bg-gray-900/80 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-gray-600">Map</div>
-        <Minimap canvasRef={minimapCanvasRef} onNavigate={handleMinimapNavigate} />
-      </div>
+      {/* Mini-map — desktop only; on mobile it eats too much canvas */}
+      {!IS_MOBILE && (
+        <div className="absolute bottom-20 left-4 z-10 rounded-md border border-gray-800 overflow-hidden shadow-lg">
+          <div className="bg-gray-900/80 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-widest text-gray-600">Map</div>
+          <Minimap canvasRef={minimapCanvasRef} onNavigate={handleMinimapNavigate} />
+        </div>
+      )}
 
-      {/* Neuromorphic Stats HUD */}
-      {viewMode === "neuromorphic" && (
+      {/* Neuromorphic Stats HUD — mobile: compact pill below toolbar so it
+          doesn't overlap the canvas centerpoint. */}
+      {viewMode === "neuromorphic" && IS_MOBILE && (
+        <div className="pointer-events-none absolute z-10 rounded-md border border-purple-800/60 bg-gray-950/95 backdrop-blur-sm shadow-[0_0_12px_rgba(168,85,247,0.2)]" style={{ top: "42px", left: "52px", right: "8px" }}>
+          <div className="flex items-center justify-between gap-2 px-2 py-1 text-[10px]">
+            <span className="flex items-center gap-1">
+              <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" />
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-purple-300">Neural</span>
+            </span>
+            <span className="flex items-center gap-0.5"><span className="text-gray-500">N</span><span className="tabular-nums text-gray-200">{neuroStats.neurons}</span></span>
+            <span className="flex items-center gap-0.5"><span className="text-gray-500">S</span><span className="tabular-nums text-gray-200">{neuroStats.synapses}</span></span>
+            <span className="flex items-center gap-0.5"><span className="text-gray-500">A</span><span className="tabular-nums text-green-400">{neuroStats.active}</span></span>
+            <span className="flex items-center gap-0.5"><span className="text-gray-500">R</span><span className="tabular-nums text-cyan-400">{neuroStats.rate}</span></span>
+          </div>
+        </div>
+      )}
+
+      {/* Neuromorphic Stats HUD — desktop full panel */}
+      {viewMode === "neuromorphic" && !IS_MOBILE && (
         <div className="absolute right-4 top-4 z-10 w-52 rounded-md border border-purple-800/60 bg-gray-950/90 backdrop-blur-sm shadow-[0_0_20px_rgba(168,85,247,0.15)]">
           <div className="flex items-center gap-2 border-b border-purple-900/40 px-3 py-2">
             <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-purple-400" />
@@ -2307,9 +2324,11 @@ export function KnowledgeGraph() {
         </div>
       )}
 
-      <div className={`pointer-events-none absolute bottom-20 z-10 text-[10px] text-gray-600 text-right leading-relaxed ${selectedNode ? "right-84" : "right-4"}`}>
-        Drag to rotate · Scroll to zoom · Click to select<br />Shift+click second node to find path
-      </div>
+      {!IS_MOBILE && (
+        <div className={`pointer-events-none absolute bottom-20 z-10 text-[10px] text-gray-600 text-right leading-relaxed ${selectedNode ? "right-84" : "right-4"}`}>
+          Drag to rotate · Scroll to zoom · Click to select<br />Shift+click second node to find path
+        </div>
+      )}
 
       {/* Time-travel slider */}
       <div className="absolute bottom-0 left-0 right-0 z-20 flex h-14 items-center gap-3 border-t border-gray-800 bg-gray-900/95 px-4 backdrop-blur-sm">
