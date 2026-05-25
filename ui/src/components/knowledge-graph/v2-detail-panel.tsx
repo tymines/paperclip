@@ -78,7 +78,7 @@ export function KnowledgeGraphDetailPanel({
   if (mobile) {
     return (
       <div
-        className="pointer-events-auto absolute z-30 left-2 right-2"
+        className="pointer-events-none absolute z-30 left-2 right-2"
         style={{
           bottom: visible
             ? "calc(env(safe-area-inset-bottom) + 12px)"
@@ -100,9 +100,12 @@ export function KnowledgeGraphDetailPanel({
     );
   }
 
+  // Outer wrapper is pointer-events-none so OrbitControls keeps receiving
+  // drag/scroll events through the 320px panel area. The Related-concept
+  // chips opt back in to pointer events on themselves so they stay clickable.
   return (
     <div
-      className="pointer-events-auto absolute z-30"
+      className="pointer-events-none absolute z-30"
       style={{
         top: "56px",
         right: 0,
@@ -208,7 +211,7 @@ function DetailContent({
                 key={rel.id}
                 type="button"
                 onClick={() => onRelatedClick?.(rel.id)}
-                className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-gray-300 transition-colors hover:border-white/30 hover:text-white"
+                className="pointer-events-auto rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-gray-300 transition-colors hover:border-white/30 hover:text-white"
                 title={rel.label}
               >
                 {rel.label.length > 28 ? `${rel.label.slice(0, 27)}…` : rel.label}

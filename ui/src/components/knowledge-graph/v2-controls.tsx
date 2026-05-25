@@ -28,17 +28,19 @@ export function KnowledgeGraphControls({
   onReset,
   mobile = false,
 }: KnowledgeGraphControlsProps) {
+  // Outer wrapper is pointer-events-none so OrbitControls keeps receiving
+  // drag/scroll/touch events through the panel's bounding box. Each
+  // button re-enables pointer-events on itself so clicks still register.
   return (
     <div
       role="toolbar"
       aria-label="Camera controls"
-      className="pointer-events-auto absolute z-20 flex flex-col gap-1"
+      className="pointer-events-none absolute z-20 flex flex-col gap-1"
       style={{
         right: mobile ? "12px" : `max(20px, env(safe-area-inset-right))`,
         bottom: mobile
           ? "calc(env(safe-area-inset-bottom) + 88px)"
           : `max(84px, env(safe-area-inset-bottom))`,
-        // Spec §5 visual treatment
         padding: "8px",
         borderRadius: "18px",
         background: "rgba(18, 19, 23, 0.78)",
@@ -80,7 +82,7 @@ function ControlButton({
       onClick={onClick}
       title={title}
       aria-label={title}
-      className="group grid h-11 w-11 place-items-center rounded-xl text-gray-300 transition-[transform,background] duration-150 ease-out hover:bg-white/10 hover:text-white active:translate-y-0 hover:-translate-y-px"
+      className="pointer-events-auto group grid h-11 w-11 place-items-center rounded-xl text-gray-300 transition-[transform,background] duration-150 ease-out hover:bg-white/10 hover:text-white active:translate-y-0 hover:-translate-y-px"
     >
       {children}
     </button>
