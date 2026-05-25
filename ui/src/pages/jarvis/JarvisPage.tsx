@@ -167,7 +167,13 @@ export function JarvisPage() {
         return stored;
       }
     } catch {}
-    return "browser-native";
+    // Default to premium so the first speak() call (e.g. the auto-fired
+    // briefing) attempts ElevenLabs. /jarvis/voice/tiers downgrades to the
+    // top-available tier shortly after mount if the key isn't actually
+    // configured — but optimistically picking premium means a configured
+    // key produces an ElevenLabs voice on the very first turn instead of
+    // a one-shot of robotic browser TTS.
+    return "premium";
   });
   const [voiceCharacter, setVoiceCharacter] = useState<JarvisVoiceCharacter>(() => {
     try {
@@ -433,8 +439,31 @@ export function JarvisPage() {
 
   const orb = useOrbAudio({ reactorRef, tickGroupRef, state });
 
+  // Tracks the actual TTS provider used by the most recent speak() call so
+  // the "Voice Models" status row is honest. starts at null (unknown) and
+  // updates to "elevenlabs" or "browser-tts" via onProviderChange.
+  const [voiceProvider, setVoiceProvider] = useState<{
+    name: "elevenlabs" | "browser-tts" | null;
+    fallbackReason?: string;
+    fallbackStatus?: number;
+  }>({ name: null });
+
   const voice = useJarvisVoice({
     orb,
+    companyId: selectedCompanyId,
+    voiceTier,
+    voiceId: voiceCharacter.voiceId,
+    onProviderChange: (provider, detail) => {
+      if (provider === "elevenlabs") {
+        setVoiceProvider({ name: "elevenlabs" });
+      } else if (provider === "browser-tts") {
+        setVoiceProvider({
+          name: "browser-tts",
+          fallbackReason: detail?.reason,
+          fallbackStatus: detail?.status,
+        });
+      }
+    },
     onTranscript: (transcript, isFinal) => {
       // Render interim transcript as a live user bubble; promote to permanent
       // on the final.
@@ -1047,7 +1076,31 @@ export function JarvisPage() {
               <div className="jarvis-sys-list">
                 <SysRow label="Listening" value="Ready" tone="ok" />
                 <SysRow label="Thinking Engine" value="Online" tone="ok" />
-                <SysRow label="Voice Models" value="Browser TTS" tone="ok" />
+                <SysRow
+                  label="Voice Models"
+                  value={
+                    voiceProvider.name === "elevenlabs"
+                      ? "ElevenLabs Turbo v2.5"
+                      : voiceProvider.name === "browser-tts"
+                        ? voiceProvider.fallbackReason && voiceProvider.fallbackStatus
+                          ? `Browser TTS · ${voiceProvider.fallbackReason} (${voiceProvider.fallbackStatus})`
+                          : voiceProvider.fallbackReason
+                            ? `Browser TTS · ${voiceProvider.fallbackReason}`
+                            : voiceProvider.fallbackStatus
+                              ? `Browser TTS · fallback (HTTP ${voiceProvider.fallbackStatus})`
+                              : "Browser TTS"
+                      : voiceTier === "premium" || voiceTier === "standard"
+                        ? "ElevenLabs Turbo v2.5 (idle)"
+                        : "Browser TTS"
+                  }
+                  tone={
+                    voiceProvider.name === "elevenlabs"
+                      ? "gold"
+                      : voiceProvider.name === "browser-tts"
+                        ? "warm"
+                        : "ok"
+                  }
+                />
                 <SysRow label="Knowledge Base" value="3,412 docs" tone="ok" />
                 <SysRow
                   label="Voice Tier"

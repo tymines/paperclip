@@ -478,6 +478,123 @@ export function jarvisRoutes(db: Db) {
   });
 
   /**
+   * Streaming TTS proxy — synthesizes `text` via ElevenLabs Turbo v2.5 and
+   * pipes the audio bytes (mp3) directly to the browser. The client wraps
+   * the stream in an HTMLAudioElement (or MediaSource) and only falls back
+   * to browser SpeechSynthesis when this endpoint returns a non-2xx.
+   *
+   * Upstream errors are surfaced with their original status (401/402 -> the
+   * key is dead or out of quota; the UI uses this to switch the "Voice
+   * Models" badge to BROWSER TTS with an explanation). 501 means no key is
+   * configured at all.
+   */
+  const ttsSchema = z.object({
+    text: z.string().min(1).max(4_000),
+    voiceId: z.string().min(1).max(80).optional(),
+    modelId: z.string().min(1).max(80).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/voice/tts",
+    validate(ttsSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const { text, voiceId, modelId } = req.body as z.infer<typeof ttsSchema>;
+
+      const elevenlabsKey = await getRawKey("elevenlabs").catch(() => null);
+      if (!elevenlabsKey) {
+        res.status(501).json({
+          error: "elevenlabs_not_configured",
+          message:
+            "No ElevenLabs key is configured. Add one in Fleet → Provider Keys, or the client will fall back to browser TTS.",
+        });
+        return;
+      }
+
+      const vid = (voiceId && voiceId.trim()) || "pNInz6obpgDQGcFmaJgB"; // Adam
+      const mid = (modelId && modelId.trim()) || "eleven_turbo_v2_5";
+
+      // ElevenLabs' streaming endpoint returns chunked mp3. We pipe the
+      // upstream Response.body straight through res so the browser starts
+      // playing while the rest of the synthesis is still arriving.
+      let upstream: Response;
+      try {
+        upstream = await fetch(
+          `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(vid)}/stream?output_format=mp3_44100_128`,
+          {
+            method: "POST",
+            headers: {
+              "xi-api-key": elevenlabsKey,
+              "Content-Type": "application/json",
+              Accept: "audio/mpeg",
+            },
+            body: JSON.stringify({
+              text,
+              model_id: mid,
+              voice_settings: {
+                stability: 0.5,
+                similarity_boost: 0.75,
+                style: 0,
+                use_speaker_boost: true,
+              },
+            }),
+          },
+        );
+      } catch (err) {
+        logger.warn({ err, companyId }, "jarvis/voice/tts: upstream fetch failed");
+        res.status(502).json({
+          error: "elevenlabs_unreachable",
+          message: (err as Error).message,
+        });
+        return;
+      }
+
+      if (!upstream.ok || !upstream.body) {
+        const detail = await upstream.text().catch(() => "");
+        logger.warn(
+          { companyId, status: upstream.status, detail: detail.slice(0, 200) },
+          "jarvis/voice/tts: elevenlabs returned non-2xx",
+        );
+        // Mirror upstream status so the client can distinguish 401 (bad
+        // key) / 402 (out of quota) / 5xx (transient) and decide whether
+        // to surface a permanent fallback or retry.
+        res.status(upstream.status).json({
+          error: "elevenlabs_upstream_error",
+          status: upstream.status,
+          detail: detail.slice(0, 500),
+        });
+        return;
+      }
+
+      res.status(200);
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Voice-Provider", "elevenlabs");
+      res.setHeader("X-Voice-Model", mid);
+      res.setHeader("X-Voice-Id", vid);
+
+      // Stream the chunked mp3 body straight through to the client. Using
+      // a manual reader instead of Readable.fromWeb keeps the dep surface
+      // tight and works the same on Node 18+ and 20+.
+      const reader = upstream.body.getReader();
+      try {
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          if (value) res.write(Buffer.from(value));
+        }
+        res.end();
+      } catch (err) {
+        logger.warn({ err, companyId }, "jarvis/voice/tts: stream pipe failed");
+        try {
+          res.end();
+        } catch {}
+      }
+    },
+  );
+
+  /**
    * Mints a short-lived OpenAI Realtime ephemeral key so the browser can
    * open a WebRTC session for full-duplex barge-in detection without
    * exposing the company's long-lived openai_realtime secret.

@@ -238,6 +238,24 @@ export const jarvisApi = {
   ): Promise<{ elevenlabsConfigured: boolean; previewAudioUrl: string | null }> =>
     api.post(`/companies/${companyId}/jarvis/voice/preview`, body),
 
+  /**
+   * Streams ElevenLabs Turbo v2.5 audio for the given text. Returns the raw
+   * fetch Response so the caller can pipe `body` into a MediaSource / Audio
+   * element without buffering the whole clip. Resolves with the Response
+   * regardless of status — callers inspect `.ok` and surface non-2xx as a
+   * fallback signal to browser TTS.
+   */
+  ttsStream: (
+    companyId: string,
+    body: { text: string; voiceId?: string; modelId?: string },
+  ): Promise<Response> =>
+    fetch(`/api/companies/${companyId}/jarvis/voice/tts`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+
   /** Probes what Augi can actually do on this host. ?refresh=1 re-probes. */
   capabilities: (companyId: string, refresh = false): Promise<JarvisCapabilitiesResponse> =>
     api.get(`/companies/${companyId}/jarvis/capabilities${refresh ? "?refresh=1" : ""}`),
