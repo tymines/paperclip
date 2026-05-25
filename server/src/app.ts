@@ -41,6 +41,7 @@ import {
 import { llmRoutes } from "./routes/llms.js";
 import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
+import { bulkUploadRoutes } from "./routes/bulk-upload.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
@@ -214,6 +215,7 @@ export async function createApp(
   api.use(roomRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db));
+  api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(userProfileRoutes(db));
   api.use(sidebarBadgeRoutes(db));
   api.use(sidebarPreferenceRoutes(db));
