@@ -4,6 +4,7 @@ import { useCompany } from "@/context/CompanyContext";
 import {
   jarvisApi,
   type JarvisCapability,
+  type JarvisConversationTurn,
   type JarvisResponseType,
   type JarvisVoiceCharacter,
   type JarvisVoiceTier,
@@ -17,7 +18,6 @@ import { VoiceCharacterModal } from "./VoiceCharacterModal";
 import {
   MOCK_BRIEFING,
   MOCK_CAPABILITIES,
-  MOCK_INITIAL_CHAT,
   type JarvisChatMessage,
 } from "./mock-data";
 import "./Jarvis.css";
@@ -137,9 +137,11 @@ export function JarvisPage() {
   const interimMsgIdRef = useRef<string | null>(null);
 
   const [state, setState] = useState<HudState>("idle");
-  const [messages, setMessages] = useState<JarvisChatMessage[]>(
-    MOCK_INITIAL_CHAT
-  );
+  // Start empty — real history is fetched from /api/companies/:id/jarvis/conversations
+  // on mount. Empty state ("Tap the mic or type to start") is rendered when
+  // there is no prior conversation for this user.
+  const [messages, setMessages] = useState<JarvisChatMessage[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [composer, setComposer] = useState("");
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [tiers, setTiers] = useState<JarvisVoiceTier[] | null>(null);
@@ -192,6 +194,29 @@ export function JarvisPage() {
     void refreshCapabilities(false);
   }, [refreshCapabilities]);
 
+  // Hydrate the chat panel with the user's real conversation history. If
+  // the endpoint 404s on older servers, silently fall through to the empty
+  // state — never resurrect the mock chat.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    let cancelled = false;
+    setHistoryLoaded(false);
+    jarvisApi
+      .conversations(selectedCompanyId, 20)
+      .then((resp) => {
+        if (cancelled) return;
+        setMessages(conversationsToMessages(resp.conversations));
+        setHistoryLoaded(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setHistoryLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId]);
+
   const onVoiceCharacterSelect = useCallback((voice: JarvisVoiceCharacter) => {
     setVoiceCharacter(voice);
     try {
@@ -201,7 +226,10 @@ export function JarvisPage() {
   }, []);
 
   // Fetch tier availability + pick the highest available as default if the
-  // user hasn't already chosen one (or their previous choice is now stale).
+  // user hasn't explicitly chosen one. We treat "no stored choice" and the
+  // legacy default "browser-native" the same way — both auto-upgrade to the
+  // top available tier (Premium when ElevenLabs + Realtime keys are present)
+  // so Tyler isn't stuck on Free after wiring up the keys.
   useEffect(() => {
     if (!selectedCompanyId) return;
     let cancelled = false;
@@ -212,10 +240,15 @@ export function JarvisPage() {
         setTiers(resp.tiers);
         try {
           const stored = window.localStorage.getItem(TIER_STORAGE_KEY) as JarvisVoiceTierId | null;
+          const userPickedKey = `${TIER_STORAGE_KEY}.userPicked`;
+          const userPicked = window.localStorage.getItem(userPickedKey) === "1";
           const storedTier = resp.tiers.find((t) => t.id === stored);
-          if (!storedTier || !storedTier.available) {
-            const top = resp.tiers.find((t) => t.available);
-            if (top) setVoiceTier(top.id);
+          const top = resp.tiers.find((t) => t.available);
+          // Auto-upgrade if: no stored tier, stored tier is unavailable, or
+          // user never explicitly picked (so the previous default came from
+          // the localStorage seed rather than a real choice).
+          if (!userPicked || !storedTier || !storedTier.available) {
+            if (top && top.id !== voiceTier) setVoiceTier(top.id);
           }
         } catch {}
       })
@@ -226,12 +259,16 @@ export function JarvisPage() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCompanyId]);
 
   const onTierSelect = useCallback((id: JarvisVoiceTierId) => {
     setVoiceTier(id);
     try {
       window.localStorage.setItem(TIER_STORAGE_KEY, id);
+      // Mark this as a real user choice so the auto-upgrade pass on next
+      // mount honors the pick instead of bumping back to top-available.
+      window.localStorage.setItem(`${TIER_STORAGE_KEY}.userPicked`, "1");
     } catch {}
   }, []);
 
@@ -839,12 +876,20 @@ export function JarvisPage() {
               </button>
             </div>
             <div className="jarvis-chat-scroll" ref={chatScrollRef}>
-              {messages.map((m) => (
-                <div key={m.id} className={`jarvis-msg ${m.author}`}>
-                  <span className="jarvis-msg-author">{m.authorLabel}</span>
-                  <div className="jarvis-msg-bubble">{m.text}</div>
+              {messages.length === 0 ? (
+                <div className="jarvis-chat-empty">
+                  {historyLoaded
+                    ? "Tap the mic or type to start. Your conversation lives here once you say something."
+                    : "Loading conversation…"}
                 </div>
-              ))}
+              ) : (
+                messages.map((m) => (
+                  <div key={m.id} className={`jarvis-msg ${m.author}`}>
+                    <span className="jarvis-msg-author">{m.authorLabel}</span>
+                    <div className="jarvis-msg-bubble">{m.text}</div>
+                  </div>
+                ))
+              )}
             </div>
           </section>
 
@@ -988,5 +1033,36 @@ function SysRow({
 function formatNow() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function conversationsToMessages(turns: JarvisConversationTurn[]): JarvisChatMessage[] {
+  const out: JarvisChatMessage[] = [];
+  for (const t of turns) {
+    const stamp = formatStampFromIso(t.createdAt);
+    out.push({
+      id: `u-${t.id}`,
+      author: "user",
+      authorLabel: `You · ${stamp}`,
+      text: t.userTranscript,
+      timestamp: stamp,
+    });
+    out.push({
+      id: `r-${t.id}`,
+      author: "agent",
+      authorLabel: `Jarvis · ${stamp}`,
+      text: t.agentReply,
+      timestamp: stamp,
+    });
+  }
+  return out;
+}
+
+function formatStampFromIso(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  } catch {
+    return "";
+  }
 }
 

@@ -1263,6 +1263,14 @@
   background: var(--jarvis-line-strong);
   border-radius: 3px;
 }
+.jarvis-chat-empty {
+  font-family: var(--jarvis-font-body);
+  font-size: 12.5px;
+  color: var(--jarvis-muted);
+  padding: 24px 10px;
+  text-align: center;
+  font-style: italic;
+}
 .jarvis-msg { display: flex; flex-direction: column; gap: 4px; max-width: 92%; }
 .jarvis-msg-author {
   font-family: var(--jarvis-font-data);

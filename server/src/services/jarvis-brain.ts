@@ -252,13 +252,29 @@ interface LlmCallResult {
 }
 
 /**
- * Tries DeepSeek first (cheap + fast, ~250ms first token), falls back to
- * OpenAI gpt-4o-mini. Returns null if neither key is configured.
+ * Tries Anthropic Claude first (Augi-as-brain), then DeepSeek, then OpenAI.
+ * Returns null if no provider key is configured or all of them fail. The
+ * brain falls back to a deterministic, data-grounded template in that case.
  */
 async function callLlm(
   systemPrompt: string,
   userPrompt: string,
 ): Promise<LlmCallResult | null> {
+  const anthropicKey = await getRawKey("anthropic").catch(() => null);
+  if (anthropicKey) {
+    try {
+      const result = await fetchAnthropicMessage({
+        apiKey: anthropicKey,
+        model: "claude-opus-4-7",
+        systemPrompt,
+        userPrompt,
+      });
+      if (result) return { ...result, provider: "anthropic" };
+    } catch (err) {
+      logger.warn({ err }, "jarvis-brain: anthropic call failed");
+    }
+  }
+
   const deepseekKey = await getRawKey("deepseek").catch(() => null);
   if (deepseekKey) {
     try {
@@ -292,6 +308,57 @@ async function callLlm(
   }
 
   return null;
+}
+
+/**
+ * Anthropic /v1/messages call. Kept separate from the OpenAI-shaped helper
+ * because the request/response payloads differ (system as top-level field,
+ * content array, etc.).
+ */
+async function fetchAnthropicMessage({
+  apiKey,
+  model,
+  systemPrompt,
+  userPrompt,
+}: {
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  userPrompt: string;
+}): Promise<{ reply: string; model: string } | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+        max_tokens: 400,
+        temperature: 0.4,
+      }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    const text = (json.content ?? [])
+      .filter((b) => b.type === "text" && typeof b.text === "string")
+      .map((b) => b.text as string)
+      .join("\n")
+      .trim();
+    if (!text) return null;
+    return { reply: text, model };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchChatCompletion({
