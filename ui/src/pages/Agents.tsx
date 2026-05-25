@@ -1,12 +1,13 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, type MouseEvent } from "react";
 import { Link, useNavigate, useLocation } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useSidebar } from "../context/SidebarContext";
+import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
 import { StatusBadge } from "../components/StatusBadge";
 import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
@@ -23,7 +24,7 @@ import {
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Bot, Plus, List, GitBranch, SlidersHorizontal } from "lucide-react";
+import { Bot, Plus, List, GitBranch, SlidersHorizontal, Pause, Play } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
 
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
@@ -92,6 +93,44 @@ function AgentSpendChip({ agent }: { agent: Agent }) {
   );
 }
 
+const PAUSE_RESUME_ELIGIBLE = new Set(["paused", "idle", "active", "running"]);
+
+function FleetPauseResumeButton({
+  isPaused,
+  onClick,
+  disabled,
+}: {
+  isPaused: boolean;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (disabled) return;
+    onClick();
+  };
+  const label = isPaused ? "Resume" : "Pause";
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={disabled}
+      aria-label={`${label} agent`}
+      title={label}
+      className={cn(
+        "inline-flex items-center justify-center gap-1.5 border border-border bg-background text-xs transition-colors",
+        "min-h-[44px] min-w-[44px] px-2 sm:min-h-9 sm:min-w-0 sm:h-9 sm:px-2.5",
+        "hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed",
+      )}
+      data-pp-fleet-pause-resume={isPaused ? "resume" : "pause"}
+    >
+      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+      <span className="hidden sm:inline">{label}</span>
+    </button>
+  );
+}
+
 function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean): OrgNode[] {
   return nodes
     .reduce<OrgNode[]>((acc, node) => {
@@ -108,9 +147,12 @@ export function Agents() {
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialogActions();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const { pushToast } = useToastActions();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
   const { isMobile } = useSidebar();
+  const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
   const pathSegment = location.pathname.split("/").pop() ?? "all";
   const tab: FilterTab = (pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error") ? pathSegment : "all";
   const [view, setView] = useState<"list" | "org">("org");
@@ -158,6 +200,71 @@ export function Agents() {
     for (const a of agents ?? []) map.set(a.id, a);
     return map;
   }, [agents]);
+
+  const pauseResumeAgent = useMutation({
+    mutationFn: ({ agent, action }: { agent: Agent; action: "pause" | "resume" }) =>
+      action === "pause"
+        ? agentsApi.pause(agent.id, selectedCompanyId ?? undefined)
+        : agentsApi.resume(agent.id, selectedCompanyId ?? undefined),
+    onMutate: ({ agent, action }) => {
+      setPendingAgentIds((current) => {
+        const next = new Set(current);
+        next.add(agent.id);
+        return next;
+      });
+      if (selectedCompanyId) {
+        const key = queryKeys.agents.list(selectedCompanyId);
+        const previous = queryClient.getQueryData<Agent[]>(key);
+        if (previous) {
+          const nextStatus: Agent["status"] = action === "pause" ? "paused" : "idle";
+          const now = new Date();
+          queryClient.setQueryData<Agent[]>(
+            key,
+            previous.map((a) =>
+              a.id === agent.id
+                ? ({
+                    ...a,
+                    status: nextStatus,
+                    pausedAt: action === "pause" ? now : null,
+                    pauseReason: action === "pause" ? a.pauseReason : null,
+                  } satisfies Agent)
+                : a,
+            ),
+          );
+        }
+        return { previous };
+      }
+      return {};
+    },
+    onError: (error, { agent, action }, context) => {
+      if (selectedCompanyId && context && "previous" in context && context.previous) {
+        queryClient.setQueryData(queryKeys.agents.list(selectedCompanyId), context.previous);
+      }
+      pushToast({
+        title: action === "pause" ? "Could not pause agent" : "Could not resume agent",
+        body: error instanceof Error ? error.message : agent.name,
+        tone: "error",
+      });
+    },
+    onSuccess: (_data, { agent, action }) => {
+      pushToast({
+        title: action === "pause" ? "Agent paused" : "Agent resumed",
+        body: agent.name,
+        tone: "success",
+      });
+    },
+    onSettled: (_data, _error, { agent }) => {
+      setPendingAgentIds((current) => {
+        const next = new Set(current);
+        next.delete(agent.id);
+        return next;
+      });
+      if (selectedCompanyId) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.agents.list(selectedCompanyId) });
+        queryClient.invalidateQueries({ queryKey: queryKeys.org(selectedCompanyId) });
+      }
+    },
+  });
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Fleet" }]);
@@ -336,6 +443,18 @@ export function Agents() {
                         <StatusBadge status={agent.status} />
                       </span>
                     </div>
+                    {PAUSE_RESUME_ELIGIBLE.has(agent.status) && (
+                      <FleetPauseResumeButton
+                        isPaused={agent.status === "paused"}
+                        disabled={pendingAgentIds.has(agent.id)}
+                        onClick={() =>
+                          pauseResumeAgent.mutate({
+                            agent,
+                            action: agent.status === "paused" ? "resume" : "pause",
+                          })
+                        }
+                      />
+                    )}
                   </div>
                 }
               />
@@ -354,7 +473,16 @@ export function Agents() {
       {effectiveView === "org" && filteredOrg.length > 0 && (
         <div className="border border-border py-1">
           {filteredOrg.map((node) => (
-            <OrgTreeNode key={node.id} node={node} depth={0} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} />
+            <OrgTreeNode
+              key={node.id}
+              node={node}
+              depth={0}
+              agentMap={agentMap}
+              liveRunByAgent={liveRunByAgent}
+              tab={tab}
+              pendingAgentIds={pendingAgentIds}
+              onPauseResume={(agent, action) => pauseResumeAgent.mutate({ agent, action })}
+            />
           ))}
         </div>
       )}
@@ -380,12 +508,16 @@ function OrgTreeNode({
   agentMap,
   liveRunByAgent,
   tab,
+  pendingAgentIds,
+  onPauseResume,
 }: {
   node: OrgNode;
   depth: number;
   agentMap: Map<string, Agent>;
   liveRunByAgent: Map<string, { runId: string; liveCount: number }>;
   tab: FilterTab;
+  pendingAgentIds: Set<string>;
+  onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
 }) {
   const agent = agentMap.get(node.id);
 
@@ -450,12 +582,28 @@ function OrgTreeNode({
               <StatusBadge status={node.status} />
             </span>
           </div>
+          {agent && PAUSE_RESUME_ELIGIBLE.has(agent.status) && (
+            <FleetPauseResumeButton
+              isPaused={agent.status === "paused"}
+              disabled={pendingAgentIds.has(agent.id)}
+              onClick={() => onPauseResume(agent, agent.status === "paused" ? "resume" : "pause")}
+            />
+          )}
         </div>
       </Link>
       {node.reports && node.reports.length > 0 && (
         <div className="border-l border-border/50 ml-4">
           {node.reports.map((child) => (
-            <OrgTreeNode key={child.id} node={child} depth={depth + 1} agentMap={agentMap} liveRunByAgent={liveRunByAgent} tab={tab} />
+            <OrgTreeNode
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              agentMap={agentMap}
+              liveRunByAgent={liveRunByAgent}
+              tab={tab}
+              pendingAgentIds={pendingAgentIds}
+              onPauseResume={onPauseResume}
+            />
           ))}
         </div>
       )}
