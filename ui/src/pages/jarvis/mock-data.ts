@@ -21,6 +21,10 @@ export interface JarvisChatMessage {
   authorLabel: string;
   text: string;
   timestamp: string;
+  /** Set on agent messages when Tyler barged in before the reply finished. */
+  interrupted?: boolean;
+  /** Characters of agent reply that were actually spoken before the cut. */
+  interruptedAtChars?: number;
 }
 
 export const MOCK_CAPABILITIES: JarvisCapability[] = [
