@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { jarvisConversations, companies } from "@paperclipai/db";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { jarvisConversations, companies, companyJarvisSettings } from "@paperclipai/db";
+import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
@@ -691,6 +691,71 @@ export function jarvisRoutes(db: Db) {
   });
 
   // ============================================================================
+  // Per-company Jarvis settings
+  // ============================================================================
+
+  /**
+   * Read the company's Jarvis settings. Returns the row's values when one
+   * exists; otherwise returns the documented defaults (no row creation here —
+   * a write through PATCH lazily upserts the row).
+   */
+  router.get(
+    "/companies/:companyId/jarvis/settings",
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const row = await db
+        .select({ autoBriefOnLoad: companyJarvisSettings.autoBriefOnLoad })
+        .from(companyJarvisSettings)
+        .where(eq(companyJarvisSettings.companyId, companyId))
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      res.json({
+        autoBriefOnLoad: row?.autoBriefOnLoad ?? false,
+      });
+    },
+  );
+
+  /**
+   * Patch one or more Jarvis settings. Upserts the row so the first PATCH
+   * after migration installs the row with the supplied values + defaults
+   * for omitted fields.
+   */
+  const settingsPatchSchema = z.object({
+    autoBriefOnLoad: z.boolean().optional(),
+  });
+  router.patch(
+    "/companies/:companyId/jarvis/settings",
+    validate(settingsPatchSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const body = req.body as z.infer<typeof settingsPatchSchema>;
+      const now = new Date();
+      const row = await db
+        .insert(companyJarvisSettings)
+        .values({
+          companyId,
+          autoBriefOnLoad: body.autoBriefOnLoad ?? false,
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: companyJarvisSettings.companyId,
+          set: {
+            ...(body.autoBriefOnLoad !== undefined
+              ? { autoBriefOnLoad: body.autoBriefOnLoad }
+              : {}),
+            updatedAt: now,
+          },
+        })
+        .returning({ autoBriefOnLoad: companyJarvisSettings.autoBriefOnLoad });
+      res.json({
+        autoBriefOnLoad: row[0]?.autoBriefOnLoad ?? false,
+      });
+    },
+  );
+
+  // ============================================================================
   // Peer-agent delegations
   // ============================================================================
 
@@ -834,6 +899,8 @@ interface DaddysHomeDispatchResult {
   truncated: boolean;
   audioStreamUrl: null;
   conversationId: null;
+  /** True when this response was served from the 5-minute dedupe window. */
+  deduped: boolean;
 }
 
 /**
@@ -848,6 +915,32 @@ async function dispatchDaddysHome(
   db: Db,
   input: DaddysHomeDispatchInput,
 ): Promise<DaddysHomeDispatchResult> {
+  // Cross-source dedupe: when a fresh briefing exists for this company within
+  // the dedupe window, return that row instead of firing a new LLM call. Fixes
+  // the failure mode where the client auto-trigger, the Mac-wake watcher, and
+  // the manual "Brief me" button each landed their own briefing inside the
+  // same minute and the chat panel showed three identical replies in a row.
+  const fresh = await findRecentBriefing(db, input.companyId, BRIEFING_DEDUPE_WINDOW_MS);
+  if (fresh) {
+    return {
+      briefingText: fresh.agentReply,
+      recommendedAction: extractRecommendedAction(fresh.agentReply),
+      briefingPayload: (fresh.contextSnapshot as BriefingPayload | null) ??
+        (await gatherBriefingPayload(db, input.companyId)),
+      tier: input.voiceTier ?? "browser-native",
+      latencyMs: 0,
+      llmProvider: fresh.llmProvider,
+      llmModel: fresh.llmModel,
+      personaVersion: fresh.personaVersion ?? "cached",
+      personaSource: "file",
+      responseType: fresh.responseType ?? "briefing",
+      truncated: false,
+      audioStreamUrl: null,
+      conversationId: null,
+      deduped: true,
+    };
+  }
+
   const payload = await gatherBriefingPayload(db, input.companyId);
   const userPrompt = composeBriefingTranscript(payload, input.source);
 
@@ -877,7 +970,61 @@ async function dispatchDaddysHome(
     truncated: out.truncated,
     audioStreamUrl: null,
     conversationId: null,
+    deduped: false,
   };
+}
+
+/**
+ * Five-minute briefing-dedupe window. Any source that funnels into
+ * dispatchDaddysHome (client auto-trigger, Mac-wake watcher, manual button,
+ * scheduled cron) shares this window — if any of them has landed a briefing
+ * for the company in the last five minutes, every subsequent caller reads
+ * that row instead of spinning the LLM again.
+ */
+const BRIEFING_DEDUPE_WINDOW_MS = 5 * 60 * 1000;
+const BRIEFING_SOURCES = ["daddys_home", "mac-wake", "schedule", "manual"] as const;
+
+interface RecentBriefing {
+  agentReply: string;
+  contextSnapshot: Record<string, unknown> | null;
+  llmProvider: string | null;
+  llmModel: string | null;
+  personaVersion: string | null;
+  responseType: string | null;
+}
+
+async function findRecentBriefing(
+  db: Db,
+  companyId: string,
+  windowMs: number,
+): Promise<RecentBriefing | null> {
+  try {
+    const since = new Date(Date.now() - windowMs);
+    const rows = await db
+      .select({
+        agentReply: jarvisConversations.agentReply,
+        contextSnapshot: jarvisConversations.contextSnapshot,
+        llmProvider: jarvisConversations.llmProvider,
+        llmModel: jarvisConversations.llmModel,
+        personaVersion: jarvisConversations.personaVersion,
+        responseType: jarvisConversations.responseType,
+        createdAt: jarvisConversations.createdAt,
+      })
+      .from(jarvisConversations)
+      .where(
+        and(
+          eq(jarvisConversations.companyId, companyId),
+          inArray(jarvisConversations.source, BRIEFING_SOURCES as unknown as string[]),
+          gte(jarvisConversations.createdAt, since),
+        ),
+      )
+      .orderBy(desc(jarvisConversations.createdAt))
+      .limit(1);
+    return rows[0] ?? null;
+  } catch (err) {
+    logger.warn({ err, companyId }, "daddys-home: dedupe lookup failed");
+    return null;
+  }
 }
 
 /**

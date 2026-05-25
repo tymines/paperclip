@@ -182,6 +182,16 @@ export interface JarvisCancelResponseResult {
   persisted: boolean;
 }
 
+export interface JarvisCompanySettings {
+  /**
+   * When true, opening /TYL/jarvis fires the Daddy's Home briefing
+   * automatically if the 4-hour debounce has lapsed. Default false —
+   * Tyler explicitly disabled this after the page kept auto-briefing
+   * him when he just wanted to chat.
+   */
+  autoBriefOnLoad: boolean;
+}
+
 // All paths are RELATIVE to /api — the api client auto-prepends the
 // /api base. Don't add "/api/" to these paths or they will double-prefix
 // into /api/api/... and 404. This was the actual root cause of the
@@ -310,4 +320,15 @@ export const jarvisApi = {
     api.get(
       `/companies/${companyId}/jarvis/delegations/peers/${peer}/reachable`,
     ),
+
+  /** Read the company's Jarvis settings — auto-brief opt-in, etc. */
+  settings: (companyId: string): Promise<JarvisCompanySettings> =>
+    api.get(`/companies/${companyId}/jarvis/settings`),
+
+  /** Patch one or more settings; returns the resulting row. */
+  updateSettings: (
+    companyId: string,
+    body: Partial<JarvisCompanySettings>,
+  ): Promise<JarvisCompanySettings> =>
+    api.patch(`/companies/${companyId}/jarvis/settings`, body),
 };

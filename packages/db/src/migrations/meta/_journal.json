@@ -722,6 +722,13 @@
       "when": 1779580800000,
       "tag": "0102_jarvis_delegations",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1779667200000,
+      "tag": "0103_jarvis_auto_brief_setting",
+      "breakpoints": true
     }
   ]
 }
