@@ -18,8 +18,9 @@
  * NOT gated by enableUiV2 — Tyler asked for this as a product change, not a
  * v2 visual reskin.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "@/lib/router";
 import {
   BarChart3,
   CalendarDays,
@@ -75,11 +76,19 @@ const TABS: { key: SchedulerTab; label: string; icon: typeof PenSquare }[] = [
 export function SocialScheduler() {
   const { selectedCompanyId, selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
+  const location = useLocation();
   const [tab, setTab] = useState<SchedulerTab>("compose");
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Social" }]);
   }, [setBreadcrumbs]);
+
+  // Demo mode (?demo=true) opts back into server-returned stub data so
+  // developers can still preview the full UI with seed accounts.
+  const demoMode = useMemo(
+    () => new URLSearchParams(location.search).get("demo") === "true",
+    [location.search],
+  );
 
   const accountsQuery = useQuery({
     queryKey: queryKeys.social.accounts(selectedCompanyId ?? "__none__"),
@@ -91,7 +100,15 @@ export function SocialScheduler() {
     return <EmptyState icon={Share2} message="Select a company to use the scheduler." />;
   }
 
-  const accounts = accountsQuery.data ?? [];
+  // Hide accounts the stub OAuth flow has persisted (metadata.stub === true)
+  // unless the page is loaded in demo mode. Otherwise Tyler sees fake handles
+  // (@stub_x_handle, etc.) he never registered and the UI implies they are
+  // real connected accounts.
+  const allAccounts = accountsQuery.data ?? [];
+  const accounts = demoMode
+    ? allAccounts
+    : allAccounts.filter((a) => !(a.metadata && (a.metadata as Record<string, unknown>).stub === true));
+  const stubHidden = allAccounts.length - accounts.length;
   const hasNoAccounts = !accountsQuery.isLoading && accounts.length === 0;
 
   return (
@@ -134,13 +151,23 @@ export function SocialScheduler() {
 
       {hasNoAccounts && tab !== "accounts" ? (
         <div className="rounded-md border border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
-          <p className="font-medium">No social accounts connected.</p>
+          <p className="font-medium">Let's connect your first account.</p>
           <p className="mt-1 leading-5">
             Connect Instagram, X, Facebook, Threads, or Reddit to start composing and scheduling posts.
           </p>
           <Button variant="outline" size="sm" className="mt-2" onClick={() => setTab("accounts")}>
             Open the Accounts tab
           </Button>
+        </div>
+      ) : null}
+
+      {demoMode ? (
+        <div className="rounded-md border border-sky-400/60 bg-sky-50/80 px-3 py-2 text-xs text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200">
+          Demo mode is on — showing seeded stub accounts. Remove <code>?demo=true</code> from the URL to hide them.
+        </div>
+      ) : stubHidden > 0 ? (
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {stubHidden} stub account{stubHidden === 1 ? "" : "s"} hidden. Append <code>?demo=true</code> to the URL to preview them.
         </div>
       ) : null}
 

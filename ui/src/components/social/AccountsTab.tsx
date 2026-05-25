@@ -88,7 +88,11 @@ export function AccountsTab({ companyId, accounts, loading }: AccountsTabProps) 
             </div>
           ) : accounts.length === 0 ? (
             <div className="col-span-full rounded-md border border-dashed border-border bg-card/60 p-6 text-center text-sm text-muted-foreground">
-              No accounts connected yet — pick a platform below to add one.
+              <p className="font-medium text-foreground">No accounts connected yet.</p>
+              <p className="mt-1">
+                Pick a platform below to start scheduling posts — connect your first Instagram, X,
+                Facebook, Threads, or Reddit account in the wizard.
+              </p>
             </div>
           ) : (
             accounts.map((account) => {
