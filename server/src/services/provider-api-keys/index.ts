@@ -21,7 +21,13 @@ export type ProviderKey =
   | "moonshot"
   | "openai"
   | "anthropic"
-  | "gemini";
+  | "gemini"
+  // Jarvis premium voice tier — used independently from the chat-completion
+  // providers. openai_realtime is the WebRTC STT gateway; elevenlabs is the
+  // streaming TTS provider. Adding new slots here automatically surfaces them
+  // in the existing instance/settings/provider-keys page.
+  | "openai_realtime"
+  | "elevenlabs";
 
 export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "deepseek",
@@ -29,6 +35,8 @@ export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "openai",
   "anthropic",
   "gemini",
+  "openai_realtime",
+  "elevenlabs",
 ];
 
 interface StoredKey {

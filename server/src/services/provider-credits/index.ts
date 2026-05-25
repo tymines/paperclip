@@ -13,6 +13,8 @@ import { moonshotAdapter } from "./moonshot.js";
 import { openaiAdapter } from "./openai.js";
 import { anthropicAdapter } from "./anthropic.js";
 import { geminiAdapter } from "./gemini.js";
+import { openaiRealtimeAdapter } from "./openai-realtime.js";
+import { elevenlabsAdapter } from "./elevenlabs.js";
 import { unknownAdapter } from "./unknown.js";
 import {
   getRawKey,
@@ -26,6 +28,8 @@ const REGISTRY: Record<ProviderKey, ProviderCreditAdapter> = {
   openai: openaiAdapter,
   anthropic: anthropicAdapter,
   gemini: geminiAdapter,
+  openai_realtime: openaiRealtimeAdapter,
+  elevenlabs: elevenlabsAdapter,
   unknown: unknownAdapter,
 };
 

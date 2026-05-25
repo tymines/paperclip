@@ -21,6 +21,7 @@ import {
   Layers,
   MoreHorizontal,
   Gauge,
+  Sparkles,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -185,6 +186,7 @@ function SidebarLegacy({
       </SidebarSection>
 
       <SidebarSection label="Company">
+        <SidebarNavItem to="/jarvis" label="Jarvis" icon={Sparkles} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
@@ -253,6 +255,7 @@ function SidebarV1({
       </div>
 
       <SidebarSection label="More">
+        <SidebarNavItem to="/jarvis" label="Jarvis" icon={Sparkles} />
         <SidebarNavItem to="/issues" label={issueNoun.capPlural} icon={CircleDot} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
         <SidebarNavItem to="/work" label="Work" icon={Layers} />

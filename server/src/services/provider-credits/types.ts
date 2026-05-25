@@ -16,6 +16,10 @@ export type ProviderKey =
   | "openai"
   | "anthropic"
   | "gemini"
+  // Voice-only providers used by Jarvis. They don't expose balance/spending
+  // endpoints; an adapter is still registered so the keys page can list them.
+  | "openai_realtime"
+  | "elevenlabs"
   | "unknown";
 
 export interface ProviderMeta {
