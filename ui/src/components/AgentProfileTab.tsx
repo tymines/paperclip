@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AgentIcon } from "./AgentIconPicker";
 import { StatusBadge } from "./StatusBadge";
 import { Identity } from "./Identity";
+import { AgentBridgeActivityPanel } from "./AgentBridgeActivityPanel";
 import {
   AGENT_ROLE_LABELS,
   type Agent,
@@ -186,6 +187,12 @@ export function AgentProfileTab({
           )}
         </section>
       </div>
+
+      <AgentBridgeActivityPanel
+        agentId={agent.id}
+        companyId={agent.companyId}
+      />
+
 
       <p className="text-center text-[11px] text-muted-foreground">
         Public agent profiles (no-login share links) coming next round —

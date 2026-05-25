@@ -25,6 +25,19 @@ export type DispatchAgentBridgeInput = {
 const RECENT_MESSAGE_WINDOW = 20;
 const BRIDGE_REQUEST_TIMEOUT_MS = 10_000;
 
+/**
+ * Resolves the base URL the bridge daemon should POST agent replies to. The
+ * dev server's listen port is published by index.ts as PAPERCLIP_LISTEN_PORT;
+ * fall back to the legacy 3001 only as a last resort so a misconfigured env
+ * doesn't silently break round-trip persistence.
+ */
+export function resolveBridgeApiBaseUrl(): string {
+  if (process.env.PAPERCLIP_API_URL) return process.env.PAPERCLIP_API_URL;
+  if (process.env.PAPERCLIP_PUBLIC_BASE_URL) return process.env.PAPERCLIP_PUBLIC_BASE_URL;
+  const port = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3001";
+  return `http://127.0.0.1:${port}`;
+}
+
 function isBridgeConfig(value: unknown): value is AgentBridgeConfig {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
@@ -81,10 +94,9 @@ export async function dispatchAgentBridge(
 
   const history = await fetchRecentContext(db, input.roomId);
 
-  const apiBaseUrl =
-    process.env.PAPERCLIP_API_URL ?? process.env.PAPERCLIP_PUBLIC_BASE_URL ?? "http://127.0.0.1:3001";
+  const apiBaseUrl = resolveBridgeApiBaseUrl();
   const replyUrl = new URL(
-    `/api/companies/${input.companyId}/rooms/${input.roomId}/messages`,
+    `/api/agent-bridge/reply`,
     apiBaseUrl,
   ).toString();
 

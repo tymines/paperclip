@@ -224,7 +224,39 @@ export const agentsApi = {
     api.post<ClaudeLoginResult>(agentPath(id, companyId, "/claude-login"), {}),
   availableSkills: () =>
     api.get<{ skills: AvailableSkill[] }>("/skills/available"),
+  bridgeAttempts: (
+    companyId: string,
+    agentId: string,
+    limit = 20,
+  ) =>
+    api.get<BridgeAttemptsResponse>(
+      `/companies/${companyId}/agents/${agentId}/bridge-attempts?limit=${limit}`,
+    ),
 };
+
+export interface BridgeAttempt {
+  id: string;
+  companyId: string | null;
+  roomId: string | null;
+  agentId: string | null;
+  contentLength: number;
+  outcome: "persisted" | "rejected" | "errored";
+  errorDetail: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface BridgeAttemptsResponse {
+  attempts: BridgeAttempt[];
+  last24hCounts: {
+    total: number;
+    persisted: number;
+    rejected: number;
+    errored: number;
+  };
+  hasFailures24h: boolean;
+  lastOutcome: "persisted" | "rejected" | "errored" | null;
+}
 
 export interface AvailableSkill {
   name: string;
