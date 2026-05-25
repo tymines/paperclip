@@ -126,7 +126,7 @@ function elevenlabsWebhookSecretStore(db: Db): WebhookSecretStore {
         const value = (slot as { value: string }).value;
         const updatedAt =
           typeof (slot as { updatedAt?: unknown }).updatedAt === "string"
-            ? ((slot as { updatedAt: string }).updatedAt)
+            ? ((slot as unknown as { updatedAt: string }).updatedAt)
             : null;
         return { secret: value, updatedAt };
       }
