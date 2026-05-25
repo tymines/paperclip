@@ -59,5 +59,19 @@ export { logActivity, type LogActivityInput } from "./activity-log.js";
 export { notifyHireApproved, type NotifyHireApprovedInput } from "./hire-hook.js";
 export { publishLiveEvent, subscribeCompanyLiveEvents } from "./live-events.js";
 export { dispatchAgentBridge, type AgentBridgeConfig } from "./agent-bridge.js";
+export {
+  dispatchDelegation,
+  recordDelegationResult,
+  listDelegations,
+  countRecentDelegations,
+  checkPeerReachable,
+  getPeerEndpoint,
+  naturalAcknowledgment,
+  type PeerAgentId,
+  type DelegationInput,
+  type DelegationDispatchResult,
+  type DelegationResultInput,
+  type PeerEndpoint,
+} from "./jarvis-delegation.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";

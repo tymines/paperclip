@@ -12,6 +12,17 @@ import {
   type ResponseType,
 } from "./jarvis-persona.js";
 import { getCapabilitySnapshot, summarizeForPersona } from "./jarvis-capabilities.js";
+import {
+  dispatchDelegation,
+  naturalAcknowledgment,
+  type DelegationDispatchResult,
+  type PeerAgentId,
+} from "./jarvis-delegation.js";
+import {
+  DELEGATION_TOOLS,
+  TOOL_NAME_TO_PEER,
+  toOpenAiTools,
+} from "./jarvis-delegation-tools.js";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -59,6 +70,14 @@ export interface JarvisBrainInput {
   customUserPrompt?: string;
   /** When set, replaces the ContextBriefing snapshot written to the row. */
   customContextSnapshot?: Record<string, unknown>;
+  /** Conversation row to link any delegation to. */
+  conversationId?: string;
+  /**
+   * Disable peer-agent delegation tools for this call. Defaults to true.
+   * Set false for system probes or evals that should not trigger real
+   * dispatches.
+   */
+  enableDelegation?: boolean;
 }
 
 export interface JarvisBrainOutput {
@@ -71,6 +90,14 @@ export interface JarvisBrainOutput {
   personaSource: "file" | "fallback";
   truncated: boolean;
   responseType: ResponseType;
+  /** When the brain dispatched a peer delegation in response to this turn. */
+  delegation?: {
+    id: string;
+    agent: PeerAgentId;
+    status: "queued" | "failed";
+    reachable: boolean;
+    remainingQuotaThisMinute: number;
+  };
 }
 
 interface ContextBriefing {
@@ -266,7 +293,19 @@ interface LlmCallResult {
   reply: string;
   provider: string;
   model: string;
+  /** Tool-use intent the model produced (peer delegation). */
+  toolCall?: ToolCallIntent;
 }
+
+export interface ToolCallIntent {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+const DELEGATION_SYSTEM_HINT = `
+
+PEER-AGENT DELEGATION:
+You have access to delegate_* tools that hand work off to peer agents in Tyler's fleet (Hermes, August, Codex, content desk, social desk, research desk, plus dispatch_claude_code for repo-heavy work). When Tyler asks you to do something that could be handled by a peer (research, code, content, posting), PREFER to delegate rather than do it yourself. Brief acknowledgment first ("On it — handing this to Hermes"), then call the right delegate_* tool. Don't ask for permission unless the task is irreversible. The tool returns a tracking id and a reachability flag; your natural-language reply will be generated for you — just pick the right tool and pass a self-contained task string.`;
 
 /**
  * Tries Anthropic Claude first (Augi-as-brain), then DeepSeek, then OpenAI.
@@ -276,6 +315,7 @@ interface LlmCallResult {
 async function callLlm(
   systemPrompt: string,
   userPrompt: string,
+  withTools = true,
 ): Promise<LlmCallResult | null> {
   const anthropicKey = await getRawKey("anthropic").catch(() => null);
   if (anthropicKey) {
@@ -285,6 +325,7 @@ async function callLlm(
         model: "claude-opus-4-7",
         systemPrompt,
         userPrompt,
+        tools: withTools ? DELEGATION_TOOLS : undefined,
       });
       if (result) return { ...result, provider: "anthropic" };
     } catch (err) {
@@ -301,6 +342,7 @@ async function callLlm(
         model: "deepseek-chat",
         systemPrompt,
         userPrompt,
+        withTools,
       });
       if (result) return { ...result, provider: "deepseek" };
     } catch (err) {
@@ -317,6 +359,7 @@ async function callLlm(
         model: "gpt-4o-mini",
         systemPrompt,
         userPrompt,
+        withTools,
       });
       if (result) return { ...result, provider: "openai" };
     } catch (err) {
@@ -337,15 +380,25 @@ async function fetchAnthropicMessage({
   model,
   systemPrompt,
   userPrompt,
+  tools,
 }: {
   apiKey: string;
   model: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ reply: string; model: string } | null> {
+  tools?: typeof DELEGATION_TOOLS;
+}): Promise<{ reply: string; model: string; toolCall?: ToolCallIntent } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
+    const body: Record<string, unknown> = {
+      model,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+      max_tokens: 400,
+      temperature: 0.4,
+    };
+    if (tools && tools.length > 0) body.tools = tools;
     const resp = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -353,24 +406,37 @@ async function fetchAnthropicMessage({
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",
       },
-      body: JSON.stringify({
-        model,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-        max_tokens: 400,
-        temperature: 0.4,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!resp.ok) return null;
     const json = (await resp.json()) as {
-      content?: Array<{ type?: string; text?: string }>;
+      content?: Array<{
+        type?: string;
+        text?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+      }>;
     };
-    const text = (json.content ?? [])
+    const blocks = json.content ?? [];
+    const toolBlock = blocks.find(
+      (b) => b.type === "tool_use" && typeof b.name === "string",
+    );
+    const text = blocks
       .filter((b) => b.type === "text" && typeof b.text === "string")
       .map((b) => b.text as string)
       .join("\n")
       .trim();
+    if (toolBlock && toolBlock.name) {
+      return {
+        reply: text,
+        model,
+        toolCall: {
+          name: toolBlock.name,
+          args: (toolBlock.input ?? {}) as Record<string, unknown>,
+        },
+      };
+    }
     if (!text) return null;
     return { reply: text, model };
   } finally {
@@ -384,38 +450,67 @@ async function fetchChatCompletion({
   model,
   systemPrompt,
   userPrompt,
+  withTools,
 }: {
   url: string;
   apiKey: string;
   model: string;
   systemPrompt: string;
   userPrompt: string;
-}): Promise<{ reply: string; model: string } | null> {
+  withTools?: boolean;
+}): Promise<{ reply: string; model: string; toolCall?: ToolCallIntent } | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
+    const body: Record<string, unknown> = {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0.4,
+      max_tokens: 280,
+    };
+    if (withTools) body.tools = toOpenAiTools();
     const resp = await fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.4,
-        max_tokens: 280,
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     if (!resp.ok) return null;
     const json = (await resp.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{
+        message?: {
+          content?: string;
+          tool_calls?: Array<{
+            function?: { name?: string; arguments?: string };
+          }>;
+        };
+      }>;
     };
-    const text = json.choices?.[0]?.message?.content?.trim();
+    const msg = json.choices?.[0]?.message;
+    const text = msg?.content?.trim() ?? "";
+    const toolCall = msg?.tool_calls?.[0]?.function;
+    if (toolCall?.name) {
+      let parsedArgs: Record<string, unknown> = {};
+      try {
+        parsedArgs = JSON.parse(toolCall.arguments ?? "{}") as Record<string, unknown>;
+      } catch {
+        // Model returned malformed JSON — skip the tool call and treat
+        // the text reply (if any) as the reply.
+      }
+      if (Object.keys(parsedArgs).length > 0 || (toolCall.arguments ?? "").trim().length > 0) {
+        return {
+          reply: text,
+          model,
+          toolCall: { name: toolCall.name, args: parsedArgs },
+        };
+      }
+    }
     if (!text) return null;
     return { reply: text, model };
   } finally {
@@ -440,10 +535,16 @@ export async function jarvisBrainReply(
     getCapabilitySnapshot().catch(() => null),
   ]);
 
+  const enableDelegation = input.enableDelegation ?? true;
   const basePrompt = formatPersonaForCall(persona, { voiceMode, responseType });
-  const systemPrompt = capSnapshot
-    ? `${basePrompt}\n\nCAPABILITY GROUNDING (real probe of this host, ${capSnapshot.generatedAt}): ${summarizeForPersona(capSnapshot)} When asked what you can do, ground your answer in these — do not promise capabilities marked needs_install or unsupported without flagging the install hint.`
-    : basePrompt;
+  const systemPromptParts = [basePrompt];
+  if (capSnapshot) {
+    systemPromptParts.push(
+      `CAPABILITY GROUNDING (real probe of this host, ${capSnapshot.generatedAt}): ${summarizeForPersona(capSnapshot)} When asked what you can do, ground your answer in these — do not promise capabilities marked needs_install or unsupported without flagging the install hint.`,
+    );
+  }
+  if (enableDelegation) systemPromptParts.push(DELEGATION_SYSTEM_HINT.trim());
+  const systemPrompt = systemPromptParts.join("\n\n");
 
   // For briefings the persona wants work-first ordering: shipped overnight,
   // blockers, fleet, projects — revenue only on ask. The context block we
@@ -456,7 +557,37 @@ export async function jarvisBrainReply(
       ? composeBriefingContext(input.transcript, ctx)
       : composeStandardContext(input.transcript, ctx));
 
-  const llm = await callLlm(systemPrompt, userPrompt);
+  const llm = await callLlm(systemPrompt, userPrompt, enableDelegation);
+
+  // Tool-use path: model chose to delegate to a peer. Run the dispatch,
+  // overwrite the reply with the natural acknowledgment, return early.
+  let delegationOut: JarvisBrainOutput["delegation"] | undefined;
+  if (llm?.toolCall && enableDelegation) {
+    const peer = TOOL_NAME_TO_PEER[llm.toolCall.name];
+    const taskArg = typeof llm.toolCall.args.task === "string" ? llm.toolCall.args.task : "";
+    if (peer && taskArg.length > 0) {
+      const dispatch: DelegationDispatchResult = await dispatchDelegation(db, {
+        companyId: input.companyId,
+        conversationId: input.conversationId,
+        agent: peer,
+        task: taskArg,
+        metadata: { ...llm.toolCall.args, source: "jarvis-brain" },
+        requestedByActorId: input.userActorId,
+      });
+      const ackText = naturalAcknowledgment(peer, dispatch);
+      delegationOut = {
+        id: dispatch.id,
+        agent: peer,
+        status: dispatch.status,
+        reachable: dispatch.reachable,
+        remainingQuotaThisMinute: dispatch.remainingQuotaThisMinute,
+      };
+      // Override the model's free-form text with the canonical phrasing —
+      // keeps voice-mode tight and predictable.
+      llm.reply = ackText;
+    }
+  }
+
   let reply = llm?.reply ?? deterministicReply(input.transcript, ctx, responseType);
 
   // Belt-and-braces: if the model ignored the voice-mode instruction in
@@ -535,6 +666,7 @@ export async function jarvisBrainReply(
     personaSource: persona.source,
     truncated,
     responseType,
+    delegation: delegationOut,
   };
 }
 

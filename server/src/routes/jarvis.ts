@@ -29,6 +29,12 @@ import {
   mintRealtimeEphemeralKey,
   type BargeInCancelEvent,
 } from "../services/jarvis-barge-in.js";
+import {
+  listDelegations,
+  recordDelegationResult,
+  checkPeerReachable,
+  type PeerAgentId,
+} from "../services/jarvis-delegation.js";
 
 /**
  * Jarvis voice endpoint.
@@ -123,6 +129,7 @@ export function jarvisRoutes(db: Db) {
         responseType: out.responseType,
         truncated: out.truncated,
         conversationId: null,
+        delegation: out.delegation ?? null,
       });
     }
   );
@@ -682,6 +689,106 @@ export function jarvisRoutes(db: Db) {
 
     res.json({ tiers });
   });
+
+  // ============================================================================
+  // Peer-agent delegations
+  // ============================================================================
+
+  /**
+   * List delegations for a company. Filtered by status so the client can
+   * poll `?status=running` every 30s without paging the entire table.
+   */
+  router.get(
+    "/companies/:companyId/jarvis/delegations",
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const statusParam = typeof req.query.status === "string" ? req.query.status : undefined;
+      const conversationId =
+        typeof req.query.conversationId === "string" ? req.query.conversationId : undefined;
+      const limit = Math.min(
+        Math.max(Number.parseInt(String(req.query.limit ?? "50"), 10) || 50, 1),
+        200,
+      );
+      const allowed = new Set(["queued", "running", "completed", "failed"]);
+      const status = statusParam && allowed.has(statusParam)
+        ? (statusParam as "queued" | "running" | "completed" | "failed")
+        : undefined;
+      const rows = await listDelegations(db, companyId, { status, conversationId, limit });
+      res.json({ delegations: rows });
+    },
+  );
+
+  /**
+   * Result callback — the peer agent (Hermes, August, Codex, …) posts
+   * here when it completes its work. Authentication is the per-row
+   * callback token issued at dispatch time, NOT the standard board key.
+   * We sidestep the actor middleware via the `_publicDelegationCallback`
+   * marker so the bridge daemon can post without paperclip credentials.
+   */
+  const callbackSchema = z.object({
+    status: z.enum(["running", "completed", "failed"]),
+    result: z.string().max(64_000).optional(),
+    error: z.string().max(4_000).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/delegations/:id/result",
+    validate(callbackSchema),
+    async (req, res) => {
+      const { companyId, id } = req.params as { companyId: string; id: string };
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) {
+        res.status(401).json({ ok: false, error: "missing_bearer_token" });
+        return;
+      }
+      const callbackToken = match[1]!.trim();
+      const body = req.body as z.infer<typeof callbackSchema>;
+      const out = await recordDelegationResult(db, {
+        delegationId: id,
+        companyId,
+        callbackToken,
+        status: body.status,
+        result: body.result,
+        error: body.error,
+      });
+      if (!out.ok) {
+        res.status(out.error === "callback_token_mismatch" ? 403 : 404).json({
+          ok: false,
+          error: out.error,
+        });
+        return;
+      }
+      res.json({ ok: true });
+    },
+  );
+
+  /**
+   * Reachability probe — used by the UI / brain to verify whether a peer
+   * is up before offering to delegate. Cached server-side for 30s.
+   */
+  router.get(
+    "/companies/:companyId/jarvis/delegations/peers/:peer/reachable",
+    async (req, res) => {
+      const { companyId, peer } = req.params as { companyId: string; peer: string };
+      assertCompanyAccess(req, companyId);
+      const allowed: PeerAgentId[] = [
+        "hermes",
+        "august",
+        "codex",
+        "content",
+        "social",
+        "researcher",
+        "claude-code",
+      ];
+      if (!allowed.includes(peer as PeerAgentId)) {
+        res.status(400).json({ ok: false, error: "unknown_peer" });
+        return;
+      }
+      const out = await checkPeerReachable(peer as PeerAgentId);
+      res.json(out);
+    },
+  );
 
   return router;
 }

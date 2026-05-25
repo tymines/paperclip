@@ -1525,3 +1525,35 @@
   .jarvis-stat-overlay.tr { right: 2%; }
   .jarvis-stat-overlay .jarvis-stat-value-big { font-size: 18px; }
 }
+
+/* Peer-agent delegation chip — rendered on agent bubbles that triggered a
+ * delegate_to_* tool call. Colors mirror the orb HUD palette. */
+.jarvis-delegation-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: default;
+}
+.jarvis-delegation-chip-wait {
+  color: #facc15;
+  background: rgba(250, 204, 21, 0.1);
+  border-color: rgba(250, 204, 21, 0.4);
+}
+.jarvis-delegation-chip-ok {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+.jarvis-delegation-chip-err {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.4);
+}

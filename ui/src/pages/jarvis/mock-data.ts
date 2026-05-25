@@ -25,6 +25,14 @@ export interface JarvisChatMessage {
   interrupted?: boolean;
   /** Characters of agent reply that were actually spoken before the cut. */
   interruptedAtChars?: number;
+  /**
+   * Set when this turn dispatched a peer-agent delegation. The chat
+   * panel renders a "Delegated" chip on the bubble; the polling loop
+   * watches `delegationId` to know when to append a follow-up result.
+   */
+  delegationId?: string | null;
+  delegationAgent?: string | null;
+  delegationStatus?: "queued" | "running" | "completed" | "failed" | null;
 }
 
 export const MOCK_CAPABILITIES: JarvisCapability[] = [

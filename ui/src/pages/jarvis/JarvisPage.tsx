@@ -234,6 +234,86 @@ export function JarvisPage() {
     };
   }, [selectedCompanyId]);
 
+  // Track delegation rows we've already chimed for so the soft bell only
+  // fires once per completion, even if the result row sits in the table
+  // for a while before the user sees it.
+  const chimedDelegationsRef = useRef<Set<string>>(new Set());
+
+  // Poll active delegations every 30s. When a delegation row flips to
+  // completed / failed, update the chip on its originating bubble AND
+  // append a Jarvis follow-up message with the result, then fire a
+  // subtle audio cue so Tyler knows something landed.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    async function tick() {
+      try {
+        // Pull both running and recently-completed rows so we catch the
+        // queued→completed flip even if the poll missed the running step
+        // (some peers skip the running update entirely).
+        const [running, recent] = await Promise.all([
+          jarvisApi.delegations(selectedCompanyId!, { status: "running" }),
+          jarvisApi.delegations(selectedCompanyId!, { limit: 20 }),
+        ]);
+        if (cancelled) return;
+        const byId = new Map<string, import("@/api/jarvis").JarvisDelegationRow>();
+        for (const r of running.delegations) byId.set(r.id, r);
+        for (const r of recent.delegations) byId.set(r.id, r);
+
+        setMessages((prev) => {
+          let mutated = false;
+          const next = prev.slice();
+          const followUps: JarvisChatMessage[] = [];
+          for (let i = 0; i < next.length; i++) {
+            const msg = next[i];
+            if (!msg?.delegationId) continue;
+            const row = byId.get(msg.delegationId);
+            if (!row) continue;
+            if (msg.delegationStatus !== row.status) {
+              next[i] = { ...msg, delegationStatus: row.status };
+              mutated = true;
+            }
+            if (
+              (row.status === "completed" || row.status === "failed") &&
+              !chimedDelegationsRef.current.has(row.id)
+            ) {
+              chimedDelegationsRef.current.add(row.id);
+              playSoftBell();
+              const stamp = formatNow();
+              const verb = row.status === "completed" ? "landed" : "failed";
+              const body =
+                row.result?.trim() || (row.status === "failed" ? "(no error detail)" : "(empty result)");
+              followUps.push({
+                id: `r-${row.id}-done`,
+                author: "agent",
+                authorLabel: `Jarvis · ${stamp}`,
+                text: `${row.agent} ${verb}: ${body}`,
+                timestamp: stamp,
+              });
+            }
+          }
+          if (followUps.length > 0) {
+            return [...next, ...followUps];
+          }
+          return mutated ? next : prev;
+        });
+      } catch {
+        /* swallow — next tick will retry */
+      }
+    }
+
+    void tick();
+    timer = setInterval(() => {
+      void tick();
+    }, 30_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [selectedCompanyId]);
+
   const onVoiceCharacterSelect = useCallback((voice: JarvisVoiceCharacter) => {
     setVoiceCharacter(voice);
     try {
@@ -558,6 +638,7 @@ export function JarvisPage() {
       const voiceMode = opts.voiceMode ?? false;
       let reply = "";
       let conversationId: string | null = null;
+      let delegation: import("@/api/jarvis").JarvisDelegationAck | null = null;
       try {
         const resp = await jarvisApi.voice(selectedCompanyId, {
           transcript,
@@ -567,6 +648,7 @@ export function JarvisPage() {
         });
         reply = resp.reply;
         conversationId = resp.conversationId;
+        delegation = resp.delegation ?? null;
       } catch (err) {
         reply = `Network error reaching Jarvis: ${(err as Error).message}`;
       }
@@ -580,6 +662,9 @@ export function JarvisPage() {
           authorLabel: `Jarvis · ${stamp}`,
           text: reply,
           timestamp: stamp,
+          delegationId: delegation?.id ?? null,
+          delegationAgent: delegation?.agent ?? null,
+          delegationStatus: delegation ? delegation.status : null,
         },
       ]);
       // Stash so barge-in handler can mark this message interrupted and
@@ -1125,7 +1210,15 @@ export function JarvisPage() {
                         <span className="jarvis-msg-interrupt-tag">— interrupted</span>
                       ) : null}
                     </span>
-                    <div className="jarvis-msg-bubble">{m.text}</div>
+                    <div className="jarvis-msg-bubble">
+                      {m.text}
+                      {m.delegationId && (
+                        <DelegationChip
+                          agent={m.delegationAgent ?? "peer"}
+                          status={m.delegationStatus ?? "queued"}
+                        />
+                      )}
+                    </div>
                   </div>
                 ))
               )}
@@ -1274,6 +1367,37 @@ function formatNow() {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * Subtle audio cue fired when a delegation lands. WebAudio so we don't
+ * have to ship an asset; the envelope is intentionally short + soft so
+ * it's a quiet "ping" rather than a notification klaxon.
+ */
+function playSoftBell() {
+  try {
+    const Ctx =
+      typeof window !== "undefined"
+        ? (window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext)
+        : null;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(880, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.4);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.45);
+    setTimeout(() => void ctx.close().catch(() => undefined), 600);
+  } catch {
+    /* environment doesn't support WebAudio — silent fallback */
+  }
+}
+
 function conversationsToMessages(turns: JarvisConversationTurn[]): JarvisChatMessage[] {
   const out: JarvisChatMessage[] = [];
   for (const t of turns) {
@@ -1307,3 +1431,36 @@ function formatStampFromIso(iso: string): string {
   }
 }
 
+/**
+ * Compact pill rendered on agent-side bubbles that triggered a peer-agent
+ * delegation. Color follows status: amber while queued/running, green on
+ * completion, red on failure. Tapping the chip is a future hook
+ * (delegation detail drawer) — for now it surfaces status + agent.
+ */
+function DelegationChip({
+  agent,
+  status,
+}: {
+  agent: string;
+  status: "queued" | "running" | "completed" | "failed";
+}) {
+  const label =
+    status === "queued"
+      ? `Delegated → ${agent} · queued`
+      : status === "running"
+        ? `Delegated → ${agent} · running`
+        : status === "completed"
+          ? `Delegated → ${agent} · done`
+          : `Delegated → ${agent} · failed`;
+  const tone =
+    status === "completed"
+      ? "ok"
+      : status === "failed"
+        ? "err"
+        : "wait";
+  return (
+    <span className={`jarvis-delegation-chip jarvis-delegation-chip-${tone}`}>
+      {label}
+    </span>
+  );
+}

@@ -715,6 +715,13 @@
       "when": 1779494400000,
       "tag": "0101_jarvis_conversation_source",
       "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1779580800000,
+      "tag": "0102_jarvis_delegations",
+      "breakpoints": true
     }
   ]
 }
