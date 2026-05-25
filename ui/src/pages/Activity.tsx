@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@/lib/router";
 import type { ActivityEvent, Agent } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
+import { costsApi } from "../api/costs";
+import { dashboardApi } from "../api/dashboard";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -11,6 +14,8 @@ import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { ChartCard, SpendActivityChart } from "../components/ActivityCharts";
+import { agentUrl, formatCostUsdCompact, formatTokens } from "../lib/utils";
 import {
   Select,
   SelectContent,
@@ -55,6 +60,28 @@ export function Activity() {
   const { data, isLoading, error } = useQuery({
     queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT }],
     queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT }),
+    enabled: !!selectedCompanyId,
+  });
+
+  // Activity needs spend visibility but doesn't own its own time-series —
+  // the dashboard summary already carries 14 days of per-day cost rolled up
+  // from cost_events, so we reuse it for the spend chart.
+  const { data: dashboard } = useQuery({
+    queryKey: queryKeys.dashboard(selectedCompanyId!),
+    queryFn: () => dashboardApi.summary(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  // Per-agent spend rollup for the same window. Default range covers the last
+  // 30 days so the breakdown contextually matches the activity feed window.
+  const costAgentRangeFrom = useMemo(() => {
+    const d = new Date();
+    d.setUTCDate(d.getUTCDate() - 30);
+    return d.toISOString();
+  }, []);
+  const { data: costByAgent } = useQuery({
+    queryKey: [...queryKeys.dashboard(selectedCompanyId!), "activity", "cost-by-agent", costAgentRangeFrom],
+    queryFn: () => costsApi.byAgent(selectedCompanyId!, costAgentRangeFrom),
     enabled: !!selectedCompanyId,
   });
 
@@ -117,8 +144,64 @@ export function Activity() {
     ? [...new Set(data.map((e) => e.entityType))].sort()
     : [];
 
+  const topCostAgents = useMemo(() => {
+    return [...(costByAgent ?? [])]
+      .filter((row) => (row.costCents ?? 0) > 0 || (row.inputTokens ?? 0) + (row.outputTokens ?? 0) > 0)
+      .slice(0, 10);
+  }, [costByAgent]);
+
   return (
     <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2" data-pp-activity-spend-overview>
+        <ChartCard title="Spend" subtitle="Last 14 days">
+          <SpendActivityChart activity={dashboard?.runActivity ?? []} />
+        </ChartCard>
+        <div className="rounded-lg border border-border p-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-medium text-muted-foreground">Spend by agent</h3>
+            <span className="text-[10px] text-muted-foreground/60">Last 30 days</span>
+          </div>
+          {topCostAgents.length === 0 ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              No per-agent spend yet — once cost_events flow this fills in.
+            </p>
+          ) : (
+            <ul className="mt-3 divide-y divide-border/60 text-xs">
+              {topCostAgents.map((row) => {
+                const tokens = (row.inputTokens ?? 0) + (row.outputTokens ?? 0);
+                const agentRef = row.agentId
+                  ? agentUrl({ id: row.agentId, name: row.agentName ?? null, urlKey: null })
+                  : null;
+                return (
+                  <li
+                    key={row.agentId ?? "unknown"}
+                    className="flex items-center justify-between gap-3 py-1.5"
+                  >
+                    <span className="min-w-0 truncate">
+                      {agentRef ? (
+                        <Link to={agentRef} className="text-foreground/80 hover:underline">
+                          {row.agentName ?? row.agentId?.slice(0, 8) ?? "Unknown agent"}
+                        </Link>
+                      ) : (
+                        <span className="text-muted-foreground">Unattributed</span>
+                      )}
+                    </span>
+                    <span className="flex shrink-0 items-center gap-3 font-mono tabular-nums">
+                      {tokens > 0 ? (
+                        <span className="text-muted-foreground">{formatTokens(tokens)}t</span>
+                      ) : null}
+                      <span className="text-foreground/80">
+                        {formatCostUsdCompact((row.costCents ?? 0) / 100)}
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+
       <div className="flex items-center justify-end">
         <Select value={filter} onValueChange={setFilter}>
           <SelectTrigger className="w-[140px] h-8 text-xs">
