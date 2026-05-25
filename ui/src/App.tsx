@@ -347,6 +347,7 @@ export function App() {
           <Route path="execution-workspaces/:workspaceId/runtime-logs" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/issues" element={<UnprefixedBoardRedirect />} />
           <Route path="execution-workspaces/:workspaceId/routines" element={<UnprefixedBoardRedirect />} />
+          <Route path="cost-watcher" element={<UnprefixedBoardRedirect />} />
           <Route path="knowledge-graph" element={<UnprefixedBoardRedirect />} />
           <Route path="rooms" element={<UnprefixedBoardRedirect />} />
           <Route path="rooms/:roomId" element={<UnprefixedBoardRedirect />} />
