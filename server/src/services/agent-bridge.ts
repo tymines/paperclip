@@ -27,15 +27,26 @@ const BRIDGE_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * Resolves the base URL the bridge daemon should POST agent replies to. The
- * dev server's listen port is published by index.ts as PAPERCLIP_LISTEN_PORT;
- * fall back to the legacy 3001 only as a last resort so a misconfigured env
- * doesn't silently break round-trip persistence.
+ * bridge daemon runs on the same host, so we ALWAYS prefer the local listen
+ * port over any public/auth URL — past silent drops happened because the
+ * daemon was sent a Cloudflare-fronted public URL that 302'd to a login
+ * page, and `fetch` followed the redirect, read the 200 HTML response as
+ * "success", and dropped the reply with no error. The
+ * PAPERCLIP_BRIDGE_LOCAL_API_URL env exists as an escape hatch for the rare
+ * setup where the daemon is NOT co-located (e.g. running in a sibling
+ * container) — in that case set it explicitly.
  */
 export function resolveBridgeApiBaseUrl(): string {
+  if (process.env.PAPERCLIP_BRIDGE_LOCAL_API_URL) {
+    return process.env.PAPERCLIP_BRIDGE_LOCAL_API_URL;
+  }
+  const port = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT;
+  if (port) return `http://127.0.0.1:${port}`;
+  // No port published yet (very early boot, tests) — fall back to the
+  // configured public URLs only as a last resort.
   if (process.env.PAPERCLIP_API_URL) return process.env.PAPERCLIP_API_URL;
   if (process.env.PAPERCLIP_PUBLIC_BASE_URL) return process.env.PAPERCLIP_PUBLIC_BASE_URL;
-  const port = process.env.PAPERCLIP_LISTEN_PORT ?? process.env.PORT ?? "3001";
-  return `http://127.0.0.1:${port}`;
+  return "http://127.0.0.1:3001";
 }
 
 function isBridgeConfig(value: unknown): value is AgentBridgeConfig {
