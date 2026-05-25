@@ -3,6 +3,7 @@ import { useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
 import {
   jarvisApi,
+  type JarvisResponseType,
   type JarvisVoiceCharacter,
   type JarvisVoiceTier,
   type JarvisVoiceTierId,
@@ -29,6 +30,49 @@ const DEFAULT_VOICE: JarvisVoiceCharacter = {
   style: "deep · calm · British",
   premade: true,
 };
+
+// Static defaults so the cost hint + System Status row show meaningful values
+// before /jarvis/voice/tiers responds (or when the older server doesn't
+// expose it). The picker dropdown uses its own internal defaults via the
+// same shape.
+function defaultTier(id: JarvisVoiceTierId): JarvisVoiceTier {
+  switch (id) {
+    case "premium":
+      return {
+        id: "premium",
+        label: "Premium",
+        available: false,
+        latencyEstimateMs: 800,
+        monthlyCostUsdAt5min: 45,
+        costPerMinUsd: 0.04,
+        providers: ["openai_realtime", "elevenlabs"],
+        description: "OpenAI Realtime STT + ElevenLabs Turbo v2.5 TTS.",
+      };
+    case "standard":
+      return {
+        id: "standard",
+        label: "Standard",
+        available: false,
+        latencyEstimateMs: 1500,
+        monthlyCostUsdAt5min: 8,
+        costPerMinUsd: 0.007,
+        providers: ["openai"],
+        description: "OpenAI Whisper STT + TTS-1.",
+      };
+    case "browser-native":
+    default:
+      return {
+        id: "browser-native",
+        label: "Free",
+        available: true,
+        latencyEstimateMs: 1800,
+        monthlyCostUsdAt5min: 0,
+        costPerMinUsd: 0,
+        providers: [],
+        description: "Browser SpeechRecognition + SpeechSynthesis.",
+      };
+  }
+}
 
 type HudState = "idle" | "listening" | "processing" | "speaking";
 
@@ -235,7 +279,10 @@ export function JarvisPage() {
     const timeOfDay = hour < 5 ? "good night" : hour < 12 ? "good morning" : hour < 17 ? "good afternoon" : "good evening";
     // Defer slightly so the page paints + AudioContext can resume on first click.
     const t = window.setTimeout(() => {
-      void dispatchTranscript(`${timeOfDay} — give me today's briefing`);
+      void dispatchTranscript(`${timeOfDay} — give me today's briefing`, {
+        voiceMode: true,
+        responseType: "briefing",
+      });
     }, 800);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -261,15 +308,26 @@ export function JarvisPage() {
   // Dispatch a finalized transcript: POST to /api/jarvis/voice, render the
   // reply as an agent bubble, speak it via browser TTS. Orb visuals follow
   // the HUD state and the TTS envelope inside useJarvisVoice.
+  //
+  // voiceMode flag tells the server to strip markdown + tighten prose; we
+  // set it true when the input came from the mic, false on text submits.
+  // responseType is an optional hint — the morning auto-greet sets
+  // "briefing"; the rest let the server infer from the transcript.
   const dispatchTranscript = useCallback(
-    async (transcript: string) => {
+    async (
+      transcript: string,
+      opts: { voiceMode?: boolean; responseType?: JarvisResponseType } = {}
+    ) => {
       if (!transcript.trim() || !selectedCompanyId) return;
       setState("processing");
+      const voiceMode = opts.voiceMode ?? false;
       let reply = "";
       try {
         const resp = await jarvisApi.voice(selectedCompanyId, {
           transcript,
           voiceTier,
+          voiceMode,
+          responseType: opts.responseType,
         });
         reply = resp.reply;
       } catch (err) {
@@ -310,7 +368,7 @@ export function JarvisPage() {
         },
       ]);
       setComposer("");
-      void dispatchTranscript(trimmed);
+      void dispatchTranscript(trimmed, { voiceMode: false });
     },
     [composer, dispatchTranscript]
   );
@@ -347,7 +405,7 @@ export function JarvisPage() {
         },
       ];
     });
-    await dispatchTranscript(finalText);
+    await dispatchTranscript(finalText, { voiceMode: true });
   }, [state, voice, dispatchTranscript]);
 
   function clearChat() {
@@ -835,45 +893,3 @@ function formatNow() {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// Static defaults so the cost hint + System Status row show meaningful values
-// before /jarvis/voice/tiers responds (or when the older server doesn't
-// expose it). The picker dropdown uses its own internal defaults via the
-// same shape.
-function defaultTier(id: JarvisVoiceTierId): JarvisVoiceTier {
-  switch (id) {
-    case "premium":
-      return {
-        id: "premium",
-        label: "Premium",
-        available: false,
-        latencyEstimateMs: 800,
-        monthlyCostUsdAt5min: 45,
-        costPerMinUsd: 0.04,
-        providers: ["openai_realtime", "elevenlabs"],
-        description: "OpenAI Realtime STT + ElevenLabs Turbo v2.5 TTS.",
-      };
-    case "standard":
-      return {
-        id: "standard",
-        label: "Standard",
-        available: false,
-        latencyEstimateMs: 1500,
-        monthlyCostUsdAt5min: 8,
-        costPerMinUsd: 0.007,
-        providers: ["openai"],
-        description: "OpenAI Whisper STT + TTS-1.",
-      };
-    case "browser-native":
-    default:
-      return {
-        id: "browser-native",
-        label: "Free",
-        available: true,
-        latencyEstimateMs: 1800,
-        monthlyCostUsdAt5min: 0,
-        costPerMinUsd: 0,
-        providers: [],
-        description: "Browser SpeechRecognition + SpeechSynthesis.",
-      };
-  }
-}

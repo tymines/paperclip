@@ -2,10 +2,16 @@ import { api } from "./client";
 
 export type JarvisVoiceTierId = "premium" | "standard" | "browser-native";
 
+export type JarvisResponseType = "quick" | "standard" | "briefing" | "detailed";
+
 export interface JarvisVoiceRequest {
   transcript: string;
   conversationId?: string;
   voiceTier?: JarvisVoiceTierId;
+  /** True when the transcript came from the mic — reply will also be spoken. */
+  voiceMode?: boolean;
+  /** Length-budget hint. Server infers when omitted. */
+  responseType?: JarvisResponseType;
 }
 
 export interface JarvisVoiceResponse {
@@ -16,6 +22,14 @@ export interface JarvisVoiceResponse {
   conversationId: string | null;
   llmProvider?: string | null;
   llmModel?: string | null;
+  /** Content-hash of the persona that produced this reply. */
+  personaVersion?: string;
+  /** "file" if loaded from disk, "fallback" if the persona file is missing. */
+  personaSource?: "file" | "fallback";
+  /** Resolved response type after the server's inference pass. */
+  responseType?: JarvisResponseType;
+  /** True when the API layer trimmed the model output to fit the budget. */
+  truncated?: boolean;
 }
 
 export interface JarvisVoiceTier {

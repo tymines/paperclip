@@ -18,6 +18,10 @@ const voiceRequestSchema = z.object({
   transcript: z.string().min(1).max(4000),
   conversationId: z.string().uuid().optional(),
   voiceTier: z.enum(["browser-native", "standard", "premium"]).optional(),
+  /** True when the transcript came from the mic (TTS reply is spoken). */
+  voiceMode: z.boolean().optional(),
+  /** Length-budget hint. Falls back to inferResponseType() when omitted. */
+  responseType: z.enum(["quick", "standard", "briefing", "detailed"]).optional(),
 });
 
 export function jarvisRoutes(db: Db) {
@@ -30,7 +34,9 @@ export function jarvisRoutes(db: Db) {
       const { companyId } = req.params as { companyId: string };
       assertCompanyAccess(req, companyId);
 
-      const { transcript, voiceTier } = req.body as z.infer<typeof voiceRequestSchema>;
+      const { transcript, voiceTier, voiceMode, responseType } = req.body as z.infer<
+        typeof voiceRequestSchema
+      >;
 
       const actor = req.actor;
       const userActorId =
@@ -45,6 +51,8 @@ export function jarvisRoutes(db: Db) {
         userActorId,
         transcript,
         voiceTier,
+        voiceMode,
+        responseType,
       });
 
       res.json({
@@ -54,6 +62,10 @@ export function jarvisRoutes(db: Db) {
         llmProvider: out.llmProvider,
         llmModel: out.llmModel,
         contextSnapshot: out.contextSnapshot,
+        personaVersion: out.personaVersion,
+        personaSource: out.personaSource,
+        responseType: out.responseType,
+        truncated: out.truncated,
         conversationId: null,
       });
     }
