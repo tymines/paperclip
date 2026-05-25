@@ -31,6 +31,7 @@ import {
   Mail,
   PenSquare,
   Share2,
+  UploadCloud,
   Users,
 } from "lucide-react";
 import { socialApi } from "../api/social";
@@ -49,6 +50,7 @@ import { InboxTab } from "../components/social/InboxTab";
 import { AnalyticsTab } from "../components/social/AnalyticsTab";
 import { CompetitorsTab } from "../components/social/CompetitorsTab";
 import { HashtagLabTab } from "../components/social/HashtagLabTab";
+import { BulkUploadTab } from "../components/social/BulkUploadTab";
 
 type SchedulerTab =
   | "compose"
@@ -59,13 +61,15 @@ type SchedulerTab =
   | "inbox"
   | "analytics"
   | "competitors"
-  | "hashtags";
+  | "hashtags"
+  | "bulk-upload";
 
 const TABS: { key: SchedulerTab; label: string; icon: typeof PenSquare }[] = [
   { key: "compose", label: "Compose", icon: PenSquare },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
   { key: "grid", label: "IG Grid", icon: Grid3X3 },
   { key: "queue", label: "Queue", icon: Inbox },
+  { key: "bulk-upload", label: "Bulk Upload", icon: UploadCloud },
   { key: "inbox", label: "Inbox", icon: Mail },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
   { key: "competitors", label: "Competitors", icon: Users },
@@ -176,6 +180,7 @@ export function SocialScheduler() {
         {tab === "calendar" ? <CalendarTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "grid" ? <InstagramGridTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "queue" ? <QueueTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "bulk-upload" ? <BulkUploadTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "inbox" ? <InboxTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "analytics" ? <AnalyticsTab companyId={selectedCompanyId} accounts={accounts} /> : null}
         {tab === "competitors" ? <CompetitorsTab companyId={selectedCompanyId} accounts={accounts} /> : null}

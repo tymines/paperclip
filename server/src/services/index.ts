@@ -29,6 +29,7 @@ export { goalService } from "./goals.js";
 export { knowledgeGraphService } from "./knowledge-graph.js";
 export { roomService } from "./rooms.js";
 export { socialService } from "./social.js";
+export { bulkUploadService } from "./bulk-upload.js";
 export { activityService, type ActivityFilters } from "./activity.js";
 export { approvalService } from "./approvals.js";
 export { budgetService } from "./budgets.js";
