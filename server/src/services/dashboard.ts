@@ -83,9 +83,12 @@ export function dashboardService(db: Db) {
       const monthStart = getUtcMonthStart(now);
       const runActivityDays = getRecentUtcDateKeys(now, DASHBOARD_RUN_ACTIVITY_DAYS);
       const runActivityStart = new Date(`${runActivityDays[0]}T00:00:00.000Z`);
-      const [{ monthSpend }] = await db
+      const [monthCostSummary] = await db
         .select({
           monthSpend: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
+          monthInputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::double precision`,
+          monthOutputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::double precision`,
+          monthCachedInputTokens: sql<number>`coalesce(sum(${costEvents.cachedInputTokens}), 0)::double precision`,
         })
         .from(costEvents)
         .where(
@@ -95,7 +98,10 @@ export function dashboardService(db: Db) {
           ),
         );
 
-      const monthSpendCents = Number(monthSpend);
+      const monthSpendCents = Number(monthCostSummary?.monthSpend ?? 0);
+      const monthInputTokens = Number(monthCostSummary?.monthInputTokens ?? 0);
+      const monthOutputTokens = Number(monthCostSummary?.monthOutputTokens ?? 0);
+      const monthCachedInputTokens = Number(monthCostSummary?.monthCachedInputTokens ?? 0);
       const runActivityDayExpr = sql<string>`to_char(${heartbeatRuns.createdAt} at time zone 'UTC', 'YYYY-MM-DD')`;
       const runActivityRows = await db
         .select({
@@ -112,10 +118,40 @@ export function dashboardService(db: Db) {
         )
         .groupBy(runActivityDayExpr, heartbeatRuns.status);
 
+      // Per-day cost / token rollup from cost_events for the same window the
+      // activity chart renders, so callers can overlay a spend / token line.
+      const costActivityDayExpr = sql<string>`to_char(${costEvents.occurredAt} at time zone 'UTC', 'YYYY-MM-DD')`;
+      const costActivityRows = await db
+        .select({
+          date: costActivityDayExpr,
+          costCents: sql<number>`coalesce(sum(${costEvents.costCents}), 0)::double precision`,
+          inputTokens: sql<number>`coalesce(sum(${costEvents.inputTokens}), 0)::double precision`,
+          outputTokens: sql<number>`coalesce(sum(${costEvents.outputTokens}), 0)::double precision`,
+          cachedInputTokens: sql<number>`coalesce(sum(${costEvents.cachedInputTokens}), 0)::double precision`,
+        })
+        .from(costEvents)
+        .where(
+          and(
+            eq(costEvents.companyId, companyId),
+            gte(costEvents.occurredAt, runActivityStart),
+          ),
+        )
+        .groupBy(costActivityDayExpr);
+
       const runActivity = new Map(
         runActivityDays.map((date) => [
           date,
-          { date, succeeded: 0, failed: 0, other: 0, total: 0 },
+          {
+            date,
+            succeeded: 0,
+            failed: 0,
+            other: 0,
+            total: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cachedInputTokens: 0,
+            costCents: 0,
+          },
         ]),
       );
       for (const row of runActivityRows) {
@@ -126,6 +162,14 @@ export function dashboardService(db: Db) {
         else if (row.status === "failed" || row.status === "timed_out") bucket.failed += count;
         else bucket.other += count;
         bucket.total += count;
+      }
+      for (const row of costActivityRows) {
+        const bucket = runActivity.get(row.date);
+        if (!bucket) continue;
+        bucket.costCents += Number(row.costCents ?? 0);
+        bucket.inputTokens += Number(row.inputTokens ?? 0);
+        bucket.outputTokens += Number(row.outputTokens ?? 0);
+        bucket.cachedInputTokens += Number(row.cachedInputTokens ?? 0);
       }
 
       const utilization =
@@ -147,6 +191,11 @@ export function dashboardService(db: Db) {
           monthSpendCents,
           monthBudgetCents: company.budgetMonthlyCents,
           monthUtilizationPercent: Number(utilization.toFixed(2)),
+        },
+        tokens: {
+          monthInputTokens,
+          monthOutputTokens,
+          monthCachedInputTokens,
         },
         pendingApprovals,
         budgets: {
