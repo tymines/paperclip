@@ -1080,15 +1080,17 @@ export function JarvisPage() {
                   label="Voice Models"
                   value={
                     voiceProvider.name === "elevenlabs"
-                      ? "ElevenLabs Turbo v2.5"
+                      ? "ElevenLabs Turbo v2.5 (playing)"
                       : voiceProvider.name === "browser-tts"
-                        ? voiceProvider.fallbackReason && voiceProvider.fallbackStatus
-                          ? `Browser TTS · ${voiceProvider.fallbackReason} (${voiceProvider.fallbackStatus})`
-                          : voiceProvider.fallbackReason
-                            ? `Browser TTS · ${voiceProvider.fallbackReason}`
-                            : voiceProvider.fallbackStatus
-                              ? `Browser TTS · fallback (HTTP ${voiceProvider.fallbackStatus})`
-                              : "Browser TTS"
+                        ? voiceProvider.fallbackReason === "quota_exceeded"
+                          ? "Browser TTS · ElevenLabs key cap hit — raise it in Workspace → API Keys"
+                          : voiceProvider.fallbackReason && voiceProvider.fallbackStatus
+                            ? `Browser TTS · ${voiceProvider.fallbackReason} (${voiceProvider.fallbackStatus})`
+                            : voiceProvider.fallbackReason
+                              ? `Browser TTS · ${voiceProvider.fallbackReason}`
+                              : voiceProvider.fallbackStatus
+                                ? `Browser TTS · fallback (HTTP ${voiceProvider.fallbackStatus})`
+                                : "Browser TTS"
                       : voiceTier === "premium" || voiceTier === "standard"
                         ? "ElevenLabs Turbo v2.5 (idle)"
                         : "Browser TTS"

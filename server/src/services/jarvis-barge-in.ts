@@ -92,7 +92,12 @@ export async function mintRealtimeEphemeralKey(opts: {
   if (!apiKey) return null;
 
   const model = opts.model ?? "gpt-realtime";
-  const voice = opts.voice ?? "alloy";
+  // "alloy" was the original default but reads as flat and robotic over the
+  // phone — Tyler kept calling Jarvis "the robot" specifically because of
+  // the conversational/barge-in voice. "sage" is the warmest of the GA
+  // Realtime voices (alternatives: ash, verse, ballad, coral) and matches
+  // the ElevenLabs Adam tone we use for the briefing path.
+  const voice = opts.voice ?? "sage";
 
   const resp = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
     method: "POST",
