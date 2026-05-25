@@ -60,6 +60,67 @@ export function jarvisRoutes(db: Db) {
   );
 
   /**
+   * Lists available ElevenLabs voices. Pre-made voices are hardcoded
+   * (their IDs are stable across the ElevenLabs catalog); cloned voices
+   * are stored client-side in localStorage in Commit 6 — a follow-up will
+   * persist them to a company_jarvis_settings row once the ElevenLabs
+   * proxy lands.
+   */
+  router.get("/companies/:companyId/jarvis/voices", async (req, res) => {
+    const { companyId } = req.params as { companyId: string };
+    assertCompanyAccess(req, companyId);
+    const elevenlabsKey = await getRawKey("elevenlabs").catch(() => null);
+    res.json({
+      elevenlabsConfigured: !!elevenlabsKey,
+      voices: PREMADE_ELEVENLABS_VOICES,
+    });
+  });
+
+  /**
+   * Stub for now. Real ElevenLabs proxy (POST /v1/voices/add) lands with
+   * the Premium tier handlers. Returns 501 with a helpful message if the
+   * key isn't configured.
+   */
+  router.post("/companies/:companyId/jarvis/voice/clone", async (req, res) => {
+    const { companyId } = req.params as { companyId: string };
+    assertCompanyAccess(req, companyId);
+    const elevenlabsKey = await getRawKey("elevenlabs").catch(() => null);
+    if (!elevenlabsKey) {
+      res.status(501).json({
+        error: "elevenlabs_not_configured",
+        message:
+          "Connect an ElevenLabs API key in Fleet → Provider Keys to enable voice cloning.",
+      });
+      return;
+    }
+    // Real proxy lands in a follow-up. For now: return a "ready to clone"
+    // ack so the client wizard can preview the flow without hitting
+    // ElevenLabs's billing endpoint.
+    res.status(202).json({
+      status: "stub",
+      message:
+        "ElevenLabs key configured. The real /v1/voices/add proxy ships with the Premium tier handlers.",
+    });
+  });
+
+  /**
+   * Voice preview — synthesizes a sample sentence in the selected voice.
+   * Without an ElevenLabs key, the client falls back to browser TTS
+   * directly, so this endpoint primarily exists as a contract anchor.
+   */
+  router.post("/companies/:companyId/jarvis/voice/preview", async (req, res) => {
+    const { companyId } = req.params as { companyId: string };
+    assertCompanyAccess(req, companyId);
+    const elevenlabsKey = await getRawKey("elevenlabs").catch(() => null);
+    res.json({
+      elevenlabsConfigured: !!elevenlabsKey,
+      // Client uses this flag to pick browser TTS vs server-streamed audio.
+      // Real audio stream lands with Premium tier handlers.
+      previewAudioUrl: null,
+    });
+  });
+
+  /**
    * Reports which Jarvis voice tiers are currently available based on
    * configured provider keys. The client uses this to enable/disable the
    * tier picker rows and pick the highest-available tier by default.
@@ -116,3 +177,18 @@ export function jarvisRoutes(db: Db) {
 
   return router;
 }
+
+/**
+ * ElevenLabs's stable pre-made voice catalog. IDs are taken from the
+ * documented sample voices and are the same for every account.
+ */
+const PREMADE_ELEVENLABS_VOICES = [
+  { voiceId: "pNInz6obpgDQGcFmaJgB", name: "Adam", style: "deep · calm · British", premade: true },
+  { voiceId: "EXAVITQu4vr4xnSDxMaL", name: "Bella", style: "soft · warm · American", premade: true },
+  { voiceId: "nPczCjzI2devNBz1zQrb", name: "Brian", style: "narrative · British", premade: true },
+  { voiceId: "IKne3meq5aSn9XLyUdCD", name: "Charlie", style: "casual · Australian", premade: true },
+  { voiceId: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", style: "youthful · American", premade: true },
+  { voiceId: "21m00Tcm4TlvDq8ikWAM", name: "Rachel", style: "calm · American · narrator", premade: true },
+  { voiceId: "AZnzlk1XvdvUeBnXmlld", name: "Domi", style: "strong · confident · American", premade: true },
+  { voiceId: "MF3mGyEYCl7XYWbV9V6O", name: "Elli", style: "young · emotional", premade: true },
+];

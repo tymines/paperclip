@@ -33,6 +33,19 @@ export interface JarvisVoiceTiersResponse {
   tiers: JarvisVoiceTier[];
 }
 
+export interface JarvisVoiceCharacter {
+  voiceId: string;
+  name: string;
+  style: string;
+  premade: boolean;
+  cloned?: boolean;
+}
+
+export interface JarvisVoicesResponse {
+  elevenlabsConfigured: boolean;
+  voices: JarvisVoiceCharacter[];
+}
+
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
@@ -48,4 +61,22 @@ export const jarvisApi = {
    */
   voiceTiers: (companyId: string): Promise<JarvisVoiceTiersResponse> =>
     api.get(`/api/companies/${companyId}/jarvis/voice/tiers`),
+
+  /** Lists available ElevenLabs voice characters (pre-made + cloned). */
+  voices: (companyId: string): Promise<JarvisVoicesResponse> =>
+    api.get(`/api/companies/${companyId}/jarvis/voices`),
+
+  /** Uploads a 30s audio sample to ElevenLabs for cloning. Returns voice_id when configured. */
+  cloneVoice: (
+    companyId: string,
+    body: { name: string; audioBase64: string; mimeType: string }
+  ): Promise<{ status: string; voiceId?: string; message?: string }> =>
+    api.post(`/api/companies/${companyId}/jarvis/voice/clone`, body),
+
+  /** Returns an audio preview URL for a given voice (or null on browser-fallback). */
+  voicePreview: (
+    companyId: string,
+    body: { voiceId: string }
+  ): Promise<{ elevenlabsConfigured: boolean; previewAudioUrl: string | null }> =>
+    api.post(`/api/companies/${companyId}/jarvis/voice/preview`, body),
 };

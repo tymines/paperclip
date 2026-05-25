@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState, useCallback, useMemo, type FormEvent } from "react";
 import { useNavigate } from "@/lib/router";
 import { useCompany } from "@/context/CompanyContext";
-import { jarvisApi, type JarvisVoiceTier, type JarvisVoiceTierId } from "@/api/jarvis";
+import {
+  jarvisApi,
+  type JarvisVoiceCharacter,
+  type JarvisVoiceTier,
+  type JarvisVoiceTierId,
+} from "@/api/jarvis";
 import { Reactor } from "./Reactor";
 import { useOrbAudio } from "./useOrbAudio";
 import { useJarvisVoice } from "./useJarvisVoice";
 import { VoiceTierPicker } from "./VoiceTierPicker";
+import { VoiceCharacterModal } from "./VoiceCharacterModal";
 import {
   MOCK_BRIEFING,
   MOCK_CAPABILITIES,
@@ -15,6 +21,14 @@ import {
 import "./Jarvis.css";
 
 const TIER_STORAGE_KEY = "paperclip.jarvis.voiceTier";
+const VOICE_CHARACTER_STORAGE_KEY = "paperclip.jarvis.voiceCharacter";
+
+const DEFAULT_VOICE: JarvisVoiceCharacter = {
+  voiceId: "pNInz6obpgDQGcFmaJgB",
+  name: "Adam",
+  style: "deep · calm · British",
+  premade: true,
+};
 
 type HudState = "idle" | "listening" | "processing" | "speaking";
 
@@ -93,6 +107,27 @@ export function JarvisPage() {
     } catch {}
     return "browser-native";
   });
+  const [voiceCharacter, setVoiceCharacter] = useState<JarvisVoiceCharacter>(() => {
+    try {
+      const stored = window.localStorage.getItem(VOICE_CHARACTER_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed.voiceId === "string") {
+          return parsed as JarvisVoiceCharacter;
+        }
+      }
+    } catch {}
+    return DEFAULT_VOICE;
+  });
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+
+  const onVoiceCharacterSelect = useCallback((voice: JarvisVoiceCharacter) => {
+    setVoiceCharacter(voice);
+    try {
+      window.localStorage.setItem(VOICE_CHARACTER_STORAGE_KEY, JSON.stringify(voice));
+    } catch {}
+    setVoiceModalOpen(false);
+  }, []);
 
   // Fetch tier availability + pick the highest available as default if the
   // user hasn't already chosen one (or their previous choice is now stale).
@@ -359,6 +394,18 @@ export function JarvisPage() {
         <div className="jarvis-top-actions">
           <span className="jarvis-online-pill">Online</span>
           <VoiceTierPicker tiers={tiers} selected={voiceTier} onSelect={onTierSelect} />
+          <button
+            type="button"
+            className="jarvis-voice-character-btn"
+            onClick={() => setVoiceModalOpen(true)}
+            title="Change voice character"
+          >
+            <svg viewBox="0 0 24 24" width={12} height={12} fill="none" aria-hidden>
+              <rect x={9} y={3} width={6} height={11} rx={3} stroke="currentColor" strokeWidth={1.8} />
+              <path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
+            </svg>
+            <span className="name">{voiceCharacter.name}</span>
+          </button>
           <button className="jarvis-icon-btn" title="Settings" type="button">
             <svg viewBox="0 0 24 24" fill="none">
               <circle cx={12} cy={12} r={3} stroke="currentColor" strokeWidth={1.6} />
@@ -727,6 +774,14 @@ export function JarvisPage() {
           </section>
         </aside>
       </main>
+
+      <VoiceCharacterModal
+        companyId={selectedCompanyId ?? null}
+        open={voiceModalOpen}
+        selectedVoiceId={voiceCharacter.voiceId}
+        onSelect={onVoiceCharacterSelect}
+        onClose={() => setVoiceModalOpen(false)}
+      />
     </div>
   );
 }
