@@ -100,43 +100,49 @@ export interface JarvisHealthResponse {
   voice: { elevenlabs: boolean; openaiRealtime: boolean };
 }
 
+// All paths are RELATIVE to /api — the api client auto-prepends the
+// /api base. Don't add "/api/" to these paths or they will double-prefix
+// into /api/api/... and 404. This was the actual root cause of the
+// "Jarvis is broken" report: every call below was 404ing silently, the
+// catch blocks ate the failures, and the chat panel stayed on the
+// MOCK_INITIAL_CHAT seed making it LOOK like the backend was responding.
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
-   * Commit 2: placeholder. Commit 3: dispatched through Augi-as-brain
-   * with real cost-watcher / blocked-issue / fleet data + LLM call.
+   * Dispatched through Augi-as-brain with real cost-watcher /
+   * blocked-issue / fleet data + LLM call.
    */
   voice: (companyId: string, body: JarvisVoiceRequest): Promise<JarvisVoiceResponse> =>
-    api.post(`/api/companies/${companyId}/jarvis/voice`, body),
+    api.post(`/companies/${companyId}/jarvis/voice`, body),
 
   /**
    * Reports which voice tiers are currently available based on configured
    * provider keys + their latency / monthly cost estimates.
    */
   voiceTiers: (companyId: string): Promise<JarvisVoiceTiersResponse> =>
-    api.get(`/api/companies/${companyId}/jarvis/voice/tiers`),
+    api.get(`/companies/${companyId}/jarvis/voice/tiers`),
 
   /** Lists available ElevenLabs voice characters (pre-made + cloned). */
   voices: (companyId: string): Promise<JarvisVoicesResponse> =>
-    api.get(`/api/companies/${companyId}/jarvis/voices`),
+    api.get(`/companies/${companyId}/jarvis/voices`),
 
   /** Uploads a 30s audio sample to ElevenLabs for cloning. Returns voice_id when configured. */
   cloneVoice: (
     companyId: string,
     body: { name: string; audioBase64: string; mimeType: string }
   ): Promise<{ status: string; voiceId?: string; message?: string }> =>
-    api.post(`/api/companies/${companyId}/jarvis/voice/clone`, body),
+    api.post(`/companies/${companyId}/jarvis/voice/clone`, body),
 
   /** Returns an audio preview URL for a given voice (or null on browser-fallback). */
   voicePreview: (
     companyId: string,
     body: { voiceId: string }
   ): Promise<{ elevenlabsConfigured: boolean; previewAudioUrl: string | null }> =>
-    api.post(`/api/companies/${companyId}/jarvis/voice/preview`, body),
+    api.post(`/companies/${companyId}/jarvis/voice/preview`, body),
 
   /** Probes what Augi can actually do on this host. ?refresh=1 re-probes. */
   capabilities: (companyId: string, refresh = false): Promise<JarvisCapabilitiesResponse> =>
-    api.get(`/api/companies/${companyId}/jarvis/capabilities${refresh ? "?refresh=1" : ""}`),
+    api.get(`/companies/${companyId}/jarvis/capabilities${refresh ? "?refresh=1" : ""}`),
 
   /**
    * Returns the user's recent Jarvis conversation turns so the chat panel
@@ -146,12 +152,12 @@ export const jarvisApi = {
     companyId: string,
     limit = 20,
   ): Promise<JarvisConversationsResponse> =>
-    api.get(`/api/companies/${companyId}/jarvis/conversations?limit=${limit}`),
+    api.get(`/companies/${companyId}/jarvis/conversations?limit=${limit}`),
 
   /**
    * Health probe — confirms /api/jarvis routes are mounted and reports
    * which LLM / voice provider keys are configured. Used by the UI to
    * surface "no real LLM wired" when every provider is missing.
    */
-  health: (): Promise<JarvisHealthResponse> => api.get(`/api/jarvis/health`),
+  health: (): Promise<JarvisHealthResponse> => api.get(`/jarvis/health`),
 };
