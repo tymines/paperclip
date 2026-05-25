@@ -160,7 +160,7 @@ export function Home() {
             </span>
             <Link
               to={companyPrefix ? `/${companyPrefix}/goals` : "/goals"}
-              className="-my-3 inline-flex min-h-[44px] items-center px-2 text-xs text-primary hover:underline"
+              className="-my-3 inline-flex min-h-[44px] min-w-[44px] items-center justify-end px-3 text-xs text-primary hover:underline"
             >
               Open all
             </Link>

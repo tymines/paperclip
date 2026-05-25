@@ -29,7 +29,9 @@ function GoalNode({ goal, children, allGoals, depth, goalLink, onSelect }: GoalN
     <>
       {hasChildren ? (
         <button
-          className="p-0.5"
+          type="button"
+          aria-label={expanded ? "Collapse goal" : "Expand goal"}
+          className="-my-2 inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded p-0.5 hover:bg-accent/50"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
