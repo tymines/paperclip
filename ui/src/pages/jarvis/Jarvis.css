@@ -372,6 +372,31 @@
   text-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
+/* Manual "Brief me" trigger in the topbar — same pill silhouette as the
+   voice-character button so the action cluster reads as one group. */
+.jarvis-topbar__brief-me {
+  all: unset;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  border: 1px solid var(--jarvis-line);
+  background: var(--jarvis-panel);
+  border-radius: 999px;
+  font-family: var(--jarvis-font-data);
+  font-size: 10px;
+  color: var(--jarvis-text);
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-weight: 600;
+  transition: all 160ms ease;
+}
+.jarvis-topbar__brief-me:hover {
+  border-color: var(--jarvis-line-strong);
+  color: var(--jarvis-accent);
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+}
+
 .jarvis-modal-shroud {
   position: fixed;
   inset: 0;
@@ -1020,6 +1045,36 @@
   text-transform: uppercase;
   text-shadow: 0 0 14px rgba(0, 212, 255, 0.55);
   text-align: center;
+}
+
+/* Recommended-action CTA — centered over the orb. Pointer-events override
+   the reactor's pointer-events:none parent stack via z-index/position. */
+.jarvis-orb__cta {
+  all: unset;
+  cursor: pointer;
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: 88%;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(2, 8, 18, 0.72);
+  border: 1px solid var(--jarvis-line-strong);
+  backdrop-filter: blur(8px);
+  font-family: var(--jarvis-font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--jarvis-text-strong);
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0, 12, 28, 0.55), 0 0 18px rgba(0, 212, 255, 0.28);
+  transition: all 160ms ease;
+}
+.jarvis-orb__cta:hover {
+  background: rgba(0, 28, 50, 0.85);
+  box-shadow: 0 8px 28px rgba(0, 12, 28, 0.6), 0 0 22px rgba(0, 212, 255, 0.45);
 }
 
 /* Reactor SVG */

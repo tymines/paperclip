@@ -22,6 +22,16 @@ export const jarvisConversations = pgTable(
     responseType: text("response_type"),
     /** True when the API layer truncated the model output to fit the budget. */
     truncated: boolean("truncated").default(false),
+    /**
+     * How this turn was triggered. Free-form (no enum) so new sources don't
+     * need a migration. Known values:
+     *   - "voice"        — normal mic-driven turn (default when null)
+     *   - "chat"         — text typed into the chat panel
+     *   - "daddys_home"  — morning briefing routine
+     *   - "mac-wake"     — wake-event-triggered daddys-home
+     *   - "schedule"     — cron-triggered daddys-home (daily-jarvis-briefing)
+     */
+    source: text("source"),
     /** Snapshot of the context briefing fed to the LLM — supports replay + audit. */
     contextSnapshot: jsonb("context_snapshot").$type<Record<string, unknown>>(),
     latencyMs: text("latency_ms"),
@@ -34,6 +44,10 @@ export const jarvisConversations = pgTable(
     ),
     personaVersionIdx: index("jarvis_conversations_persona_version_idx").on(
       table.personaVersion,
+    ),
+    sourceCreatedIdx: index("jarvis_conversations_source_created_idx").on(
+      table.source,
+      table.createdAt,
     ),
   }),
 );

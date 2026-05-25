@@ -1,13 +1,20 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { jarvisConversations } from "@paperclipai/db";
-import { and, desc, eq } from "drizzle-orm";
+import { jarvisConversations, companies } from "@paperclipai/db";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
+import {
+  gatherBriefingPayload,
+  composeBriefingTranscript,
+  extractRecommendedAction,
+  type BriefingPayload,
+} from "../services/jarvis-briefing.js";
 import { getRawKey } from "../services/provider-api-keys/index.js";
 import { getCapabilitySnapshot } from "../services/jarvis-capabilities.js";
+import { logger } from "../middleware/logger.js";
 import {
   calendarUpcoming,
   remindersOpen,
@@ -114,6 +121,123 @@ export function jarvisRoutes(db: Db) {
       });
     }
   );
+
+  /**
+   * Daddy's Home morning briefing.
+   *
+   * Pulls a live ops snapshot (shipped overnight, blocked work, fleet health,
+   * project progress, what changed) and hands it to Augi as the user-message
+   * context. Augi composes a 4-6 sentence spoken-prose briefing per the
+   * persona's "Daily morning briefing" section, ending with one concrete
+   * recommended next action. Persisted to jarvis_conversations with
+   * source="daddys_home" (or whatever source the caller passed).
+   *
+   * Server returns the briefing text + the extracted recommended-action
+   * sentence (UI surfaces it as a primary CTA in the orb center). Audio
+   * playback is client-side — the client picks browser TTS or ElevenLabs
+   * based on the user's voiceTier.
+   */
+  const daddysHomeSchema = z.object({
+    voiceTier: z.enum(["browser-native", "standard", "premium"]).optional(),
+    source: z.string().min(1).max(64).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/daddys-home",
+    validate(daddysHomeSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const { voiceTier, source } = req.body as z.infer<typeof daddysHomeSchema>;
+
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : "daddys-home-trigger";
+
+      const out = await dispatchDaddysHome(db, {
+        companyId,
+        userActorId,
+        voiceTier,
+        source: source ?? "daddys_home",
+      });
+
+      res.json(out);
+    },
+  );
+
+  /**
+   * Local-only trigger that the bridge daemon's Mac-wake watcher hits on
+   * unlock. No auth — we restrict to loopback callers and use a 4-hour
+   * in-memory debounce so a flurry of wake events doesn't carpet-bomb
+   * Augi. Resolves to the first company in the database (Tyler's instance
+   * is single-tenant) and proxies to the main daddys-home flow.
+   *
+   * Mounted at /jarvis/daddys-home-trigger (no companyId prefix) so the
+   * bridge daemon can call it without knowing the UUID.
+   */
+  router.post("/jarvis/daddys-home-trigger", async (req, res) => {
+    // Defensive loopback check — req.ip is sensitive to trust-proxy config,
+    // so we also consult the raw socket address. The trigger has no auth so
+    // we must be strict about the origin (it's only meant for the bridge
+    // daemon on the same host).
+    const candidates = [
+      req.ip ?? "",
+      req.socket?.remoteAddress ?? "",
+      (req.headers["x-forwarded-for"] as string | undefined) ?? "",
+    ];
+    if (!candidates.some(isLoopback)) {
+      res.status(403).json({ error: "loopback_only" });
+      return;
+    }
+    const source =
+      typeof req.query.source === "string" && req.query.source.length > 0
+        ? req.query.source.slice(0, 64)
+        : "mac-wake";
+
+    const lastFired = daddysHomeDebounce.get(source) ?? 0;
+    const now = Date.now();
+    if (now - lastFired < DADDYS_HOME_DEBOUNCE_MS) {
+      const cooldownSec = Math.round(
+        (DADDYS_HOME_DEBOUNCE_MS - (now - lastFired)) / 1000,
+      );
+      res.status(429).json({
+        ok: false,
+        skipped: "debounced",
+        source,
+        cooldownSec,
+      });
+      return;
+    }
+
+    const company = await db
+      .select({ id: companies.id })
+      .from(companies)
+      .orderBy(asc(companies.createdAt))
+      .limit(1)
+      .then((rows) => rows[0] ?? null);
+
+    if (!company) {
+      res.status(503).json({ ok: false, error: "no_company_configured" });
+      return;
+    }
+
+    daddysHomeDebounce.set(source, now);
+
+    try {
+      const out = await dispatchDaddysHome(db, {
+        companyId: company.id,
+        userActorId: `system:${source}`,
+        source,
+      });
+      res.json({ ok: true, source, companyId: company.id, ...out });
+    } catch (err) {
+      logger.warn({ err, source }, "daddys-home-trigger: dispatch failed");
+      res.status(500).json({ ok: false, error: "dispatch_failed" });
+    }
+  });
 
   /**
    * Conversation history — pulls the user's recent turns out of
@@ -395,6 +519,93 @@ export function jarvisRoutes(db: Db) {
   });
 
   return router;
+}
+
+/**
+ * 4 hours per source — matches the Mac-wake watcher's debounce so a flurry
+ * of wake-from-sleep events doesn't carpet-bomb Augi. The `manual` source
+ * (Brief-me button) bypasses this via the company-scoped endpoint which has
+ * no debounce.
+ */
+const DADDYS_HOME_DEBOUNCE_MS = 4 * 60 * 60 * 1000;
+const daddysHomeDebounce = new Map<string, number>();
+
+function isLoopback(ip: string): boolean {
+  if (!ip) return false;
+  const cleaned = ip.replace(/^::ffff:/, "");
+  return (
+    cleaned === "127.0.0.1" ||
+    cleaned === "::1" ||
+    cleaned === "localhost" ||
+    cleaned.startsWith("127.")
+  );
+}
+
+interface DaddysHomeDispatchInput {
+  companyId: string;
+  userActorId: string;
+  voiceTier?: string;
+  source: string;
+}
+
+interface DaddysHomeDispatchResult {
+  briefingText: string;
+  recommendedAction: string;
+  briefingPayload: BriefingPayload;
+  tier: string;
+  latencyMs: number;
+  llmProvider: string | null;
+  llmModel: string | null;
+  personaVersion: string;
+  personaSource: "file" | "fallback";
+  responseType: string;
+  truncated: boolean;
+  audioStreamUrl: null;
+  conversationId: null;
+}
+
+/**
+ * Shared briefing dispatcher used by both the company-scoped endpoint
+ * (Brief-me button + scheduled routine) and the loopback trigger (Mac-wake).
+ * Gathers the briefing payload, hands it to jarvisBrainReply as a
+ * customUserPrompt (so the brain skips its default standard/briefing
+ * composer and uses our richer payload-grounded prompt instead), then
+ * extracts the recommended-action sentence for the orb-center CTA.
+ */
+async function dispatchDaddysHome(
+  db: Db,
+  input: DaddysHomeDispatchInput,
+): Promise<DaddysHomeDispatchResult> {
+  const payload = await gatherBriefingPayload(db, input.companyId);
+  const userPrompt = composeBriefingTranscript(payload, input.source);
+
+  const out = await jarvisBrainReply(db, {
+    companyId: input.companyId,
+    userActorId: input.userActorId,
+    transcript: "Daddy's Home morning briefing",
+    voiceTier: input.voiceTier,
+    voiceMode: true,
+    responseType: "briefing",
+    source: input.source,
+    customUserPrompt: userPrompt,
+    customContextSnapshot: payload as unknown as Record<string, unknown>,
+  });
+
+  return {
+    briefingText: out.reply,
+    recommendedAction: extractRecommendedAction(out.reply),
+    briefingPayload: payload,
+    tier: input.voiceTier ?? "browser-native",
+    latencyMs: out.latencyMs,
+    llmProvider: out.llmProvider,
+    llmModel: out.llmModel,
+    personaVersion: out.personaVersion,
+    personaSource: out.personaSource,
+    responseType: out.responseType,
+    truncated: out.truncated,
+    audioStreamUrl: null,
+    conversationId: null,
+  };
 }
 
 /**
