@@ -53,4 +53,17 @@ export const instanceSettingsApi = {
       `/instance/settings/provider-keys/${provider}/test`,
       {},
     ),
+
+  // ── ElevenLabs Webhook ───────────────────────────────────────────────
+  // GET returns presence + last4 + URL; the raw secret is only returned
+  // by the generate call (once).
+  getElevenLabsWebhook: () =>
+    api.get<{ url: string; configured: boolean; last4: string | null; updatedAt: string | null }>(
+      "/instance/settings/elevenlabs-webhook",
+    ),
+  generateElevenLabsWebhookSecret: () =>
+    api.post<{ url: string; secret: string; last4: string; updatedAt: string }>(
+      "/instance/settings/elevenlabs-webhook/generate",
+      {},
+    ),
 };
