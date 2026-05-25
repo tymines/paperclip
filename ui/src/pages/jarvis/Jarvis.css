@@ -868,6 +868,20 @@
   box-shadow: 0 0 8px rgba(0, 212, 255, 0.6);
   animation: jarvis-cap-fill 1.4s ease-out both;
 }
+.jarvis-cap-warn {
+  color: var(--jarvis-accent-warm);
+  font-family: var(--jarvis-font-data);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+}
+.jarvis-cap-asof {
+  margin-top: 8px;
+  font-family: var(--jarvis-font-data);
+  font-size: 9px;
+  color: var(--jarvis-muted);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
 @keyframes jarvis-cap-fill {
   from { width: 0; }
   to { width: var(--fill, 0%); }

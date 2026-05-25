@@ -5,6 +5,7 @@ import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
 import { getRawKey } from "../services/provider-api-keys/index.js";
+import { getCapabilitySnapshot } from "../services/jarvis-capabilities.js";
 
 /**
  * Jarvis voice endpoint.
@@ -70,6 +71,20 @@ export function jarvisRoutes(db: Db) {
       });
     }
   );
+
+  /**
+   * Capability surface — reports what Augi can actually do on this host.
+   * Cached for 10 minutes; ?refresh=1 forces a re-probe. Tyler hits this
+   * from the Capabilities panel + the persona uses it to ground "what
+   * can you do" replies in real probe results.
+   */
+  router.get("/companies/:companyId/jarvis/capabilities", async (req, res) => {
+    const { companyId } = req.params as { companyId: string };
+    assertCompanyAccess(req, companyId);
+    const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+    const snapshot = await getCapabilitySnapshot({ refresh });
+    res.json(snapshot);
+  });
 
   /**
    * Lists available ElevenLabs voices. Pre-made voices are hardcoded
