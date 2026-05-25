@@ -1549,6 +1549,60 @@ export function KnowledgeGraph() {
     return () => cancelAnimationFrame(rafRef.current);
   }, [setupBloom, drawMinimap, graphData.links, viewMode]);
 
+  // Configure the renderer's built-in 3D controls once they exist so that
+  // two-finger pinch-zoom is enabled and tuned for touch. react-force-graph
+  // creates `controls()` after the first render frame, so we poll briefly.
+  // Both TrackballControls (default) and OrbitControls expose rotateSpeed /
+  // zoomSpeed; OrbitControls additionally exposes `touches.TWO` and
+  // `screenSpacePanning`, which we set defensively for the day we flip
+  // controlType.
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const apply = () => {
+      if (cancelled) return;
+      const fg = fgRef.current;
+      const controls = fg && typeof fg.controls === "function" ? fg.controls() : null;
+      if (!controls) {
+        if (++attempts < 60) requestAnimationFrame(apply);
+        return;
+      }
+      // Common to TrackballControls + OrbitControls.
+      if ("rotateSpeed" in controls) controls.rotateSpeed = 0.8;
+      if ("zoomSpeed" in controls) controls.zoomSpeed = 1.2;
+      // TrackballControls — make sure 2-finger pinch (TOUCH_ZOOM_PAN) isn't gated.
+      if ("noZoom" in controls) controls.noZoom = false;
+      if ("noPan" in controls) controls.noPan = false;
+      if ("noRotate" in controls) controls.noRotate = false;
+      // OrbitControls — set explicitly in case controlType is flipped later.
+      if ("enableZoom" in controls) controls.enableZoom = true;
+      if ("enablePan" in controls) controls.enablePan = true;
+      if ("enableRotate" in controls) controls.enableRotate = true;
+      if ("screenSpacePanning" in controls) controls.screenSpacePanning = true;
+      // touches.TWO = DOLLY_PAN is OrbitControls' two-finger pinch+pan.
+      // THREE.TOUCH.DOLLY_PAN is the numeric value 2 (THREE.TOUCH enum).
+      // Casting via `as` keeps this hook ts-clean when controls() is the
+      // TrackballControls type (which has no `touches` field).
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyControls = controls as any;
+      if (anyControls.touches) {
+        // THREE.TOUCH: { ROTATE:0, PAN:1, DOLLY_PAN:2, DOLLY_ROTATE:3 }
+        anyControls.touches.ONE = 0; // ROTATE
+        anyControls.touches.TWO = 2; // DOLLY_PAN
+      }
+      // Dev-only diagnostic hook for the pinch regression test
+      // (scripts/kg-pinch-verify.mjs). Stripped from prod builds.
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window as any).__kgFg = fg;
+      }
+    };
+    requestAnimationFrame(apply);
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode]);
+
   const handleEngineStop = useCallback(() => {
     if (!IS_MOBILE) return;
     // Only zoom-to-fit once on initial load, not on every engine stop
@@ -1781,22 +1835,15 @@ export function KnowledgeGraph() {
     fgRef.current?.zoomToFit(600, 50);
   }, []);
 
-  // v2 mobile gestures — pinch / single-tap / double-tap-fly /
-  // swipe-pan (delegated to OrbitControls) / pull-down-reset.
+  // v2 mobile gestures — single-tap / double-tap-fly / pull-down-reset.
+  // Two-finger pinch + pan are delegated to the renderer's built-in
+  // TrackballControls; we explicitly do NOT bind a pinch handler here
+  // because preventing the default or running a parallel cameraPosition
+  // tween fights the controls and kills pinch on iOS Safari + Android
+  // Chrome (Tyler had to use the +/- buttons).
   useKnowledgeGraphGestures({
     canvasRef: containerRef,
     enabled: IS_MOBILE,
-    onPinchZoom: (scaleDelta) => {
-      const fg = fgRef.current;
-      if (!fg) return;
-      const cam = fg.camera() as THREE.PerspectiveCamera;
-      const p = cam.position;
-      // Spec §8: clamp distance to [30, 1200] world units.
-      const len = p.length();
-      const next = Math.max(30, Math.min(1200, len / scaleDelta));
-      const k = next / len;
-      fg.cameraPosition({ x: p.x * k, y: p.y * k, z: p.z * k }, undefined, 80);
-    },
     onDoubleTap: (clientX, clientY) => {
       // Raycast at the tap coordinate via react-force-graph helpers.
       const fg = fgRef.current;
@@ -1851,7 +1898,17 @@ export function KnowledgeGraph() {
           "#08090b",
       }}
     >
-      <div ref={containerRef} className="relative flex-1 min-h-0" style={{ height: IS_MOBILE ? "100%" : "calc(100dvh - 3.5rem)" }}>
+      <div
+        ref={containerRef}
+        className="relative flex-1 min-h-0"
+        style={{
+          height: IS_MOBILE ? "100%" : "calc(100dvh - 3.5rem)",
+          // Tell the browser not to claim pinch / pan for page-zoom or
+          // scroll; the renderer's TrackballControls needs the raw
+          // multitouch events.
+          touchAction: "none",
+        }}
+      >
         {graphData.nodes.length > 0 && dimensions.width > 0 && dimensions.height > 0 ? (
           viewMode === "neuromorphic" ? (
             <ForceGraph3D<GraphNode, GraphLink>

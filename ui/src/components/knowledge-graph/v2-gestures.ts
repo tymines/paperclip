@@ -3,15 +3,23 @@
  *
  * Spec: knowledge-graph-polish-spec.md §8.
  *
- * Five gestures, wired on top of OrbitControls (don't replace):
- *   1. Pinch-zoom    — iOS gesturechange / Android touchmove with 2 fingers
- *   2. Single tap    — touchend within 12px / 250ms → select node
- *   3. Double tap    — two touchend events within 300ms / 24px → fly-to node
- *   4. Swipe-pan     — delegated to OrbitControls.pan
- *   5. Pull-down     — top-60px touch with |dx|<40 & dy>80 → clear + fit-all
+ * Three single-finger gestures, layered on top of the renderer's native
+ * controls (TrackballControls / OrbitControls — both handle two-finger
+ * pinch + pan internally and we must NOT fight them):
+ *   1. Single tap    — touchend within 12px / 250ms → select node
+ *   2. Double tap    — two touchend events within 300ms / 24px → fly-to node
+ *   3. Pull-down     — top-60px touch with |dx|<40 & dy>80 → clear + fit-all
  *
- * Passive listeners by default; non-passive only where preventDefault is
- * called (gesturechange to suppress Safari's page-zoom).
+ * Two-finger pinch-zoom and two-finger pan are delegated to the renderer's
+ * built-in controls. Earlier revisions intercepted iOS `gesturechange` with
+ * preventDefault and ran a custom `cameraPosition` tween per pinch frame;
+ * that tug-of-war against TrackballControls killed pinch in practice (Tyler
+ * had to use the +/- buttons). We now never preventDefault, never touch
+ * multitouch events, and let the renderer's controls own the pinch.
+ *
+ * All listeners are passive — we never block the browser from delivering
+ * the same events to the canvas, which is what feeds the renderer's
+ * controls.
  */
 import { useEffect, useRef } from "react";
 
@@ -22,8 +30,6 @@ interface UseKnowledgeGraphGesturesOpts {
   onSingleTap?(x: number, y: number): void;
   /** Called when a double-tap resolves at a coordinate. */
   onDoubleTap?(x: number, y: number): void;
-  /** Pinch zoom delta — > 1 zooms in, < 1 zooms out. */
-  onPinchZoom?(scaleDelta: number): void;
   /** Pull-down from the top → reset view. */
   onPullDownReset?(): void;
   /** Disable when the user is interacting with another surface. */
@@ -42,56 +48,41 @@ export function useKnowledgeGraphGestures({
   canvasRef,
   onSingleTap,
   onDoubleTap,
-  onPinchZoom,
   onPullDownReset,
   enabled = true,
 }: UseKnowledgeGraphGesturesOpts) {
   const lastTapRef = useRef<{ t: number; x: number; y: number } | null>(null);
   const tapStartRef = useRef<{ t: number; x: number; y: number } | null>(null);
-  const pinchStartDistRef = useRef<number | null>(null);
+  // Once a 2nd finger lands during a touch sequence, abandon any tap candidate
+  // so that lifting one finger after a pinch doesn't fire a stale single-tap.
+  const multitouchActiveRef = useRef(false);
 
   useEffect(() => {
     if (!enabled) return;
     const el = canvasRef.current;
     if (!el) return;
 
-    // ── Pinch-zoom — iOS Safari gesturechange ───────────────────────────
-    // Safari fires gesturestart/change/end at the document level when two
-    // fingers pinch; preventDefault stops the browser's own page-zoom.
-    const onGestureChange = (e: Event) => {
-      const ge = e as Event & { scale?: number };
-      if (typeof ge.scale !== "number") return;
-      e.preventDefault();
-      onPinchZoom?.(ge.scale);
-    };
-    el.addEventListener("gesturechange", onGestureChange as EventListener, { passive: false });
-
-    // ── Android two-finger pinch (touchmove with 2 pointers) ────────────
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 2) {
-        const [a, b] = [e.touches[0]!, e.touches[1]!];
-        pinchStartDistRef.current = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-      } else if (e.touches.length === 1) {
-        const t = e.touches[0]!;
-        tapStartRef.current = { t: Date.now(), x: t.clientX, y: t.clientY };
+      if (e.touches.length >= 2) {
+        multitouchActiveRef.current = true;
+        tapStartRef.current = null;
+        return;
       }
-    };
-
-    const onTouchMove = (e: TouchEvent) => {
-      if (e.touches.length !== 2 || pinchStartDistRef.current == null) return;
-      const [a, b] = [e.touches[0]!, e.touches[1]!];
-      const dist = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-      const scale = dist / pinchStartDistRef.current;
-      onPinchZoom?.(scale);
+      const t = e.touches[0]!;
+      tapStartRef.current = { t: Date.now(), x: t.clientX, y: t.clientY };
     };
 
     const onTouchEnd = (e: TouchEvent) => {
-      pinchStartDistRef.current = null;
+      // If any finger is still on the surface, the gesture isn't finished;
+      // and if we ever saw 2+ fingers in this sequence we're in pinch land
+      // and must not synthesize a tap.
+      if (e.touches.length > 0) return;
+      const wasMultitouch = multitouchActiveRef.current;
+      multitouchActiveRef.current = false;
       const start = tapStartRef.current;
       tapStartRef.current = null;
-      if (!start) return;
-      // touchend fires with no remaining touches and at least one
-      // changedTouches entry.
+      if (wasMultitouch || !start) return;
+
       const t = e.changedTouches[0];
       if (!t) return;
       const dx = t.clientX - start.x;
@@ -128,15 +119,14 @@ export function useKnowledgeGraphGestures({
       onSingleTap?.(t.clientX, t.clientY);
     };
 
+    // Passive everywhere — we never preventDefault, so two-finger pinch and
+    // pan reach the renderer's canvas + its TrackballControls/OrbitControls.
     el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: true });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
 
     return () => {
-      el.removeEventListener("gesturechange", onGestureChange as EventListener);
       el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
     };
-  }, [canvasRef, enabled, onSingleTap, onDoubleTap, onPinchZoom, onPullDownReset]);
+  }, [canvasRef, enabled, onSingleTap, onDoubleTap, onPullDownReset]);
 }
