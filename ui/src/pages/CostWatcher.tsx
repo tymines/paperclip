@@ -150,7 +150,7 @@ function ProviderStrip({ payload }: { payload: CostWatcherPayload }) {
           Pulse-glow = balance covers under 7 days at current burn.
         </p>
       </header>
-      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 -mx-2 px-2 scrollbar-auto-hide">
+      <div className="flex snap-x snap-mandatory gap-3 overflow-x-auto overscroll-x-contain pb-2 -mx-4 px-4 scrollbar-hide">
         {payload.providers.map((card) => {
           const formatter = new Intl.NumberFormat(undefined, {
             style: "currency",
