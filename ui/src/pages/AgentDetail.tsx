@@ -1396,27 +1396,75 @@ function AgentOverview({
 }: {
   agent: AgentDetailRecord;
   runs: HeartbeatRun[];
-  assignedIssues: { id: string; title: string; status: string; priority: string; identifier?: string | null; createdAt: Date }[];
+  assignedIssues: { id: string; title: string; status: string; priority: string; identifier?: string | null; createdAt: Date; costCents?: number }[];
   runtimeState?: AgentRuntimeState;
   agentId: string;
   agentRouteId: string;
 }) {
   const issueNoun = useIssueNoun();
+  const [issueChartWeight, setIssueChartWeight] = useState<"count" | "cost">("count");
+  const hasIssueCostData = assignedIssues.some((issue) => (issue.costCents ?? 0) > 0);
   return (
     <div className="space-y-8">
       {/* Latest Run */}
       <LatestRunCard runs={runs} agentId={agentRouteId} />
+
+      {/* Issue chart weighting toggle — only meaningful once cost_events flow */}
+      <div className="-mb-4 flex items-center justify-end" data-pp-issue-chart-weight-toggle>
+        <div
+          className={cn(
+            "inline-flex items-center rounded-md border border-border bg-card text-[11px]",
+            hasIssueCostData ? "" : "opacity-50",
+          )}
+        >
+          <button
+            type="button"
+            className={cn(
+              "px-2 py-1 transition-colors",
+              issueChartWeight === "count"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+            onClick={() => setIssueChartWeight("count")}
+            aria-pressed={issueChartWeight === "count"}
+          >
+            Count
+          </button>
+          <button
+            type="button"
+            disabled={!hasIssueCostData}
+            className={cn(
+              "px-2 py-1 transition-colors",
+              issueChartWeight === "cost"
+                ? "bg-accent text-foreground"
+                : "text-muted-foreground hover:text-foreground",
+              "disabled:cursor-not-allowed",
+            )}
+            onClick={() => setIssueChartWeight("cost")}
+            aria-pressed={issueChartWeight === "cost"}
+            title={hasIssueCostData ? "Weight by spend" : "No spend data on these issues yet"}
+          >
+            Spend
+          </button>
+        </div>
+      </div>
 
       {/* Charts */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ChartCard title="Run Activity" subtitle="Last 14 days">
           <RunActivityChart runs={runs} />
         </ChartCard>
-        <ChartCard title={`${issueNoun.capPlural} by Priority`} subtitle="Last 14 days">
-          <PriorityChart issues={assignedIssues} />
+        <ChartCard
+          title={`${issueNoun.capPlural} by Priority`}
+          subtitle={`Last 14 days · ${issueChartWeight === "cost" ? "weighted by spend" : "by count"}`}
+        >
+          <PriorityChart issues={assignedIssues} weight={issueChartWeight} />
         </ChartCard>
-        <ChartCard title={`${issueNoun.capPlural} by Status`} subtitle="Last 14 days">
-          <IssueStatusChart issues={assignedIssues} />
+        <ChartCard
+          title={`${issueNoun.capPlural} by Status`}
+          subtitle={`Last 14 days · ${issueChartWeight === "cost" ? "weighted by spend" : "by count"}`}
+        >
+          <IssueStatusChart issues={assignedIssues} weight={issueChartWeight} />
         </ChartCard>
         <ChartCard title="Success Rate" subtitle="Last 14 days">
           <SuccessRateChart runs={runs} />

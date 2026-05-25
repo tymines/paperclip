@@ -153,7 +153,22 @@ const priorityColors: Record<string, string> = {
 
 const priorityOrder = ["critical", "high", "medium", "low"] as const;
 
-export function PriorityChart({ issues }: { issues: { priority: string; createdAt: Date }[] }) {
+/**
+ * Weight a priority/status chart by issue count (default) or by spend in
+ * USD pulled from the optional Issue.costCents field. `cost` mode silently
+ * degrades to all-zero bars when none of the supplied issues have a cost
+ * — so opting in pre-bridge produces an empty chart rather than a misleading
+ * count chart relabelled as spend.
+ */
+export type IssueChartWeight = "count" | "cost";
+
+export function PriorityChart({
+  issues,
+  weight = "count",
+}: {
+  issues: { priority: string; createdAt: Date; costCents?: number }[];
+  weight?: IssueChartWeight;
+}) {
   const issueNoun = useIssueNoun();
   const days = getLast14Days();
   const grouped = new Map<string, Record<string, number>>();
@@ -162,13 +177,22 @@ export function PriorityChart({ issues }: { issues: { priority: string; createdA
     const day = new Date(issue.createdAt).toISOString().slice(0, 10);
     const entry = grouped.get(day);
     if (!entry) continue;
-    if (issue.priority in entry) entry[issue.priority]++;
+    if (issue.priority in entry) {
+      const value = weight === "cost" ? (issue.costCents ?? 0) : 1;
+      entry[issue.priority] += value;
+    }
   }
 
   const maxValue = Math.max(...Array.from(grouped.values()).map(v => Object.values(v).reduce((a, b) => a + b, 0)), 1);
   const hasData = Array.from(grouped.values()).some(v => Object.values(v).reduce((a, b) => a + b, 0) > 0);
 
-  if (!hasData) return <p className="text-xs text-muted-foreground">No {issueNoun.plural}</p>;
+  if (!hasData) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {weight === "cost" ? `No spend on ${issueNoun.plural}` : `No ${issueNoun.plural}`}
+      </p>
+    );
+  }
 
   return (
     <div>
@@ -218,7 +242,13 @@ const statusLabels: Record<string, string> = {
   backlog: "Backlog",
 };
 
-export function IssueStatusChart({ issues }: { issues: { status: string; createdAt: Date }[] }) {
+export function IssueStatusChart({
+  issues,
+  weight = "count",
+}: {
+  issues: { status: string; createdAt: Date; costCents?: number }[];
+  weight?: IssueChartWeight;
+}) {
   const issueNoun = useIssueNoun();
   const days = getLast14Days();
   const allStatuses = new Set<string>();
@@ -228,8 +258,9 @@ export function IssueStatusChart({ issues }: { issues: { status: string; created
     const day = new Date(issue.createdAt).toISOString().slice(0, 10);
     const entry = grouped.get(day);
     if (!entry) continue;
-    entry[issue.status] = (entry[issue.status] ?? 0) + 1;
-    allStatuses.add(issue.status);
+    const value = weight === "cost" ? (issue.costCents ?? 0) : 1;
+    entry[issue.status] = (entry[issue.status] ?? 0) + value;
+    if (value > 0) allStatuses.add(issue.status);
   }
 
   const statusOrder = ["todo", "in_progress", "in_review", "done", "blocked", "cancelled", "backlog"].filter(s => allStatuses.has(s));
