@@ -46,7 +46,25 @@ interface StoredKey {
   updatedAt: string;
 }
 
-type StoreShape = Partial<Record<ProviderKey, StoredKey>>;
+/**
+ * On disk a key entry is either a {value, updatedAt} object (current
+ * format written by setKey) or a bare string (legacy / out-of-band
+ * writes, e.g. Augi/August dropping keys directly into the file). Both
+ * shapes are accepted on read; setKey always writes the object form.
+ */
+type StoreEntry = StoredKey | string;
+type StoreShape = Partial<Record<ProviderKey, StoreEntry>>;
+
+function entryValue(entry: StoreEntry | undefined): string | null {
+  if (typeof entry === "string") return entry.length > 0 ? entry : null;
+  if (entry && typeof entry.value === "string" && entry.value.length > 0) return entry.value;
+  return null;
+}
+
+function entryUpdatedAt(entry: StoreEntry | undefined): string | null {
+  if (typeof entry === "string" || !entry) return null;
+  return typeof entry.updatedAt === "string" ? entry.updatedAt : null;
+}
 
 export interface RedactedKeyEntry {
   provider: ProviderKey;
@@ -94,16 +112,14 @@ export function isProviderKey(value: unknown): value is ProviderKey {
 export async function listRedactedKeys(): Promise<RedactedKeyEntry[]> {
   const store = await readStore();
   return SUPPORTED_PROVIDERS.map((provider) => {
-    const entry = store[provider];
-    if (!entry || typeof entry.value !== "string" || entry.value.length === 0) {
-      return { provider, hasKey: false, last4: null, updatedAt: null };
-    }
-    const tail = entry.value.length >= 4 ? entry.value.slice(-4) : entry.value;
+    const raw = entryValue(store[provider]);
+    if (!raw) return { provider, hasKey: false, last4: null, updatedAt: null };
+    const tail = raw.length >= 4 ? raw.slice(-4) : raw;
     return {
       provider,
       hasKey: true,
       last4: tail,
-      updatedAt: typeof entry.updatedAt === "string" ? entry.updatedAt : null,
+      updatedAt: entryUpdatedAt(store[provider]),
     };
   });
 }
@@ -115,8 +131,7 @@ export async function listRedactedKeys(): Promise<RedactedKeyEntry[]> {
  */
 export async function getRawKey(provider: ProviderKey): Promise<string | null> {
   const store = await readStore();
-  const entry = store[provider];
-  return entry && typeof entry.value === "string" && entry.value.length > 0 ? entry.value : null;
+  return entryValue(store[provider]);
 }
 
 /** Upsert a single provider's key. Pass empty string to clear. */
