@@ -30,6 +30,43 @@ export interface JarvisVoiceResponse {
   responseType?: JarvisResponseType;
   /** True when the API layer trimmed the model output to fit the budget. */
   truncated?: boolean;
+  /** When this turn dispatched a peer-agent delegation. */
+  delegation?: JarvisDelegationAck | null;
+}
+
+export type JarvisPeerAgentId =
+  | "hermes"
+  | "august"
+  | "codex"
+  | "content"
+  | "social"
+  | "researcher"
+  | "claude-code";
+
+export interface JarvisDelegationAck {
+  id: string;
+  agent: JarvisPeerAgentId;
+  status: "queued" | "failed";
+  reachable: boolean;
+  remainingQuotaThisMinute: number;
+}
+
+export interface JarvisDelegationRow {
+  id: string;
+  companyId: string;
+  conversationId: string | null;
+  agent: JarvisPeerAgentId;
+  task: string;
+  status: "queued" | "running" | "completed" | "failed";
+  result: string | null;
+  metadata: Record<string, unknown> | null;
+  requestedByActorId: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface JarvisDelegationsResponse {
+  delegations: JarvisDelegationRow[];
 }
 
 export interface JarvisVoiceTier {
@@ -160,4 +197,30 @@ export const jarvisApi = {
    * surface "no real LLM wired" when every provider is missing.
    */
   health: (): Promise<JarvisHealthResponse> => api.get(`/jarvis/health`),
+
+  /**
+   * List delegations for the company. Filtered by status when provided so
+   * the chat panel can poll `?status=running` cheaply on a 30s tick.
+   */
+  delegations: (
+    companyId: string,
+    opts: { status?: "queued" | "running" | "completed" | "failed"; limit?: number } = {},
+  ): Promise<JarvisDelegationsResponse> => {
+    const qs = new URLSearchParams();
+    if (opts.status) qs.set("status", opts.status);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    const tail = qs.toString();
+    return api.get(
+      `/companies/${companyId}/jarvis/delegations${tail ? `?${tail}` : ""}`,
+    );
+  },
+
+  /** Reachability probe for a single peer (server caches 30s). */
+  peerReachable: (
+    companyId: string,
+    peer: JarvisPeerAgentId,
+  ): Promise<{ reachable: boolean; error?: string }> =>
+    api.get(
+      `/companies/${companyId}/jarvis/delegations/peers/${peer}/reachable`,
+    ),
 };
