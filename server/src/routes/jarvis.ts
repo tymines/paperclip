@@ -6,6 +6,15 @@ import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
 import { getRawKey } from "../services/provider-api-keys/index.js";
 import { getCapabilitySnapshot } from "../services/jarvis-capabilities.js";
+import {
+  calendarUpcoming,
+  remindersOpen,
+  messagesRecent,
+  shellExec,
+  fsList,
+  fsSearch,
+  consumeConfirmation,
+} from "../services/jarvis-tools.js";
 
 /**
  * Jarvis voice endpoint.
@@ -70,6 +79,105 @@ export function jarvisRoutes(db: Db) {
         conversationId: null,
       });
     }
+  );
+
+  /**
+   * Tools — read-only safe operations Augi calls directly without
+   * confirmation. Writes / sends / deletes go through the confirmation
+   * registry (POST /jarvis/confirm/:id) and only fire after Tyler
+   * approves in the chat UI.
+   */
+  router.get("/companies/:companyId/jarvis/tools/calendar", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    const hours = Number.parseInt(String(req.query.windowHours ?? "24"), 10);
+    const out = await calendarUpcoming(Number.isFinite(hours) ? hours : 24);
+    res.status(out.ok ? 200 : 500).json(out);
+  });
+
+  router.get("/companies/:companyId/jarvis/tools/reminders", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    const out = await remindersOpen();
+    res.status(out.ok ? 200 : 500).json(out);
+  });
+
+  router.get("/companies/:companyId/jarvis/tools/messages", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    const limit = Number.parseInt(String(req.query.limit ?? "10"), 10);
+    const out = await messagesRecent(Number.isFinite(limit) ? limit : 10);
+    res.status(out.ok ? 200 : 500).json(out);
+  });
+
+  const fsListSchema = z.object({
+    path: z.string().min(1).max(2000),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/tools/fs/list",
+    validate(fsListSchema),
+    async (req, res) => {
+      assertCompanyAccess(req, req.params.companyId as string);
+      const { path: target } = req.body as z.infer<typeof fsListSchema>;
+      const out = await fsList(target);
+      res.status(out.ok ? 200 : 500).json(out);
+    },
+  );
+
+  const fsSearchSchema = z.object({
+    path: z.string().min(1).max(2000),
+    query: z.string().min(1).max(200),
+    maxResults: z.number().int().positive().max(200).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/tools/fs/search",
+    validate(fsSearchSchema),
+    async (req, res) => {
+      assertCompanyAccess(req, req.params.companyId as string);
+      const { path: target, query, maxResults } = req.body as z.infer<typeof fsSearchSchema>;
+      const out = await fsSearch(target, query, { maxResults });
+      res.status(out.ok ? 200 : 500).json(out);
+    },
+  );
+
+  const shellExecSchema = z.object({
+    cmd: z.string().min(1).max(2000),
+    cwd: z.string().max(2000).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/tools/shell",
+    validate(shellExecSchema),
+    async (req, res) => {
+      assertCompanyAccess(req, req.params.companyId as string);
+      const { cmd, cwd } = req.body as z.infer<typeof shellExecSchema>;
+      const out = await shellExec(cmd, { cwd });
+      res.status(out.ok ? 200 : 500).json(out);
+    },
+  );
+
+  /**
+   * Confirmation execution path for irreversible actions. Brain emits a
+   * pending PendingConfirmation; client renders the yes/no card; on
+   * approve, this endpoint pulls the entry from the registry and runs.
+   * Returns 410 if expired (5min TTL) or already consumed.
+   */
+  router.post(
+    "/companies/:companyId/jarvis/confirm/:id",
+    async (req, res) => {
+      assertCompanyAccess(req, req.params.companyId as string);
+      const entry = consumeConfirmation(req.params.id as string);
+      if (!entry) {
+        res.status(410).json({
+          ok: false,
+          error: "Confirmation has expired or was already consumed. Re-ask Augi to redo the action.",
+        });
+        return;
+      }
+      // Write/send tool execution lands in a follow-up; for now the
+      // registry round-trip is enough to validate the contract.
+      res.json({
+        ok: true,
+        message: `Acknowledged ${entry.toolName}. Live execution wiring lands in the follow-up commit.`,
+        entry,
+      });
+    },
   );
 
   /**
