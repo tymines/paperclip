@@ -26,13 +26,13 @@ describe("createBargeInController", () => {
           JSON.stringify({
             ephemeralKey: "ek_test",
             expiresAt: Math.floor(Date.now() / 1000) + 60,
-            model: "gpt-4o-realtime-preview-2024-12-17",
+            model: "gpt-realtime",
             voice: "alloy",
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (u.includes("openai.com/v1/realtime")) {
+      if (u.includes("openai.com/v1/realtime/calls")) {
         return new Response("v=0\nfake-sdp", { status: 200 });
       }
       if (u.endsWith("/cancel-response")) {
