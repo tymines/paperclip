@@ -766,6 +766,28 @@
   gap: 16px;
   min-height: 0;
 }
+.jarvis-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 181, 71, 0.42);
+  background: rgba(255, 181, 71, 0.08);
+  border-radius: 8px;
+  color: var(--jarvis-text);
+}
+.jarvis-banner-text {
+  flex: 1;
+  font-family: var(--jarvis-font-body);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--jarvis-text-dim);
+}
+.jarvis-banner-text strong {
+  color: var(--jarvis-accent-warm);
+  font-weight: 700;
+  margin-right: 4px;
+}
 .jarvis-chat-panel { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .jarvis-chat-scroll {
   display: flex;

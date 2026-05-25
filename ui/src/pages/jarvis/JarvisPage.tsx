@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState, useCallback, type FormEvent } from "react";
 import { useNavigate } from "@/lib/router";
+import { useCompany } from "@/context/CompanyContext";
+import { jarvisApi } from "@/api/jarvis";
 import { Reactor } from "./Reactor";
 import { useOrbAudio } from "./useOrbAudio";
+import { useJarvisVoice } from "./useJarvisVoice";
 import {
   MOCK_BRIEFING,
   MOCK_CAPABILITIES,
@@ -63,19 +66,53 @@ const MODE_TABS: JarvisRouteTarget[] = [
 export function JarvisPage() {
   useJarvisFonts();
   const navigate = useNavigate();
+  const { selectedCompanyId } = useCompany();
 
   const reactorRef = useRef<HTMLDivElement | null>(null);
   const tickGroupRef = useRef<SVGGElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const interimMsgIdRef = useRef<string | null>(null);
 
   const [state, setState] = useState<HudState>("idle");
   const [messages, setMessages] = useState<JarvisChatMessage[]>(
     MOCK_INITIAL_CHAT
   );
   const [composer, setComposer] = useState("");
+  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   const orb = useOrbAudio({ reactorRef, tickGroupRef, state });
+
+  const voice = useJarvisVoice({
+    orb,
+    onTranscript: (transcript, isFinal) => {
+      // Render interim transcript as a live user bubble; promote to permanent
+      // on the final.
+      setMessages((prev) => {
+        const id = interimMsgIdRef.current;
+        const stamp = formatNow();
+        if (id) {
+          const next = prev.map((m) =>
+            m.id === id ? { ...m, text: transcript, authorLabel: `You · ${stamp}` } : m
+          );
+          if (isFinal) interimMsgIdRef.current = null;
+          return next;
+        }
+        const newId = `u-live-${Date.now()}`;
+        interimMsgIdRef.current = isFinal ? null : newId;
+        return [
+          ...prev,
+          {
+            id: newId,
+            author: "user",
+            authorLabel: `You · ${stamp}`,
+            text: transcript,
+            timestamp: stamp,
+          },
+        ];
+      });
+    },
+  });
 
   // Capture the SVG <g> with rim ticks for the orb hook to read.
   useEffect(() => {
@@ -102,66 +139,94 @@ export function JarvisPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [exit]);
 
-  /**
-   * Commit 1: text + mic both stub to the same fake response loop so the
-   * visual ships independent of the backend. Commit 2 swaps these with
-   * SpeechRecognition / SpeechSynthesis + POST /api/jarvis/voice.
-   */
-  function fakeReply(forText: string) {
-    setState("processing");
-    window.setTimeout(() => {
-      setState("speaking");
-      orb.playDemoSpeech(2.6);
-      const text = synthesizeMockReply(forText);
+  // Dispatch a finalized transcript: POST to /api/jarvis/voice, render the
+  // reply as an agent bubble, speak it via browser TTS. Orb visuals follow
+  // the HUD state and the TTS envelope inside useJarvisVoice.
+  const dispatchTranscript = useCallback(
+    async (transcript: string) => {
+      if (!transcript.trim() || !selectedCompanyId) return;
+      setState("processing");
+      let reply = "";
+      try {
+        const resp = await jarvisApi.voice(selectedCompanyId, { transcript });
+        reply = resp.reply;
+      } catch (err) {
+        reply = `Network error reaching Jarvis: ${(err as Error).message}`;
+      }
+      const stamp = formatNow();
       setMessages((prev) => [
         ...prev,
         {
           id: `r-${Date.now()}`,
           author: "agent",
-          authorLabel: `Jarvis · ${formatNow()}`,
-          text,
-          timestamp: formatNow(),
+          authorLabel: `Jarvis · ${stamp}`,
+          text: reply,
+          timestamp: stamp,
         },
       ]);
-      window.setTimeout(() => setState("idle"), 2800);
-    }, 650);
-  }
+      setState("speaking");
+      await voice.speak(reply);
+      setState("idle");
+    },
+    [selectedCompanyId, voice]
+  );
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = composer.trim();
-    if (!trimmed) return;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `u-${Date.now()}`,
-        author: "user",
-        authorLabel: `You · ${formatNow()}`,
-        text: trimmed,
-        timestamp: formatNow(),
-      },
-    ]);
-    setComposer("");
-    fakeReply(trimmed);
-  }
+  const onSubmit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      const trimmed = composer.trim();
+      if (!trimmed) return;
+      const stamp = formatNow();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `u-${Date.now()}`,
+          author: "user",
+          authorLabel: `You · ${stamp}`,
+          text: trimmed,
+          timestamp: stamp,
+        },
+      ]);
+      setComposer("");
+      void dispatchTranscript(trimmed);
+    },
+    [composer, dispatchTranscript]
+  );
 
-  function onMicDown() {
+  const onMicDown = useCallback(() => {
+    if (voice.isSpeaking) voice.cancelSpeak();
+    interimMsgIdRef.current = null;
     setState("listening");
-  }
-  function onMicUp() {
+    voice.startListening();
+  }, [voice]);
+
+  const onMicUp = useCallback(async () => {
     if (state !== "listening") return;
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `u-${Date.now()}`,
-        author: "user",
-        authorLabel: `You · ${formatNow()}`,
-        text: "(voice transcript will appear here in commit 2)",
-        timestamp: formatNow(),
-      },
-    ]);
-    fakeReply("");
-  }
+    const { transcript } = await voice.stopListening();
+    interimMsgIdRef.current = null;
+    const finalText = transcript.trim();
+    if (!finalText) {
+      setState("idle");
+      return;
+    }
+    // The interim bubble (if any) was already promoted; if there is no
+    // promoted bubble yet (interim path didn't fire), add the final.
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.author === "user" && last.text === finalText) return prev;
+      return [
+        ...prev,
+        {
+          id: `u-${Date.now()}`,
+          author: "user",
+          authorLabel: `You · ${formatNow()}`,
+          text: finalText,
+          timestamp: formatNow(),
+        },
+      ];
+    });
+    await dispatchTranscript(finalText);
+  }, [state, voice, dispatchTranscript]);
 
   function clearChat() {
     setMessages([]);
@@ -479,6 +544,25 @@ export function JarvisPage() {
 
         {/* RIGHT RAIL */}
         <aside className="jarvis-right-rail" aria-label="Conversation">
+          {!voice.capability.hasSpeechRecognition && !bannerDismissed ? (
+            <div className="jarvis-banner">
+              <div className="jarvis-banner-text">
+                <strong>Limited voice quality.</strong> This browser doesn't expose
+                SpeechRecognition — text input still works. Connect a Whisper /
+                ElevenLabs adapter in Fleet → Provider Keys for premium voice.
+              </div>
+              <button
+                className="jarvis-icon-btn"
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => setBannerDismissed(true)}
+              >
+                <svg viewBox="0 0 24 24" fill="none">
+                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+          ) : null}
           <section className="jarvis-panel jarvis-chat-panel">
             <span className="jarvis-corner-tr" /><span className="jarvis-corner-bl" />
             <div className="jarvis-panel-header">
@@ -593,15 +677,4 @@ function SysRow({
 function formatNow() {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
-
-function synthesizeMockReply(prompt: string): string {
-  if (!prompt) {
-    return "Standing by. Hold the mic and ask anything.";
-  }
-  const trimmed = prompt.trim().toLowerCase();
-  if (trimmed.startsWith("search")) {
-    return "Searching across issues, agents, rooms, and skills…\n(real search wiring lands in commit 3)";
-  }
-  return `Got it — "${prompt.length > 64 ? prompt.slice(0, 64) + "…" : prompt}".\n(real Augi dispatch lands in commit 3)`;
 }
