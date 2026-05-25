@@ -90,4 +90,5 @@ export { pluginLogs } from "./plugin_logs.js";
 export { jarvisConversations } from "./jarvis_conversations.js";
 export { jarvisDelegations } from "./jarvis_delegations.js";
 export { companyJarvisSettings } from "./company_jarvis_settings.js";
+export { jarvisLearnedPreferences } from "./jarvis_learned_preferences.js";
 export { webhookEventLog } from "./webhook_event_log.js";

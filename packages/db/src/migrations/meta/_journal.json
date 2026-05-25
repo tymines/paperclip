@@ -729,6 +729,13 @@
       "when": 1779667200000,
       "tag": "0103_jarvis_auto_brief_setting",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1779753600000,
+      "tag": "0104_jarvis_learned_preferences",
+      "breakpoints": true
     }
   ]
 }

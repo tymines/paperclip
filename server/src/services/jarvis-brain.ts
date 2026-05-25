@@ -24,6 +24,18 @@ import {
   toOpenAiTools,
 } from "./jarvis-delegation-tools.js";
 import { logger } from "../middleware/logger.js";
+import {
+  buildTimeContext,
+  formatTimeContextBlock,
+} from "./jarvis-time-context.js";
+import {
+  fetchLearnedPreferences,
+  fetchRecentTurns,
+  formatConversationHistoryBlock,
+  formatLearnedPreferencesBlock,
+  observeForPreferences,
+  type RecentTurn,
+} from "./jarvis-learning.js";
 
 /**
  * The Jarvis brain.
@@ -526,18 +538,28 @@ export async function jarvisBrainReply(
   const voiceMode = input.voiceMode ?? false;
   const responseType: ResponseType = input.responseType ?? inferResponseType(input.transcript);
 
-  // Persona load + context + capability snapshot all run in parallel.
-  // Capabilities are appended to the system prompt so Augi can answer
-  // "what can you do?" accurately for THIS machine.
-  const [persona, ctx, capSnapshot] = await Promise.all([
+  // Persona load + context + capability snapshot + memory all run in
+  // parallel. Capabilities are appended to the system prompt so Augi can
+  // answer "what can you do?" accurately for THIS machine. Conversation
+  // history + learned preferences give the brain continuity across turns
+  // and let it adapt to Tyler over time.
+  const [persona, ctx, capSnapshot, recentTurns, learnedPrefs] = await Promise.all([
     loadPersona(),
     gatherContext(db, input.companyId),
     getCapabilitySnapshot().catch(() => null),
+    fetchRecentTurns(db, input.companyId, input.userActorId),
+    fetchLearnedPreferences(db, input.companyId, input.userActorId),
   ]);
+
+  const timeContext = buildTimeContext();
 
   const enableDelegation = input.enableDelegation ?? true;
   const basePrompt = formatPersonaForCall(persona, { voiceMode, responseType });
-  const systemPromptParts = [basePrompt];
+  const systemPromptParts = [basePrompt, formatTimeContextBlock(timeContext)];
+  const prefsBlock = formatLearnedPreferencesBlock(learnedPrefs);
+  if (prefsBlock) systemPromptParts.push(prefsBlock);
+  const historyBlock = formatConversationHistoryBlock(recentTurns);
+  if (historyBlock) systemPromptParts.push(historyBlock);
   if (capSnapshot) {
     systemPromptParts.push(
       `CAPABILITY GROUNDING (real probe of this host, ${capSnapshot.generatedAt}): ${summarizeForPersona(capSnapshot)} When asked what you can do, ground your answer in these — do not promise capabilities marked needs_install or unsupported without flagging the install hint.`,
@@ -635,7 +657,9 @@ export async function jarvisBrainReply(
     ?? (ctx as unknown as Record<string, unknown>);
 
   // Fire-and-forget persist; never fail the user's reply on a write error.
-  void db
+  // We capture the inserted id so the observer pass can stamp the new
+  // preference rows it produces with the source message it was derived from.
+  const persistPromise = db
     .insert(jarvisConversations)
     .values({
       companyId: input.companyId,
@@ -652,9 +676,40 @@ export async function jarvisBrainReply(
       contextSnapshot: persistedContext,
       latencyMs: String(latencyMs),
     })
-    .catch((err) => {
+    .returning({ id: jarvisConversations.id });
+
+  // Preference-learning observer. Truly fire-and-forget — never blocks the
+  // user-facing reply. The deterministic-template path skips this since
+  // there's nothing for the model to learn from a canned reply.
+  if (llm?.reply) {
+    void persistPromise
+      .then(async (rows) => {
+        const sourceMessageId = rows[0]?.id ?? null;
+        const observerTurns: RecentTurn[] = [
+          ...recentTurns,
+          {
+            id: sourceMessageId ?? "current",
+            userTranscript: input.transcript,
+            agentReply: reply,
+            createdAt: new Date(),
+            source: input.source ?? null,
+          },
+        ];
+        await observeForPreferences(db, {
+          companyId: input.companyId,
+          userActorId: input.userActorId,
+          recentTurns: observerTurns,
+          sourceMessageId,
+        });
+      })
+      .catch((err) => {
+        logger.warn({ err }, "jarvis-brain: observer pass failed");
+      });
+  } else {
+    void persistPromise.catch((err) => {
       logger.warn({ err }, "jarvis-brain: persist failed");
     });
+  }
 
   return {
     reply,
