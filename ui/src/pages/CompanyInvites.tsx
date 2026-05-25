@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, MailPlus } from "lucide-react";
+import { Check, ExternalLink, MailPlus, Share2 } from "lucide-react";
 import { accessApi } from "@/api/access";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,10 @@ function isInviteHistoryRow(value: unknown): value is Awaited<ReturnType<typeof 
   return "id" in value && "state" in value && "createdAt" in value;
 }
 
+function hasNativeShare(): boolean {
+  return typeof navigator !== "undefined" && typeof (navigator as Navigator).share === "function";
+}
+
 export function CompanyInvites() {
   const { selectedCompany, selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -52,6 +56,12 @@ export function CompanyInvites() {
   const [humanRole, setHumanRole] = useState<"owner" | "admin" | "operator" | "viewer">("operator");
   const [latestInviteUrl, setLatestInviteUrl] = useState<string | null>(null);
   const [latestInviteCopied, setLatestInviteCopied] = useState(false);
+  const [canNativeShare, setCanNativeShare] = useState(false);
+  const inviteUrlInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    setCanNativeShare(hasNativeShare());
+  }, []);
 
   useEffect(() => {
     if (!latestInviteCopied) return;
@@ -61,22 +71,49 @@ export function CompanyInvites() {
     return () => window.clearTimeout(timeout);
   }, [latestInviteCopied]);
 
-  async function copyInviteUrl(url: string) {
+  // Returns "copied" when writeText succeeded, "unavailable" when both the
+  // permission and the API failed. Native share is offered separately so we
+  // only surface the amber "Clipboard unavailable" toast when there is no
+  // better fallback available to the user.
+  async function copyInviteUrl(url: string): Promise<"copied" | "unavailable"> {
     try {
       if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(url);
-        return true;
+        return "copied";
       }
     } catch {
-      // Fall through to the unavailable message below.
+      // Fall through.
     }
 
-    pushToast({
-      title: "Clipboard unavailable",
-      body: "Copy the invite URL manually from the field below.",
-      tone: "warn",
-    });
-    return false;
+    if (!hasNativeShare()) {
+      pushToast({
+        title: "Clipboard unavailable",
+        body: "Copy the invite URL manually from the field below.",
+        tone: "warn",
+      });
+    }
+    return "unavailable";
+  }
+
+  async function shareInviteUrl(url: string) {
+    if (!hasNativeShare()) return false;
+    try {
+      await (navigator as Navigator).share({
+        title: selectedCompany?.name ? `Join ${selectedCompany.name} on Paperclip` : "Join on Paperclip",
+        text: "You've been invited to a Paperclip company.",
+        url,
+      });
+      return true;
+    } catch (err) {
+      // AbortError = user closed the share sheet; not worth a toast.
+      if (err instanceof DOMException && err.name === "AbortError") return false;
+      pushToast({
+        title: "Could not share",
+        body: err instanceof Error ? err.message : "Unknown error",
+        tone: "error",
+      });
+      return false;
+    }
   }
 
   useEffect(() => {
@@ -117,12 +154,18 @@ export function CompanyInvites() {
     onSuccess: async (invite) => {
       setLatestInviteUrl(invite.inviteUrl);
       setLatestInviteCopied(false);
-      const copied = await copyInviteUrl(invite.inviteUrl);
+      const copyOutcome = await copyInviteUrl(invite.inviteUrl);
+      if (copyOutcome === "copied") setLatestInviteCopied(true);
 
       await queryClient.invalidateQueries({ queryKey: inviteHistoryQueryKey });
       pushToast({
         title: "Invite created",
-        body: copied ? "Invite ready below and copied to clipboard." : "Invite ready below.",
+        body:
+          copyOutcome === "copied"
+            ? "Invite ready below and copied to clipboard."
+            : hasNativeShare()
+              ? "Invite ready below. Tap Share invite to send it."
+              : "Invite ready below.",
         tone: "success",
       });
     },
@@ -236,7 +279,7 @@ export function CompanyInvites() {
         </div>
 
         {latestInviteUrl ? (
-          <div className="space-y-3 rounded-lg border border-border px-4 py-4">
+          <div className="space-y-3 rounded-lg border border-border px-4 py-4" data-testid="latest-invite-panel">
             <div className="space-y-1">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-sm font-medium">Latest invite link</div>
@@ -251,17 +294,48 @@ export function CompanyInvites() {
                 This URL includes the current Paperclip domain returned by the server.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={async () => {
-                const copied = await copyInviteUrl(latestInviteUrl);
-                setLatestInviteCopied(copied);
-              }}
-              className="w-full rounded-md border border-border bg-muted/60 px-3 py-2 text-left text-sm break-all transition-colors hover:bg-background"
-            >
-              {latestInviteUrl}
-            </button>
+
+            {canNativeShare ? (
+              <Button
+                type="button"
+                className="w-full"
+                onClick={() => {
+                  void shareInviteUrl(latestInviteUrl);
+                }}
+                data-testid="latest-invite-share"
+              >
+                <Share2 className="h-4 w-4" />
+                Share invite
+              </Button>
+            ) : null}
+
+            <input
+              ref={inviteUrlInputRef}
+              readOnly
+              value={latestInviteUrl}
+              onFocus={(event) => event.currentTarget.select()}
+              onClick={(event) => event.currentTarget.select()}
+              aria-label="Invite URL — tap to select"
+              className="w-full rounded-md border border-border bg-muted/60 px-3 py-2 font-mono text-xs text-foreground outline-none focus:bg-background"
+              data-testid="latest-invite-input"
+            />
+
             <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                type="button"
+                onClick={async () => {
+                  const outcome = await copyInviteUrl(latestInviteUrl);
+                  setLatestInviteCopied(outcome === "copied");
+                  if (outcome !== "copied") {
+                    inviteUrlInputRef.current?.focus();
+                  }
+                }}
+              >
+                <Check className="h-4 w-4" />
+                Copy
+              </Button>
               <Button size="sm" variant="outline" asChild>
                 <a href={latestInviteUrl} target="_blank" rel="noreferrer">
                   <ExternalLink className="h-4 w-4" />
