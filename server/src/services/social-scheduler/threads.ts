@@ -1,11 +1,20 @@
 /**
- * Threads adapter — stub implementation.
+ * Threads adapter — OAuth token exchange wired through `token-exchange.ts`.
  *
  * Real wiring requires:
  *   - Meta App with Threads API permissions (same app as IG/FB works)
  *   - Threads API launched publicly June 2024 — separate from IG Graph API
  *     even though both run on Meta infra
- *   - OAuth flow returning Threads-scoped token
+ *   - OAuth flow returning Threads-scoped token (graph.threads.net)
+ *
+ * **App Review status (read vs publish):**
+ *   - `threads_basic` (verify identity + read self): no App Review needed
+ *     for app admins/devs in Development Mode.
+ *   - `threads_content_publish` / `threads_manage_replies` /
+ *     `threads_manage_insights`: require Meta App Review. The wizard
+ *     authorize-step requests them; Meta will or won't grant depending on
+ *     review status. We persist whatever scope Meta returns and the
+ *     `publishPost` path checks for it before calling the API.
  *
  * Publish path: POST /{threads-user-id}/threads (create container) → POST
  * /{threads-user-id}/threads_publish (finalize). Up to 10 images / 1 video.

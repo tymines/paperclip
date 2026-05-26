@@ -1,5 +1,5 @@
 /**
- * Instagram adapter — stub implementation.
+ * Instagram adapter — OAuth token exchange wired through `token-exchange.ts`.
  *
  * Real wiring requires:
  *   - Meta App with Instagram Graph API permissions
@@ -9,10 +9,24 @@
  *     no personal IG via the Graph API)
  *   - OAuth flow via Facebook Login that returns a long-lived Page token
  *
- * Publish path: POST /{ig-user-id}/media (create container) → POST
- * /{ig-user-id}/media_publish (finalize). Carousels = N containers + 1
- * parent container with children=[...]. Stories = different media type and
- * separate publishing endpoint.
+ * **App Review status (read vs publish):**
+ *   - `instagram_business_basic` (read profile + media): available to Meta
+ *     apps in Development Mode for the app's test users with NO App Review.
+ *     This is what Tyler can use to verify-end-to-end *today* with his own
+ *     IG account added as a test user — connect succeeds, /verify returns
+ *     ok, account row shows up green.
+ *   - `instagram_business_content_publish` (post to feed/reels): requires
+ *     Meta App Review (~1-3 week queue). Until it ships approved, the
+ *     wizard's authorize step will request the publish scope and Meta will
+ *     either grant it (test users) or strip it (everyone else); Paperclip
+ *     persists whatever scope Meta returns on `social_accounts.scopes`.
+ *     `publishPost` checks that and surfaces a "publish scope not granted
+ *     — App Review pending" error rather than calling the API.
+ *
+ * Publish path (when scope is granted): POST /{ig-user-id}/media (create
+ * container) → POST /{ig-user-id}/media_publish (finalize). Carousels = N
+ * containers + 1 parent container with children=[...]. Stories = different
+ * media type and separate publishing endpoint.
  */
 import type { SocialAccount } from "@paperclipai/shared";
 import type {

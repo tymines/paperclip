@@ -14,10 +14,15 @@ import {
 import { validate } from "../middleware/validate.js";
 import { socialService, logActivity } from "../services/index.js";
 import {
+  buildConnectedAccountFromTokens,
+  ensureFreshToken,
+  exchangeCodeForTokens,
   getSocialAdapter,
   listSupportedSocialPlatforms,
   socialCredentialsService,
   testCredentialFormat,
+  TokenExchangeError,
+  verifyAccessToken,
 } from "../services/social-scheduler/index.js";
 import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
 import { notFound, badRequest } from "../errors.js";
@@ -139,6 +144,12 @@ export function socialRoutes(db: Db) {
   // GET /companies/:companyId/social/accounts/:accountId/verify
   // Hits the platform's /me-style endpoint to confirm the stored token is
   // still good. Used by the Accounts dot (green = ok, red = re-auth).
+  //
+  // Refreshes the token first if it's within 5 min of expiring, then
+  // prefers the adapter's `verifyAccount()` (Reddit has karma metrics
+  // worth surfacing) and falls back to the platform-agnostic
+  // `verifyAccessToken()` for adapters that haven't overridden it.
+  //
   // Returns { ok, supported, handle?, details?, reason? }.
   router.get("/companies/:companyId/social/accounts/:accountId/verify", async (req, res) => {
     const companyId = req.params.companyId as string;
@@ -148,22 +159,48 @@ export function socialRoutes(db: Db) {
     if (!account || account.companyId !== companyId) {
       throw notFound("Social account not found");
     }
-    const adapter = getSocialAdapter(account.platform as SocialPlatform);
-    if (!adapter?.verifyAccount) {
-      res.json({ ok: false, supported: false, reason: "verify not supported for this platform" });
+    if (!account.accessToken) {
+      res.json({ ok: false, supported: true, reason: "no access token stored" });
       return;
     }
+    // Best-effort refresh — don't fail verify if refresh itself errors.
+    let working = account;
     try {
-      const result = await adapter.verifyAccount(
-        account as unknown as Parameters<NonNullable<typeof adapter.verifyAccount>>[0],
-      );
-      res.json({ ...result, supported: true });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // 200 (not 5xx) so the dot UI gets a JSON body — it differentiates
-      // by `ok: false` + `reason` rather than HTTP status.
-      res.status(200).json({ ok: false, supported: true, reason: message });
+      working = (await ensureFreshToken(
+        db,
+        account as unknown as Parameters<typeof ensureFreshToken>[1],
+      )) as unknown as typeof account;
+    } catch {
+      /* fall through to the existing token */
     }
+    const adapter = getSocialAdapter(working.platform as SocialPlatform);
+    if (adapter?.verifyAccount) {
+      try {
+        const result = await adapter.verifyAccount(
+          working as unknown as Parameters<NonNullable<typeof adapter.verifyAccount>>[0],
+        );
+        res.json({ ...result, supported: true });
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        // 200 (not 5xx) so the dot UI gets a JSON body — it differentiates
+        // by `ok: false` + `reason` rather than HTTP status.
+        res.status(200).json({ ok: false, supported: true, reason: message });
+        return;
+      }
+    }
+    // Fall back to the generic /me hit via token-exchange.ts.
+    const generic = await verifyAccessToken(
+      working.platform as SocialPlatform,
+      working.accessToken ?? "",
+    );
+    res.json({
+      ok: generic.ok,
+      supported: true,
+      handle: generic.identity?.platformUserName ?? null,
+      details: generic.identity ?? null,
+      reason: generic.error,
+    });
   });
 
   // PATCH /companies/:companyId/social/accounts/:accountId
@@ -803,15 +840,16 @@ export function socialRoutes(db: Db) {
 
   /**
    * OAuth callback — the platform redirects Tyler's browser here after he
-   * grants consent. In v2 we don't actually exchange the code for tokens
-   * against the live API (that requires Tyler to have real apps in App
-   * Review); instead we record the connect as successful, persist a
-   * stub-shaped row tagged `connectMethod: "wizard"`, and let the publish
-   * worker pull tokens from credentials when it's time to call the API.
+   * grants consent. We exchange the `code` for real tokens against the
+   * platform's token endpoint (Reddit + Meta family + X) and persist
+   * accessToken / refreshToken / tokenExpiresAt / scope /
+   * platformAccountId / username / displayName onto a `social_accounts`
+   * row tagged `connectMethod: "wizard"`.
    *
-   * In v3+ the wizard will hit the platform's token endpoint here using
-   * the stored client secret, then store the encrypted tokens on the
-   * social_accounts row.
+   * Errors (`invalid_grant`, `redirect_uri_mismatch`, `invalid_scope`,
+   * etc.) come back as a `TokenExchangeError` — the message gets rendered
+   * into the callback HTML, which postMessages it to the wizard opener,
+   * which renders it inline on the wizard's step-4 surface.
    */
   router.get("/auth/social-callback/:platform", async (req, res, next) => {
     try {
@@ -830,13 +868,19 @@ export function socialRoutes(db: Db) {
             ok: false,
             platform,
             message: errorDescription ?? errorParam,
+            errorCode: errorParam,
           }));
         return;
       }
       if (!state) {
         res
           .status(400)
-          .send(callbackHtml({ ok: false, platform, message: "Missing state parameter" }));
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: "Missing state parameter",
+            errorCode: "missing_state",
+          }));
         return;
       }
       const entry = consumeOAuthState(state);
@@ -847,6 +891,18 @@ export function socialRoutes(db: Db) {
             ok: false,
             platform,
             message: "OAuth state expired or did not match — restart the wizard",
+            errorCode: "invalid_state",
+          }));
+        return;
+      }
+      if (!code) {
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: "Platform did not return an authorization code",
+            errorCode: "missing_code",
           }));
         return;
       }
@@ -859,28 +915,77 @@ export function socialRoutes(db: Db) {
             ok: false,
             platform,
             message: `${platform} adapter is not wired yet`,
+            errorCode: "no_adapter",
           }));
         return;
       }
       const spec = getWizardSpec(platform);
 
-      const stubAccount = await adapter.finishConnect({
-        code: code || "wizard_stub_code",
-        state,
+      // Decrypt the app credentials Tyler saved in step 3 of the wizard.
+      const creds = await credentials.getDecrypted(platform);
+      if (!creds) {
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: `Save ${platform} app credentials in the wizard before authorizing`,
+            errorCode: "no_credentials",
+          }));
+        return;
+      }
+
+      // Real token exchange against the platform's token endpoint.
+      let exchanged;
+      try {
+        exchanged = await exchangeCodeForTokens({
+          platform,
+          clientId: creds.clientId,
+          clientSecret: creds.clientSecret,
+          code,
+          redirectUri: entry.redirectUri,
+        });
+      } catch (err) {
+        const xerr =
+          err instanceof TokenExchangeError
+            ? err
+            : new TokenExchangeError({
+                platform,
+                code: "unknown",
+                status: 500,
+                message: err instanceof Error ? err.message : String(err),
+              });
+        res
+          .status(400)
+          .send(callbackHtml({
+            ok: false,
+            platform,
+            message: `Token exchange failed: ${xerr.message}`,
+            errorCode: xerr.code,
+          }));
+        return;
+      }
+
+      const account = buildConnectedAccountFromTokens({
+        platform,
         companyId: entry.companyId,
+        tokens: exchanged,
       });
+
       const persisted = await svc.createAccount(entry.companyId, {
-        platform: stubAccount.platform,
-        platformAccountId: stubAccount.platformAccountId,
-        displayName: stubAccount.displayName,
-        username: stubAccount.username,
-        avatarUrl: stubAccount.avatarUrl,
-        accessToken: stubAccount.accessToken,
-        refreshToken: stubAccount.refreshToken,
-        tokenExpiresAt: stubAccount.tokenExpiresAt,
-        status: stubAccount.status,
-        metadata: stubAccount.metadata as Record<string, unknown> | null,
-        scopes: spec?.oauth.scopes ?? [],
+        platform: account.platform,
+        platformAccountId: account.platformAccountId,
+        displayName: account.displayName,
+        username: account.username,
+        avatarUrl: account.avatarUrl,
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        tokenExpiresAt: account.tokenExpiresAt,
+        status: account.status,
+        metadata: account.metadata as Record<string, unknown> | null,
+        scopes: exchanged.scope
+          ? exchanged.scope.split(/[\s,]+/).filter(Boolean)
+          : spec?.oauth.scopes ?? [],
         connectMethod: "wizard",
         createdBy: null,
       } as unknown as Parameters<typeof svc.createAccount>[1]);
@@ -892,13 +997,18 @@ export function socialRoutes(db: Db) {
         action: "social.account.connected",
         entityType: "social_account",
         entityId: persisted.id,
-        details: { platform, method: "wizard" },
+        details: {
+          platform,
+          method: "wizard",
+          handle: account.username,
+          scope: exchanged.scope,
+        },
       });
 
       res.status(200).send(callbackHtml({
         ok: true,
         platform,
-        message: `Connected ${spec?.label ?? platform}. You can close this tab.`,
+        message: `Connected ${spec?.label ?? platform}${account.username ? ` (${account.username})` : ""}. You can close this tab.`,
         accountId: persisted.id,
       }));
     } catch (err) {
@@ -918,6 +1028,8 @@ function callbackHtml(opts: {
   platform: string;
   message: string;
   accountId?: string;
+  /** Machine-readable failure code (e.g. `invalid_grant`). */
+  errorCode?: string;
 }): string {
   const safeMessage = opts.message.replace(/[<>&"]/g, (ch) => {
     switch (ch) {
@@ -975,7 +1087,7 @@ function callbackHtml(opts: {
   </div>
   <script>
     (function () {
-      var payload = { type: "paperclip-social-callback", ok: ${opts.ok ? "true" : "false"}, platform: ${JSON.stringify(opts.platform)}, accountId: ${JSON.stringify(opts.accountId ?? null)}, message: ${JSON.stringify(opts.message)} };
+      var payload = { type: "paperclip-social-callback", ok: ${opts.ok ? "true" : "false"}, platform: ${JSON.stringify(opts.platform)}, accountId: ${JSON.stringify(opts.accountId ?? null)}, message: ${JSON.stringify(opts.message)}, errorCode: ${JSON.stringify(opts.errorCode ?? null)} };
       try { if (window.opener) window.opener.postMessage(payload, "*"); } catch (e) {}
       setTimeout(function () { try { window.close(); } catch (e) {} }, 2000);
     })();

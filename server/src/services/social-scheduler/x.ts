@@ -1,12 +1,24 @@
 /**
- * X (Twitter) adapter — stub implementation.
+ * X (Twitter) adapter — OAuth token exchange wired through `token-exchange.ts`.
  *
  * Real wiring requires:
  *   - X Developer account with Project + App
  *   - OAuth 2.0 (PKCE) client with `tweet.read tweet.write users.read
  *     offline.access` scopes
- *   - Paid plan if Tyler expects to post more than 50 tweets / 24h
- *     (free tier limit on API v2 as of mid-2026)
+ *   - Pay-per-use plan (X dropped the free tier in 2026 — see the wizard
+ *     gate for credit-purchase instructions)
+ *
+ * **Paid-tier status (read vs publish):**
+ *   - `tweet.read` + `users.read` (verify + read timeline): available on
+ *     any tier including the bottom $0.001/owned-resource read pricing —
+ *     no App Review needed.
+ *   - `tweet.write` (publish a tweet): $0.015 per tweet, $0.20 per tweet
+ *     containing a URL. Same wallet, same Developer Portal — no separate
+ *     review queue. The wizard's gate confirms Tyler has bought credits.
+ *   - `dm.read` / `dm.write`: Enterprise-tier only; we request them in
+ *     the authorize URL but Twitter will silently drop them for non-
+ *     Enterprise apps. The `scope` field on the returned token row tells
+ *     us what survived.
  *
  * Publish path: POST /2/tweets with body { text, media: { media_ids: [..] } }.
  * Threads = chain via { reply: { in_reply_to_tweet_id } } on subsequent

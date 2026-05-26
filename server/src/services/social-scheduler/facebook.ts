@@ -1,11 +1,11 @@
 /**
- * Facebook adapter — stub with documented native-scheduling path.
+ * Facebook adapter — OAuth token exchange wired through `token-exchange.ts`.
  *
  * Facebook is the ONLY platform on Tyler's list with native scheduled
  * publishing in the API (per Hermes's social-platform-apis.md). That
- * makes it the flagship for v1 scheduling — once OAuth lands the
- * scheduledAt becomes the literal `scheduled_publish_time` request
- * parameter instead of Paperclip's own queue.
+ * makes it the flagship for v1 scheduling — the `scheduledAt` field becomes
+ * the literal `scheduled_publish_time` request parameter instead of
+ * Paperclip's own queue.
  *
  * Real wiring:
  *   - Meta App (same one as Instagram if Tyler links his IG to a FB Page)
@@ -13,6 +13,19 @@
  *   - OAuth flow returning a long-lived Page access token (not user token)
  *   - Personal-profile posting is no longer supported by Graph API; this
  *     adapter targets Facebook Pages only.
+ *
+ * **App Review status (read vs publish):**
+ *   - `public_profile` + `email` (verify only): default permissions, no
+ *     App Review. Connect + /verify work today.
+ *   - `pages_show_list` + `pages_read_engagement` (read connected Pages):
+ *     usable in Development Mode for the app's admins/devs without App
+ *     Review — fine for Tyler's own account.
+ *   - `pages_manage_posts` (publish to a Page): requires Meta App Review.
+ *     If review hasn't completed, the wizard's authorize will succeed but
+ *     Meta will not grant the scope. `social_accounts.scopes` will reflect
+ *     what was actually granted; `publishPost` checks before calling the
+ *     API and surfaces a "publish scope not granted — App Review pending"
+ *     error.
  *
  * Publish — immediate (text/link):
  *   POST https://graph.facebook.com/{page-id}/feed

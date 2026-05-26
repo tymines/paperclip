@@ -47,3 +47,18 @@ export {
   last4,
   type EncryptedEnvelope,
 } from "./oauth-crypto.js";
+export {
+  exchangeCodeForTokens,
+  refreshAccessToken,
+  verifyAccessToken,
+  isTokenStale,
+  TokenExchangeError,
+  __setOAuthFetchForTesting,
+  PAPERCLIP_OAUTH_USER_AGENT,
+  type TokenExchangeInput,
+  type TokenExchangeResult,
+  type VerifyResult,
+  type RefreshInput,
+} from "./token-exchange.js";
+export { buildConnectedAccountFromTokens } from "./connect-helpers.js";
+export { ensureFreshToken } from "./freshness.js";
