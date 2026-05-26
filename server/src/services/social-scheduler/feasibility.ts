@@ -140,7 +140,7 @@ export const TYLER_HOMEWORK: HomeworkItem[] = [
   {
     title: "X Developer Portal + PPU credits",
     description:
-      "Create an app at developer.x.com, generate OAuth 2.0 client + Bearer Token. Purchase credits (~$50 to start). Set a monthly spending cap in the console — recommend $200 hard cap until you know the DM-polling burn rate. Scopes: tweet.read, tweet.write, users.read, dm.read, dm.write, offline.access.",
+      "Create an app at developer.x.com, generate OAuth 2.0 client + Bearer Token. Purchase credits (~$50 to start). Set a monthly spending cap in the console — recommend $200 hard cap. Scopes: tweet.read, tweet.write, users.read, offline.access.",
     href: "https://developer.x.com",
     importance: "blocker",
   },

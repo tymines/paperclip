@@ -174,8 +174,7 @@ export const WIZARD_PLATFORM_SPECS: Partial<Record<SocialPlatform, WizardPlatfor
       { label: "Website URL", value: "https://paperclip.augiport.com" },
       {
         label: "Required scopes",
-        value:
-          "tweet.read, tweet.write, users.read, dm.read, dm.write, offline.access",
+        value: "tweet.read, tweet.write, users.read, offline.access",
       },
     ],
     cost: {
@@ -210,14 +209,7 @@ export const WIZARD_PLATFORM_SPECS: Partial<Record<SocialPlatform, WizardPlatfor
     oauth: {
       authorizeUrlTemplate:
         "https://twitter.com/i/oauth2/authorize?response_type=code&client_id={client_id}&redirect_uri={redirect_uri}&scope={scopes}&state={state}&code_challenge=paperclip-pkce&code_challenge_method=plain",
-      scopes: [
-        "tweet.read",
-        "tweet.write",
-        "users.read",
-        "dm.read",
-        "dm.write",
-        "offline.access",
-      ],
+      scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
       scopeJoin: " ",
       responseTypeCode: true,
       requiresPkce: true,

@@ -15,10 +15,9 @@
  *   - `tweet.write` (publish a tweet): $0.015 per tweet, $0.20 per tweet
  *     containing a URL. Same wallet, same Developer Portal — no separate
  *     review queue. The wizard's gate confirms Tyler has bought credits.
- *   - `dm.read` / `dm.write`: Enterprise-tier only; we request them in
- *     the authorize URL but Twitter will silently drop them for non-
- *     Enterprise apps. The `scope` field on the returned token row tells
- *     us what survived.
+ *   - DM scopes are intentionally NOT requested: Paperclip doesn't route
+ *     DMs and the Developer Console app is configured Read+Write only,
+ *     so requesting them would fail the handshake with `unauthorized_scope`.
  *
  * Publish path: POST /2/tweets with body { text, media: { media_ids: [..] } }.
  * Threads = chain via { reply: { in_reply_to_tweet_id } } on subsequent
