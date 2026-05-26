@@ -25,6 +25,7 @@ import { roomRoutes } from "./routes/rooms.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
 import type { SocialScheduler } from "./workers/social-scheduler.js";
+import type { SocialDmPoller } from "./workers/social-dm-poller.js";
 import { approvalRoutes } from "./routes/approvals.js";
 import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
@@ -143,6 +144,7 @@ export async function createApp(
     pluginMigrationDb?: Db;
     pluginWorkerManager?: PluginWorkerManager;
     socialScheduler?: SocialScheduler;
+    socialDmPoller?: SocialDmPoller;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
   },
@@ -227,7 +229,7 @@ export async function createApp(
   api.use(knowledgeGraphRoutes(db));
   api.use(roomRoutes(db));
   api.use(agentBridgeRoutes(db));
-  api.use(socialRoutes(db, { scheduler: opts.socialScheduler }));
+  api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
   api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(userProfileRoutes(db));
   api.use(sidebarBadgeRoutes(db));

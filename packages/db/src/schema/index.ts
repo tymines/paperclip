@@ -38,6 +38,7 @@ export { agentBridgeReplyAttempts } from "./agent_bridge_reply_attempts.js";
 export { socialAccounts } from "./social_accounts.js";
 export { socialPosts, socialPostTargets } from "./social_posts.js";
 export { socialAppCredentials } from "./social_app_credentials.js";
+export { socialDms, jarvisAlerts } from "./social_dms.js";
 export { bulkUploadDrafts, bulkUploads } from "./bulk_upload_drafts.js";
 export { issues } from "./issues.js";
 export { issueRecoveryActions } from "./issue_recovery_actions.js";

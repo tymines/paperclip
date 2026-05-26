@@ -37,6 +37,7 @@ import { heartbeatsApi } from "../api/heartbeats";
 import { instanceSettingsApi } from "../api/instanceSettings";
 import { queryKeys } from "../lib/queryKeys";
 import { useInboxBadge } from "../hooks/useInboxBadge";
+import { socialApi } from "../api/social";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
@@ -58,6 +59,13 @@ export function Sidebar() {
     refetchInterval: 10_000,
   });
   const liveRunCount = liveRuns?.length ?? 0;
+  const { data: socialDmBadge } = useQuery({
+    queryKey: queryKeys.social.dmsUnreadCount(selectedCompanyId!),
+    queryFn: () => socialApi.dmUnreadCount(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 60_000,
+  });
+  const socialUnread = socialDmBadge?.unread ?? 0;
   const showWorkspacesLink = experimentalSettings?.enableIsolatedWorkspaces === true;
   const uiV1 = experimentalSettings?.enableUiV1 === true;
   const uiV2 = experimentalSettings?.enableUiV2 === true;
@@ -98,6 +106,7 @@ export function Sidebar() {
           openNewIssue={openNewIssue}
           inboxBadge={inboxBadge}
           liveRunCount={liveRunCount}
+          socialUnread={socialUnread}
           showWorkspacesLink={showWorkspacesLink}
           pluginContext={pluginContext}
           issueNoun={issueNoun}
@@ -107,6 +116,7 @@ export function Sidebar() {
           openNewIssue={openNewIssue}
           inboxBadge={inboxBadge}
           liveRunCount={liveRunCount}
+          socialUnread={socialUnread}
           showWorkspacesLink={showWorkspacesLink}
           pluginContext={pluginContext}
           issueNoun={issueNoun}
@@ -120,6 +130,7 @@ interface SidebarSharedProps {
   openNewIssue: () => void;
   inboxBadge: ReturnType<typeof useInboxBadge>;
   liveRunCount: number;
+  socialUnread: number;
   showWorkspacesLink: boolean;
   pluginContext: { companyId: string | null; companyPrefix: string | null };
   issueNoun: ReturnType<typeof useIssueNoun>;
@@ -129,6 +140,7 @@ function SidebarLegacy({
   openNewIssue,
   inboxBadge,
   liveRunCount,
+  socialUnread,
   showWorkspacesLink,
   pluginContext,
   issueNoun,
@@ -183,7 +195,12 @@ function SidebarLegacy({
 
       <SidebarSection label="Collaboration">
         <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
-        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+        <SidebarNavItem
+          to="/social"
+          label="Social"
+          icon={Megaphone}
+          badge={socialUnread > 0 ? socialUnread : undefined}
+        />
       </SidebarSection>
 
       <SidebarSection label="Company">
@@ -219,6 +236,7 @@ function SidebarV1({
   openNewIssue,
   inboxBadge,
   liveRunCount,
+  socialUnread,
   showWorkspacesLink,
   pluginContext,
   issueNoun,
@@ -263,7 +281,12 @@ function SidebarV1({
         <SidebarNavItem to="/work" label="Work" icon={Layers} />
         <SidebarNavItem to="/goals" label="Goals" icon={Target} />
         <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
-        <SidebarNavItem to="/social" label="Social" icon={Megaphone} />
+        <SidebarNavItem
+          to="/social"
+          label="Social"
+          icon={Megaphone}
+          badge={socialUnread > 0 ? socialUnread : undefined}
+        />
         <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/org" label="Org" icon={Network} />

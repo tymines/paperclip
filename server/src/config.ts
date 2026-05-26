@@ -87,6 +87,8 @@ export interface Config {
   heartbeatSchedulerIntervalMs: number;
   socialSchedulerEnabled: boolean;
   socialSchedulerIntervalMs: number;
+  socialDmPollerEnabled: boolean;
+  socialDmPollerIntervalMs: number;
   companyDeletionEnabled: boolean;
   telemetryEnabled: boolean;
 }
@@ -335,6 +337,8 @@ export function loadConfig(): Config {
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
     socialSchedulerEnabled: process.env.SOCIAL_SCHEDULER_ENABLED !== "false",
     socialSchedulerIntervalMs: Math.max(5000, Number(process.env.SOCIAL_SCHEDULER_INTERVAL_MS) || 30000),
+    socialDmPollerEnabled: process.env.SOCIAL_DM_POLLER_ENABLED !== "false",
+    socialDmPollerIntervalMs: Math.max(15000, Number(process.env.SOCIAL_DM_POLLER_INTERVAL_MS) || 60000),
     companyDeletionEnabled,
     telemetryEnabled: fileConfig?.telemetry?.enabled ?? true,
   };

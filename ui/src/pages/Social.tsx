@@ -16,6 +16,8 @@ import {
   Instagram,
   Facebook,
   Youtube,
+  Inbox as InboxIcon,
+  BadgeCheck,
   type LucideIcon,
 } from "lucide-react";
 import { socialApi } from "../api/social";
@@ -47,6 +49,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { SocialAccountPublic, SocialPostListItem, SocialPlatform } from "@paperclipai/shared";
 import { XLogoIcon } from "../components/social/x-icon";
+import type { SocialDmRow } from "../api/social";
 
 // ── Platform helpers ──────────────────────────────────────────────────────────
 
@@ -115,7 +118,186 @@ function PlatformIcon({ platform, size = 16 }: { platform: SocialPlatform; size?
 
 // ── Sub-views ──────────────────────────────────────────────────────────────────
 
-type Tab = "posts" | "calendar" | "accounts";
+type Tab = "posts" | "calendar" | "accounts" | "inbox";
+
+function timeAgo(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return "now";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  const day = Math.floor(hr / 24);
+  if (day < 30) return `${day}d`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function DmRow({
+  dm,
+  onMarkRead,
+  onExpand,
+  expanded,
+  threadMessages,
+}: {
+  dm: SocialDmRow;
+  onMarkRead: (dm: SocialDmRow) => void;
+  onExpand: (dm: SocialDmRow) => void;
+  expanded: boolean;
+  threadMessages: SocialDmRow[] | null;
+}) {
+  const unread = dm.readAt == null && dm.direction === "inbound";
+  const initials = (dm.senderHandle ?? dm.senderDisplayName ?? "?").slice(0, 2).toUpperCase();
+  return (
+    <div
+      className={`rounded-lg border p-3 cursor-pointer transition-colors ${
+        unread ? "bg-primary/5 border-primary/30" : "hover:bg-accent/40"
+      }`}
+      onClick={() => {
+        onExpand(dm);
+        if (unread) onMarkRead(dm);
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <div className="relative shrink-0">
+          {dm.senderAvatarUrl ? (
+            <img
+              src={dm.senderAvatarUrl}
+              alt=""
+              className="h-9 w-9 rounded-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <div className="h-9 w-9 rounded-full bg-muted flex items-center justify-center text-[11px] font-medium">
+              {initials}
+            </div>
+          )}
+          {unread && (
+            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-primary ring-2 ring-background" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-sm font-medium truncate">
+              {dm.senderDisplayName ?? dm.senderHandle ?? "Unknown sender"}
+            </span>
+            {dm.senderVerified && (
+              <BadgeCheck className="h-3.5 w-3.5 text-blue-500 shrink-0" aria-label="Verified" />
+            )}
+            {dm.senderHandle && (
+              <span className="text-xs text-muted-foreground truncate">@{dm.senderHandle}</span>
+            )}
+            {dm.senderIsFirstContact && (
+              <Badge variant="outline" className="text-[9px] px-1.5 py-0 border-amber-500/60 text-amber-700 dark:text-amber-300">
+                first contact
+              </Badge>
+            )}
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              {timeAgo(dm.sentAt)}
+            </span>
+          </div>
+          <p className={`mt-1 text-sm ${unread ? "text-foreground" : "text-muted-foreground"} line-clamp-2`}>
+            {dm.text ?? <span className="italic text-muted-foreground">(no text)</span>}
+          </p>
+          {expanded && threadMessages && (
+            <div className="mt-3 space-y-2 border-t pt-3">
+              {threadMessages.map((m) => (
+                <div key={m.id} className="text-xs">
+                  <span className="font-medium">
+                    {m.direction === "outbound" ? "You" : m.senderHandle ? `@${m.senderHandle}` : "Them"}
+                  </span>
+                  <span className="text-muted-foreground"> · {timeAgo(m.sentAt)}</span>
+                  <p className="mt-0.5 whitespace-pre-wrap">{m.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function InboxView({ companyId }: { companyId: string }) {
+  const queryClient = useQueryClient();
+  const [expandedThreadId, setExpandedThreadId] = useState<string | null>(null);
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const { data: dms, isLoading } = useQuery({
+    queryKey: queryKeys.social.dms(companyId, null, unreadOnly),
+    queryFn: () => socialApi.listDms(companyId, { unreadOnly, limit: 100 }),
+    refetchInterval: 60_000,
+  });
+
+  const markReadMutation = useMutation({
+    mutationFn: (dmId: string) => socialApi.markDmRead(companyId, dmId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["social", "dms"] });
+    },
+  });
+
+  const allDms = dms ?? [];
+  const threadDms = expandedThreadId
+    ? allDms.filter((d) => d.threadId === expandedThreadId).sort((a, b) => a.sentAt.localeCompare(b.sentAt))
+    : null;
+  const threadHeads = new Map<string, SocialDmRow>();
+  for (const d of allDms) {
+    const cur = threadHeads.get(d.threadId);
+    if (!cur || d.sentAt > cur.sentAt) threadHeads.set(d.threadId, d);
+  }
+  const heads = [...threadHeads.values()].sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+
+  if (isLoading) {
+    return <PageSkeleton variant="list" />;
+  }
+  if (heads.length === 0) {
+    return (
+      <EmptyState
+        icon={InboxIcon}
+        message={
+          unreadOnly
+            ? "No unread DMs."
+            : "No DMs yet. Once you connect an X account with dm.read scope, new messages will appear here within ~60 seconds."
+        }
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          {heads.length} thread{heads.length === 1 ? "" : "s"}
+          {dms && dms.some((d) => d.readAt == null && d.direction === "inbound") && (
+            <span className="ml-2">
+              · {dms.filter((d) => d.readAt == null && d.direction === "inbound").length} unread
+            </span>
+          )}
+        </p>
+        <button
+          onClick={() => setUnreadOnly((v) => !v)}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          {unreadOnly ? "Show all" : "Unread only"}
+        </button>
+      </div>
+      <div className="space-y-2">
+        {heads.map((dm) => (
+          <DmRow
+            key={dm.threadId}
+            dm={dm}
+            expanded={dm.threadId === expandedThreadId}
+            threadMessages={dm.threadId === expandedThreadId ? threadDms : null}
+            onMarkRead={(d) => markReadMutation.mutate(d.id)}
+            onExpand={(d) =>
+              setExpandedThreadId((cur) => (cur === d.threadId ? null : d.threadId))
+            }
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function AccountCard({
   account,
@@ -411,6 +593,7 @@ export function Social() {
   const tabs: { id: Tab; label: string }[] = [
     { id: "posts", label: "Posts" },
     { id: "calendar", label: "Calendar" },
+    { id: "inbox", label: "Inbox" },
     { id: "accounts", label: "Accounts" },
   ];
 
@@ -476,6 +659,9 @@ export function Social() {
 
       {/* Calendar tab */}
       {tab === "calendar" && <CalendarView posts={posts ?? []} />}
+
+      {/* Inbox tab — real DMs polled from X (and other platforms as they wire in). */}
+      {tab === "inbox" && <InboxView companyId={selectedCompanyId} />}
 
       {/* Accounts tab */}
       {tab === "accounts" && (

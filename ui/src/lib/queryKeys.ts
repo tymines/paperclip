@@ -205,6 +205,9 @@ export const queryKeys = {
     credentials: ["social", "credentials"] as const,
     credentialsByPlatform: (platform: string) =>
       ["social", "credentials", platform] as const,
+    dms: (companyId: string, accountId: string | null, unreadOnly: boolean) =>
+      ["social", "dms", companyId, accountId ?? "all", unreadOnly] as const,
+    dmsUnreadCount: (companyId: string) => ["social", "dms", "unread-count", companyId] as const,
   },
   plugins: {
     all: ["plugins"] as const,

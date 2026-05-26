@@ -28,6 +28,9 @@ import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
 import { notFound, badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import type { SocialScheduler } from "../workers/social-scheduler.js";
+import type { SocialDmPoller } from "../workers/social-dm-poller.js";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { socialDms } from "@paperclipai/db";
 
 function isSocialPlatform(value: string): value is SocialPlatform {
   return (SOCIAL_PLATFORMS as readonly string[]).includes(value);
@@ -80,11 +83,15 @@ export function __testing_oauthStateStore() {
   return { rememberOAuthState, consumeOAuthState, oauthStateStore };
 }
 
-export function socialRoutes(db: Db, opts: { scheduler?: SocialScheduler } = {}) {
+export function socialRoutes(
+  db: Db,
+  opts: { scheduler?: SocialScheduler; dmPoller?: SocialDmPoller } = {},
+) {
   const router = Router();
   const svc = socialService(db);
   const credentials = socialCredentialsService(db);
   const scheduler = opts.scheduler ?? null;
+  const dmPoller = opts.dmPoller ?? null;
 
   // ── Scheduler ────────────────────────────────────────────────────────────
 
@@ -98,6 +105,99 @@ export function socialRoutes(db: Db, opts: { scheduler?: SocialScheduler } = {})
     }
     const diag = scheduler.getDiagnostics();
     res.json({ enabled: true, ...diag });
+  });
+
+  // ── DM Poller ────────────────────────────────────────────────────────────
+
+  // GET /social/dms/poller/health — runtime diagnostics for the X DM
+  // poller worker. 503 if the poller isn't wired into this process.
+  router.get("/social/dms/poller/health", (_req, res) => {
+    if (!dmPoller) {
+      res.status(503).json({ enabled: false, reason: "DM poller not started in this process" });
+      return;
+    }
+    const diag = dmPoller.getDiagnostics();
+    res.json({ enabled: true, ...diag });
+  });
+
+  // GET /companies/:companyId/social/dms?accountId=&unreadOnly=&limit=
+  // Returns the most-recent DMs across the company's connected accounts.
+  router.get("/companies/:companyId/social/dms", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accountId = typeof req.query.accountId === "string" ? req.query.accountId : null;
+    const unreadOnly =
+      req.query.unreadOnly === "true" || req.query.unreadOnly === "1";
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
+
+    const accounts = await svc.listAccounts(companyId);
+    const accountIds = accounts.map((a) => a.id);
+    if (accountIds.length === 0) {
+      res.json([]);
+      return;
+    }
+    if (accountId && !accountIds.includes(accountId)) {
+      throw notFound("account");
+    }
+
+    const conditions = [
+      accountId
+        ? eq(socialDms.socialAccountId, accountId)
+        : sql`${socialDms.socialAccountId} = ANY(${accountIds}::uuid[])`,
+    ];
+    if (unreadOnly) conditions.push(isNull(socialDms.readAt));
+
+    const rows = await db
+      .select()
+      .from(socialDms)
+      .where(and(...conditions))
+      .orderBy(desc(socialDms.sentAt))
+      .limit(limit);
+    res.json(rows);
+  });
+
+  // POST /companies/:companyId/social/dms/:dmId/mark-read
+  router.post("/companies/:companyId/social/dms/:dmId/mark-read", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const dmId = req.params.dmId as string;
+    assertCompanyAccess(req, companyId);
+    const row = await db
+      .select()
+      .from(socialDms)
+      .where(eq(socialDms.id, dmId))
+      .then((rows) => rows[0] ?? null);
+    if (!row) throw notFound("dm");
+    const account = await svc.getAccount(row.socialAccountId);
+    if (!account || account.companyId !== companyId) throw notFound("dm");
+    const now = new Date();
+    await db
+      .update(socialDms)
+      .set({ readAt: now })
+      .where(eq(socialDms.id, dmId));
+    res.json({ id: dmId, readAt: now.toISOString() });
+  });
+
+  // GET /companies/:companyId/social/dms/unread-count — sidebar badge.
+  router.get("/companies/:companyId/social/dms/unread-count", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const accounts = await svc.listAccounts(companyId);
+    const accountIds = accounts.map((a) => a.id);
+    if (accountIds.length === 0) {
+      res.json({ unread: 0 });
+      return;
+    }
+    const result = await db
+      .select({ unread: sql<number>`count(*)::int` })
+      .from(socialDms)
+      .where(
+        and(
+          sql`${socialDms.socialAccountId} = ANY(${accountIds}::uuid[])`,
+          isNull(socialDms.readAt),
+          eq(socialDms.direction, "inbound"),
+        ),
+      );
+    res.json({ unread: result[0]?.unread ?? 0 });
   });
 
   // POST /social/scheduler/fire-now/:postId — admin/test bypass that runs

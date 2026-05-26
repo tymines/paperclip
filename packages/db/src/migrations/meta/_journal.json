@@ -757,6 +757,13 @@
       "when": 1780012800000,
       "tag": "0107_social_twitter_rename_x",
       "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1780099200000,
+      "tag": "0108_social_dms_and_jarvis_alerts",
+      "breakpoints": true
     }
   ]
 }

@@ -40,6 +40,7 @@ import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-sh
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createSocialScheduler } from "./workers/social-scheduler.js";
+import { createSocialDmPoller } from "./workers/social-dm-poller.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -602,6 +603,13 @@ export async function startServer(): Promise<StartedServer> {
       })
     : undefined;
   if (socialScheduler) socialScheduler.start();
+  const socialDmPoller = config.socialDmPollerEnabled
+    ? createSocialDmPoller({
+        db: db as any,
+        tickIntervalMs: config.socialDmPollerIntervalMs,
+      })
+    : undefined;
+  if (socialDmPoller) socialDmPoller.start();
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -627,6 +635,7 @@ export async function startServer(): Promise<StartedServer> {
     resolveSession,
     pluginWorkerManager,
     socialScheduler,
+    socialDmPoller,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 

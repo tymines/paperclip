@@ -161,6 +161,30 @@ export const socialApi = {
     );
   },
 
+  // ── DM Inbox (real, polled into social_dms) ─────────────────────────────
+  listDms: (
+    companyId: string,
+    opts?: { accountId?: string; unreadOnly?: boolean; limit?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.accountId) params.set("accountId", opts.accountId);
+    if (opts?.unreadOnly) params.set("unreadOnly", "true");
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return api.get<SocialDmRow[]>(
+      `/companies/${companyId}/social/dms${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  markDmRead: (companyId: string, dmId: string) =>
+    api.post<{ id: string; readAt: string }>(
+      `/companies/${companyId}/social/dms/${dmId}/mark-read`,
+      {},
+    ),
+
+  dmUnreadCount: (companyId: string) =>
+    api.get<{ unread: number }>(`/companies/${companyId}/social/dms/unread-count`),
+
   inboxThread: (companyId: string, accountId: string, threadId: string) =>
     api.get<DirectMessage[]>(`/companies/${companyId}/social/inbox/${accountId}/${threadId}`),
 
@@ -247,6 +271,26 @@ export const socialApi = {
       {},
     ),
 };
+
+export interface SocialDmRow {
+  id: string;
+  socialAccountId: string;
+  platform: SocialPlatform;
+  threadId: string;
+  messageId: string;
+  direction: "inbound" | "outbound";
+  senderPlatformUserId: string | null;
+  senderHandle: string | null;
+  senderDisplayName: string | null;
+  senderAvatarUrl: string | null;
+  senderVerified: boolean;
+  senderIsFirstContact: boolean;
+  text: string | null;
+  mediaUrls: string[];
+  sentAt: string;
+  readAt: string | null;
+  createdAt: string;
+}
 
 export interface DirectMessageThread {
   threadId: string;

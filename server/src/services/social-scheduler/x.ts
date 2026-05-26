@@ -4,20 +4,25 @@
  * Real wiring requires:
  *   - X Developer account with Project + App
  *   - OAuth 2.0 (PKCE) client with `tweet.read tweet.write users.read
- *     offline.access` scopes
+ *     offline.access dm.read dm.write` scopes
+ *   - X app permissions set to "Read and write and Direct messages" in
+ *     the Developer Console (otherwise the dm.* scopes return
+ *     `unauthorized_scope` at the consent screen)
  *   - Pay-per-use plan (X dropped the free tier in 2026 — see the wizard
  *     gate for credit-purchase instructions)
  *
- * **Paid-tier status (read vs publish):**
+ * **Paid-tier status (read vs publish vs DMs):**
  *   - `tweet.read` + `users.read` (verify + read timeline): available on
  *     any tier including the bottom $0.001/owned-resource read pricing —
  *     no App Review needed.
  *   - `tweet.write` (publish a tweet): $0.015 per tweet, $0.20 per tweet
  *     containing a URL. Same wallet, same Developer Portal — no separate
  *     review queue. The wizard's gate confirms Tyler has bought credits.
- *   - DM scopes are intentionally NOT requested: Paperclip doesn't route
- *     DMs and the Developer Console app is configured Read+Write only,
- *     so requesting them would fail the handshake with `unauthorized_scope`.
+ *   - `dm.read` + `dm.write` (poll inbox / reply): $0.010 per DM event
+ *     read on PPU; webhook push is Enterprise-only. The DM poller worker
+ *     (`server/src/workers/social-dm-poller.ts`) polls /2/dm_events on a
+ *     60s tick and writes inbound DMs into `social_dms` so the Inbox
+ *     subtab and Jarvis briefing can surface them.
  *
  * Publish path: POST /2/tweets with body { text, media: { media_ids: [..] } }.
  * Threads = chain via { reply: { in_reply_to_tweet_id } } on subsequent
