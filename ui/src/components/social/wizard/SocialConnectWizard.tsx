@@ -739,25 +739,66 @@ function StepConnect({
   onConnected: (accountId: string) => void;
 }) {
   const [popupRef, setPopupRef] = useState<Window | null>(null);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const authorizeMutation = useMutation({
     mutationFn: () => socialApi.wizardAuthorize(companyId, spec.platform),
-    onSuccess: (res) => {
-      const popup = window.open(res.authUrl, "_blank", "width=600,height=720");
-      setPopupRef(popup);
-    },
   });
+
+  const handleOpenConsent = () => {
+    setAuthError(null);
+    // iOS Safari blocks window.open() if it runs after an awaited fetch — the
+    // user-gesture context is lost across the async boundary. So open a blank
+    // popup synchronously *inside* the click handler to keep the gesture, then
+    // navigate it once the authorize URL comes back. If the popup is blocked
+    // anyway (popup === null), fall back to a top-level navigation, which a
+    // popup blocker cannot stop.
+    const popup = window.open("about:blank", "_blank", "width=600,height=720");
+    if (popup) setPopupRef(popup);
+
+    authorizeMutation.mutate(undefined, {
+      onSuccess: (res) => {
+        try {
+          if (popup && !popup.closed) {
+            popup.location.href = res.authUrl;
+          } else {
+            window.location.href = res.authUrl;
+          }
+        } catch {
+          window.location.href = res.authUrl;
+        }
+      },
+      onError: (err) => {
+        try {
+          popup?.close();
+        } catch {
+          /* ignore */
+        }
+        setAuthError(err instanceof Error ? err.message : String(err));
+      },
+    });
+  };
 
   // Listen for the postMessage from /auth/social-callback/:platform.
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const data = event.data as
-        | { type?: string; ok?: boolean; platform?: string; accountId?: string | null }
+        | {
+            type?: string;
+            ok?: boolean;
+            platform?: string;
+            accountId?: string | null;
+            message?: string;
+            errorCode?: string | null;
+          }
         | null;
       if (!data || data.type !== "paperclip-social-callback") return;
       if (data.platform !== spec.platform) return;
       if (data.ok && data.accountId) {
+        setAuthError(null);
         onConnected(data.accountId);
+      } else if (data.ok === false) {
+        setAuthError(data.message ?? "OAuth handshake failed");
       }
       try {
         popupRef?.close();
@@ -809,7 +850,7 @@ function StepConnect({
       </div>
 
       <Button
-        onClick={() => authorizeMutation.mutate()}
+        onClick={handleOpenConsent}
         disabled={authorizeMutation.isPending || connected}
         className="w-full sm:w-auto"
       >
@@ -825,6 +866,13 @@ function StepConnect({
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm text-emerald-100">
           <CheckCircle2 className="mr-1 inline h-4 w-4 align-text-bottom" />
           {meta.label} account connected. It now shows in the Accounts tab.
+        </div>
+      ) : null}
+
+      {authError ? (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100">
+          <AlertTriangle className="mr-1 inline h-4 w-4 align-text-bottom" />
+          {authError}
         </div>
       ) : null}
 
