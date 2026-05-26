@@ -94,6 +94,14 @@ export interface SocialAppCredentialPublic {
   /** Only the trailing 4 chars of the client secret — for confirmation. */
   clientSecretLast4: string | null;
   redirectUri: string | null;
+  /** OAuth 1.0a consumer key (api_key) — not secret. */
+  consumerKey?: string | null;
+  /** Trailing 4 chars of OAuth 1.0a consumer secret. */
+  consumerSecretLast4?: string | null;
+  /** Trailing 4 chars of OAuth 1.0a app-only bearer token. */
+  bearerTokenLast4?: string | null;
+  /** Default OAuth 2.0 scopes requested at authorize time. */
+  defaultScopes?: string[] | null;
   lastValidatedAt: Date | null;
   lastValidationStatus: "ok" | "error" | null;
   lastValidationMessage: string | null;

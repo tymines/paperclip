@@ -30,6 +30,12 @@ function toPublic(row: CredentialRow): SocialAppCredentialPublic {
     clientId: row.clientId,
     clientSecretLast4: row.clientSecretLast4,
     redirectUri: row.redirectUri,
+    consumerKey: row.consumerKey ?? null,
+    consumerSecretLast4: row.consumerSecretLast4 ?? null,
+    bearerTokenLast4: row.bearerTokenLast4 ?? null,
+    defaultScopes: Array.isArray(row.defaultScopes)
+      ? (row.defaultScopes as string[])
+      : null,
     lastValidatedAt: row.lastValidatedAt,
     lastValidationStatus:
       validationStatus === "ok" || validationStatus === "error" ? validationStatus : null,
@@ -45,6 +51,10 @@ export interface SaveCredentialInput {
   clientSecret: string;
   redirectUri?: string | null;
   createdBy?: string | null;
+  consumerKey?: string | null;
+  consumerSecret?: string | null;
+  bearerToken?: string | null;
+  defaultScopes?: string[] | null;
 }
 
 export function socialCredentialsService(db: Db) {
@@ -85,6 +95,18 @@ export function socialCredentialsService(db: Db) {
     save: async (input: SaveCredentialInput): Promise<SocialAppCredentialPublic> => {
       const envelope: EncryptedEnvelope = encryptOAuthSecret(input.clientSecret);
       const tail = last4(input.clientSecret);
+      const consumerSecretEnvelope =
+        input.consumerSecret != null && input.consumerSecret !== ""
+          ? encryptOAuthSecret(input.consumerSecret)
+          : null;
+      const consumerSecretTail =
+        input.consumerSecret != null ? last4(input.consumerSecret) : null;
+      const bearerTokenEnvelope =
+        input.bearerToken != null && input.bearerToken !== ""
+          ? encryptOAuthSecret(input.bearerToken)
+          : null;
+      const bearerTokenTail =
+        input.bearerToken != null ? last4(input.bearerToken) : null;
       const [existing] = await db
         .select()
         .from(socialAppCredentials)
@@ -97,6 +119,15 @@ export function socialCredentialsService(db: Db) {
             clientSecretEncrypted: envelope,
             clientSecretLast4: tail,
             redirectUri: input.redirectUri ?? existing.redirectUri,
+            consumerKey: input.consumerKey ?? existing.consumerKey,
+            consumerSecretEncrypted:
+              consumerSecretEnvelope ?? existing.consumerSecretEncrypted,
+            consumerSecretLast4:
+              consumerSecretTail ?? existing.consumerSecretLast4,
+            bearerTokenEncrypted:
+              bearerTokenEnvelope ?? existing.bearerTokenEncrypted,
+            bearerTokenLast4: bearerTokenTail ?? existing.bearerTokenLast4,
+            defaultScopes: input.defaultScopes ?? existing.defaultScopes,
             updatedAt: new Date(),
           })
           .where(eq(socialAppCredentials.platform, input.platform))
@@ -111,6 +142,12 @@ export function socialCredentialsService(db: Db) {
           clientSecretEncrypted: envelope,
           clientSecretLast4: tail,
           redirectUri: input.redirectUri ?? null,
+          consumerKey: input.consumerKey ?? null,
+          consumerSecretEncrypted: consumerSecretEnvelope,
+          consumerSecretLast4: consumerSecretTail,
+          bearerTokenEncrypted: bearerTokenEnvelope,
+          bearerTokenLast4: bearerTokenTail,
+          defaultScopes: input.defaultScopes ?? null,
           createdBy: input.createdBy ?? null,
         })
         .returning();
