@@ -12,7 +12,6 @@ import {
   Send,
   Trash2,
   Settings2,
-  Twitter,
   Linkedin,
   Instagram,
   Facebook,
@@ -47,11 +46,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { SocialAccountPublic, SocialPostListItem, SocialPlatform } from "@paperclipai/shared";
+import { XLogoIcon } from "../components/social/x-icon";
 
 // ── Platform helpers ──────────────────────────────────────────────────────────
 
 const PLATFORM_ICONS: Partial<Record<SocialPlatform, LucideIcon>> = {
-  twitter: Twitter,
+  x: XLogoIcon as unknown as LucideIcon,
   linkedin: Linkedin,
   instagram: Instagram,
   facebook: Facebook,
@@ -59,7 +59,7 @@ const PLATFORM_ICONS: Partial<Record<SocialPlatform, LucideIcon>> = {
 };
 
 const PLATFORM_COLORS: Record<SocialPlatform, string> = {
-  twitter: "bg-sky-500",
+  x: "bg-black",
   linkedin: "bg-blue-700",
   instagram: "bg-gradient-to-br from-purple-500 to-pink-500",
   facebook: "bg-blue-600",
@@ -73,7 +73,7 @@ const PLATFORM_COLORS: Record<SocialPlatform, string> = {
 };
 
 const PLATFORM_LABELS: Record<SocialPlatform, string> = {
-  twitter: "X (Twitter)",
+  x: "X",
   linkedin: "LinkedIn",
   instagram: "Instagram",
   facebook: "Facebook",
@@ -302,7 +302,7 @@ export function Social() {
 
   // Account draft
   const [accountDraft, setAccountDraft] = useState({
-    platform: "twitter" as SocialPlatform,
+    platform: "x" as SocialPlatform,
     displayName: "",
     username: "",
     platformAccountId: "",
@@ -346,7 +346,7 @@ export function Social() {
     onSuccess: (account) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.social.accounts(selectedCompanyId!) });
       setAddAccountOpen(false);
-      setAccountDraft({ platform: "twitter", displayName: "", username: "", platformAccountId: "" });
+      setAccountDraft({ platform: "x", displayName: "", username: "", platformAccountId: "" });
       pushToast({ title: "Account connected", body: account.displayName });
     },
     onError: (err) => {
@@ -657,7 +657,7 @@ export function Social() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="twitter">X (Twitter)</SelectItem>
+                  <SelectItem value="x">X</SelectItem>
                   <SelectItem value="linkedin">LinkedIn</SelectItem>
                   <SelectItem value="instagram">Instagram</SelectItem>
                   <SelectItem value="facebook">Facebook</SelectItem>

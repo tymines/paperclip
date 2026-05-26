@@ -20,7 +20,7 @@ import {
 } from "./wizard-state";
 
 const ig = WIZARD_PLATFORM_SPECS.instagram as WizardPlatformSpec;
-const x = WIZARD_PLATFORM_SPECS.twitter as WizardPlatformSpec;
+const x = WIZARD_PLATFORM_SPECS.x as WizardPlatformSpec;
 const reddit = WIZARD_PLATFORM_SPECS.reddit as WizardPlatformSpec;
 const fb = WIZARD_PLATFORM_SPECS.facebook as WizardPlatformSpec;
 
@@ -71,13 +71,13 @@ describe("SocialConnectWizard step machine", () => {
 
   describe("X paid-tier gate", () => {
     it("blocks advance until pay-per-use gate is confirmed", () => {
-      const s = blankState("twitter");
+      const s = blankState("x");
       const check = canAdvance(s, x);
       expect(check.ok).toBe(false);
     });
 
     it("allows advance once paid-tier gate is acknowledged", () => {
-      let s = blankState("twitter");
+      let s = blankState("x");
       s = acknowledgeGate(s, "x_paid_tier");
       const check = canAdvance(s, x);
       expect(check.ok).toBe(true);

@@ -5,14 +5,14 @@
 
 export type BulkUploadPlatform =
   | "instagram"
-  | "twitter"
+  | "x"
   | "facebook"
   | "threads"
   | "reddit";
 
 export const BULK_UPLOAD_PLATFORMS = [
   "instagram",
-  "twitter",
+  "x",
   "facebook",
   "threads",
   "reddit",

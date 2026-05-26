@@ -47,7 +47,7 @@ describe("best-time engine — source selection", () => {
         slots: [{ weekday: 0, hour: 10, engagement: 99 }],
       }),
     };
-    const result = await computeBestTimes("co-1", "twitter", source);
+    const result = await computeBestTimes("co-1", "x", source);
     expect(result.source).toBe(SOURCE_LABEL);
   });
 

@@ -51,9 +51,9 @@ const INDUSTRY_BASELINES: Record<BulkUploadPlatform, IndustrySlot[]> = {
     { weekday: 1, hour: 19, score: 0.70 },
     { weekday: 0, hour: 19, score: 0.62 },
   ],
-  // X (Twitter) — earlier than the rest. Tweets break in the 8-10 AM
+  // X — earlier than the rest. Tweets break in the 8-10 AM
   // band, especially Tues/Wed. Quick decay; second peak around lunch.
-  twitter: [
+  x: [
     { weekday: 2, hour: 9, score: 1.0 },
     { weekday: 3, hour: 9, score: 0.97 },
     { weekday: 2, hour: 12, score: 0.90 },

@@ -35,7 +35,7 @@ const PLATFORM_FORMAT_RULES: Record<SocialPlatform, FormatRule | null> = {
     clientSecretMinLen: 24,
     reason: "Threads App IDs follow the Meta App ID format.",
   },
-  twitter: {
+  x: {
     clientIdRegex: /^[A-Za-z0-9_-]{20,}$/,
     clientSecretMinLen: 30,
     reason: "X OAuth 2.0 Client IDs are 20+ chars alphanumeric.",

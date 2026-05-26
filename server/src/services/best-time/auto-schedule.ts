@@ -8,7 +8,7 @@
  * Conflict resolution (per spec): if two scheduled posts collide within
  * 30 minutes on the same platform, push the second one to the next-best
  * available slot. Cross-platform collisions at the same minute are fine
- * (IG + Twitter can both go at 10:00).
+ * (IG + X can both go at 10:00).
  */
 
 import type { BestTimeSlot, BulkUploadPlatform } from "./types.js";

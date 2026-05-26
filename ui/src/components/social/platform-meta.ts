@@ -4,11 +4,11 @@ import {
   Linkedin,
   MessageSquare,
   Music,
-  Twitter,
   Youtube,
   type LucideIcon,
 } from "lucide-react";
 import type { SocialPlatform } from "@paperclipai/shared";
+import { XLogoIcon } from "./x-icon";
 
 export interface PlatformMeta {
   label: string;
@@ -37,10 +37,10 @@ export const PLATFORM_META: Record<SocialPlatform, PlatformMeta> = {
     mediaLimit: 10,
     schedulerSupported: true,
   },
-  twitter: {
+  x: {
     label: "X",
-    color: "#1DA1F2",
-    icon: Twitter,
+    color: "#000000",
+    icon: XLogoIcon as unknown as LucideIcon,
     captionLimit: 280,
     captionLimitIsHard: true,
     mediaLimit: 4,
@@ -131,7 +131,7 @@ export const PLATFORM_META: Record<SocialPlatform, PlatformMeta> = {
 
 export const TYLER_PRIORITY_PLATFORMS: SocialPlatform[] = [
   "instagram",
-  "twitter",
+  "x",
   "facebook",
   "threads",
   "reddit",

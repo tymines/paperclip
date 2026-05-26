@@ -58,7 +58,7 @@ function seedState() {
   if (platform === "instagram" && stepParam >= 2) {
     s = acknowledgeGate(s, "instagram_business_account");
   }
-  if (platform === "twitter" && stepParam >= 2) {
+  if (platform === "x" && stepParam >= 2) {
     s = acknowledgeGate(s, "x_paid_tier");
   }
   if (platform === "reddit" && stepParam >= 2) {

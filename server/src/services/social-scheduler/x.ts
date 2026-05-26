@@ -1,5 +1,5 @@
 /**
- * X (Twitter) adapter — OAuth token exchange wired through `token-exchange.ts`.
+ * X adapter — OAuth token exchange wired through `token-exchange.ts`.
  *
  * Real wiring requires:
  *   - X Developer account with Project + App
@@ -46,15 +46,15 @@ const X_TWEET_MAX = 280;
 const X_MEDIA_MAX = 4;
 
 export const xAdapter: SocialPlatformAdapter = {
-  platform: "twitter",
+  platform: "x",
 
   async startConnect() {
-    return mockConnectStart("twitter");
+    return mockConnectStart("x");
   },
 
   async finishConnect(opts) {
     return mockConnectAccount({
-      platform: "twitter",
+      platform: "x",
       companyId: opts.companyId,
       username: "stub_x_handle",
       displayName: "Stub X Account",
@@ -114,5 +114,5 @@ export const xAdapter: SocialPlatformAdapter = {
     return { ok: errors.length === 0, errors, warnings };
   },
 
-  ...expansionStubs("twitter"),
+  ...expansionStubs("x"),
 };

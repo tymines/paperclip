@@ -62,9 +62,9 @@ describe("auto-schedule algorithm — conflict resolution", () => {
     expect(ig.map((i) => i.uploadId)).toEqual(["a", "m", "z"]);
   });
 
-  it("allows cross-platform posts at the same minute (IG + Twitter at 10:00)", () => {
+  it("allows cross-platform posts at the same minute (IG + X at 10:00)", () => {
     const uploads: ScheduleUpload[] = [
-      makeUpload("a", ["instagram", "twitter"], 0),
+      makeUpload("a", ["instagram", "x"], 0),
     ];
     const result = autoSchedule(uploads, {
       kind: "even",

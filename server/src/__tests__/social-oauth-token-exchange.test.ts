@@ -349,7 +349,7 @@ describe("Threads OAuth token exchange", () => {
   });
 });
 
-describe("X (Twitter) OAuth token exchange", () => {
+describe("X OAuth token exchange", () => {
   it("POSTs token endpoint with PKCE verifier + HTTP Basic auth", async () => {
     const { fetch: mock, calls } = makeMockFetch([
       {
@@ -378,11 +378,11 @@ describe("X (Twitter) OAuth token exchange", () => {
     __setOAuthFetchForTesting(mock);
 
     const result = await exchangeCodeForTokens({
-      platform: "twitter",
+      platform: "x",
       clientId: "x-client",
       clientSecret: "x-secret",
       code: "auth-x",
-      redirectUri: "https://paperclip/auth/social-callback/twitter",
+      redirectUri: "https://paperclip/auth/social-callback/x",
     });
 
     expect(result.accessToken).toBe("real-x-access");

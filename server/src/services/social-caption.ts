@@ -61,7 +61,6 @@ const DEFAULT_BRAND_VOICE = [
 const PLATFORM_GUIDANCE: Record<string, { lenHint: string; tone: string; hashtags: string }> = {
   instagram:  { lenHint: "1-3 short sentences, under ~250 chars",         tone: "visual hook first; one personal line",          hashtags: "4-5 hashtags, mix of niche + medium reach" },
   threads:    { lenHint: "1-2 sentences, under 500 chars",                tone: "conversational, slightly punchy",               hashtags: "1-2 hashtags max" },
-  twitter:    { lenHint: "1 sentence, under 240 chars total incl tags",   tone: "tight, link-bait-y in the founder/build sense", hashtags: "0-2 hashtags" },
   x:          { lenHint: "1 sentence, under 240 chars total incl tags",   tone: "tight, link-bait-y in the founder/build sense", hashtags: "0-2 hashtags" },
   facebook:   { lenHint: "2-3 sentences",                                  tone: "warmer, slightly longer than X",                hashtags: "0-3 hashtags" },
   reddit:     { lenHint: "punchy title + 1 line of context",              tone: "no hype, no sales — Reddit hates that",         hashtags: "no hashtags on Reddit" },

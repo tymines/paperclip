@@ -1,7 +1,7 @@
 /**
  * Smoke test for the social scheduler worker.
  *
- * Inserts a scheduled-now social_post for Tyler Co / Twitter, runs the
+ * Inserts a scheduled-now social_post for Tyler Co / X, runs the
  * scheduler's tickOnce() against the live embedded Postgres, then reports
  * the resulting target status + diagnostics. Cleans up the test rows.
  *
@@ -14,13 +14,13 @@ import { createSocialScheduler } from "../src/workers/social-scheduler.js";
 
 const DATABASE_URL = "postgresql://paperclip:paperclip@localhost:54329/paperclip";
 const TYLER_CO = "414c172d-7013-4728-b781-aad604d8e2d7";
-const TWITTER_ACCOUNT = "3bc80e0b-8e14-4df7-a3ad-48ad8201ac06";
+const X_ACCOUNT = "3bc80e0b-8e14-4df7-a3ad-48ad8201ac06";
 
 async function main() {
   const db = createDb(DATABASE_URL);
   const scheduler = createSocialScheduler({ db });
 
-  console.log("[verify] inserting test scheduled post for Tyler Co / Twitter");
+  console.log("[verify] inserting test scheduled post for Tyler Co / X");
   const [post] = await db
     .insert(socialPosts)
     .values({
@@ -39,8 +39,8 @@ async function main() {
 
   await db.insert(socialPostTargets).values({
     postId: post.id,
-    accountId: TWITTER_ACCOUNT,
-    platform: "twitter",
+    accountId: X_ACCOUNT,
+    platform: "x",
     status: "scheduled",
   });
 

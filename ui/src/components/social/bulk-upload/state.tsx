@@ -16,7 +16,7 @@ import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
 /** Bulk Upload is constrained to these five platforms per Tyler's spec. */
 export const BULK_UPLOAD_PLATFORMS = [
   "instagram",
-  "twitter",
+  "x",
   "facebook",
   "threads",
   "reddit",

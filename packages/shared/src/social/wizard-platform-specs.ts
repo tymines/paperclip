@@ -162,15 +162,15 @@ export const WIZARD_PLATFORM_SPECS: Partial<Record<SocialPlatform, WizardPlatfor
       requiresPkce: false,
     },
   },
-  twitter: {
-    platform: "twitter",
+  x: {
+    platform: "x",
     label: "X",
     appKind: "X Developer App (OAuth 2.0 with PKCE)",
     setupTime: "~15 min after purchasing credits",
     developerConsoleUrl: "https://developer.x.com/en/portal/dashboard",
     appConfig: [
       { label: "App type", value: "OAuth 2.0 (Confidential client)" },
-      { label: "Callback URI", value: `${PAPERCLIP_CALLBACK_BASE}/twitter` },
+      { label: "Callback URI", value: `${PAPERCLIP_CALLBACK_BASE}/x` },
       { label: "Website URL", value: "https://paperclip.augiport.com" },
       {
         label: "Required scopes",

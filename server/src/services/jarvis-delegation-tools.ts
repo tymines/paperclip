@@ -102,7 +102,7 @@ export const DELEGATION_TOOLS: AnthropicToolDef[] = [
         platforms: {
           type: "array",
           items: { type: "string" },
-          description: "Optional platforms the copy targets (twitter, linkedin, instagram, blog, etc).",
+          description: "Optional platforms the copy targets (x, linkedin, instagram, blog, etc).",
         },
       },
       required: ["task"],

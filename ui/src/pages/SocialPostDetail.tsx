@@ -10,7 +10,6 @@ import {
   Send,
   Trash2,
   Save,
-  Twitter,
   Linkedin,
   Instagram,
   Facebook,
@@ -31,9 +30,10 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { SocialPlatform, SocialPostTarget } from "@paperclipai/shared";
+import { XLogoIcon } from "../components/social/x-icon";
 
 const PLATFORM_COLORS: Record<SocialPlatform, string> = {
-  twitter: "bg-sky-500",
+  x: "bg-black",
   linkedin: "bg-blue-700",
   instagram: "bg-gradient-to-br from-purple-500 to-pink-500",
   facebook: "bg-blue-600",
@@ -47,7 +47,7 @@ const PLATFORM_COLORS: Record<SocialPlatform, string> = {
 };
 
 const PLATFORM_LABELS: Record<SocialPlatform, string> = {
-  twitter: "X (Twitter)",
+  x: "X",
   linkedin: "LinkedIn",
   instagram: "Instagram",
   facebook: "Facebook",
@@ -61,7 +61,7 @@ const PLATFORM_LABELS: Record<SocialPlatform, string> = {
 };
 
 const PLATFORM_ICONS: Partial<Record<SocialPlatform, LucideIcon>> = {
-  twitter: Twitter,
+  x: XLogoIcon as unknown as LucideIcon,
   linkedin: Linkedin,
   instagram: Instagram,
   facebook: Facebook,

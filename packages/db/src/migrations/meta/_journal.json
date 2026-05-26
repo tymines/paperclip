@@ -750,6 +750,13 @@
       "when": 1779926400000,
       "tag": "0106_social_post_targets_retry",
       "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1780012800000,
+      "tag": "0107_social_twitter_rename_x",
+      "breakpoints": true
     }
   ]
 }

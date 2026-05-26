@@ -636,7 +636,7 @@ export const ROOM_MESSAGE_HARD_CAP = 200;
 
 // ── Social (Postiz) ──────────────────────────────────────────────────────────
 export const SOCIAL_PLATFORMS = [
-  "twitter",
+  "x",
   "linkedin",
   "instagram",
   "facebook",

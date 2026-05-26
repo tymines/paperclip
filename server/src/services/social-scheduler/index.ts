@@ -15,7 +15,7 @@ import { redditAdapter } from "./reddit.js";
 
 const REGISTRY: Partial<Record<SocialPlatform, SocialPlatformAdapter>> = {
   instagram: instagramAdapter,
-  twitter: xAdapter,
+  x: xAdapter,
   facebook: facebookAdapter,
   threads: threadsAdapter,
   reddit: redditAdapter,

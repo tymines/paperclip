@@ -547,7 +547,7 @@ async function refreshThreads(accessToken: string): Promise<TokenExchangeResult>
   };
 }
 
-/* ── X (Twitter v2 OAuth2 / PKCE) ───────────────────────────────────────── */
+/* ── X (v2 OAuth2 / PKCE) ───────────────────────────────────────────────── */
 
 async function exchangeX(input: TokenExchangeInput): Promise<TokenExchangeResult> {
   const basic = Buffer.from(`${input.clientId}:${input.clientSecret}`).toString("base64");
@@ -566,11 +566,11 @@ async function exchangeX(input: TokenExchangeInput): Promise<TokenExchangeResult
     },
     body,
   });
-  const json = await parseJsonResponse(res, "twitter");
+  const json = await parseJsonResponse(res, "x");
   const accessToken = pickString(json, "access_token");
   if (!accessToken) {
     throw new TokenExchangeError({
-      platform: "twitter",
+      platform: "x",
       code: "missing_access_token",
       status: res.status,
       message: "X token response did not include an access_token",
@@ -629,11 +629,11 @@ async function refreshX(
       client_id: clientId,
     }),
   });
-  const json = await parseJsonResponse(res, "twitter");
+  const json = await parseJsonResponse(res, "x");
   const accessToken = pickString(json, "access_token");
   if (!accessToken) {
     throw new TokenExchangeError({
-      platform: "twitter",
+      platform: "x",
       code: "missing_access_token",
       status: res.status,
       message: "X refresh response did not include an access_token",
@@ -666,7 +666,7 @@ export async function exchangeCodeForTokens(input: TokenExchangeInput): Promise<
     case "facebook": return exchangeFacebook(input);
     case "instagram": return exchangeInstagram(input);
     case "threads": return exchangeThreads(input);
-    case "twitter": return exchangeX(input);
+    case "x": return exchangeX(input);
     default:
       throw new TokenExchangeError({
         platform: input.platform,
@@ -686,7 +686,7 @@ export async function verifyAccessToken(
     case "facebook": return verifyFacebook(accessToken);
     case "instagram": return verifyInstagram(accessToken);
     case "threads": return verifyThreads(accessToken);
-    case "twitter": return verifyX(accessToken);
+    case "x": return verifyX(accessToken);
     default:
       return { ok: false, identity: null, error: `verify not implemented for ${platform}` };
   }
@@ -712,10 +712,10 @@ export async function refreshAccessToken(input: RefreshInput): Promise<TokenExch
         });
       }
       return refreshReddit(input.clientId, input.clientSecret, input.refreshToken);
-    case "twitter":
+    case "x":
       if (!input.refreshToken) {
         throw new TokenExchangeError({
-          platform: "twitter",
+          platform: "x",
           code: "no_refresh_token",
           status: 0,
           message: "X requires offline.access scope to receive a refresh_token (none stored).",

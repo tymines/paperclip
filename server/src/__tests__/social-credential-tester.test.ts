@@ -30,12 +30,12 @@ describe("testCredentialFormat", () => {
 
   it("validates X Client IDs with longer alphanumeric tokens", () => {
     const good = testCredentialFormat(
-      "twitter",
+      "x",
       "QkVKQVdaYTJoNFlsNjYzOGFLLXc",
       "thisisasecretofatleastthirty-charsXX",
     );
     expect(good.ok).toBe(true);
-    const bad = testCredentialFormat("twitter", "short", "thisisasecretofatleastthirty-charsXX");
+    const bad = testCredentialFormat("x", "short", "thisisasecretofatleastthirty-charsXX");
     expect(bad.ok).toBe(false);
   });
 

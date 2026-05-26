@@ -1,5 +1,5 @@
 /**
- * One-off ingestion of X (Twitter) developer app credentials into
+ * One-off ingestion of X developer app credentials into
  * `social_app_credentials`. Reads all secrets from environment variables —
  * NEVER bake secret values into source.
  *
@@ -14,7 +14,7 @@
  *   pnpm --filter @paperclipai/server exec tsx scripts/ingest-x-credentials.ts
  *
  * The script:
- *   1. UPSERTS the `twitter` row with all five secrets encrypted at rest.
+ *   1. UPSERTS the `x` row with all five secrets encrypted at rest.
  *   2. Decrypts back and verifies round-trip without printing values.
  *   3. Prints only redacted (last-4) markers + row id.
  */
@@ -53,7 +53,7 @@ async function main() {
   const svc = socialCredentialsService(db);
 
   const saved = await svc.save({
-    platform: "twitter",
+    platform: "x",
     clientId,
     clientSecret,
     redirectUri,
@@ -69,7 +69,7 @@ async function main() {
   const [row] = await db
     .select()
     .from(socialAppCredentials)
-    .where(eq(socialAppCredentials.platform, "twitter"));
+    .where(eq(socialAppCredentials.platform, "x"));
   if (!row) throw new Error("row not found after save");
 
   const checks: Array<[string, string, unknown, string]> = [

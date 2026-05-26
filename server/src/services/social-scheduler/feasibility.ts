@@ -44,7 +44,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Publish post",
     byPlatform: {
       instagram: { status: "review", note: "free, App Review per scope (~1–5d/round)" },
-      twitter: { status: "paid", note: "$0.015/post, $0.20 with URL" },
+      x: { status: "paid", note: "$0.015/post, $0.20 with URL" },
       facebook: { status: "review", note: "free, App Review" },
       threads: { status: "review", note: "free, App Review" },
       reddit: { status: "ok", note: "free non-commercial; commercial = direct contract" },
@@ -54,7 +54,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Scheduled posting (native)",
     byPlatform: {
       instagram: { status: "self", note: "no API — Paperclip queue + fire at time" },
-      twitter: { status: "self" },
+      x: { status: "self" },
       facebook: { status: "ok", note: "scheduled_publish_time supported" },
       threads: { status: "self" },
       reddit: { status: "self" },
@@ -64,7 +64,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Read DMs",
     byPlatform: {
       instagram: { status: "review", note: "webhooks + App Review" },
-      twitter: { status: "paid", note: "poll-only on PPU, $0.010/event" },
+      x: { status: "paid", note: "poll-only on PPU, $0.010/event" },
       facebook: { status: "review", note: "webhooks + App Review" },
       threads: { status: "missing", note: "no Threads DM API" },
       reddit: { status: "self", note: "poll inbox + modmail" },
@@ -74,7 +74,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Send DMs",
     byPlatform: {
       instagram: { status: "review", note: "24h window + App Review" },
-      twitter: { status: "paid", note: "150/day/user cap, $0.015/send" },
+      x: { status: "paid", note: "150/day/user cap, $0.015/send" },
       facebook: { status: "review", note: "24h window + App Review" },
       threads: { status: "missing", note: "no Threads DM API" },
       reddit: { status: "self", note: "/api/compose, no webhooks" },
@@ -84,7 +84,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Real-time DM webhook (push)",
     byPlatform: {
       instagram: { status: "review" },
-      twitter: { status: "blocked", note: "Enterprise tier only" },
+      x: { status: "blocked", note: "Enterprise tier only" },
       facebook: { status: "review" },
       threads: { status: "missing" },
       reddit: { status: "missing", note: "poll-only" },
@@ -94,7 +94,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Hashtag suggestions",
     byPlatform: {
       instagram: { status: "self", note: "30 tags/7d cap; build internal corpus" },
-      twitter: { status: "paid", note: "Trends $0.010/each" },
+      x: { status: "paid", note: "Trends $0.010/each" },
       facebook: { status: "missing" },
       threads: { status: "self", note: "topic_tag only, no trending API" },
       reddit: { status: "self", note: "subreddit /hot, /top" },
@@ -104,7 +104,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Competitor profile fetch",
     byPlatform: {
       instagram: { status: "ok", note: "Business Discovery (public biz/creator)" },
-      twitter: { status: "paid", note: "$0.010/user fetch" },
+      x: { status: "paid", note: "$0.010/user fetch" },
       facebook: { status: "blocked", note: "page admin token needed for depth" },
       threads: { status: "missing", note: "only authorized users" },
       reddit: { status: "ok", note: "/user/X/about + /submitted" },
@@ -114,7 +114,7 @@ export const SOCIAL_FEATURE_MATRIX: FeatureRow[] = [
     feature: "Own analytics (per-post)",
     byPlatform: {
       instagram: { status: "review", note: "Insights + App Review" },
-      twitter: { status: "paid", note: "Owned reads $0.001/post — basically free" },
+      x: { status: "paid", note: "Owned reads $0.001/post — basically free" },
       facebook: { status: "review", note: "Insights + App Review" },
       threads: { status: "review", note: "Insights + App Review" },
       reddit: { status: "self", note: "read own post score" },
