@@ -135,8 +135,7 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
    * a periodic tick) never see the same row.
    */
   async function tickInternal() {
-    const now = new Date();
-    const claimedPostIds = await claimDuePosts(now, batchSize);
+    const claimedPostIds = await claimDuePosts(batchSize);
     let published = 0;
     let failed = 0;
     for (const postId of claimedPostIds) {
@@ -162,15 +161,19 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
    * Atomically pick up to `limit` posts that have come due and flip them to
    * `publishing` so a concurrent ticker skips them. Targets stay `scheduled`
    * until publishPostTargets() claims each one individually.
+   *
+   * Uses `NOW()` rather than binding a JS Date because postgres.js's prepared-
+   * statement bind path doesn't accept Date for raw `sql` templates — and the
+   * DB clock is the right authority for "is this row due" anyway.
    */
-  async function claimDuePosts(now: Date, limit: number): Promise<string[]> {
+  async function claimDuePosts(limit: number): Promise<string[]> {
     const rows = await db.execute(sql<{ id: string }>`
       WITH due AS (
         SELECT id
         FROM social_posts
         WHERE status = 'scheduled'
           AND scheduled_at IS NOT NULL
-          AND scheduled_at <= ${now}
+          AND scheduled_at <= NOW()
         ORDER BY scheduled_at ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
