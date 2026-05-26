@@ -65,6 +65,15 @@ export interface AccountMetrics {
   engagementRate?: number;
 }
 
+/** Result of `adapter.verifyAccount()` — feeds the Accounts dot. */
+export interface AccountVerification {
+  ok: boolean;
+  /** Handle the platform reports — useful if the user renamed since connect. */
+  handle?: string;
+  /** Platform-specific extras (Reddit karma, X followers count, etc.). */
+  details?: Record<string, unknown>;
+}
+
 /** ── Expansion-pass shapes (Inbox / Analytics / Competitors / Hashtags) ── */
 
 export interface DirectMessageThread {
@@ -211,6 +220,14 @@ export interface SocialPlatformAdapter {
    * rules. Pure function; doesn't hit the network.
    */
   validatePost(post: PostDraftPayload): PostValidation;
+
+  /**
+   * Hit the platform's `/me`-style endpoint to confirm the stored token is
+   * still good. Used by the Accounts dot. Optional because not every
+   * platform exposes one; absent means the Accounts UI falls back to
+   * `getAccountMetrics`.
+   */
+  verifyAccount?(account: SocialAccount): Promise<AccountVerification>;
 
   // ── Expansion-pass methods ────────────────────────────────────────────
 

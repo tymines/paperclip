@@ -136,6 +136,36 @@ export function socialRoutes(db: Db) {
     res.json(redactAccount(account as unknown as Record<string, unknown>));
   });
 
+  // GET /companies/:companyId/social/accounts/:accountId/verify
+  // Hits the platform's /me-style endpoint to confirm the stored token is
+  // still good. Used by the Accounts dot (green = ok, red = re-auth).
+  // Returns { ok, supported, handle?, details?, reason? }.
+  router.get("/companies/:companyId/social/accounts/:accountId/verify", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const accountId = req.params.accountId as string;
+    assertCompanyAccess(req, companyId);
+    const account = await svc.getAccount(accountId);
+    if (!account || account.companyId !== companyId) {
+      throw notFound("Social account not found");
+    }
+    const adapter = getSocialAdapter(account.platform as SocialPlatform);
+    if (!adapter?.verifyAccount) {
+      res.json({ ok: false, supported: false, reason: "verify not supported for this platform" });
+      return;
+    }
+    try {
+      const result = await adapter.verifyAccount(
+        account as unknown as Parameters<NonNullable<typeof adapter.verifyAccount>>[0],
+      );
+      res.json({ ...result, supported: true });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // 200 (not 5xx) so the dot UI gets a JSON body — it differentiates
+      // by `ok: false` + `reason` rather than HTTP status.
+      res.status(200).json({ ok: false, supported: true, reason: message });
+    }
+  });
+
   // PATCH /companies/:companyId/social/accounts/:accountId
   router.patch(
     "/companies/:companyId/social/accounts/:accountId",
