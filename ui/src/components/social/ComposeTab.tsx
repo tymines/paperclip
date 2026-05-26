@@ -11,9 +11,18 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, FileText, Image, Loader2, Send } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  FileText,
+  Image,
+  Loader2,
+  Send,
+  Sparkles,
+  Wand2,
+} from "lucide-react";
 import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
-import { socialApi, type PostValidationResult } from "../../api/social";
+import { socialApi, type CaptionSuggestion, type PostValidationResult } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
 import { useToastActions } from "../../context/ToastContext";
 import { Button } from "@/components/ui/button";
@@ -44,6 +53,12 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
   const [scheduledFor, setScheduledFor] = useState(() => nextRoundHourIso());
   const [redditTitle, setRedditTitle] = useState("");
   const [redditSubreddit, setRedditSubreddit] = useState("");
+
+  // DeepSeek "Generate caption" panel state.
+  const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiSuggestion, setAiSuggestion] = useState<CaptionSuggestion | null>(null);
+  const [aiError, setAiError] = useState<{ title: string; detail: string } | null>(null);
 
   // Reset selection when accounts list changes (e.g. user just connected one).
   useEffect(() => {
@@ -78,6 +93,67 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
     enabled: selectedPlatforms.length > 0 && (caption.length > 0 || mediaUrl.length > 0),
     staleTime: 200,
   });
+
+  // Target platform for the AI suggestion: pick the first selected
+  // platform if any, otherwise default to Instagram so the user gets a
+  // sensible length/tone shape.
+  const aiTargetPlatform: SocialPlatform = useMemo(
+    () => (selectedPlatforms[0] ?? ("instagram" as SocialPlatform)),
+    [selectedPlatforms],
+  );
+
+  const captionMutation = useMutation({
+    mutationFn: () =>
+      socialApi.suggestCaption(companyId, {
+        platform: aiTargetPlatform,
+        prompt: aiPrompt.length > 0 ? aiPrompt : null,
+        mediaUrl: mediaUrl.length > 0 ? mediaUrl : null,
+      }),
+    onSuccess: (result) => {
+      setAiSuggestion(result);
+      setAiError(null);
+    },
+    onError: (err) => {
+      setAiSuggestion(null);
+      const message = err instanceof Error ? err.message : String(err);
+      const lower = message.toLowerCase();
+      if (lower.includes("deepseek_key_missing") || lower.includes("503")) {
+        setAiError({
+          title: "DeepSeek key missing",
+          detail: "Add your DeepSeek key in Provider API Keys, then retry.",
+        });
+      } else if (
+        lower.includes("deepseek_key_unauthorized") ||
+        lower.includes("deepseek_rate_limited") ||
+        lower.includes("deepseek_upstream_error") ||
+        lower.includes("502")
+      ) {
+        setAiError({
+          title: "DeepSeek key needs attention",
+          detail: "DeepSeek refused the request — key revoked, out of credit, or rate-limited.",
+        });
+      } else {
+        setAiError({
+          title: "Could not generate caption",
+          detail: message.slice(0, 220),
+        });
+      }
+    },
+  });
+
+  const applyAiSuggestion = () => {
+    if (!aiSuggestion) return;
+    const tagSuffix = aiSuggestion.hashtags.length > 0
+      ? `\n\n${aiSuggestion.hashtags.map((t) => `#${t}`).join(" ")}`
+      : "";
+    const appended = caption.trim().length > 0
+      ? `${caption.trim()}\n\n${aiSuggestion.caption}${tagSuffix}`
+      : `${aiSuggestion.caption}${tagSuffix}`;
+    setCaption(appended);
+    setAiSuggestion(null);
+    setAiPanelOpen(false);
+    setAiPrompt("");
+  };
 
   const submitMutation = useMutation({
     mutationFn: async () => {
@@ -189,9 +265,24 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="compose-caption" className="text-xs uppercase tracking-wide text-muted-foreground">
-            Caption
-          </Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="compose-caption" className="text-xs uppercase tracking-wide text-muted-foreground">
+              Caption
+            </Label>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              data-testid="compose-generate-caption"
+              onClick={() => {
+                setAiPanelOpen((open) => !open);
+                setAiError(null);
+              }}
+            >
+              <Wand2 className="h-3.5 w-3.5" />
+              {aiPanelOpen ? "Hide AI" : "Generate caption"}
+            </Button>
+          </div>
           <Textarea
             id="compose-caption"
             value={caption}
@@ -199,6 +290,96 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
             placeholder="What's the post?"
             className="min-h-[140px] resize-y"
           />
+          {aiPanelOpen ? (
+            <div
+              data-testid="compose-ai-panel"
+              className="space-y-2 rounded-md border border-accent/40 bg-accent/10 p-3"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                Generate via DeepSeek · target: {aiTargetPlatform}
+              </div>
+              <Textarea
+                value={aiPrompt}
+                onChange={(e) => setAiPrompt(e.target.value)}
+                placeholder="What's the post about? (e.g. 'shipped v2 social scheduler, want to tease it to existing audience')"
+                className="min-h-[64px] text-sm"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={
+                    captionMutation.isPending ||
+                    (aiPrompt.trim().length === 0 && mediaUrl.trim().length === 0)
+                  }
+                  onClick={() => captionMutation.mutate()}
+                >
+                  {captionMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3.5 w-3.5" />
+                  )}
+                  {captionMutation.isPending ? "Generating…" : "Generate"}
+                </Button>
+                <span className="text-[11px] text-muted-foreground">
+                  Uses the media URL above as visual context if provided.
+                </span>
+              </div>
+              {aiError ? (
+                <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">{aiError.title}</div>
+                    <div className="text-destructive/90">{aiError.detail}</div>
+                    <a
+                      href="/instance/settings/provider-keys"
+                      className="mt-0.5 inline-block text-[11px] underline underline-offset-2 hover:no-underline"
+                    >
+                      Open Provider API Keys →
+                    </a>
+                  </div>
+                </div>
+              ) : null}
+              {aiSuggestion ? (
+                <div
+                  data-testid="compose-ai-suggestion"
+                  className="space-y-2 rounded-md border border-border bg-card/80 p-2.5 text-xs"
+                >
+                  <div className="whitespace-pre-wrap text-[13px] leading-snug">
+                    {aiSuggestion.caption}
+                  </div>
+                  {aiSuggestion.hashtags.length > 0 ? (
+                    <div className="flex flex-wrap gap-1 text-[11px] text-muted-foreground">
+                      {aiSuggestion.hashtags.map((tag) => (
+                        <span key={tag} className="rounded-full border border-border bg-background px-1.5 py-0.5">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  <div className="text-[10px] italic text-muted-foreground">
+                    Intent: {aiSuggestion.intent}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    DeepSeek · {aiSuggestion.latencyMs} ms · ~${aiSuggestion.estimatedCostUsd.toFixed(4)}{aiSuggestion.cached ? " · cached" : ""}{aiSuggestion.usedVision ? " · vision" : ""}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Button type="button" size="sm" onClick={applyAiSuggestion}>
+                      Use this
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setAiSuggestion(null)}
+                    >
+                      Dismiss
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           {selectedPlatforms.length > 0 ? (
             <div className="flex flex-wrap gap-1.5 text-xs">
               {selectedPlatforms.map((platform) => {

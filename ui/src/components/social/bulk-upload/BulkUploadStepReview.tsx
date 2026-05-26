@@ -1,19 +1,21 @@
 /**
  * Step 2 — Review. Per-file caption + hashtag + platform targets, with
- * bulk-apply ("apply this caption to all selected"), AI-suggest, and the
- * usual select-all / select-by-type controls.
+ * bulk-apply ("apply this caption to all selected"), AI-suggest (DeepSeek),
+ * and the usual select-all / select-by-type controls.
  *
- * AI-suggest: this branch has no model-adapter endpoint, so we show the
- * spec's fallback copy ("AI suggestions need an active agent — set one
- * up in Fleet"). When that endpoint lands the button just needs to POST
- * to it and write the response onto the row.
+ * AI-suggest: hits POST /companies/:companyId/social/captions/suggest with
+ * the uploaded media + platform → Moonshot vision describes the frame →
+ * DeepSeek polishes it into an on-brand caption + hashtags + intent. The
+ * row stays editable; the user clicks "Use this" to commit.
  */
 import { useCallback, useMemo, useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   CheckSquare,
   FileImage,
   FileVideo,
+  Loader2,
   Sparkles,
   Square,
   Wand2,
@@ -21,7 +23,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "../../../lib/utils";
 import { bulkUploadApi } from "../../../api/bulkUpload";
+import { socialApi, type CaptionSuggestion } from "../../../api/social";
 import { PLATFORM_META } from "../platform-meta";
+import type { SocialPlatform } from "@paperclipai/shared";
 import {
   BULK_UPLOAD_PLATFORMS,
   useBulkUploadState,
@@ -262,7 +266,8 @@ function ReviewRow({
 }: ReviewRowProps) {
   const [caption, setCaption] = useState(row.caption ?? "");
   const [hashtags, setHashtags] = useState(row.hashtags.join(" "));
-  const [showAiHint, setShowAiHint] = useState(false);
+  const [aiSuggestion, setAiSuggestion] = useState<CaptionSuggestion | null>(null);
+  const [aiError, setAiError] = useState<{ title: string; detail: string } | null>(null);
 
   // Keep local edit fields in sync if the row gets bulk-applied to.
   useEffect(() => {
@@ -271,6 +276,61 @@ function ReviewRow({
   useEffect(() => {
     setHashtags(row.hashtags.join(" "));
   }, [row.hashtags]);
+
+  const aiPlatform = useMemo<SocialPlatform>(() => {
+    if (row.platforms.length > 0) return row.platforms[0] as SocialPlatform;
+    if (availablePlatforms.length > 0) return availablePlatforms[0] as SocialPlatform;
+    return "instagram" as SocialPlatform;
+  }, [row.platforms, availablePlatforms]);
+
+  const captionMutation = useMutation({
+    mutationFn: () =>
+      socialApi.suggestCaption(companyId, {
+        platform: aiPlatform,
+        uploadId: row.id,
+      }),
+    onSuccess: (result) => {
+      setAiSuggestion(result);
+      setAiError(null);
+    },
+    onError: (err) => {
+      setAiSuggestion(null);
+      const message = err instanceof Error ? err.message : String(err);
+      const lower = message.toLowerCase();
+      if (lower.includes("deepseek_key_missing") || lower.includes("503")) {
+        setAiError({
+          title: "DeepSeek key missing",
+          detail: "Add your DeepSeek key in Provider API Keys, then retry.",
+        });
+      } else if (
+        lower.includes("deepseek_key_unauthorized") ||
+        lower.includes("deepseek_rate_limited") ||
+        lower.includes("deepseek_upstream_error") ||
+        lower.includes("502")
+      ) {
+        setAiError({
+          title: "DeepSeek key needs attention",
+          detail: "DeepSeek refused the request (key revoked, out of credit, or rate-limited).",
+        });
+      } else {
+        setAiError({
+          title: "Could not generate caption",
+          detail: message.slice(0, 220),
+        });
+      }
+    },
+  });
+
+  const applyAiSuggestion = useCallback(() => {
+    if (!aiSuggestion) return;
+    setCaption(aiSuggestion.caption);
+    setHashtags(aiSuggestion.hashtags.join(" "));
+    onCommit({
+      caption: aiSuggestion.caption,
+      hashtags: aiSuggestion.hashtags,
+    });
+    setAiSuggestion(null);
+  }, [aiSuggestion, onCommit]);
 
   const thumb =
     row.detectedType === "image"
@@ -345,19 +405,75 @@ function ReviewRow({
           />
           <button
             type="button"
-            onClick={() => setShowAiHint(true)}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground"
+            onClick={() => captionMutation.mutate()}
+            disabled={captionMutation.isPending}
+            data-testid="ai-suggest-button"
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1 text-xs text-muted-foreground hover:bg-accent/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
-            <Wand2 className="h-3.5 w-3.5" />
-            AI suggest
+            {captionMutation.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+            {captionMutation.isPending ? "Generating…" : `AI suggest (${PLATFORM_META[aiPlatform].label})`}
           </button>
         </div>
-        {showAiHint ? (
-          <div className="flex items-start gap-2 rounded-md border border-accent/40 bg-accent/10 px-2 py-1.5 text-[11px] text-muted-foreground">
-            <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-            <span>
-              AI suggestions need an active agent — set one up in Fleet, then come back here.
-            </span>
+        {aiError ? (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-medium">{aiError.title}</div>
+              <div className="text-destructive/90">{aiError.detail}</div>
+              <a
+                href="/instance/settings/provider-keys"
+                className="mt-0.5 inline-block text-[11px] underline underline-offset-2 hover:no-underline"
+              >
+                Open Provider API Keys →
+              </a>
+            </div>
+          </div>
+        ) : null}
+        {aiSuggestion ? (
+          <div
+            data-testid="ai-suggestion-panel"
+            className="flex flex-col gap-1.5 rounded-md border border-accent/50 bg-accent/10 px-2.5 py-2 text-[11px]"
+          >
+            <div className="flex items-start gap-2 text-foreground">
+              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent-foreground" />
+              <div className="min-w-0 flex-1 space-y-1.5">
+                <div className="whitespace-pre-wrap text-[12px] leading-snug">
+                  {aiSuggestion.caption}
+                </div>
+                {aiSuggestion.hashtags.length > 0 ? (
+                  <div className="flex flex-wrap gap-1 text-[10px] text-muted-foreground">
+                    {aiSuggestion.hashtags.map((tag) => (
+                      <span key={tag} className="rounded-full border border-border bg-card px-1.5 py-0.5">
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="text-[10px] italic text-muted-foreground">
+                  Intent: {aiSuggestion.intent}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  DeepSeek · {aiSuggestion.latencyMs} ms · ~${aiSuggestion.estimatedCostUsd.toFixed(4)}{aiSuggestion.cached ? " · cached" : ""}{aiSuggestion.usedVision ? " · vision" : ""}
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-1.5">
+              <Button type="button" size="sm" onClick={applyAiSuggestion}>
+                Use this
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setAiSuggestion(null)}
+              >
+                Dismiss
+              </Button>
+            </div>
           </div>
         ) : null}
       </div>

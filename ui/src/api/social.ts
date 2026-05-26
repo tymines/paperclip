@@ -202,6 +202,23 @@ export const socialApi = {
       niche,
     }),
 
+  // Auto-caption via DeepSeek. Provide ONE of: uploadId, mediaUrl, or
+  // prompt. Returns caption + hashtags + intent + cache + cost metadata.
+  suggestCaption: (
+    companyId: string,
+    input: {
+      platform: SocialPlatform;
+      voice?: string | null;
+      prompt?: string | null;
+      uploadId?: string | null;
+      mediaUrl?: string | null;
+    },
+  ) =>
+    api.post<CaptionSuggestion>(
+      `/companies/${companyId}/social/captions/suggest`,
+      input,
+    ),
+
   // ── Connect Wizard ──────────────────────────────────────────────────────
   wizardSpecs: () => api.get<WizardSpecsResponse>("/social/wizard/specs"),
 
@@ -289,4 +306,16 @@ export interface HashtagSuggestion {
   tier: "popular" | "medium" | "niche";
   totalUses: number;
   predictedReachLift?: number;
+}
+
+export interface CaptionSuggestion {
+  caption: string;
+  hashtags: string[];
+  intent: string;
+  cached: boolean;
+  cacheKey: string;
+  latencyMs: number;
+  provider: "deepseek";
+  estimatedCostUsd: number;
+  usedVision: boolean;
 }

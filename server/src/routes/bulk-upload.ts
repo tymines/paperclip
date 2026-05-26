@@ -34,8 +34,21 @@ import {
   type ScheduleStrategy,
   type ScheduleUpload,
 } from "../services/best-time/index.js";
+import {
+  suggestCaption,
+  CaptionProviderError,
+  CaptionConfigError,
+} from "../services/social-caption.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
+
+async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
 
 function isBulkUploadPlatform(value: string): value is BulkUploadPlatform {
   return (BULK_UPLOAD_PLATFORMS as readonly string[]).includes(value);
@@ -146,6 +159,96 @@ export function bulkUploadRoutes(db: Db, storage: StorageService) {
       // 2026 industry baseline automatically.
       const result = await computeBestTimes(companyId, platformParam);
       res.json(result);
+    },
+  );
+
+  // ── Auto-caption (DeepSeek) ─────────────────────────────────────────────
+  //
+  // Tyler explicitly picked DeepSeek for this. Two callers:
+  //   - Bulk Upload step 2 "AI suggest" passes { uploadId, platform } and
+  //     gets back a caption + hashtags grounded in the visual content
+  //     (Moonshot vision → DeepSeek chat).
+  //   - Compose tab "Generate caption" passes { prompt, platform } and
+  //     optionally { mediaUrl } and gets the same shape back.
+  // Identical inputs short-circuit from an in-memory sha256 cache.
+  router.post(
+    "/companies/:companyId/social/captions/suggest",
+    async (req, res, next) => {
+      try {
+        const companyId = req.params.companyId as string;
+        assertCompanyAccess(req, companyId);
+
+        const body = (req.body ?? {}) as {
+          platform?: unknown;
+          voice?: unknown;
+          prompt?: unknown;
+          uploadId?: unknown;
+          mediaUrl?: unknown;
+        };
+        const platform = typeof body.platform === "string" ? body.platform.toLowerCase() : "";
+        if (platform.length === 0) {
+          throw badRequest("platform is required");
+        }
+        const voice = typeof body.voice === "string" ? body.voice : null;
+        const prompt = typeof body.prompt === "string" ? body.prompt : null;
+        const uploadId = typeof body.uploadId === "string" ? body.uploadId : null;
+        const mediaUrl = typeof body.mediaUrl === "string" ? body.mediaUrl : null;
+
+        if (!uploadId && !mediaUrl && !(prompt && prompt.trim().length > 0)) {
+          throw badRequest("provide one of: uploadId, mediaUrl, or a non-empty prompt");
+        }
+
+        let mediaBytes: Buffer | null = null;
+        let mediaMime: string | null = null;
+        let mediaFilename: string | null = null;
+        if (uploadId) {
+          const file = await svc.getUpload(uploadId);
+          if (!file || file.companyId !== companyId) {
+            throw notFound("Upload not found");
+          }
+          const object = await storage.getObject(file.companyId, file.storageKey);
+          mediaBytes = await streamToBuffer(object.stream);
+          mediaMime = file.mimeType ?? object.contentType ?? null;
+          mediaFilename = file.filename ?? null;
+        }
+
+        const result = await suggestCaption({
+          platform,
+          voice,
+          prompt,
+          mediaBytes,
+          mediaMime,
+          mediaFilename,
+          mediaUrl: uploadId ? null : mediaUrl,
+        });
+
+        res.json(result);
+      } catch (err) {
+        if (err instanceof CaptionConfigError) {
+          res.status(503).json({
+            error: "deepseek_key_missing",
+            provider: err.provider,
+            detail: err.message,
+            fix: "Add the DeepSeek key at /instance/settings/provider-keys.",
+          });
+          return;
+        }
+        if (err instanceof CaptionProviderError) {
+          res.status(502).json({
+            error: err.status === 401 || err.status === 403
+              ? "deepseek_key_unauthorized"
+              : err.status === 429
+                ? "deepseek_rate_limited"
+                : "deepseek_upstream_error",
+            provider: err.provider,
+            upstreamStatus: err.status,
+            detail: err.message,
+            fix: "DeepSeek key needs attention — check /instance/settings/provider-keys.",
+          });
+          return;
+        }
+        next(err);
+      }
     },
   );
 
