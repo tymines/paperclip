@@ -743,6 +743,13 @@
       "when": 1779840000000,
       "tag": "0105_social_app_creds_oauth1a",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1779926400000,
+      "tag": "0106_social_post_targets_retry",
+      "breakpoints": true
     }
   ]
 }

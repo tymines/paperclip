@@ -27,6 +27,7 @@ import {
 import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
 import { notFound, badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import type { SocialScheduler } from "../workers/social-scheduler.js";
 
 function isSocialPlatform(value: string): value is SocialPlatform {
   return (SOCIAL_PLATFORMS as readonly string[]).includes(value);
@@ -79,10 +80,44 @@ export function __testing_oauthStateStore() {
   return { rememberOAuthState, consumeOAuthState, oauthStateStore };
 }
 
-export function socialRoutes(db: Db) {
+export function socialRoutes(db: Db, opts: { scheduler?: SocialScheduler } = {}) {
   const router = Router();
   const svc = socialService(db);
   const credentials = socialCredentialsService(db);
+  const scheduler = opts.scheduler ?? null;
+
+  // ── Scheduler ────────────────────────────────────────────────────────────
+
+  // GET /social/scheduler/health — runtime diagnostics for the social
+  // scheduler worker. Returns 503 when the worker hasn't been wired into
+  // this server process (e.g. tests that build a router without it).
+  router.get("/social/scheduler/health", (_req, res) => {
+    if (!scheduler) {
+      res.status(503).json({ enabled: false, reason: "social scheduler not started in this process" });
+      return;
+    }
+    const diag = scheduler.getDiagnostics();
+    res.json({ enabled: true, ...diag });
+  });
+
+  // POST /social/scheduler/fire-now/:postId — admin/test bypass that runs
+  // the publish pipeline immediately for one post, ignoring scheduled_at.
+  router.post("/social/scheduler/fire-now/:postId", async (req, res, next) => {
+    try {
+      if (!scheduler) {
+        res.status(503).json({ ok: false, reason: "social scheduler not started in this process" });
+        return;
+      }
+      const postId = req.params.postId as string;
+      const post = await svc.getPost(postId);
+      if (!post) throw notFound("Social post not found");
+      assertCompanyAccess(req, post.companyId);
+      const result = await scheduler.fireNow(postId);
+      res.json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
 
   // ── Accounts ─────────────────────────────────────────────────────────────
 

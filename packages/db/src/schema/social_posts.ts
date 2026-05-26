@@ -1,5 +1,6 @@
 import {
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -31,6 +32,7 @@ export const socialPosts = pgTable(
     companyStatusIdx: index("social_posts_company_status_idx").on(table.companyId, table.status),
     companyScheduledIdx: index("social_posts_company_scheduled_idx").on(table.companyId, table.scheduledAt),
     companyCreatedIdx: index("social_posts_company_created_idx").on(table.companyId, table.createdAt),
+    dueIdx: index("social_posts_due_idx").on(table.status, table.scheduledAt),
   }),
 );
 
@@ -47,6 +49,10 @@ export const socialPostTargets = pgTable(
     errorMessage: text("error_message"),
     publishedAt: timestamp("published_at", { withTimezone: true }),
     analytics: jsonb("analytics"),
+    attemptCount: integer("attempt_count").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    claimedAt: timestamp("claimed_at", { withTimezone: true }),
+    idempotencyKey: text("idempotency_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -54,5 +60,6 @@ export const socialPostTargets = pgTable(
     postIdx: index("social_post_targets_post_idx").on(table.postId),
     accountIdx: index("social_post_targets_account_idx").on(table.accountId),
     statusIdx: index("social_post_targets_status_idx").on(table.status),
+    idempotencyIdx: index("social_post_targets_idempotency_idx").on(table.idempotencyKey),
   }),
 );

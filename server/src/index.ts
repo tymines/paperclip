@@ -39,6 +39,7 @@ import {
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
+import { createSocialScheduler } from "./workers/social-scheduler.js";
 import { createStorageServiceFromConfig } from "./storage/index.js";
 import { printStartupBanner } from "./startup-banner.js";
 import { getBoardClaimWarningUrl, initializeBoardClaimChallenge } from "./board-claim.js";
@@ -594,6 +595,13 @@ export async function startServer(): Promise<StartedServer> {
     }
   };
   const pluginWorkerManager = createPluginWorkerManager();
+  const socialScheduler = config.socialSchedulerEnabled
+    ? createSocialScheduler({
+        db: db as any,
+        tickIntervalMs: config.socialSchedulerIntervalMs,
+      })
+    : undefined;
+  if (socialScheduler) socialScheduler.start();
   const app = await createApp(db as any, {
     uiMode,
     serverPort: listenPort,
@@ -618,6 +626,7 @@ export async function startServer(): Promise<StartedServer> {
     betterAuthHandler,
     resolveSession,
     pluginWorkerManager,
+    socialScheduler,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
 
