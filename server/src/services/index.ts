@@ -75,3 +75,12 @@ export {
 } from "./jarvis-delegation.js";
 export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServicesOnStartup } from "./workspace-runtime.js";
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
+export { createDesignRunsService, type DesignRunsService, type StartDesignRunInput } from "./design-runs.js";
+export {
+  opendesignClient,
+  odHealth,
+  odListSkills,
+  odListAgents,
+  type OdSkill,
+  type OdAgent,
+} from "./opendesign-client.js";

@@ -40,6 +40,7 @@ import {
   useBulkUploadState,
   type BulkUploadFile,
 } from "./state";
+import { BulkUploadGenerateWithDesign } from "./BulkUploadGenerateWithDesign";
 
 interface Props {
   onNext?: () => void;
@@ -216,8 +217,33 @@ export function BulkUploadStepUpload({ onNext }: Props) {
   const allSelected = total > 0 && selectedIds.length === total;
   const someSelected = selectedIds.length > 0 && selectedIds.length < total;
 
+  // Step-1 mode toggle: existing-upload (default) vs generate-with-design.
+  // The toggle state is local — once the user generates an artifact, the
+  // resulting design_run row is its own record; flipping back to upload
+  // does not erase it.
+  const [mode, setMode] = useState<"upload" | "design">("upload");
+
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex gap-1 rounded-md border border-border bg-muted/30 p-1 text-xs">
+        <button
+          type="button"
+          onClick={() => setMode("upload")}
+          className={`flex-1 rounded px-2 py-1 ${mode === "upload" ? "bg-background font-medium" : "text-muted-foreground"}`}
+        >
+          Upload existing
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("design")}
+          className={`flex-1 rounded px-2 py-1 ${mode === "design" ? "bg-background font-medium" : "text-muted-foreground"}`}
+        >
+          Generate with Design
+        </button>
+      </div>
+
+      {mode === "design" ? <BulkUploadGenerateWithDesign /> : null}
+
       <div
         onDragEnter={(e) => {
           e.preventDefault();

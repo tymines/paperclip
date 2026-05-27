@@ -23,6 +23,11 @@ import {
   TOOL_NAME_TO_PEER,
   toOpenAiTools,
 } from "./jarvis-delegation-tools.js";
+import {
+  DESIGN_TOOL_DEF,
+  dispatchDesignTool,
+  designToolAcknowledgment,
+} from "./jarvis-design-tool.js";
 import { logger } from "../middleware/logger.js";
 import {
   buildTimeContext,
@@ -337,7 +342,7 @@ async function callLlm(
         model: "claude-opus-4-7",
         systemPrompt,
         userPrompt,
-        tools: withTools ? DELEGATION_TOOLS : undefined,
+        tools: withTools ? [...DELEGATION_TOOLS, DESIGN_TOOL_DEF] : undefined,
       });
       if (result) return { ...result, provider: "anthropic" };
     } catch (err) {
@@ -483,7 +488,19 @@ async function fetchChatCompletion({
       temperature: 0.4,
       max_tokens: 280,
     };
-    if (withTools) body.tools = toOpenAiTools();
+    if (withTools) {
+      body.tools = [
+        ...toOpenAiTools(),
+        {
+          type: "function" as const,
+          function: {
+            name: DESIGN_TOOL_DEF.name,
+            description: DESIGN_TOOL_DEF.description,
+            parameters: DESIGN_TOOL_DEF.input_schema,
+          },
+        },
+      ];
+    }
     const resp = await fetch(url, {
       method: "POST",
       headers: {
@@ -584,7 +601,23 @@ export async function jarvisBrainReply(
   // Tool-use path: model chose to delegate to a peer. Run the dispatch,
   // overwrite the reply with the natural acknowledgment, return early.
   let delegationOut: JarvisBrainOutput["delegation"] | undefined;
-  if (llm?.toolCall && enableDelegation) {
+  if (llm?.toolCall && llm.toolCall.name === DESIGN_TOOL_DEF.name) {
+    const skillId = typeof llm.toolCall.args.skill_id === "string" ? llm.toolCall.args.skill_id : "";
+    const promptArg = typeof llm.toolCall.args.prompt === "string" ? llm.toolCall.args.prompt : "";
+    if (skillId && promptArg) {
+      try {
+        const out = await dispatchDesignTool(db, input.companyId, {
+          skill_id: skillId,
+          prompt: promptArg,
+        }, input.userActorId);
+        llm.reply = designToolAcknowledgment(out.skill);
+      } catch (err) {
+        logger.warn({ err }, "jarvis-brain: design tool dispatch failed");
+        llm.reply = `Tried to fire the design tool but ${err instanceof Error ? err.message : "it failed"}.`;
+      }
+    }
+  }
+  if (llm?.toolCall && enableDelegation && llm.toolCall.name !== DESIGN_TOOL_DEF.name) {
     const peer = TOOL_NAME_TO_PEER[llm.toolCall.name];
     const taskArg = typeof llm.toolCall.args.task === "string" ? llm.toolCall.args.task : "";
     if (peer && taskArg.length > 0) {
