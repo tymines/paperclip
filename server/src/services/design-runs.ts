@@ -11,6 +11,7 @@ import {
   persistArtifactHtml,
   type OdRunEvent,
 } from "./opendesign-client.js";
+import { rasterizeArtifact } from "./design-rasterizer.js";
 
 export type DesignRunsService = ReturnType<typeof createDesignRunsService>;
 
@@ -24,6 +25,8 @@ export type StartDesignRunInput = {
   params?: Record<string, unknown>;
   outputType?: "html" | "png" | "mp4";
   createdBy?: string;
+  idempotencyKey?: string | null;
+  presetRunId?: string | null;
 };
 
 export function createDesignRunsService(db: Db) {
@@ -46,6 +49,20 @@ export function createDesignRunsService(db: Db) {
 
   async function start(input: StartDesignRunInput): Promise<DesignRun> {
     const agentId = input.agentId ?? "claude";
+
+    if (input.idempotencyKey) {
+      const conditions = [eq(designRuns.idempotencyKey, input.idempotencyKey)];
+      if (input.companyId) {
+        conditions.push(eq(designRuns.companyId, input.companyId));
+      }
+      const existing = await db
+        .select()
+        .from(designRuns)
+        .where(and(...conditions))
+        .limit(1);
+      if (existing[0]) return existing[0];
+    }
+
     const odProjectId = `paperclip-${randomUUID().slice(0, 12)}`;
     const inserted = await db
       .insert(designRuns)
@@ -60,6 +77,8 @@ export function createDesignRunsService(db: Db) {
         status: "running",
         odProjectId,
         createdBy: input.createdBy ?? null,
+        idempotencyKey: input.idempotencyKey ?? null,
+        presetRunId: input.presetRunId ?? null,
       })
       .returning();
     const row = inserted[0];
@@ -143,6 +162,36 @@ export function createDesignRunsService(db: Db) {
         metadata: { eventCount: events.length },
       })
       .where(eq(designRuns.id, row.id));
+
+    // Fire-and-forget rasterization. Failure is recorded on the row but
+    // does NOT mark the parent run failed — the HTML artifact still exists.
+    if (result.status === "completed" && assetPath) {
+      void rasterizeRun(row.id, input.skill, assetPath).catch(async (err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        await db
+          .update(designRuns)
+          .set({ rasterStatus: "failed", rasterError: msg })
+          .where(eq(designRuns.id, row.id));
+      });
+    }
+  }
+
+  async function rasterizeRun(runId: string, skillId: string, htmlPath: string): Promise<void> {
+    await db
+      .update(designRuns)
+      .set({ rasterStatus: "running" })
+      .where(eq(designRuns.id, runId));
+    const result = await rasterizeArtifact({ runId, skillId, htmlPath });
+    const ok = result.pngPaths.length > 0 || !!result.mp4Path;
+    await db
+      .update(designRuns)
+      .set({
+        rasterStatus: ok ? "completed" : "skipped",
+        rasterError: ok ? null : result.notes.join("; ") || "no output",
+        pngPaths: result.pngPaths,
+        mp4Path: result.mp4Path,
+      })
+      .where(eq(designRuns.id, runId));
   }
 
   async function readAssetHtml(id: string): Promise<string | null> {

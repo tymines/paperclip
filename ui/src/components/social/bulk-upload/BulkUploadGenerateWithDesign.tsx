@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Sparkles, ExternalLink, Wand2 } from "lucide-react";
+import { Sparkles, ExternalLink, Wand2, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { designApi, type DesignSkill } from "../../../api/design";
-import { useBulkUploadState } from "./state";
+import { bulkUploadApi } from "../../../api/bulkUpload";
+import {
+  useBulkUploadState,
+  type BulkUploadFile,
+  type BulkUploadPlatform,
+} from "./state";
 
 /**
  * Step 1 alternate-mode panel: instead of uploading an existing file,
@@ -32,8 +37,9 @@ const PRIORITY_SKILLS = [
 ];
 
 export function BulkUploadGenerateWithDesign() {
-  const { companyId } = useBulkUploadState();
+  const { companyId, draftId, dispatch } = useBulkUploadState();
   const qc = useQueryClient();
+  const importedRunsRef = useRef<Set<string>>(new Set());
   const skillsQ = useQuery({
     queryKey: ["design", "skills"],
     queryFn: () => designApi.skills(),
@@ -67,11 +73,54 @@ export function BulkUploadGenerateWithDesign() {
     queryFn: () => designApi.getRun(runId!),
     enabled: !!runId,
     refetchInterval: (q) => {
-      const status = q.state.data?.run.status;
-      return status && TERMINAL.has(status) ? false : POLL_MS;
+      const r = q.state.data?.run;
+      if (!r) return POLL_MS;
+      // Keep polling until both the generation AND the rasterization land.
+      const genDone = TERMINAL.has(r.status);
+      const rasterDone = ["completed", "failed", "skipped"].includes(r.rasterStatus);
+      return genDone && rasterDone ? false : POLL_MS;
     },
   });
   const run = runQ.data?.run;
+
+  const importMutation = useMutation({
+    mutationFn: async (designRunId: string) => {
+      if (!draftId) throw new Error("no draft yet");
+      return bulkUploadApi.importDesignRun(companyId, draftId, designRunId);
+    },
+    onSuccess: (result) => {
+      const next: BulkUploadFile[] = result.uploads.map((row) => ({
+        id: row.id,
+        filename: row.filename,
+        mimeType: row.mimeType,
+        sizeBytes: row.sizeBytes,
+        storageKey: row.storageKey,
+        thumbnailKey: row.thumbnailKey,
+        detectedType: row.detectedType,
+        orderIndex: row.orderIndex,
+        caption: row.caption,
+        hashtags: Array.isArray(row.hashtags) ? row.hashtags : [],
+        platforms: Array.isArray(row.platforms)
+          ? (row.platforms as BulkUploadPlatform[])
+          : [],
+        aiSuggestedCaption: row.aiSuggestedCaption,
+        selected: false,
+        uploadProgress: null,
+        uploadError: null,
+      }));
+      dispatch({ type: "add-uploads", uploads: next });
+    },
+  });
+
+  // Once a run's PNG/MP4 are ready, push them into the draft's media list.
+  // De-dup via importedRunsRef so React StrictMode re-fires don't double-add.
+  useEffect(() => {
+    if (!run || !draftId) return;
+    if (run.rasterStatus !== "completed") return;
+    if (importedRunsRef.current.has(run.id)) return;
+    importedRunsRef.current.add(run.id);
+    importMutation.mutate(run.id);
+  }, [run, draftId, importMutation]);
 
   useEffect(() => {
     const sel = shortlist.find((s) => s.id === skillId);
@@ -155,7 +204,18 @@ export function BulkUploadGenerateWithDesign() {
             </span>
           </div>
           <div className="h-72 overflow-hidden rounded border border-border bg-muted/30">
-            {run.assetUrl ? (
+            {run.rasterStatus === "completed" && run.pngPaths.length > 0 ? (
+              <div className="grid h-full grid-cols-2 gap-1 overflow-auto p-1">
+                {run.pngPaths.map((_, idx) => (
+                  <img
+                    key={idx}
+                    src={`/api/design/runs/${run.id}/asset.png?slide=${idx + 1}`}
+                    alt={`slide ${idx + 1}`}
+                    className="h-full w-full object-contain"
+                  />
+                ))}
+              </div>
+            ) : run.assetUrl ? (
               <iframe
                 title="design preview"
                 src={run.assetUrl}
@@ -168,10 +228,34 @@ export function BulkUploadGenerateWithDesign() {
               </div>
             ) : (
               <div className="grid h-full place-items-center text-xs text-muted-foreground">
-                Agent is working… (Phase 1 keeps you here; PNG rasterization lands in Phase 2)
+                Agent is working…
               </div>
             )}
           </div>
+          {run.status === "completed" ? (
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <span>
+                raster: <span className="font-mono">{run.rasterStatus}</span>
+                {run.pngPaths.length > 0
+                  ? ` · ${run.pngPaths.length} PNG${run.pngPaths.length === 1 ? "" : "s"}`
+                  : ""}
+                {run.mp4Path ? " · MP4" : ""}
+              </span>
+              {importMutation.isPending ? (
+                <span className="flex items-center gap-1">
+                  <ImageIcon className="h-3 w-3" /> attaching…
+                </span>
+              ) : importedRunsRef.current.has(run.id) && !importMutation.isError ? (
+                <span className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                  <ImageIcon className="h-3 w-3" /> auto-attached
+                </span>
+              ) : importMutation.isError ? (
+                <span className="text-red-600">
+                  attach failed: {(importMutation.error as Error).message}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

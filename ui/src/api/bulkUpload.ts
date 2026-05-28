@@ -120,6 +120,12 @@ export const bulkUploadApi = {
       { ids },
     ),
 
+  importDesignRun: (companyId: string, draftId: string, designRunId: string) =>
+    api.post<{ uploads: BulkUploadRow[]; designRunId: string }>(
+      `${base(companyId)}/drafts/${draftId}/import-design-run`,
+      { designRunId },
+    ),
+
   bestTimes: (companyId: string, platform: string) =>
     api.get<BestTimeResult>(
       `${base(companyId)}/best-times?platform=${encodeURIComponent(platform)}`,

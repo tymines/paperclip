@@ -77,6 +77,15 @@ export { reconcilePersistedRuntimeServicesOnStartup, restartDesiredRuntimeServic
 export { createStorageServiceFromConfig, getStorageService } from "../storage/index.js";
 export { createDesignRunsService, type DesignRunsService, type StartDesignRunInput } from "./design-runs.js";
 export {
+  PRESET_DEFINITIONS,
+  createPresetRunsService,
+  lookupPreset,
+  type PresetDefinition,
+  type PresetRunInput,
+  type PresetRunService,
+} from "./design-presets.js";
+export { rasterizerProbe, rasterKindForSkill, type RasterKind } from "./design-rasterizer.js";
+export {
   opendesignClient,
   odHealth,
   odListSkills,

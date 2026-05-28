@@ -37,6 +37,12 @@ export type DesignRun = {
   assetPath: string | null;
   assetUrl: string | null;
   previewUrl: string | null;
+  pngPaths: string[];
+  mp4Path: string | null;
+  rasterStatus: "pending" | "running" | "completed" | "failed" | "skipped";
+  rasterError: string | null;
+  presetRunId: string | null;
+  idempotencyKey: string | null;
   error: string | null;
   tokenCostUsd: string | null;
   renderCostUsd: string | null;
@@ -46,6 +52,30 @@ export type DesignRun = {
   createdAt: string;
   completedAt: string | null;
   metadata: Record<string, unknown>;
+};
+
+export type DesignPreset = {
+  slug: string;
+  name: string;
+  description: string;
+  estimateMin: string;
+  cardEmoji: string;
+  steps: Array<{ label: string; skill: string }>;
+  stepCount: number;
+};
+
+export type DesignPresetRun = {
+  id: string;
+  companyId: string | null;
+  presetSlug: string;
+  brief: string;
+  status: "running" | "completed" | "partial" | "failed";
+  childRunIds: string[];
+  resultSummary: Record<string, unknown>;
+  error: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  completedAt: string | null;
 };
 
 export const designApi = {
@@ -79,4 +109,17 @@ export const designApi = {
     return api.get<{ runs: DesignRun[] }>(`/design/runs${qs}`);
   },
   getRun: (id: string) => api.get<{ run: DesignRun }>(`/design/runs/${id}`),
+  presets: () => api.get<{ presets: DesignPreset[] }>(`/design/presets`),
+  startPresetRun: (
+    slug: string,
+    body: { companyId?: string | null; brief: string; voice?: string; persona?: string },
+  ) => api.post<{ preset: DesignPresetRun; runs: DesignRun[] }>(`/design/presets/${slug}/run`, body),
+  getPresetRun: (id: string) =>
+    api.get<{ preset: DesignPresetRun; runs: DesignRun[] }>(`/design/preset-runs/${id}`),
+  listPresetRuns: (companyId: string | null, limit = 25) => {
+    const qs = companyId
+      ? `?companyId=${encodeURIComponent(companyId)}&limit=${limit}`
+      : `?limit=${limit}`;
+    return api.get<{ presetRuns: DesignPresetRun[] }>(`/design/preset-runs${qs}`);
+  },
 };

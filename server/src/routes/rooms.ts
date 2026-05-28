@@ -9,6 +9,7 @@ import {
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
 import { roomService, logActivity, publishLiveEvent, heartbeatService } from "../services/index.js";
+import { createDesignRunsService } from "../services/design-runs.js";
 import { dispatchAgentBridge } from "../services/agent-bridge.js";
 import { conflict, notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -249,6 +250,117 @@ export function roomRoutes(db: Db) {
         createdAt: message.createdAt,
       },
     });
+
+    // @design mention → fire a design run, post the asset back as a follow-up.
+    // Detect the mention in the user's message; strip the mention to derive
+    // the brief. Carousels are the default; @design[skill=poster-hero] picks
+    // a different skill. Bound to a 1s rasterization wait grace via polling.
+    void (async () => {
+      const designMatch = message.content.match(
+        /@design(?:\[skill=([a-z0-9-]+)\])?\b\s*(.*)$/is,
+      );
+      if (!designMatch) return;
+      const skill = (designMatch[1] ?? "card-xiaohongshu").trim();
+      const brief = designMatch[2]?.trim();
+      if (!brief) return;
+      try {
+        const designSvc = createDesignRunsService(db);
+        const run = await designSvc.start({
+          companyId,
+          skill,
+          prompt: brief,
+          agentId: "claude",
+          createdBy: actor.actorId ?? undefined,
+        });
+        // Acknowledge immediately so the room sees the kickoff.
+        const ack = await svc.sendMessage({
+          roomId,
+          senderId: "design-agent",
+          senderType: "agent",
+          content: `Working on a ${skill.replace(/-/g, " ")} for "${brief.slice(0, 80)}${brief.length > 80 ? "…" : ""}". Run id: ${run.id}.`,
+          messageType: "chat",
+          metadata: { designRunId: run.id, kind: "design-ack" },
+          parentMessageId: message.id,
+        });
+        publishLiveEvent({
+          companyId,
+          type: "room.message",
+          payload: {
+            roomId,
+            messageId: ack.id,
+            senderId: ack.senderId,
+            senderType: ack.senderType,
+            content: ack.content,
+            messageType: ack.messageType,
+            parentMessageId: ack.parentMessageId,
+            createdAt: ack.createdAt,
+          },
+        });
+        // Poll the run until terminal + raster done, then post the asset link.
+        const deadline = Date.now() + 8 * 60_000;
+        let lastRow = run;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 3_000));
+          const cur = await designSvc.get(run.id);
+          if (!cur) break;
+          lastRow = cur;
+          const genDone = ["completed", "failed", "cancelled"].includes(cur.status);
+          const rasterDone = ["completed", "failed", "skipped"].includes(cur.rasterStatus);
+          if (genDone && rasterDone) break;
+        }
+        const pngList = Array.isArray(lastRow.pngPaths)
+          ? (lastRow.pngPaths as string[])
+          : [];
+        let body: string;
+        const metadata: Record<string, unknown> = {
+          designRunId: run.id,
+          kind: "design-result",
+          status: lastRow.status,
+          rasterStatus: lastRow.rasterStatus,
+        };
+        if (lastRow.status !== "completed") {
+          body = `Design run failed: ${lastRow.error ?? "unknown error"}.`;
+        } else if (lastRow.rasterStatus === "completed" && pngList.length > 0) {
+          const urls = pngList.map(
+            (_, i) => `/api/design/runs/${run.id}/asset.png?slide=${i + 1}`,
+          );
+          metadata.assetUrls = urls;
+          metadata.mp4Url = lastRow.mp4Path ? `/api/design/runs/${run.id}/asset.mp4` : null;
+          body = `Done — ${pngList.length} image${pngList.length === 1 ? "" : "s"} ready. View on /design or click any of: ${urls.slice(0, 4).join(" · ")}`;
+        } else {
+          metadata.assetUrl = lastRow.assetUrl;
+          body = `Done — HTML preview: ${lastRow.assetUrl ?? `/api/design/runs/${run.id}/asset`}`;
+        }
+        const reply = await svc.sendMessage({
+          roomId,
+          senderId: "design-agent",
+          senderType: "agent",
+          content: body,
+          messageType: "chat",
+          metadata,
+          parentMessageId: message.id,
+        });
+        publishLiveEvent({
+          companyId,
+          type: "room.message",
+          payload: {
+            roomId,
+            messageId: reply.id,
+            senderId: reply.senderId,
+            senderType: reply.senderType,
+            content: reply.content,
+            messageType: reply.messageType,
+            parentMessageId: reply.parentMessageId,
+            createdAt: reply.createdAt,
+          },
+        });
+      } catch (err) {
+        logger.warn(
+          { err, roomId, designBrief: brief },
+          "@design room hook dispatch failed",
+        );
+      }
+    })().catch(() => undefined);
 
     // Dispatch to agent members. Bridged agents are routed via HTTP to their
     // external runtime (e.g. OpenClaw); non-bridged agents are woken via the

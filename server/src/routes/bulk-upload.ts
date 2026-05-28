@@ -23,6 +23,10 @@ import { Router } from "express";
 import multer from "multer";
 import type { Db } from "@paperclipai/db";
 import type { StorageService } from "../storage/types.js";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { eq } from "drizzle-orm";
+import { designRuns } from "@paperclipai/db";
 import { bulkUploadService } from "../services/bulk-upload.js";
 import { socialService } from "../services/social.js";
 import {
@@ -656,6 +660,106 @@ export function bulkUploadRoutes(db: Db, storage: StorageService) {
         unscheduled: built.result.unscheduled,
         errors,
       });
+    },
+  );
+
+  // Auto-attach rasterized PNGs / MP4 from a completed design_run into the
+  // draft's media list. Closes the loop on Generate-with-Design: once the
+  // PNGs land on disk we hand them to the bulk-upload pipeline so they
+  // schedule like any other media file.
+  router.post(
+    "/companies/:companyId/social/bulk-upload/drafts/:draftId/import-design-run",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const draftId = req.params.draftId as string;
+      assertCompanyAccess(req, companyId);
+      const draft = await svc.getDraft(draftId);
+      if (!draft || draft.companyId !== companyId) throw notFound("Draft not found");
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const runId = typeof body.designRunId === "string" ? body.designRunId : null;
+      if (!runId) throw badRequest("designRunId required");
+
+      const runRow = await db
+        .select()
+        .from(designRuns)
+        .where(eq(designRuns.id, runId))
+        .then((rows) => rows[0] ?? null);
+      if (!runRow) throw notFound("design run not found");
+      if (runRow.companyId && runRow.companyId !== companyId) {
+        throw badRequest("design run belongs to another company");
+      }
+      if (runRow.rasterStatus !== "completed") {
+        res.status(409).json({
+          error: "raster not ready",
+          rasterStatus: runRow.rasterStatus,
+          rasterError: runRow.rasterError,
+        });
+        return;
+      }
+
+      const actor = getActorInfo(req);
+      const created: Array<Awaited<ReturnType<typeof svc.createUpload>>> = [];
+
+      const pngPaths = Array.isArray(runRow.pngPaths) ? (runRow.pngPaths as string[]) : [];
+      for (let i = 0; i < pngPaths.length; i += 1) {
+        const p = pngPaths[i];
+        try {
+          const bytes = await fs.readFile(p);
+          const baseName = path.basename(p);
+          const putResult = await storage.putFile({
+            companyId,
+            namespace: "social/bulk",
+            originalFilename: `design-${runRow.id.slice(0, 8)}-${baseName}`,
+            contentType: "image/png",
+            body: bytes,
+          });
+          const row = await svc.createUpload({
+            companyId,
+            draftId: draft.id,
+            filename: `design-${runRow.skill}-${baseName}`,
+            mimeType: "image/png",
+            sizeBytes: bytes.length,
+            storageKey: putResult.objectKey,
+            detectedType: "image",
+            createdBy: actor?.actorId ?? null,
+          });
+          created.push(row);
+        } catch (err) {
+          // Skip this slide; we still want the others to land.
+          // eslint-disable-next-line no-console
+          console.warn(`[bulk-upload] failed to import ${p}: ${err}`);
+        }
+      }
+
+      if (runRow.mp4Path) {
+        try {
+          const bytes = await fs.readFile(runRow.mp4Path);
+          const baseName = path.basename(runRow.mp4Path);
+          const putResult = await storage.putFile({
+            companyId,
+            namespace: "social/bulk",
+            originalFilename: `design-${runRow.id.slice(0, 8)}-${baseName}`,
+            contentType: "video/mp4",
+            body: bytes,
+          });
+          const row = await svc.createUpload({
+            companyId,
+            draftId: draft.id,
+            filename: `design-${runRow.skill}-${baseName}`,
+            mimeType: "video/mp4",
+            sizeBytes: bytes.length,
+            storageKey: putResult.objectKey,
+            detectedType: "video",
+            createdBy: actor?.actorId ?? null,
+          });
+          created.push(row);
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn(`[bulk-upload] failed to import mp4: ${err}`);
+        }
+      }
+
+      res.status(201).json({ uploads: created, designRunId: runRow.id });
     },
   );
 

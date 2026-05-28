@@ -25,8 +25,14 @@ import {
 } from "./jarvis-delegation-tools.js";
 import {
   DESIGN_TOOL_DEF,
+  DESIGN_BATCH_TOOL_DEF,
+  DESIGN_PACK_TOOL_DEF,
   dispatchDesignTool,
+  dispatchDesignBatch,
+  dispatchDesignPack,
   designToolAcknowledgment,
+  designBatchAcknowledgment,
+  designPackAcknowledgment,
 } from "./jarvis-design-tool.js";
 import { logger } from "../middleware/logger.js";
 import {
@@ -342,7 +348,9 @@ async function callLlm(
         model: "claude-opus-4-7",
         systemPrompt,
         userPrompt,
-        tools: withTools ? [...DELEGATION_TOOLS, DESIGN_TOOL_DEF] : undefined,
+        tools: withTools
+          ? [...DELEGATION_TOOLS, DESIGN_TOOL_DEF, DESIGN_BATCH_TOOL_DEF, DESIGN_PACK_TOOL_DEF]
+          : undefined,
       });
       if (result) return { ...result, provider: "anthropic" };
     } catch (err) {
@@ -499,6 +507,22 @@ async function fetchChatCompletion({
             parameters: DESIGN_TOOL_DEF.input_schema,
           },
         },
+        {
+          type: "function" as const,
+          function: {
+            name: DESIGN_BATCH_TOOL_DEF.name,
+            description: DESIGN_BATCH_TOOL_DEF.description,
+            parameters: DESIGN_BATCH_TOOL_DEF.input_schema,
+          },
+        },
+        {
+          type: "function" as const,
+          function: {
+            name: DESIGN_PACK_TOOL_DEF.name,
+            description: DESIGN_PACK_TOOL_DEF.description,
+            parameters: DESIGN_PACK_TOOL_DEF.input_schema,
+          },
+        },
       ];
     }
     const resp = await fetch(url, {
@@ -617,7 +641,67 @@ export async function jarvisBrainReply(
       }
     }
   }
-  if (llm?.toolCall && enableDelegation && llm.toolCall.name !== DESIGN_TOOL_DEF.name) {
+  if (llm?.toolCall && llm.toolCall.name === DESIGN_BATCH_TOOL_DEF.name) {
+    const skillId = typeof llm.toolCall.args.skill_id === "string" ? llm.toolCall.args.skill_id : "";
+    const tmpl = typeof llm.toolCall.args.prompt_template === "string"
+      ? llm.toolCall.args.prompt_template
+      : "";
+    const rawCount = llm.toolCall.args.count;
+    const count = typeof rawCount === "number"
+      ? rawCount
+      : typeof rawCount === "string"
+        ? parseInt(rawCount, 10)
+        : 0;
+    const persona = typeof llm.toolCall.args.persona === "string"
+      ? llm.toolCall.args.persona
+      : undefined;
+    if (skillId && tmpl && count > 0 && count <= 10) {
+      try {
+        const out = await dispatchDesignBatch(
+          db,
+          input.companyId,
+          { skill_id: skillId, prompt_template: tmpl, count, persona },
+          input.userActorId,
+        );
+        llm.reply = designBatchAcknowledgment({
+          count: out.runs.length,
+          skill: out.runs[0]?.skill ?? skillId,
+          persona: out.persona,
+        });
+      } catch (err) {
+        logger.warn({ err }, "jarvis-brain: design batch dispatch failed");
+        llm.reply = `Tried to queue the batch but ${err instanceof Error ? err.message : "it failed"}.`;
+      }
+    }
+  }
+  if (llm?.toolCall && llm.toolCall.name === DESIGN_PACK_TOOL_DEF.name) {
+    const slug = typeof llm.toolCall.args.preset_slug === "string"
+      ? llm.toolCall.args.preset_slug
+      : "";
+    const brief = typeof llm.toolCall.args.brief === "string" ? llm.toolCall.args.brief : "";
+    const voice = typeof llm.toolCall.args.voice === "string" ? llm.toolCall.args.voice : undefined;
+    if (slug && brief) {
+      try {
+        const out = await dispatchDesignPack(
+          db,
+          input.companyId,
+          { preset_slug: slug, brief, voice },
+          input.userActorId,
+        );
+        llm.reply = designPackAcknowledgment(out.presetSlug, out.childRunIds.length);
+      } catch (err) {
+        logger.warn({ err }, "jarvis-brain: design pack dispatch failed");
+        llm.reply = `Tried to fire the design pack but ${err instanceof Error ? err.message : "it failed"}.`;
+      }
+    }
+  }
+  if (
+    llm?.toolCall &&
+    enableDelegation &&
+    llm.toolCall.name !== DESIGN_TOOL_DEF.name &&
+    llm.toolCall.name !== DESIGN_BATCH_TOOL_DEF.name &&
+    llm.toolCall.name !== DESIGN_PACK_TOOL_DEF.name
+  ) {
     const peer = TOOL_NAME_TO_PEER[llm.toolCall.name];
     const taskArg = typeof llm.toolCall.args.task === "string" ? llm.toolCall.args.task : "";
     if (peer && taskArg.length > 0) {

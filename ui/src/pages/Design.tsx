@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { designApi, type DesignSkill } from "../api/design";
+import {
+  designApi,
+  type DesignPreset,
+  type DesignRun,
+  type DesignSkill,
+} from "../api/design";
 import { useCompany } from "../context/CompanyContext";
 
 const POLL_INTERVAL_MS = 2_000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
+const PRESET_TERMINAL = new Set(["completed", "failed", "partial"]);
 
 export default function Design() {
   const { selectedCompanyId } = useCompany();
@@ -36,6 +42,44 @@ export default function Design() {
   const [prompt, setPrompt] = useState("");
   const [agentId, setAgentId] = useState("claude");
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  // Preset state
+  const [activePreset, setActivePreset] = useState<DesignPreset | null>(null);
+  const [presetBrief, setPresetBrief] = useState("");
+  const [presetVoice, setPresetVoice] = useState("");
+  const [activePresetRunId, setActivePresetRunId] = useState<string | null>(null);
+
+  const presetsQ = useQuery({
+    queryKey: ["design", "presets"],
+    queryFn: () => designApi.presets(),
+    staleTime: 5 * 60_000,
+  });
+
+  const presetRunQ = useQuery({
+    queryKey: ["design", "preset-run", activePresetRunId],
+    queryFn: () => designApi.getPresetRun(activePresetRunId!),
+    enabled: !!activePresetRunId,
+    refetchInterval: (q) => {
+      const s = q.state.data?.preset.status;
+      return s && PRESET_TERMINAL.has(s) ? false : POLL_INTERVAL_MS;
+    },
+  });
+
+  const startPresetMutation = useMutation({
+    mutationFn: () => {
+      if (!activePreset) throw new Error("pick a preset");
+      if (!presetBrief.trim()) throw new Error("brief required");
+      return designApi.startPresetRun(activePreset.slug, {
+        companyId,
+        brief: presetBrief,
+        voice: presetVoice.trim() || undefined,
+      });
+    },
+    onSuccess: (data) => {
+      setActivePresetRunId(data.preset.id);
+      qc.invalidateQueries({ queryKey: ["design", "runs"] });
+    },
+  });
 
   useEffect(() => {
     if (selectedSkill?.examplePrompt && !prompt) setPrompt(selectedSkill.examplePrompt);
@@ -120,6 +164,38 @@ export default function Design() {
             ))}
         </div>
       </header>
+
+      <PresetCardsRow
+        presets={presetsQ.data?.presets ?? []}
+        activeSlug={activePreset?.slug ?? null}
+        onPick={(p) => {
+          setActivePreset((cur) => (cur?.slug === p.slug ? null : p));
+          setPresetBrief("");
+          setActivePresetRunId(null);
+        }}
+      />
+
+      {activePreset ? (
+        <PresetBriefPanel
+          preset={activePreset}
+          brief={presetBrief}
+          onBriefChange={setPresetBrief}
+          voice={presetVoice}
+          onVoiceChange={setPresetVoice}
+          onRun={() => startPresetMutation.mutate()}
+          submitting={startPresetMutation.isPending}
+          error={
+            startPresetMutation.isError
+              ? (startPresetMutation.error as Error).message
+              : null
+          }
+          presetRun={presetRunQ.data ?? null}
+          onClose={() => {
+            setActivePreset(null);
+            setActivePresetRunId(null);
+          }}
+        />
+      ) : null}
 
       <div className="grid flex-1 grid-cols-1 gap-4 overflow-hidden md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
         {/* Picker + history column */}
@@ -305,6 +381,229 @@ export default function Design() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Preset surface — Marketing kit / Landing page / Influencer post pack /
+// Brand kit / Email blast. One brief → 1–N skill runs aggregated together.
+// ─────────────────────────────────────────────────────────────────────────
+
+interface PresetCardsRowProps {
+  presets: DesignPreset[];
+  activeSlug: string | null;
+  onPick: (preset: DesignPreset) => void;
+}
+
+function PresetCardsRow({ presets, activeSlug, onPick }: PresetCardsRowProps) {
+  if (presets.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold tracking-tight">Presets</h2>
+        <span className="text-xs text-muted-foreground">
+          One brief in, full kit out · {presets.length} curated macros
+        </span>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
+        {presets.map((p) => {
+          const active = activeSlug === p.slug;
+          return (
+            <button
+              key={p.slug}
+              type="button"
+              onClick={() => onPick(p)}
+              className={`group flex h-full flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors ${
+                active
+                  ? "border-foreground bg-accent/30"
+                  : "border-border bg-card hover:border-foreground/60 hover:bg-accent/20"
+              }`}
+              data-testid={`preset-card-${p.slug}`}
+            >
+              <div className="flex w-full items-center justify-between gap-2">
+                <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {p.cardEmoji}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {p.stepCount} step{p.stepCount === 1 ? "" : "s"} · {p.estimateMin}
+                </span>
+              </div>
+              <span className="text-sm font-medium leading-tight">{p.name}</span>
+              <span className="line-clamp-3 text-xs text-muted-foreground">
+                {p.description}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+interface PresetBriefPanelProps {
+  preset: DesignPreset;
+  brief: string;
+  onBriefChange: (v: string) => void;
+  voice: string;
+  onVoiceChange: (v: string) => void;
+  onRun: () => void;
+  onClose: () => void;
+  submitting: boolean;
+  error: string | null;
+  presetRun: { preset: { id: string; status: string; brief: string }; runs: DesignRun[] } | null;
+}
+
+function PresetBriefPanel({
+  preset,
+  brief,
+  onBriefChange,
+  voice,
+  onVoiceChange,
+  onRun,
+  onClose,
+  submitting,
+  error,
+  presetRun,
+}: PresetBriefPanelProps) {
+  const runsByLabel = useMemo(() => {
+    if (!presetRun) return new Map<string, DesignRun>();
+    // The preset definition steps and child runs are in the same order; map
+    // by index → label so the grid lines up regardless of skill-id reuse.
+    const map = new Map<string, DesignRun>();
+    presetRun.runs.forEach((r, idx) => {
+      const label = preset.steps[idx]?.label ?? r.skill;
+      map.set(label, r);
+    });
+    return map;
+  }, [preset, presetRun]);
+
+  const progress = useMemo(() => {
+    if (!presetRun) return { done: 0, total: preset.stepCount };
+    const done = presetRun.runs.filter((r) =>
+      ["completed", "failed", "cancelled"].includes(r.status),
+    ).length;
+    return { done, total: preset.stepCount };
+  }, [preset, presetRun]);
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-foreground/40 bg-card p-4">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">{preset.name}</h2>
+          <p className="text-xs text-muted-foreground">{preset.description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-xs text-muted-foreground hover:text-foreground"
+        >
+          close
+        </button>
+      </div>
+
+      <textarea
+        className="min-h-[100px] rounded border border-border bg-background p-2 text-sm"
+        placeholder="One brief — audience, angle, tone, what you want out the other side."
+        value={brief}
+        onChange={(e) => onBriefChange(e.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="flex-1 min-w-[180px] rounded border border-border bg-background px-2 py-1 text-sm"
+          placeholder="Voice (optional) — e.g. 'Sidney, warm, contemporary'"
+          value={voice}
+          onChange={(e) => onVoiceChange(e.target.value)}
+        />
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={submitting || !brief.trim()}
+          className="rounded bg-foreground px-3 py-1.5 text-sm text-background disabled:opacity-50"
+        >
+          {submitting ? "Starting…" : `Run preset (${preset.stepCount} skill${preset.stepCount === 1 ? "" : "s"})`}
+        </button>
+      </div>
+      {error ? <p className="text-xs text-red-600">{error}</p> : null}
+
+      {presetRun ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span className="font-mono">{presetRun.preset.id}</span>
+            <span>
+              {progress.done} / {progress.total} done · status: {presetRun.preset.status}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {preset.steps.map((step) => {
+              const r = runsByLabel.get(step.label);
+              const status = r?.status ?? "queued";
+              return (
+                <div
+                  key={step.label}
+                  className="flex flex-col gap-1 rounded border border-border bg-background p-2"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="font-medium">{step.label}</span>
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
+                        status === "completed"
+                          ? "bg-green-200 text-green-900 dark:bg-green-900 dark:text-green-200"
+                          : status === "failed"
+                            ? "bg-red-200 text-red-900 dark:bg-red-900 dark:text-red-200"
+                            : "bg-yellow-200 text-yellow-900 dark:bg-yellow-900 dark:text-yellow-200"
+                      }`}
+                    >
+                      {status}
+                    </span>
+                  </div>
+                  <div className="h-32 overflow-hidden rounded bg-muted/30">
+                    {r && r.rasterStatus === "completed" && r.pngPaths.length > 0 ? (
+                      <img
+                        src={`/api/design/runs/${r.id}/asset.png?slide=1`}
+                        alt={step.label}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : r?.mp4Path ? (
+                      <video
+                        src={`/api/design/runs/${r.id}/asset.mp4`}
+                        muted
+                        autoPlay
+                        loop
+                        className="h-full w-full object-cover"
+                      />
+                    ) : r?.assetUrl ? (
+                      <iframe
+                        title={step.label}
+                        src={r.assetUrl}
+                        sandbox="allow-scripts allow-same-origin"
+                        className="h-full w-full border-0"
+                      />
+                    ) : (
+                      <div className="grid h-full place-items-center text-[10px] text-muted-foreground">
+                        {status === "queued" ? "queued" : `${status}…`}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span className="font-mono">{step.skill}</span>
+                    {r?.assetUrl ? (
+                      <a
+                        href={r.assetUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline"
+                      >
+                        open
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

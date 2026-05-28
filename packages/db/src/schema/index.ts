@@ -93,4 +93,11 @@ export { jarvisDelegations } from "./jarvis_delegations.js";
 export { companyJarvisSettings } from "./company_jarvis_settings.js";
 export { jarvisLearnedPreferences } from "./jarvis_learned_preferences.js";
 export { webhookEventLog } from "./webhook_event_log.js";
-export { designRuns, type DesignRun, type NewDesignRun } from "./design_runs.js";
+export {
+  designRuns,
+  designPresetRuns,
+  type DesignRun,
+  type NewDesignRun,
+  type DesignPresetRun,
+  type NewDesignPresetRun,
+} from "./design_runs.js";
