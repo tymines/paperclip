@@ -371,6 +371,7 @@ export function App() {
           <Route path="search" element={<UnprefixedBoardRedirect />} />
           <Route path="org" element={<UnprefixedBoardRedirect />} />
           <Route path="design-guide" element={<UnprefixedBoardRedirect />} />
+          <Route path="design" element={<UnprefixedBoardRedirect />} />
           <Route path="costs" element={<UnprefixedBoardRedirect />} />
           <Route path="goals" element={<UnprefixedBoardRedirect />} />
           <Route path="goals/:goalId" element={<UnprefixedBoardRedirect />} />

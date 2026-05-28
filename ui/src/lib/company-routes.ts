@@ -19,6 +19,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "inbox",
   "u",
   "design-guide",
+  "design",
   "search",
   "knowledge-graph",
   "rooms",
