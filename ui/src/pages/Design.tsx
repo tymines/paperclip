@@ -511,7 +511,7 @@ function PresetBriefPanel({
       <div className="flex flex-wrap items-center gap-2">
         <input
           className="flex-1 min-w-[180px] rounded border border-border bg-background px-2 py-1 text-sm"
-          placeholder="Voice (optional) — e.g. 'Sidney, warm, contemporary'"
+          placeholder="Persona / brand voice (optional) — e.g. 'For Sidney — warm, contemporary'"
           value={voice}
           onChange={(e) => onVoiceChange(e.target.value)}
         />

@@ -86,16 +86,18 @@ export function designToolAcknowledgment(skill: string): string {
   return `On it — generating a ${skill.replace(/-/g, " ")} now. I'll have it ready in about 30 seconds. Check the Design tab.`;
 }
 
-// ─── Batched delegation: "have Sidney generate her next N carousels" ───────
+// ─── Batched content drafting for an influencer persona ───────────────────
 //
-// Single design_artifact + count, per-iteration prompt substitution. Lets
-// Jarvis fan out a whole week of content in one voice command without
-// requiring N round-trips through the LLM.
+// "Have the Content agent draft Sidney's next 3 carousels" → one
+// design_batch call with persona="Sidney" + count=3. The agent fleet
+// executes; the persona is the subject (brand voice, social account).
+// Personas don't run anything themselves — Sidney is a brand, not an
+// agent. Same shape works for future personas.
 
 export const DESIGN_BATCH_TOOL_DEF = {
   name: "design_batch",
   description:
-    "Fan out N design runs in one call using the same skill + a prompt template. Use when Tyler says things like 'have Sidney generate her next 3 carousels' or 'queue up 5 reels for the week.' The {n} token in prompt_template is substituted with the 1-based iteration index. Returns the parent batch id and the list of started run ids.",
+    "Fan out N design runs in one call using the same skill + a prompt template. Use when Tyler asks for a batch of content targeting a specific influencer persona — e.g. 'have the Content agent draft Sidney's next 3 carousels' or 'queue up 5 reels for the week for Sidney.' The {n} token in prompt_template is substituted with the 1-based iteration index. Returns the parent batch id and the list of started run ids.",
   input_schema: {
     type: "object" as const,
     properties: {
@@ -107,7 +109,7 @@ export const DESIGN_BATCH_TOOL_DEF = {
       prompt_template: {
         type: "string",
         description:
-          "Brief that applies to every iteration. Use {n} for the item number. The persona's voice should be baked in directly here (e.g. 'For Sidney's voice: warm, contemporary…').",
+          "Brief that applies to every iteration. Use {n} for the item number. The persona's brand voice should be baked in directly here (e.g. 'For Sidney's voice: warm, contemporary…').",
       },
       count: {
         type: "integer",
@@ -118,7 +120,7 @@ export const DESIGN_BATCH_TOOL_DEF = {
       persona: {
         type: "string",
         description:
-          "Optional persona name (e.g. 'Sidney'). Prepended to the brief so the agent knows whose voice to write in.",
+          "Optional influencer persona / brand the content is for (e.g. 'Sidney'). This is the SUBJECT of the content, not an executor — Sidney is a brand, not an agent. Prepended to the brief so the design run knows whose brand voice to write in.",
       },
     },
     required: ["skill_id", "prompt_template", "count"],
@@ -144,7 +146,7 @@ export async function dispatchDesignBatch(
   const runs: Array<{ id: string; skill: string }> = [];
   for (let i = 1; i <= args.count; i += 1) {
     const personaLine = persona
-      ? `Persona: ${persona}. Stay in their established voice.\n\n`
+      ? `Drafting content for the ${persona} influencer brand. Stay in ${persona}'s established brand voice.\n\n`
       : "";
     const prompt = `${personaLine}${args.prompt_template.replace(/\{n\}/g, String(i))}`;
     const row = await service.start({
@@ -168,9 +170,12 @@ export function designBatchAcknowledgment(args: {
   skill: string;
   persona: string | null;
 }): string {
-  const who = args.persona ? `${args.persona}` : "the design agent";
   const what = args.skill.replace(/-/g, " ");
-  return `On it — I've queued ${args.count} ${what}${args.count === 1 ? "" : "s"} for ${who}. They'll appear in the Design tab as they land.`;
+  const plural = args.count === 1 ? "" : "s";
+  if (args.persona) {
+    return `On it — Content agent is drafting ${args.count} ${what}${plural} for ${args.persona}. They'll appear in the Design tab as they land.`;
+  }
+  return `On it — Content agent is drafting ${args.count} ${what}${plural}. They'll appear in the Design tab as they land.`;
 }
 
 // ─── Preset (pack) delegation: "give me a marketing kit" ───────────────────
@@ -197,7 +202,7 @@ export const DESIGN_PACK_TOOL_DEF = {
       voice: {
         type: "string",
         description:
-          "Optional voice descriptor — e.g. 'Sidney — warm, contemporary'.",
+          "Optional brand-voice descriptor of the target persona — e.g. 'Sidney — warm, contemporary'. This names whose voice the content should be in; the persona is the subject, not the executor.",
       },
     },
     required: ["preset_slug", "brief"],

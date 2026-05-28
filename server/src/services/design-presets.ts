@@ -92,7 +92,7 @@ export const PRESET_DEFINITIONS: PresetDefinition[] = [
     slug: "influencer-post-pack",
     name: "Influencer post pack",
     description:
-      "Five carousel posts + three short reels + a caption set. A week of content from one brief.",
+      "Five carousel posts + three short reels + a caption set, drafted FOR an influencer persona (Sidney etc.). A week of content from one brief. Pass the persona's name + brand voice; the agent fleet does the drafting.",
     estimateMin: "12–20 min",
     cardEmoji: "pack",
     steps: [
