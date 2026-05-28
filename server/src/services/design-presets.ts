@@ -8,7 +8,12 @@
  * Each step is a {skill, briefTemplate}; the macro substitutes {brief}
  * (the user's input) and {persona}/{voice} (optional brand inputs) into
  * the template, then fans out the runs concurrently.
+ *
+ * CONCURRENCY: Presets with >3 steps run sequentially (1 at a time) by
+ * default. Between batches we sleep 5-10s to breathe for rate limiters.
+ * Each preset can override concurrency via its `concurrency` field.
  */
+import { setTimeout as sleep } from "node:timers/promises";
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -35,6 +40,12 @@ export type PresetDefinition = {
   estimateMin: string;
   cardEmoji: string;
   steps: PresetStep[];
+  /**
+   * Max concurrent skill runs for this preset.
+   * Default: 1 for >3 steps, 3 for <=3 steps.
+   * Override per preset for specific needs.
+   */
+  concurrency?: number;
 };
 
 export const PRESET_DEFINITIONS: PresetDefinition[] = [
@@ -45,6 +56,7 @@ export const PRESET_DEFINITIONS: PresetDefinition[] = [
       "One-pager poster + three social cards (X, Reddit, Xiaohongshu) from one brief.",
     estimateMin: "4–6 min",
     cardEmoji: "kit",
+    concurrency: 3,
     steps: [
       {
         label: "Poster",
@@ -95,6 +107,7 @@ export const PRESET_DEFINITIONS: PresetDefinition[] = [
       "Five carousel posts + three short reels + a caption set, drafted FOR an influencer persona (Sidney etc.). A week of content from one brief. Pass the persona's name + brand voice; the agent fleet does the drafting.",
     estimateMin: "12–20 min",
     cardEmoji: "pack",
+    concurrency: 2,
     steps: [
       {
         label: "Carousel 1",
@@ -248,24 +261,38 @@ export function createPresetRunsService(db: Db, designRunsService: DesignRunsSer
       persona: input.persona ?? "",
     };
 
-    // Fire all steps in parallel; the design-runs service already handles
-    // concurrent runs and idempotency.
+    // Concurrency: default 1 for >3 steps, 3 for <=3 steps.
+    // Per-preset override via def.concurrency.
+    const defaultConcurrency = def.steps.length > 3 ? 1 : 3;
+    const batchSize = def.concurrency ?? defaultConcurrency;
+
     const childRuns: DesignRun[] = [];
-    for (let idx = 0; idx < def.steps.length; idx += 1) {
-      const step = def.steps[idx];
-      const prompt = applyTemplate(step.briefTemplate, vars);
-      const idemKey = input.idempotencySeed
-        ? `${input.idempotencySeed}:${def.slug}:${idx}`
-        : undefined;
-      const run = await designRunsService.start({
-        companyId: input.companyId ?? null,
-        skill: step.skill,
-        prompt,
-        createdBy: input.createdBy ?? undefined,
-        idempotencyKey: idemKey,
-        presetRunId: presetRow.id,
+    for (let idx = 0; idx < def.steps.length; idx += batchSize) {
+      const batch = def.steps.slice(idx, idx + batchSize);
+      // Fire this batch concurrently
+      const batchPromises = batch.map(async (step, batchIdx) => {
+        const stepIdx = idx + batchIdx;
+        const prompt = applyTemplate(step.briefTemplate, vars);
+        const idemKey = input.idempotencySeed
+          ? `${input.idempotencySeed}:${def.slug}:${stepIdx}`
+          : undefined;
+        return designRunsService.start({
+          companyId: input.companyId ?? null,
+          skill: step.skill,
+          prompt,
+          createdBy: input.createdBy ?? undefined,
+          idempotencyKey: idemKey,
+          presetRunId: presetRow.id,
+        });
       });
-      childRuns.push(run);
+      const batchResults = await Promise.all(batchPromises);
+      childRuns.push(...batchResults);
+
+      // Rate-limiter breathing room between batches (5-10s jitter)
+      if (idx + batchSize < def.steps.length) {
+        const delayMs = 5_000 + Math.floor(Math.random() * 5_000);
+        await sleep(delayMs);
+      }
     }
 
     await db

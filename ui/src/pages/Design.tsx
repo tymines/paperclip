@@ -40,7 +40,10 @@ export default function Design() {
   const [mode, setMode] = useState<string>("");
   const [selectedSkill, setSelectedSkill] = useState<DesignSkill | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [agentId, setAgentId] = useState("claude");
+  const [agentId, setAgentId] = useState(() => {
+    // Prefer hermes as default — routes to DeepSeek/Kimi, not subscription-metered
+    return "hermes";
+  });
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   // Preset state
@@ -93,6 +96,22 @@ export default function Design() {
     }
   }, [agentsQ.data, agentId]);
 
+  const retryMutation = useMutation({
+    mutationFn: (runId: string) => {
+      const run = runs.find((r) => r.id === runId);
+      if (!run) throw new Error("run not found");
+      return designApi.startRun(companyId, {
+        skill: run.skill,
+        prompt: run.prompt,
+        agentId: "hermes",
+      });
+    },
+    onSuccess: (data) => {
+      setSelectedRunId(data.run.id);
+      qc.invalidateQueries({ queryKey: ["design", "runs"] });
+    },
+  });
+
   const startMutation = useMutation({
     mutationFn: () => {
       if (!selectedSkill) throw new Error("pick a skill");
@@ -144,18 +163,27 @@ export default function Design() {
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="rounded-full bg-muted px-2 py-0.5">
-            agent: {agentId}
+          <span
+            className={`rounded-full px-2 py-0.5 ${
+              agentId === "hermes"
+                ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"
+                : "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200"
+            }`}
+            title="Agent: hermes routes to DeepSeek-v4-flash / Moonshot K2.5"
+          >
+            Agent: {agentId}
           </span>
           {agentsQ.data?.agents
             .filter((a) => a.available)
-            .slice(0, 4)
+            .slice(0, 6)
             .map((a) => (
               <button
                 key={a.id}
                 onClick={() => setAgentId(a.id)}
                 className={`rounded-full border px-2 py-0.5 text-xs ${
-                  a.id === agentId ? "border-foreground" : "border-border opacity-60 hover:opacity-100"
+                  a.id === agentId
+                    ? "border-foreground bg-muted/50"
+                    : "border-border opacity-60 hover:opacity-100"
                 }`}
                 title={a.path}
               >
@@ -194,6 +222,8 @@ export default function Design() {
             setActivePreset(null);
             setActivePresetRunId(null);
           }}
+          onRetry={(runId) => retryMutation.mutate(runId)}
+          retrying={retryMutation.isPending}
         />
       ) : null}
 
@@ -265,7 +295,12 @@ export default function Design() {
                     }`}
                   >
                     <div className="flex w-full items-center justify-between gap-2 text-xs">
-                      <span className="font-mono">{r.skill}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono">{r.skill}</span>
+                        <span className="rounded bg-muted/50 px-1 py-0.5 text-[9px] uppercase text-muted-foreground">
+                          {r.agentId}
+                        </span>
+                      </div>
                       <span
                         className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
                           r.status === "completed"
@@ -281,6 +316,29 @@ export default function Design() {
                     <span className="line-clamp-1 text-xs text-muted-foreground">
                       {r.prompt}
                     </span>
+                    {r.status === "failed" && r.error ? (
+                      <div className="mt-1 w-full">
+                        <details className="group">
+                          <summary className="cursor-pointer text-[10px] text-red-500 hover:text-red-600">
+                            Show full error
+                          </summary>
+                          <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-red-50 p-1.5 text-[9px] text-red-700 dark:bg-red-950 dark:text-red-300">
+                            {r.error}
+                          </pre>
+                        </details>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            retryMutation.mutate(r.id);
+                          }}
+                          disabled={retryMutation.isPending}
+                          className="mt-1 rounded bg-foreground/10 px-2 py-0.5 text-[10px] hover:bg-foreground/20 disabled:opacity-50"
+                        >
+                          Retry with hermes
+                        </button>
+                      </div>
+                    ) : null}
                   </button>
                 </li>
               ))}
@@ -369,8 +427,31 @@ export default function Design() {
                   {activeRun.status}… the agent is working on it.
                 </div>
               ) : activeRun?.error ? (
-                <div className="grid h-full place-items-center px-4 text-center text-sm text-red-600">
-                  {activeRun.error}
+                <div className="grid h-full place-items-center px-4 text-center text-sm">
+                  <div className="flex flex-col items-center gap-2">
+                    <span className="text-red-600">
+                      {activeRun.error.length > 200
+                        ? `${activeRun.error.slice(0, 200)}…`
+                        : activeRun.error}
+                    </span>
+                    {activeRun.error.length > 200 ? (
+                      <details className="group">
+                        <summary className="cursor-pointer text-[10px] text-red-500 hover:text-red-600">
+                          Show full error
+                        </summary>
+                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-red-50 p-2 text-[11px] text-red-700 dark:bg-red-950 dark:text-red-300">
+                          {activeRun.error}
+                        </pre>
+                      </details>
+                    ) : null}
+                    {activeRun.error.toLowerCase().includes("rate limit") ||
+                    activeRun.error.toLowerCase().includes("429") ||
+                    activeRun.error.toLowerCase().includes("quota") ? (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        Rate-limited — try again in a few minutes, or reduce preset concurrency in settings.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
               ) : (
                 <div className="grid h-full place-items-center text-sm text-muted-foreground">
@@ -452,20 +533,25 @@ interface PresetBriefPanelProps {
   submitting: boolean;
   error: string | null;
   presetRun: { preset: { id: string; status: string; brief: string }; runs: DesignRun[] } | null;
+  onRetry?: (runId: string) => void;
+  retrying?: boolean;
 }
 
-function PresetBriefPanel({
-  preset,
-  brief,
-  onBriefChange,
-  voice,
-  onVoiceChange,
-  onRun,
-  onClose,
-  submitting,
-  error,
-  presetRun,
-}: PresetBriefPanelProps) {
+function PresetBriefPanel(props: PresetBriefPanelProps) {
+  const {
+    preset,
+    brief,
+    onBriefChange,
+    voice,
+    onVoiceChange,
+    onRun,
+    onClose,
+    submitting,
+    error,
+    presetRun,
+    onRetry,
+    retrying,
+  } = props;
   const runsByLabel = useMemo(() => {
     if (!presetRun) return new Map<string, DesignRun>();
     // The preset definition steps and child runs are in the same order; map
@@ -538,13 +624,25 @@ function PresetBriefPanel({
             {preset.steps.map((step) => {
               const r = runsByLabel.get(step.label);
               const status = r?.status ?? "queued";
+              const isRateLimit =
+                r?.error &&
+                (r.error.toLowerCase().includes("rate limit") ||
+                  r.error.toLowerCase().includes("429") ||
+                  r.error.toLowerCase().includes("quota"));
               return (
                 <div
                   key={step.label}
                   className="flex flex-col gap-1 rounded border border-border bg-background p-2"
                 >
                   <div className="flex items-center justify-between gap-2 text-[11px]">
-                    <span className="font-medium">{step.label}</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{step.label}</span>
+                      {r?.agentId ? (
+                        <span className="rounded bg-muted/50 px-1 py-0.5 text-[9px] uppercase text-muted-foreground">
+                          {r.agentId}
+                        </span>
+                      ) : null}
+                    </div>
                     <span
                       className={`rounded px-1.5 py-0.5 text-[10px] uppercase ${
                         status === "completed"
@@ -587,17 +685,43 @@ function PresetBriefPanel({
                   </div>
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                     <span className="font-mono">{step.skill}</span>
-                    {r?.assetUrl ? (
-                      <a
-                        href={r.assetUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline"
-                      >
-                        open
-                      </a>
-                    ) : null}
+                    <div className="flex items-center gap-1.5">
+                      {status === "failed" && r ? (
+                        <button
+                          type="button"
+                          onClick={() => onRetry?.(r.id)}
+                          disabled={retrying}
+                          className="rounded bg-red-100 px-1.5 py-0.5 text-[9px] text-red-700 hover:bg-red-200 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-800 disabled:opacity-50"
+                        >
+                          Retry
+                        </button>
+                      ) : null}
+                      {r?.assetUrl ? (
+                        <a
+                          href={r.assetUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline"
+                        >
+                          open
+                        </a>
+                      ) : null}
+                    </div>
                   </div>
+                  {status === "failed" && r?.error ? (
+                    <div>
+                      <details className="group">
+                        <summary className="cursor-pointer text-[9px] text-red-500 hover:text-red-600">
+                          {isRateLimit
+                            ? `⚠ Rate-limited — retry in a few min`
+                            : `Error: ${r.error.length > 80 ? r.error.slice(0, 80) + "…" : r.error}`}
+                        </summary>
+                        <pre className="mt-1 whitespace-pre-wrap break-words rounded bg-red-50 p-1.5 text-[9px] text-red-700 dark:bg-red-950 dark:text-red-300">
+                          {r.error}
+                        </pre>
+                      </details>
+                    </div>
+                  ) : null}
                 </div>
               );
             })}
