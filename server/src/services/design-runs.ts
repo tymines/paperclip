@@ -48,7 +48,7 @@ export function createDesignRunsService(db: Db) {
   }
 
   async function start(input: StartDesignRunInput): Promise<DesignRun> {
-    const agentId = input.agentId ?? process.env.OD_DEFAULT_AGENT?.trim() || "hermes";
+    const agentId = input.agentId ?? (process.env.OD_DEFAULT_AGENT?.trim() || "codex");
 
     if (input.idempotencyKey) {
       const conditions = [eq(designRuns.idempotencyKey, input.idempotencyKey)];
