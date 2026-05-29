@@ -150,7 +150,7 @@ async function findChromeBinary(): Promise<string | null> {
   return null;
 }
 
-async function runChrome(args: string[], timeoutMs = 60_000): Promise<{ code: number; stderr: string }> {
+async function runChrome(args: string[], timeoutMs = 90_000): Promise<{ code: number; stderr: string }> {
   const bin = await findChromeBinary();
   if (!bin) throw new Error("No Chrome/Chromium binary found");
   return await new Promise((resolve, reject) => {
@@ -178,7 +178,7 @@ async function runChrome(args: string[], timeoutMs = 60_000): Promise<{ code: nu
   });
 }
 
-async function runFfmpeg(args: string[], timeoutMs = 30_000): Promise<{ code: number; stderr: string }> {
+async function runFfmpeg(args: string[], timeoutMs = 60_000): Promise<{ code: number; stderr: string }> {
   const bin = process.env.PAPERCLIP_FFMPEG_BIN?.trim() || "ffmpeg";
   return await new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
@@ -296,7 +296,7 @@ export async function rasterizeArtifact(opts: {
       for (let i = 0; i < (totalMs / frameStep); i += 1) {
         const framePath = path.join(frameDir, `f-${String(i).padStart(4, "0")}.png`);
         const budget = (i + 1) * frameStep;
-        const res = await runChrome(
+        const res = await runChromeWithRetry(
           [
             ...CHROME_BASE_ARGS,
             `--window-size=${dims.width},${dims.height}`,
@@ -304,7 +304,7 @@ export async function rasterizeArtifact(opts: {
             `--virtual-time-budget=${budget}`,
             url,
           ],
-          30_000,
+          90_000,
         );
         if (res.code !== 0) {
           notes.push(`chrome frame ${i} rc=${res.code}: ${res.stderr.slice(0, 120)}`);
@@ -355,7 +355,7 @@ export async function rasterizeArtifact(opts: {
       for (let i = 0; i < slideCount; i += 1) {
         const wrapperPath = await writeSlideWrapper(opts.htmlPath, i, tmpDir);
         const outPng = path.join(outDir, `slide-${String(i + 1).padStart(2, "0")}.png`);
-        const res = await runChrome(
+        const res = await runChromeWithRetry(
           [
             ...CHROME_BASE_ARGS,
             `--window-size=${dims.width},${dims.height}`,
@@ -363,7 +363,7 @@ export async function rasterizeArtifact(opts: {
             `--virtual-time-budget=1500`,
             `file://${wrapperPath}`,
           ],
-          25_000,
+          90_000,
         );
         if (res.code === 0) {
           pngPaths.push(outPng);
@@ -377,7 +377,7 @@ export async function rasterizeArtifact(opts: {
     if (pngPaths.length === 0) {
       notes.push("no carousel slides rendered; falling back to single full-page PNG");
       const fallback = path.join(outDir, "artifact.png");
-      const res = await runChrome(
+      const res = await runChromeWithRetry(
         [
           ...CHROME_BASE_ARGS,
           `--window-size=${dims.width},${dims.height}`,
@@ -385,13 +385,13 @@ export async function rasterizeArtifact(opts: {
           `--virtual-time-budget=1500`,
           `file://${opts.htmlPath}`,
         ],
-        25_000,
+        90_000,
       );
       if (res.code === 0) pngPaths.push(fallback);
     }
   } else {
     const outPng = path.join(outDir, "artifact.png");
-    const res = await runChrome(
+    const res = await runChromeWithRetry(
       [
         ...CHROME_BASE_ARGS,
         `--window-size=${dims.width},${dims.height}`,
@@ -399,7 +399,7 @@ export async function rasterizeArtifact(opts: {
         `--virtual-time-budget=2000`,
         `file://${opts.htmlPath}`,
       ],
-      25_000,
+      90_000,
     );
     if (res.code === 0) {
       pngPaths.push(outPng);
@@ -421,6 +421,35 @@ export async function rasterizeArtifact(opts: {
  * Probe — returns whether rasterization will work in this environment.
  * Used at startup to log a warning instead of failing every run.
  */
+/** Retry runChrome with exponential backoff: 5s, 15s, 45s */
+async function runChromeWithRetry(
+  args: string[],
+  timeoutMs = 90_000,
+  maxRetries = 3,
+): Promise<{ code: number; stderr: string }> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await runChrome(args, timeoutMs);
+      if (res.code === 0) return res;
+      if (attempt < maxRetries) {
+        const delay = [5_000, 15_000, 45_000][attempt] ?? 60_000;
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        return res;
+      }
+    } catch (err) {
+      if (attempt < maxRetries) {
+        const delay = [5_000, 15_000, 45_000][attempt] ?? 60_000;
+        await new Promise((r) => setTimeout(r, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+  // Unreachable but ts needs it
+  return { code: 1, stderr: "max retries exceeded" };
+}
+
 export async function rasterizerProbe(): Promise<{
   chrome: string | null;
   ffmpeg: boolean;

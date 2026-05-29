@@ -120,7 +120,9 @@ export async function odStartChatAndWait(
   params: OdChatStartParams,
   opts: { timeoutMs?: number; onEvent?: (e: OdRunEvent) => void } = {},
 ): Promise<OdRunResult> {
-  const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+  const timeoutMs =
+    opts.timeoutMs ??
+    Number(process.env.OD_PRESET_CHILD_TIMEOUT_MS) || 12 * 60_000;
   const clientRequestId = params.clientRequestId ?? randomUUID();
   const body = JSON.stringify({
     agentId: params.agentId,
