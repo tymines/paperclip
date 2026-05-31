@@ -101,3 +101,8 @@ export {
   type DesignPresetRun,
   type NewDesignPresetRun,
 } from "./design_runs.js";
+export {
+  designAssets,
+  type DesignAsset,
+  type NewDesignAsset,
+} from "./design_assets.js";

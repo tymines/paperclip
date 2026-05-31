@@ -42,6 +42,7 @@ import { CompanyExport } from "./pages/CompanyExport";
 import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
+import DesignLibrary from "./pages/DesignLibrary";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -162,6 +163,7 @@ function boardRoutes() {
       <Route path="u/:userSlug" element={<UserProfile />} />
       <Route path="design-guide" element={<DesignGuide />} />
       <Route path="design" element={<Design />} />
+      <Route path="design/library" element={<DesignLibrary />} />
       <Route path="jarvis" element={<Jarvis />} />
       <Route path="voice-memos" element={<VoiceMemos />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />

@@ -163,6 +163,12 @@ export default function Design() {
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <a
+            href="/design/library"
+            className="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
+          >
+            Library
+          </a>
           <span
             className={`rounded-full px-2 py-0.5 ${
               agentId === "hermes"

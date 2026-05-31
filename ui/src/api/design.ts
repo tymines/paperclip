@@ -78,6 +78,79 @@ export type DesignPresetRun = {
   completedAt: string | null;
 };
 
+export type DesignAsset = {
+  id: string;
+  companyId: string | null;
+  runId: string;
+  kind: "image" | "video";
+  path: string;
+  url: string | null;
+  width: number | null;
+  height: number | null;
+  durationMs: number | null;
+  slideIndex: number;
+  skill: string | null;
+  prompt: string | null;
+  agentId: string | null;
+  persona: string | null;
+  favorited: boolean;
+  createdAt: string;
+};
+
+export type DesignAssetsResponse = {
+  assets: DesignAsset[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+};
+
+export const designAssetsApi = {
+  list: (
+    companyId: string,
+    params?: {
+      page?: number;
+      limit?: number;
+      skill?: string;
+      kind?: string;
+      dateRange?: string;
+      favorited?: string;
+      persona?: string;
+    },
+  ) => {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.skill) qs.set("skill", params.skill);
+    if (params?.kind) qs.set("kind", params.kind);
+    if (params?.dateRange) qs.set("dateRange", params.dateRange);
+    if (params?.favorited) qs.set("favorited", params.favorited);
+    if (params?.persona) qs.set("persona", params.persona);
+    const q = qs.toString();
+    return api.get<DesignAssetsResponse>(`/companies/${companyId}/design/assets${q ? `?${q}` : ""}`);
+  },
+  skills: (companyId: string) =>
+    api.get<{ skills: string[] }>(`/companies/${companyId}/design/assets/skills`),
+  personas: (companyId: string) =>
+    api.get<{ personas: string[] }>(`/companies/${companyId}/design/assets/personas`),
+  toggleFavorite: (companyId: string, id: string, favorited: boolean) =>
+    api.patch<{ asset: DesignAsset }>(`/companies/${companyId}/design/assets/${id}/favorite`, {
+      favorited,
+    }),
+  exportZip: (companyId: string, ids: string[]) =>
+    fetch(`/api/companies/${companyId}/design/assets/export-zip`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ids }),
+    }).then((r) => {
+      if (!r.ok) throw new Error("export zip failed");
+      return r.blob();
+    }),
+};
+
 export const designApi = {
   health: () => api.get<{ ok: boolean; version?: string }>("/design/health"),
   skills: (mode?: string) =>
