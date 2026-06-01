@@ -138,11 +138,25 @@ export function createDesignRunsService(db: Db) {
       assetPath = persisted.path;
       assetUrl = persisted.url;
     } else {
-      const artifact = await odFetchLatestProjectArtifact(odProjectId);
+      // Retry the artifact fetch with backoff — the daemon may still
+      // be finalizing the HTML (common for video-hyperframes with claude).
+      let artifact = null;
+      const retryDelays = [2_000, 5_000, 10_000];
+      for (let attempt = 0; attempt <= retryDelays.length; attempt++) {
+        artifact = await odFetchLatestProjectArtifact(odProjectId);
+        if (artifact) break;
+        if (attempt < retryDelays.length) {
+          await new Promise((r) => setTimeout(r, retryDelays[attempt]));
+        }
+      }
       if (artifact) {
         const persisted = await persistArtifactHtml(row.id, artifact.html, artifact.name);
         assetPath = persisted.path;
         assetUrl = persisted.url;
+      } else {
+        // No HTML produced after all retries — mark failed with clear error
+        result.error = "OpenDesign agent completed but produced no HTML artifact (video-hyperframes empty output)";
+        result.status = "failed";
       }
     }
 

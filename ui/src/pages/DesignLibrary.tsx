@@ -70,7 +70,7 @@ function FullPreview({
               )}
             </button>
             <a
-              href={asset.path.startsWith("/") ? `/api/design/assets/file/${asset.id}` : asset.path}
+              href={asset.url}
               download
               className="rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               title="Download"
@@ -91,7 +91,7 @@ function FullPreview({
         <div className="flex-1 overflow-auto bg-muted/30 p-4">
           {asset.kind === "video" ? (
             <video
-              src={asset.path}
+              src={asset.url}
               controls
               autoPlay
               muted
@@ -100,7 +100,7 @@ function FullPreview({
             />
           ) : (
             <img
-              src={asset.path}
+              src={asset.url}
               alt={asset.skill ?? "design asset"}
               className="mx-auto max-h-[70vh] rounded object-contain"
             />
@@ -197,7 +197,7 @@ function AssetCard({
         {asset.kind === "video" ? (
           <div className="relative flex h-full w-full items-center justify-center">
             <video
-              src={asset.path}
+              src={asset.url}
               muted
               preload="metadata"
               className="h-full w-full object-cover"
@@ -210,7 +210,7 @@ function AssetCard({
           </div>
         ) : (
           <img
-            src={asset.path}
+            src={asset.url}
             alt={asset.skill ?? "asset"}
             className="h-full w-full object-cover"
             loading="lazy"
