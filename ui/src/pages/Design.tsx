@@ -7,6 +7,7 @@ import {
   type DesignSkill,
 } from "../api/design";
 import { useCompany } from "../context/CompanyContext";
+import { Link } from "../lib/router";
 
 const POLL_INTERVAL_MS = 2_000;
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -163,12 +164,12 @@ export default function Design() {
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <a
-            href="/design/library"
+          <Link
+            to="/design/library"
             className="rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted"
           >
             Library
-          </a>
+          </Link>
           <span
             className={`rounded-full px-2 py-0.5 ${
               agentId === "hermes"
