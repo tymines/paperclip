@@ -407,8 +407,76 @@ export async function startServer(): Promise<StartedServer> {
           logger.info(`Embedded PostgreSQL cluster already exists (${clusterVersionFile}); skipping init`);
         }
 
+        // --- Stale embedded PostgreSQL lock file cleanup ---
+        // If postmaster.pid exists here, the process that created it is no longer
+        // considered alive by getRunningPid() or we wouldn't have reached this
+        // code path.  However, there is a race during rapid restart: the old PG
+        // process may still be in its shutdown handler while the new process is
+        // already trying to start.  Check whether the PID in the file is alive,
+        // and if so, wait for it to die before removing it.
         if (existsSync(postmasterPidFile)) {
-          logger.warn("Removing stale embedded PostgreSQL lock file");
+          let waitedMs = 0;
+          const maxWaitMs = 5000;
+          const pollIntervalMs = 200;
+          let pidToWait: number | undefined;
+          try {
+            const pidLine = readFileSync(postmasterPidFile, "utf8").split("\n")[0]?.trim();
+            const pid = Number(pidLine);
+            if (Number.isInteger(pid) && pid > 0) {
+              pidToWait = pid;
+            }
+          } catch {
+            // Ignore; proceed to remove.
+          }
+
+          if (pidToWait !== undefined) {
+            const isAlive = (() => {
+              try {
+                process.kill(pidToWait!, 0);
+                return true;
+              } catch {
+                return false;
+              }
+            })();
+
+            if (isAlive) {
+              logger.warn(
+                { pid: pidToWait, maxWaitMs },
+                "Stale embedded PostgreSQL process (pid from postmaster.pid) still alive; waiting for it to exit",
+              );
+              const waitDeadline = Date.now() + maxWaitMs;
+              while (Date.now() < waitDeadline) {
+                await new Promise((r) => setTimeout(r, pollIntervalMs));
+                waitedMs += pollIntervalMs;
+                try {
+                  process.kill(pidToWait, 0);
+                  // Still alive — keep waiting.
+                } catch {
+                  // Process died.
+                  break;
+                }
+              }
+              if (waitedMs >= maxWaitMs) {
+                logger.warn(
+                  { pid: pidToWait, waitedMs },
+                  "Stale embedded PostgreSQL process did not exit within timeout; removing lock file forcibly",
+                );
+              } else {
+                logger.warn(
+                  { pid: pidToWait, waitedMs },
+                  "Stale embedded PostgreSQL process exited; removing lock file",
+                );
+              }
+            } else {
+              logger.warn(
+                { pid: pidToWait },
+                "Removing stale embedded PostgreSQL lock file (process already exited)",
+              );
+            }
+          } else {
+            logger.warn("Removing stale embedded PostgreSQL lock file (no valid pid)");
+          }
+
           rmSync(postmasterPidFile, { force: true });
         }
         try {
@@ -896,6 +964,20 @@ export async function startServer(): Promise<StartedServer> {
   
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
+      logger.info({ signal }, "Shutdown signal received; closing server gracefully");
+
+      // Stop accepting new connections and drain in-flight requests.
+      await new Promise<void>((resolveClose) => {
+        server.close(() => resolveClose());
+        // Force-close lingering sockets after 3s to prevent hanging.
+        const forceCloseTimer = setTimeout(() => {
+          server.unref();
+          resolveClose();
+        }, 3000).unref();
+        server.on("close", () => clearTimeout(forceCloseTimer));
+      });
+      logger.info({ signal }, "Server connection draining complete");
+
       const telemetryClient = getTelemetryClient();
       if (telemetryClient) {
         telemetryClient.stop();
@@ -908,6 +990,58 @@ export async function startServer(): Promise<StartedServer> {
           await embeddedPostgres?.stop();
         } catch (err) {
           logger.error({ err }, "Failed to stop embedded PostgreSQL cleanly");
+        }
+
+        // Wait for PG to fully exit and release its lock file before letting
+        // process.exit(0) proceed.  The next server instance may fail to start
+        // embedded PG if it finds a live postmaster.pid pointing to a dying
+        // process or a stale lock file left on disk.
+        if (startupDbInfo.mode === "embedded-postgres") {
+          const pidFilePath = resolve(startupDbInfo.dataDir, "postmaster.pid");
+          const pollIntervalMs = 200;
+          const maxWaitMs = 5000;
+          const deadline = Date.now() + maxWaitMs;
+          while (Date.now() < deadline) {
+            if (!existsSync(pidFilePath)) {
+              logger.info("Embedded PostgreSQL lock file released");
+              break;
+            }
+            // Check whether the PID in the lock file is still alive.
+            try {
+              const pidLine = readFileSync(pidFilePath, "utf8").split("\n")[0]?.trim();
+              const pid = Number(pidLine);
+              const isAlive =
+                Number.isInteger(pid) &&
+                pid > 0 &&
+                (() => {
+                  try {
+                    process.kill(pid, 0);
+                    return true;
+                  } catch {
+                    return false;
+                  }
+                })();
+              if (!isAlive) {
+                logger.warn(
+                  { pid: Number.isInteger(pid) ? pid : undefined },
+                  "Embedded PostgreSQL process exited but lock file remains; removing stale lock",
+                );
+                rmSync(pidFilePath, { force: true });
+                break;
+              }
+            } catch {
+              // File was deleted between existsSync and readFileSync.
+              break;
+            }
+            await new Promise((r) => setTimeout(r, pollIntervalMs));
+          }
+
+          if (existsSync(pidFilePath)) {
+            logger.warn(
+              "Embedded PostgreSQL lock file still present after 5s; force-removing before exit",
+            );
+            rmSync(pidFilePath, { force: true });
+          }
         }
       }
 
