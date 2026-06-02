@@ -1,5 +1,6 @@
 import { Router } from "express";
 import path from "node:path";
+import { createReadStream, stat } from "node:fs";
 import fs from "node:fs/promises";
 import type { Db } from "@paperclipai/db";
 import { createDesignRunsService } from "../services/design-runs.js";
@@ -155,6 +156,64 @@ export function designRoutes(db: Db) {
     }
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Range-aware file stream helper
+  // ─────────────────────────────────────────────────────────────────────────
+  function sendFileWithRange(filePath: string, mimeType: string, req: import("express").Request, res: import("express").Response) {
+    return new Promise<void>((resolve, reject) => {
+      stat(filePath, (err, stats) => {
+        if (err) return reject(notFound("file not found"));
+        const fileSize = stats.size;
+        res.setHeader("Accept-Ranges", "bytes");
+        res.setHeader("Content-Type", mimeType);
+        res.setHeader("Cache-Control", "private, max-age=60");
+
+        const rangeHeader = req.headers.range;
+        if (!rangeHeader) {
+          // Full content
+          res.status(200);
+          const stream = createReadStream(filePath);
+          stream.pipe(res);
+          stream.on("end", resolve);
+          stream.on("error", reject);
+          return;
+        }
+
+        // Parse Range: bytes=start-end
+        const match = rangeHeader.match(/^bytes=(\d+)-(\d*)$/);
+        if (!match) {
+          res.status(416);
+          res.setHeader("Content-Range", `bytes */${fileSize}`);
+          res.end();
+          resolve();
+          return;
+        }
+
+        const start = parseInt(match[1], 10);
+        const endStr = match[2];
+        const end = endStr ? Math.min(parseInt(endStr, 10), fileSize - 1) : fileSize - 1;
+
+        if (start >= fileSize || start > end) {
+          res.status(416);
+          res.setHeader("Content-Range", `bytes */${fileSize}`);
+          res.end();
+          resolve();
+          return;
+        }
+
+        const chunkSize = end - start + 1;
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+        res.setHeader("Content-Length", chunkSize);
+
+        const stream = createReadStream(filePath, { start, end });
+        stream.pipe(res);
+        stream.on("end", resolve);
+        stream.on("error", reject);
+      });
+    });
+  }
+
   // Rasterized PNG. ?slide=N (1-based) for carousel skills; defaults to slide 1
   // (or the single full-page PNG for non-carousel kinds).
   router.get("/design/runs/:id/asset.png", async (req, res, next) => {
@@ -166,10 +225,7 @@ export function designRoutes(db: Db) {
       if (paths.length === 0) throw notFound("png not ready");
       const slideParam = typeof req.query.slide === "string" ? parseInt(req.query.slide, 10) : 1;
       const slideIdx = Math.max(1, Math.min(paths.length, isNaN(slideParam) ? 1 : slideParam)) - 1;
-      const bytes = await fs.readFile(paths[slideIdx]);
-      res.setHeader("Content-Type", "image/png");
-      res.setHeader("Cache-Control", "private, max-age=60");
-      res.send(bytes);
+      await sendFileWithRange(paths[slideIdx], "image/png", req, res);
     } catch (err) {
       next(err);
     }
@@ -182,10 +238,7 @@ export function designRoutes(db: Db) {
       if (!run) throw notFound("design run not found");
       if (run.companyId) assertCompanyAccess(req, run.companyId);
       if (!run.mp4Path) throw notFound("mp4 not ready");
-      const bytes = await fs.readFile(run.mp4Path);
-      res.setHeader("Content-Type", "video/mp4");
-      res.setHeader("Cache-Control", "private, max-age=60");
-      res.send(bytes);
+      await sendFileWithRange(run.mp4Path, "video/mp4", req, res);
     } catch (err) {
       next(err);
     }
