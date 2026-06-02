@@ -166,6 +166,7 @@ function boardRoutes() {
       <Route path="design/library" element={<DesignLibrary />} />
       <Route path="jarvis" element={<Jarvis />} />
       <Route path="voice-memos" element={<VoiceMemos />} />
+      <Route path="image-studio" element={<ImageStudio />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath/*" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />
@@ -366,6 +367,7 @@ export function App() {
           <Route path="rooms/:roomId" element={<UnprefixedBoardRedirect />} />
           <Route path="social" element={<UnprefixedBoardRedirect />} />
           <Route path="social/posts/:postId" element={<UnprefixedBoardRedirect />} />
+          <Route path="image-studio" element={<UnprefixedBoardRedirect />} />
           <Route path="jarvis" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard/live" element={<UnprefixedBoardRedirect />} />
