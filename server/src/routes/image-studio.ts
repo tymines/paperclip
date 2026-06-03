@@ -10,6 +10,7 @@ import {
   defaultHyperparams,
   downloadLora,
 } from "../services/image-studio/training.js";
+import { startPersonaTraining } from "../services/image-studio/training-runner.js";
 import {
   getReplicateToken,
   getReplicateTraining,
@@ -223,22 +224,33 @@ export function imageStudioRoutes(db: Db) {
       const photos = await countTrainingPhotos(photosDir);
       const hyperparams = defaultHyperparams(profile.triggerWord);
 
-      // ── Replicate fire path (intentionally not active yet) ────────────────
-      // TODO(replicate): set REPLICATE_API_TOKEN before enabling this — it
-      // fires a real ~$3 H100 run. Steps to wire:
-      //   1. zip `photosDir` into an archive,
-      //   2. upload it somewhere Replicate can fetch (public URL or data URI),
-      //   3. set a `destination` model you own, then:
-      //   const training = await createReplicateTraining({
-      //     inputImages: <zipUrl>, triggerWord: profile.triggerWord,
-      //     destination: `<owner>/${profile.slug}`,
-      //     steps: 1500, loraRank: 16, batchSize: 1, autocaption: true,
-      //   });
-      //   externalJobId = training.id; status = "training"; startedAt = new Date();
-      // Until then jobs are created in 'pending' and never billed.
+      // Fire the run when a Replicate token is configured. Without one, create
+      // a 'pending' row that is never billed (token lands via the credentials
+      // endpoint). The runner zips photosDir → uploads → ensures the
+      // destination model → creates the training and records the job.
       const hasToken = (await getReplicateToken()) !== null;
-      const externalJobId: string | null = null;
-      const status: "pending" = "pending";
+      if (hasToken) {
+        try {
+          const job = await startPersonaTraining(db, {
+            persona: { id: persona.id, name: persona.name },
+            trainer: { id: trainer.id },
+            photosDir,
+            companyId,
+          });
+          res.status(202).json({
+            job,
+            photos,
+            estimatedCostUsd: 3,
+            estimatedMinutes: 30,
+            externalJobId: job.externalJobId,
+            note: "Training submitted to Replicate.",
+          });
+          return;
+        } catch (err) {
+          res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+          return;
+        }
+      }
 
       const [job] = await db
         .insert(loraTrainingJobs)
@@ -246,9 +258,9 @@ export function imageStudioRoutes(db: Db) {
           companyId,
           personaId: persona.id,
           providerId: trainer.id,
-          status,
+          status: "pending",
           contentRating: profile.contentRating,
-          externalJobId,
+          externalJobId: null,
           triggerWord: profile.triggerWord,
           trainingZipPath: null,
           hyperparams,
@@ -260,10 +272,7 @@ export function imageStudioRoutes(db: Db) {
         photos,
         estimatedCostUsd: 3,
         estimatedMinutes: 30,
-        // Surfaces to the UI why a job is parked in 'pending'.
-        note: hasToken
-          ? "Replicate fire path is staged but disabled — see TODO at the train route."
-          : "No Replicate token set yet — job created in 'pending'. Set one via POST /api/credentials/replicate.",
+        note: "No Replicate token set yet — job created in 'pending'. Set one via POST /api/credentials/replicate.",
       });
     },
   );

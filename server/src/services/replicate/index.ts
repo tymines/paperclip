@@ -82,6 +82,83 @@ export async function verifyReplicateToken(token: string): Promise<VerifyResult>
   }
 }
 
+/** Resolve the authenticated account (used to derive the destination owner). */
+export async function getReplicateAccount(
+  token?: string,
+): Promise<{ username: string; type?: string } | null> {
+  const key = token ?? (await getReplicateToken());
+  if (!key) return null;
+  const res = await fetch(`${REPLICATE_API_BASE}/account`, { headers: authHeaders(key) });
+  if (!res.ok) return null;
+  return (await res.json()) as { username: string; type?: string };
+}
+
+/** Fetch the latest published version SHA of the trainer model. */
+export async function getLatestTrainerVersion(token?: string): Promise<string> {
+  const key = token ?? (await getReplicateToken());
+  if (!key) throw new Error("REPLICATE_API_TOKEN not set.");
+  const res = await fetch(`${REPLICATE_API_BASE}/models/${REPLICATE_TRAINER_MODEL}/versions`, {
+    headers: authHeaders(key),
+  });
+  if (!res.ok) return REPLICATE_TRAINER_VERSION;
+  const body = (await res.json()) as { results?: Array<{ id: string }> };
+  return body.results?.[0]?.id ?? REPLICATE_TRAINER_VERSION;
+}
+
+/** Upload a file (zip of training images) to Replicate; returns a fetchable URL. */
+export async function uploadReplicateFile(
+  content: Buffer,
+  filename: string,
+  token?: string,
+): Promise<string> {
+  const key = token ?? (await getReplicateToken());
+  if (!key) throw new Error("REPLICATE_API_TOKEN not set.");
+  const form = new FormData();
+  form.append(
+    "content",
+    new Blob([new Uint8Array(content)], { type: "application/zip" }),
+    filename,
+  );
+  const res = await fetch(`${REPLICATE_API_BASE}/files`, {
+    method: "POST",
+    headers: { Authorization: `Token ${key}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Replicate file upload failed (${res.status}): ${await res.text()}`);
+  const body = (await res.json()) as { urls?: { get?: string } };
+  const url = body.urls?.get;
+  if (!url) throw new Error("Replicate file upload returned no URL");
+  return url;
+}
+
+/** Ensure a destination model exists to push trained weights to. */
+export async function ensureReplicateModel(
+  owner: string,
+  name: string,
+  token?: string,
+): Promise<void> {
+  const key = token ?? (await getReplicateToken());
+  if (!key) throw new Error("REPLICATE_API_TOKEN not set.");
+  const get = await fetch(`${REPLICATE_API_BASE}/models/${owner}/${name}`, {
+    headers: authHeaders(key),
+  });
+  if (get.ok) return;
+  if (get.status !== 404) throw new Error(`Replicate model lookup failed (${get.status})`);
+  const hwRes = await fetch(`${REPLICATE_API_BASE}/hardware`, { headers: authHeaders(key) });
+  const hw = (await hwRes.json().catch(() => [])) as Array<{ sku: string }>;
+  const sku =
+    hw.find((h) => /h100/i.test(h.sku))?.sku ??
+    hw.find((h) => /gpu/i.test(h.sku))?.sku ??
+    hw[0]?.sku ??
+    "gpu-h100";
+  const mk = await fetch(`${REPLICATE_API_BASE}/models`, {
+    method: "POST",
+    headers: authHeaders(key),
+    body: JSON.stringify({ owner, name, visibility: "private", hardware: sku }),
+  });
+  if (!mk.ok) throw new Error(`Replicate model create failed (${mk.status}): ${await mk.text()}`);
+}
+
 export interface CreateTrainingInput {
   /** Public URL or data URI of the zipped training images. */
   inputImages: string;
@@ -92,6 +169,8 @@ export interface CreateTrainingInput {
   loraRank?: number;
   batchSize?: number;
   autocaption?: boolean;
+  /** Override the pinned trainer version (defaults to the latest at call time). */
+  version?: string;
   /** Optional webhook Replicate calls on status change. */
   webhook?: string;
 }
@@ -114,7 +193,8 @@ export async function createReplicateTraining(
       "REPLICATE_API_TOKEN not set — save a token via POST /api/credentials/replicate first.",
     );
   }
-  const url = `${REPLICATE_API_BASE}/models/${REPLICATE_TRAINER_MODEL}/versions/${REPLICATE_TRAINER_VERSION}/trainings`;
+  const version = input.version ?? REPLICATE_TRAINER_VERSION;
+  const url = `${REPLICATE_API_BASE}/models/${REPLICATE_TRAINER_MODEL}/versions/${version}/trainings`;
   const res = await fetch(url, {
     method: "POST",
     headers: authHeaders(token),
