@@ -1,8 +1,51 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull } from "drizzle-orm";
-import { imageProviders } from "@paperclipai/db";
+import { and, eq, or, isNull, desc } from "drizzle-orm";
+import { imageProviders, loraTrainingJobs } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
+import { badRequest } from "../errors.js";
+import {
+  personaTrainingProfile,
+  countTrainingPhotos,
+  defaultHyperparams,
+  downloadLora,
+} from "../services/image-studio/training.js";
+import {
+  getReplicateToken,
+  getReplicateTraining,
+  extractWeightsUrl,
+} from "../services/replicate/index.js";
+
+/** Map a Replicate training status onto our lora_training_jobs status enum. */
+function mapReplicateStatus(
+  status: string,
+): "training" | "downloading" | "ready" | "failed" {
+  switch (status) {
+    case "succeeded":
+      return "downloading";
+    case "failed":
+    case "canceled":
+      return "failed";
+    default:
+      // starting | processing
+      return "training";
+  }
+}
+
+/** Load a global-or-company-scoped provider row by id. */
+async function loadProvider(db: Db, companyId: string, providerId: string) {
+  const [row] = await db
+    .select()
+    .from(imageProviders)
+    .where(
+      and(
+        eq(imageProviders.id, providerId),
+        or(eq(imageProviders.companyId, companyId), isNull(imageProviders.companyId)),
+      ),
+    )
+    .limit(1);
+  return row ?? null;
+}
 
 export function imageStudioRoutes(db: Db) {
   const router = Router();
@@ -116,6 +159,196 @@ export function imageStudioRoutes(db: Db) {
     }
 
     res.json({ provider: deleted });
+  });
+
+  // ── Persona training (Replicate cloud LoRA) ───────────────────────────────
+
+  // GET /companies/:companyId/image-studio/personas/:personaId/photos
+  // Returns the training photos directory + image count (for the Train modal).
+  router.get(
+    "/companies/:companyId/image-studio/personas/:personaId/photos",
+    async (req, res) => {
+      const { companyId, personaId } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      const persona = await loadProvider(db, companyId, personaId);
+      if (!persona || persona.type !== "local_lora") {
+        res.status(404).json({ error: "Persona not found" });
+        return;
+      }
+      const profile = personaTrainingProfile(persona.name);
+      const dir =
+        typeof req.query.dir === "string" && req.query.dir.length > 0
+          ? req.query.dir
+          : profile.defaultPhotosDir;
+      const photos = await countTrainingPhotos(dir);
+      res.json({ ...photos, triggerWord: profile.triggerWord, contentRating: profile.contentRating });
+    },
+  );
+
+  // POST /companies/:companyId/image-studio/personas/:personaId/train
+  // Body: { provider_id: string (uuid), training_photos_dir?: string }
+  // Creates a lora_training_jobs row and (once a token is set) kicks off a
+  // Replicate training. Returns 202 with the job id.
+  router.post(
+    "/companies/:companyId/image-studio/personas/:personaId/train",
+    async (req, res) => {
+      const { companyId, personaId } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      const providerId = req.body?.provider_id;
+      if (typeof providerId !== "string" || providerId.length === 0) {
+        throw badRequest("provider_id is required");
+      }
+
+      const persona = await loadProvider(db, companyId, personaId);
+      if (!persona || persona.type !== "local_lora") {
+        res.status(404).json({ error: "Persona not found" });
+        return;
+      }
+      const trainer = await loadProvider(db, companyId, providerId);
+      if (!trainer) {
+        res.status(404).json({ error: "Training provider not found" });
+        return;
+      }
+      if (!trainer.trainingCapable) {
+        throw badRequest(`Provider '${trainer.name}' is not training-capable`);
+      }
+
+      const profile = personaTrainingProfile(persona.name);
+      const photosDir =
+        typeof req.body?.training_photos_dir === "string" && req.body.training_photos_dir.length > 0
+          ? req.body.training_photos_dir
+          : profile.defaultPhotosDir;
+      const photos = await countTrainingPhotos(photosDir);
+      const hyperparams = defaultHyperparams(profile.triggerWord);
+
+      // ── Replicate fire path (intentionally not active yet) ────────────────
+      // TODO(replicate): set REPLICATE_API_TOKEN before enabling this — it
+      // fires a real ~$3 H100 run. Steps to wire:
+      //   1. zip `photosDir` into an archive,
+      //   2. upload it somewhere Replicate can fetch (public URL or data URI),
+      //   3. set a `destination` model you own, then:
+      //   const training = await createReplicateTraining({
+      //     inputImages: <zipUrl>, triggerWord: profile.triggerWord,
+      //     destination: `<owner>/${profile.slug}`,
+      //     steps: 1500, loraRank: 16, batchSize: 1, autocaption: true,
+      //   });
+      //   externalJobId = training.id; status = "training"; startedAt = new Date();
+      // Until then jobs are created in 'pending' and never billed.
+      const hasToken = (await getReplicateToken()) !== null;
+      const externalJobId: string | null = null;
+      const status: "pending" = "pending";
+
+      const [job] = await db
+        .insert(loraTrainingJobs)
+        .values({
+          companyId,
+          personaId: persona.id,
+          providerId: trainer.id,
+          status,
+          contentRating: profile.contentRating,
+          externalJobId,
+          triggerWord: profile.triggerWord,
+          trainingZipPath: null,
+          hyperparams,
+        })
+        .returning();
+
+      res.status(202).json({
+        job,
+        photos,
+        estimatedCostUsd: 3,
+        estimatedMinutes: 30,
+        // Surfaces to the UI why a job is parked in 'pending'.
+        note: hasToken
+          ? "Replicate fire path is staged but disabled — see TODO at the train route."
+          : "No Replicate token set yet — job created in 'pending'. Set one via POST /api/credentials/replicate.",
+      });
+    },
+  );
+
+  // GET /companies/:companyId/image-studio/training/:jobId
+  // Returns the job; if it has a live Replicate job and a token is set, polls
+  // Replicate, updates status/progress/cost, and installs the LoRA on success.
+  router.get(
+    "/companies/:companyId/image-studio/training/:jobId",
+    async (req, res) => {
+      const { companyId, jobId } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      const [job] = await db
+        .select()
+        .from(loraTrainingJobs)
+        .where(and(eq(loraTrainingJobs.id, jobId), eq(loraTrainingJobs.companyId, companyId)))
+        .limit(1);
+      if (!job) {
+        res.status(404).json({ error: "Training job not found" });
+        return;
+      }
+
+      const terminal = job.status === "ready" || job.status === "failed";
+      const token = await getReplicateToken();
+      if (terminal || !job.externalJobId || !token) {
+        res.json({ job });
+        return;
+      }
+
+      // Live poll. Errors here are non-fatal — return the last-known row.
+      try {
+        const training = await getReplicateTraining(job.externalJobId);
+        let next = mapReplicateStatus(training.status);
+        const patch: Record<string, unknown> = { updatedAt: new Date() };
+
+        if (next === "failed") {
+          patch.status = "failed";
+          patch.errorMessage = training.error ?? "Training failed on Replicate";
+          patch.completedAt = new Date();
+        } else if (next === "downloading") {
+          const weights = extractWeightsUrl(training);
+          if (weights) {
+            const profile = personaTrainingProfile(
+              (await loadProvider(db, companyId, job.personaId))?.name ?? "persona",
+            );
+            const installed = await downloadLora(weights, profile.slug);
+            patch.status = "ready";
+            patch.outputLoraPath = installed;
+            patch.progress = 100;
+            patch.completedAt = new Date();
+            const seconds = training.metrics?.total_time ?? training.metrics?.predict_time;
+            // H100 ~ $0.001525/s; fall back to the flat ~$3 estimate.
+            patch.costUsd = seconds ? (seconds * 0.001525).toFixed(4) : "3.0000";
+            next = "ready";
+          } else {
+            patch.status = "downloading";
+          }
+        } else {
+          patch.status = "training";
+        }
+
+        const [updated] = await db
+          .update(loraTrainingJobs)
+          .set(patch)
+          .where(eq(loraTrainingJobs.id, job.id))
+          .returning();
+        res.json({ job: updated });
+      } catch (err) {
+        res.json({ job, pollError: err instanceof Error ? err.message : String(err) });
+      }
+    },
+  );
+
+  // GET /companies/:companyId/image-studio/training (recent jobs, newest first)
+  router.get("/companies/:companyId/image-studio/training", async (req, res) => {
+    const { companyId } = req.params;
+    assertCompanyAccess(req, companyId);
+    const jobs = await db
+      .select()
+      .from(loraTrainingJobs)
+      .where(eq(loraTrainingJobs.companyId, companyId))
+      .orderBy(desc(loraTrainingJobs.createdAt))
+      .limit(50);
+    res.json({ jobs });
   });
 
   return router;
