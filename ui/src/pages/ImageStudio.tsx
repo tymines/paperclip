@@ -2,8 +2,11 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   imageStudioApi,
+  uploadUrl,
   type ImageProvider,
   type LoraTrainingJob,
+  type PersonaGeneration,
+  type GenerationSource,
 } from "../api/imageStudio";
 import { useCompany } from "../context/CompanyContext";
 import {
@@ -42,6 +45,9 @@ import {
   Cloud,
   CheckCircle2,
   XCircle,
+  Trash2,
+  ArrowDownUp,
+  Wand2,
 } from "lucide-react";
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
@@ -244,6 +250,240 @@ function TrainPersonaModal({
   );
 }
 
+// ─── Persona gallery ──────────────────────────────────────────────────────────
+
+type GalleryFilter = "all" | "test" | "production";
+
+function formatGenDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+/** Full-size viewer for a single generation, with prune + reference actions. */
+function GenerationModal({
+  generation,
+  onOpenChange,
+  onDelete,
+  deleting,
+}: {
+  generation: PersonaGeneration | null;
+  onOpenChange: (open: boolean) => void;
+  onDelete: (id: string) => void;
+  deleting: boolean;
+}) {
+  const g = generation;
+  return (
+    <Dialog open={!!g} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        {g && (
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-base">
+                <ImageIcon className="h-4 w-4 text-indigo-500" />
+                Generation
+                <Badge variant="secondary" className="ml-1 capitalize">
+                  {g.source}
+                </Badge>
+                {g.contentRating === "explicit" && (
+                  <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+                    NSFW
+                  </Badge>
+                )}
+              </DialogTitle>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              <div className="overflow-hidden rounded-lg border border-border bg-muted">
+                <img
+                  src={uploadUrl(g.imagePath)}
+                  alt={g.prompt ?? "generation"}
+                  className="mx-auto max-h-[55vh] w-auto object-contain"
+                />
+              </div>
+
+              {g.prompt && (
+                <p className="rounded-md bg-muted/50 p-2 text-xs leading-relaxed text-muted-foreground">
+                  {g.prompt}
+                </p>
+              )}
+
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
+                <div>
+                  <p className="text-muted-foreground">Model</p>
+                  <p className="font-medium">{g.model ?? "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">LoRA strength</p>
+                  <p className="font-medium">{g.loraStrength ?? "—"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Generated</p>
+                  <p className="font-medium">{formatGenDate(g.createdAt)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Cost</p>
+                  <p className="font-medium">
+                    {g.costUsd ? `$${parseFloat(g.costUsd).toFixed(2)}` : "—"}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="gap-2 sm:justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onDelete(g.id)}
+                disabled={deleting}
+                className="text-red-600 hover:text-red-700"
+              >
+                {deleting ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Delete
+              </Button>
+              {/* Stub — wiring lands with the inference path. */}
+              <Button variant="secondary" size="sm" disabled title="Coming soon">
+                <Wand2 className="mr-1.5 h-3.5 w-3.5" />
+                Use as reference
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** A persona's gallery: filter chips, sort toggle, 3-col thumbnail grid. */
+function PersonaGallery({ persona }: { persona: ImageProvider }) {
+  const queryClient = useQueryClient();
+  const [filter, setFilter] = useState<GalleryFilter>("all");
+  const [newestFirst, setNewestFirst] = useState(true);
+  const [selected, setSelected] = useState<PersonaGeneration | null>(null);
+
+  const genQ = useQuery({
+    queryKey: ["image-studio", "generations", persona.id],
+    queryFn: () => imageStudioApi.listGenerations(persona.id, { limit: 60 }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => imageStudioApi.deleteGeneration(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["image-studio", "generations", persona.id],
+      });
+      setSelected(null);
+    },
+  });
+
+  const generations = genQ.data?.generations ?? [];
+
+  const visible = useMemo(() => {
+    const rows =
+      filter === "all" ? generations : generations.filter((g) => g.source === filter);
+    const sorted = [...rows].sort((a, b) => {
+      const delta = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      return newestFirst ? delta : -delta;
+    });
+    return sorted;
+  }, [generations, filter, newestFirst]);
+
+  const chip = (value: GalleryFilter, label: string) => (
+    <button
+      key={value}
+      type="button"
+      onClick={() => setFilter(value)}
+      className={
+        "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors " +
+        (filter === value
+          ? "bg-indigo-100 text-indigo-700"
+          : "bg-muted text-muted-foreground hover:bg-muted/70")
+      }
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="flex items-center gap-1.5">
+          <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
+          <span className="text-xs font-medium text-muted-foreground">Gallery</span>
+          <div className="ml-1 flex items-center gap-1">
+            {chip("all", "All")}
+            {chip("test", "Test")}
+            {chip("production", "Production")}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setNewestFirst((v) => !v)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          title="Toggle sort order"
+        >
+          <ArrowDownUp className="h-3 w-3" />
+          {newestFirst ? "Newest first" : "Oldest first"}
+        </button>
+      </div>
+
+      {genQ.isLoading ? (
+        <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading gallery…
+        </div>
+      ) : visible.length === 0 ? (
+        <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border py-6 text-center">
+          <ImageIcon className="h-6 w-6 text-muted-foreground/40" />
+          <p className="text-xs text-muted-foreground">
+            No generations yet — hit 'Train' or 'Generate' to populate
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-1.5">
+          {visible.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => setSelected(g)}
+              className="group relative aspect-square overflow-hidden rounded-md border border-border bg-muted focus:outline-none focus:ring-2 focus:ring-indigo-400"
+              title={g.prompt ?? undefined}
+            >
+              <img
+                src={uploadUrl(g.thumbnailPath ?? g.imagePath)}
+                alt={g.prompt ?? "generation"}
+                loading="lazy"
+                className="h-full w-full object-cover transition-transform group-hover:scale-105"
+              />
+              {g.source === "production" && (
+                <span className="absolute right-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
+                  prod
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <GenerationModal
+        generation={selected}
+        onOpenChange={(o) => !o && setSelected(null)}
+        onDelete={(id) => deleteMut.mutate(id)}
+        deleting={deleteMut.isPending}
+      />
+    </div>
+  );
+}
+
 // ─── Section A: Trained Personas ─────────────────────────────────────────────
 
 function TrainedPersonasSection({
@@ -344,6 +584,7 @@ function TrainedPersonasSection({
                   {!job && p.statusDetail && p.status !== "ready" && p.status !== "training" && (
                     <p className="mt-2 text-xs text-amber-600">{p.statusDetail}</p>
                   )}
+                  <PersonaGallery persona={p} />
                 </CardContent>
               </Card>
             );

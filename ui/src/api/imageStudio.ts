@@ -56,6 +56,29 @@ export interface PersonaPhotos {
   contentRating: "sfw" | "explicit";
 }
 
+export type GenerationSource = "test" | "production";
+
+export interface PersonaGeneration {
+  id: string;
+  personaId: string;
+  source: GenerationSource;
+  prompt: string | null;
+  loraStrength: string | null;
+  model: string | null;
+  imagePath: string;
+  thumbnailPath: string | null;
+  generationMetadata: Record<string, unknown> | null;
+  replicatePredictionId: string | null;
+  costUsd: string | null;
+  contentRating: "sfw" | "explicit";
+  createdAt: string;
+}
+
+/** Build a public URL for an uploads-relative media path. */
+export function uploadUrl(relPath: string): string {
+  return `/api/uploads/${relPath.replace(/^\/+/, "")}`;
+}
+
 export const imageStudioApi = {
   /** List all image providers for a company */
   listProviders: (companyId: string) =>
@@ -118,5 +141,46 @@ export const imageStudioApi = {
   listTrainingJobs: (companyId: string) =>
     api.get<{ jobs: LoraTrainingJob[] }>(
       `/companies/${companyId}/image-studio/training`,
+    ),
+
+  /** List a persona's gallery generations (newest first). */
+  listGenerations: (
+    personaId: string,
+    opts?: { source?: GenerationSource; limit?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.source) params.set("source", opts.source);
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    return api.get<{ generations: PersonaGeneration[] }>(
+      `/image-studio/personas/${personaId}/generations${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** Insert a generation into a persona's gallery (future inference results). */
+  createGeneration: (
+    personaId: string,
+    body: {
+      image_path: string;
+      thumbnail_path?: string;
+      source?: GenerationSource;
+      prompt?: string;
+      lora_strength?: number;
+      model?: string;
+      generation_metadata?: Record<string, unknown>;
+      replicate_prediction_id?: string;
+      cost_usd?: number;
+      content_rating?: "sfw" | "explicit";
+    },
+  ) =>
+    api.post<{ generation: PersonaGeneration }>(
+      `/image-studio/personas/${personaId}/generations`,
+      body,
+    ),
+
+  /** Delete a generation (prune a bad output). */
+  deleteGeneration: (id: string) =>
+    api.delete<{ generation: PersonaGeneration }>(
+      `/image-studio/generations/${id}`,
     ),
 };
