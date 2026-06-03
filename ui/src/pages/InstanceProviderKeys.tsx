@@ -29,7 +29,8 @@ type ProviderKey =
   | "openai"
   | "anthropic"
   | "gemini"
-  | "elevenlabs";
+  | "elevenlabs"
+  | "replicate";
 
 interface ProviderMeta {
   key: ProviderKey;
@@ -95,6 +96,20 @@ const PROVIDERS: ProviderMeta[] = [
     dashboardUrl: "https://elevenlabs.io/app/settings/api-keys",
     testReturnsBalance: false,
     note: "ElevenLabs doesn't expose credit balance via API — Test connection only verifies the key shape. Webhook secret and URL live in the Webhook configuration subsection below.",
+  },
+  {
+    key: "replicate",
+    name: "Replicate",
+    description: "Hosted LoRA training (ostris/flux-dev-lora-trainer) for Image Studio personas. Save here, or use POST /api/credentials/replicate which verifies before storing.",
+    placeholder: "r8_…",
+    dashboardUrl: "https://replicate.com/account/api-tokens",
+    testReturnsBalance: false,
+    // The "Paste a new key to replace …last4" input below IS the rotate
+    // affordance — replacing the value rotates the stored token.
+    // TODO(rotate): Tyler's first token was shared in plaintext chat — surface
+    // a prominent "rotate now" prompt after the first successful training, and
+    // consider tracking token age to nudge periodic rotation.
+    note: "Replicate doesn't expose balance via API — Test only verifies the token. To rotate, paste a new token above; it replaces the stored one. Rotate the bootstrap token after the first training succeeds.",
   },
 ];
 
