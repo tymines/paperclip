@@ -11,9 +11,9 @@
  * GETs return only last-4 + lastUpdated. Test-connection happens entirely
  * server-side using the stored key so the secret never round-trips.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, KeyRound, Loader2, Share2, Sparkles, X } from "lucide-react";
+import { Check, Copy, KeyRound, Loader2, RotateCw, Share2, Sparkles, TriangleAlert, X } from "lucide-react";
 import { instanceSettingsApi } from "@/api/instanceSettings";
 import { costsApi } from "@/api/costs";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -211,6 +211,21 @@ function ProviderRow({ meta, hasKey, last4, updatedAt, spend30d, onSaved }: Prov
   const [testResult, setTestResult] = useState<
     { ok: boolean; message: string } | null
   >(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The Replicate token was first stored 2026-06-02 and was exposed in chat logs
+  // multiple times. Nudge a rotation (not a block) if it hasn't been replaced
+  // since the day it was first stored.
+  const isReplicate = meta.key === "replicate";
+  const tokenStale =
+    isReplicate &&
+    hasKey &&
+    (!updatedAt || new Date(updatedAt).getTime() < Date.parse("2026-06-03T00:00:00Z"));
+
+  const focusInput = () => {
+    inputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    inputRef.current?.focus();
+  };
 
   const saveMutation = useMutation({
     mutationFn: () => instanceSettingsApi.setProviderKey(meta.key, value),
@@ -302,12 +317,48 @@ function ProviderRow({ meta, hasKey, last4, updatedAt, spend30d, onSaved }: Prov
         </a>
       </div>
 
+      {tokenStale ? (
+        <div
+          className="mt-3 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-500/10"
+          data-testid="replicate-rotate-banner"
+        >
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-amber-800 dark:text-amber-200">
+              This token hasn't been rotated since it was first stored on 2026-06-02.
+            </p>
+            <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-300/90">
+              It was exposed in chat logs — rotate it now: create a fresh token at{" "}
+              <a
+                href={meta.dashboardUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline underline-offset-2"
+              >
+                replicate.com
+              </a>{" "}
+              and paste it below.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={focusInput}
+            className="shrink-0 border-amber-400 text-amber-800 hover:bg-amber-100 dark:text-amber-200"
+          >
+            <RotateCw className="mr-1.5 h-3.5 w-3.5" />
+            Rotate now
+          </Button>
+        </div>
+      ) : null}
+
       <div className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
         <div>
           <Label htmlFor={`${meta.key}-input`} className="sr-only">
             {meta.name} API key
           </Label>
           <Input
+            ref={inputRef}
             id={`${meta.key}-input`}
             type="password"
             autoComplete="off"
@@ -354,7 +405,13 @@ function ProviderRow({ meta, hasKey, last4, updatedAt, spend30d, onSaved }: Prov
       ) : null}
 
       {hasKey ? (
-        <div className="mt-3">
+        <div className="mt-3 flex items-center gap-1">
+          {isReplicate ? (
+            <Button variant="ghost" size="sm" onClick={focusInput}>
+              <RotateCw className="mr-1.5 h-3.5 w-3.5" />
+              Rotate now
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"
