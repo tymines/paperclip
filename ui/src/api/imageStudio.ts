@@ -74,6 +74,62 @@ export interface PersonaGeneration {
   createdAt: string;
 }
 
+export interface PromptTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  personaId: string | null;
+  templateText: string;
+  defaultLoraScale: string | null;
+  defaultSteps: number | null;
+  defaultGuidance: string | null;
+  defaultAspectRatio: string | null;
+  contentRating: "sfw" | "explicit";
+  tags: string[] | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type GenerationJobStatus =
+  | "queued"
+  | "submitted"
+  | "polling"
+  | "succeeded"
+  | "failed";
+
+export interface GenerationJob {
+  id: string;
+  personaId: string;
+  promptTemplateId: string | null;
+  batchId: string;
+  promptText: string;
+  loraScale: string | null;
+  steps: number | null;
+  guidance: string | null;
+  aspectRatio: string | null;
+  seed: number | null;
+  status: GenerationJobStatus;
+  replicatePredictionId: string | null;
+  outputPath: string | null;
+  contentRating: "sfw" | "explicit";
+  costUsd: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface GenerateBatchBody {
+  prompt_text: string;
+  lora_scale?: number;
+  steps?: number;
+  guidance?: number;
+  aspect_ratio?: string;
+  seed?: number | null;
+  count?: number;
+  prompt_template_id?: string | null;
+  content_rating?: "sfw" | "explicit";
+}
+
 /** Build a public URL for an uploads-relative media path. */
 export function uploadUrl(relPath: string): string {
   return `/api/uploads/${relPath.replace(/^\/+/, "")}`;
@@ -182,5 +238,57 @@ export const imageStudioApi = {
   deleteGeneration: (id: string) =>
     api.delete<{ generation: PersonaGeneration }>(
       `/image-studio/generations/${id}`,
+    ),
+
+  /** Fire a batch generation. Returns the batch id + queued job ids. */
+  generateBatch: (personaId: string, body: GenerateBatchBody) =>
+    api.post<{ batch_id: string; job_ids: string[] }>(
+      `/image-studio/personas/${personaId}/generate`,
+      body,
+    ),
+
+  /** Poll all jobs in a batch with current status. */
+  getBatch: (personaId: string, batchId: string) =>
+    api.get<{ jobs: GenerationJob[] }>(
+      `/image-studio/personas/${personaId}/generations/batch/${batchId}`,
+    ),
+
+  /** List a persona's prompt templates + shared (persona_id NULL) templates. */
+  listPromptTemplates: (personaId: string) =>
+    api.get<{ templates: PromptTemplate[] }>(
+      `/image-studio/personas/${personaId}/prompt-templates`,
+    ),
+
+  /** Save a new prompt template for a persona. */
+  createPromptTemplate: (
+    personaId: string,
+    body: {
+      name: string;
+      template_text: string;
+      description?: string;
+      default_lora_scale?: number;
+      default_steps?: number;
+      default_guidance?: number;
+      default_aspect_ratio?: string;
+      content_rating?: "sfw" | "explicit";
+      tags?: string[];
+    },
+  ) =>
+    api.post<{ template: PromptTemplate }>(
+      `/image-studio/personas/${personaId}/prompt-templates`,
+      body,
+    ),
+
+  /** Update a prompt template. */
+  updatePromptTemplate: (id: string, body: Partial<Record<string, unknown>>) =>
+    api.patch<{ template: PromptTemplate }>(
+      `/image-studio/prompt-templates/${id}`,
+      body,
+    ),
+
+  /** Delete a prompt template. */
+  deletePromptTemplate: (id: string) =>
+    api.delete<{ template: PromptTemplate }>(
+      `/image-studio/prompt-templates/${id}`,
     ),
 };

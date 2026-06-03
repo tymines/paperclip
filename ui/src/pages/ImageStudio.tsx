@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   imageStudioApi,
@@ -7,6 +7,8 @@ import {
   type LoraTrainingJob,
   type PersonaGeneration,
   type GenerationSource,
+  type PromptTemplate,
+  type GenerationJob,
 } from "../api/imageStudio";
 import { useCompany } from "../context/CompanyContext";
 import {
@@ -33,6 +35,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import {
   Loader2,
   Plus,
@@ -48,6 +53,12 @@ import {
   Trash2,
   ArrowDownUp,
   Wand2,
+  Zap,
+  Send,
+  Save,
+  X,
+  Tag,
+  BookMarked,
 } from "lucide-react";
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
@@ -484,6 +495,664 @@ function PersonaGallery({ persona }: { persona: ImageProvider }) {
   );
 }
 
+// ─── Batch generate composer ─────────────────────────────────────────────────
+
+const ASPECT_RATIOS = ["1:1", "3:4", "4:3", "16:9", "9:16"] as const;
+
+/** Client-side persona content rating (mirrors the server's derivation). */
+function personaRating(persona: ImageProvider): "sfw" | "explicit" {
+  const fromParams = (persona.defaultParams as Record<string, unknown> | null)?.["content_rating"];
+  if (fromParams === "explicit" || fromParams === "sfw") return fromParams;
+  return /nsfw/i.test(persona.name) ? "explicit" : "sfw";
+}
+
+/** How many renders a prompt + count will fan out into (mirrors the server). */
+function countVariationJobs(prompt: string, count: number): number {
+  const groupRe = /\{([^{}]*)\}/g;
+  let product = 1;
+  let hasVar = false;
+  let m: RegExpExecArray | null;
+  while ((m = groupRe.exec(prompt)) !== null) {
+    let body = m[1];
+    const hadPrefix = /^variation\s*:/i.test(body);
+    if (hadPrefix) body = body.replace(/^variation\s*:/i, "");
+    if (body.includes("|") || hadPrefix) {
+      hasVar = true;
+      const opts = body.split("|").map((s) => s.trim()).filter(Boolean);
+      product *= Math.max(opts.length, 1);
+    }
+  }
+  const n = hasVar ? product : Math.min(Math.max(count, 1), 8);
+  return Math.min(n, 24);
+}
+
+function ratingBadge(rating: "sfw" | "explicit") {
+  return rating === "explicit" ? (
+    <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+      NSFW
+    </Badge>
+  ) : (
+    <Badge variant="outline" className="border-green-200 bg-green-50 text-green-700">
+      SFW
+    </Badge>
+  );
+}
+
+/** Nested dialog: save the current composer prompt as a reusable template. */
+function SaveTemplateDialog({
+  persona,
+  open,
+  onOpenChange,
+  promptText,
+  loraScale,
+  steps,
+  guidance,
+  aspectRatio,
+  onSaved,
+}: {
+  persona: ImageProvider;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  promptText: string;
+  loraScale: number;
+  steps: number;
+  guidance: number;
+  aspectRatio: string;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [tags, setTags] = useState("");
+  const [rating, setRating] = useState<"sfw" | "explicit">(personaRating(persona));
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setDescription("");
+      setTags("");
+      setRating(personaRating(persona));
+    }
+  }, [open, persona]);
+
+  const saveMut = useMutation({
+    mutationFn: () =>
+      imageStudioApi.createPromptTemplate(persona.id, {
+        name: name.trim(),
+        template_text: promptText,
+        description: description.trim() || undefined,
+        default_lora_scale: loraScale,
+        default_steps: steps,
+        default_guidance: guidance,
+        default_aspect_ratio: aspectRatio,
+        content_rating: rating,
+        tags: tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
+      }),
+    onSuccess: () => {
+      onSaved();
+      onOpenChange(false);
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Save className="h-4 w-4 text-indigo-500" />
+            Save as template
+          </DialogTitle>
+          <DialogDescription>
+            Reuse this prompt + settings later from the template library.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3 py-1">
+          <div className="space-y-1.5">
+            <Label htmlFor="tpl-name">Name</Label>
+            <Input id="tpl-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="OOTD mirror selfie" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tpl-desc">Description</Label>
+            <Input
+              id="tpl-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional — what this template is for"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tpl-tags">Tags</Label>
+            <Input id="tpl-tags" value={tags} onChange={(e) => setTags(e.target.value)} placeholder="ootd, mirror, selfie" />
+            <p className="text-[11px] text-muted-foreground">Comma-separated.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Content rating</Label>
+            <Select value={rating} onValueChange={(v) => setRating(v as "sfw" | "explicit")}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sfw">SFW</SelectItem>
+                <SelectItem value="explicit">NSFW (explicit)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {saveMut.isError && (
+            <p className="text-xs text-red-600">
+              {(saveMut.error as Error)?.message ?? "Failed to save template."}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button onClick={() => saveMut.mutate()} disabled={!name.trim() || !promptText.trim() || saveMut.isPending}>
+            {saveMut.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+            Save template
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The batch-generate composer: prompt composer (left) + template library (right). */
+function GenerateComposerModal({
+  persona,
+  open,
+  onOpenChange,
+  onBatchStarted,
+}: {
+  persona: ImageProvider;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onBatchStarted: (batchId: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const rating = personaRating(persona);
+
+  const [promptText, setPromptText] = useState("");
+  const [loraScale, setLoraScale] = useState(1.0);
+  const [steps, setSteps] = useState(28);
+  const [guidance, setGuidance] = useState(3.5);
+  const [aspectRatio, setAspectRatio] = useState<string>("3:4");
+  const [seed, setSeed] = useState("");
+  const [count, setCount] = useState(1);
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
+  const [ratingFilter, setRatingFilter] = useState<"all" | "sfw" | "explicit">("all");
+  const [loadedTemplateId, setLoadedTemplateId] = useState<string | null>(null);
+
+  const templatesQ = useQuery({
+    queryKey: ["image-studio", "templates", persona.id],
+    queryFn: () => imageStudioApi.listPromptTemplates(persona.id),
+    enabled: open,
+  });
+  const templates = templatesQ.data?.templates ?? [];
+
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of templates) for (const tag of t.tags ?? []) set.add(tag);
+    return Array.from(set).sort();
+  }, [templates]);
+
+  const visibleTemplates = useMemo(() => {
+    return templates.filter((t) => {
+      if (ratingFilter !== "all" && t.contentRating !== ratingFilter) return false;
+      if (tagFilter && !(t.tags ?? []).includes(tagFilter)) return false;
+      return true;
+    });
+  }, [templates, ratingFilter, tagFilter]);
+
+  function loadTemplate(t: PromptTemplate) {
+    setPromptText(t.templateText);
+    if (t.defaultLoraScale != null) setLoraScale(Number(t.defaultLoraScale));
+    if (t.defaultSteps != null) setSteps(t.defaultSteps);
+    if (t.defaultGuidance != null) setGuidance(Number(t.defaultGuidance));
+    if (t.defaultAspectRatio) setAspectRatio(t.defaultAspectRatio);
+    setLoadedTemplateId(t.id);
+  }
+
+  const generateMut = useMutation({
+    mutationFn: () =>
+      imageStudioApi.generateBatch(persona.id, {
+        prompt_text: promptText,
+        lora_scale: loraScale,
+        steps,
+        guidance,
+        aspect_ratio: aspectRatio,
+        seed: seed.trim() === "" ? null : Number(seed),
+        count,
+        prompt_template_id: loadedTemplateId,
+        content_rating: rating,
+      }),
+    onSuccess: (res) => {
+      onBatchStarted(res.batch_id);
+      onOpenChange(false);
+    },
+  });
+
+  const jobsCount = countVariationJobs(promptText, count);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Zap className="h-5 w-5 text-indigo-500" />
+            Generate with {persona.name}
+            {ratingBadge(rating)}
+          </DialogTitle>
+          <DialogDescription>
+            Compose a prompt (with {"{variation}"} support) and fire a batch through Replicate.
+            Results stream into the gallery automatically.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-[minmax(0,1fr)_280px]">
+          {/* Left: composer */}
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="composer-prompt">Prompt</Label>
+              <Textarea
+                id="composer-prompt"
+                value={promptText}
+                onChange={(e) => {
+                  setPromptText(e.target.value);
+                  setLoadedTemplateId(null);
+                }}
+                rows={5}
+                placeholder="sidney_sfw, OOTD mirror selfie, soft window light, photorealistic, high quality"
+                className="font-mono text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Tip: <code className="rounded bg-muted px-1">{"{variation:beige sweater|blazer|cardigan}"}</code>{" "}
+                fans the batch across each option (cross-product if you use several).
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="composer-lora">LoRA scale</Label>
+                <span className="font-mono text-xs text-muted-foreground">{loraScale.toFixed(2)}</span>
+              </div>
+              <input
+                id="composer-lora"
+                type="range"
+                min={0.5}
+                max={1.2}
+                step={0.05}
+                value={loraScale}
+                onChange={(e) => setLoraScale(Number(e.target.value))}
+                className="w-full accent-indigo-500"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="composer-steps">Steps</Label>
+                <Input
+                  id="composer-steps"
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={steps}
+                  onChange={(e) => setSteps(Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="composer-guidance">Guidance</Label>
+                <Input
+                  id="composer-guidance"
+                  type="number"
+                  min={0}
+                  max={20}
+                  step={0.1}
+                  value={guidance}
+                  onChange={(e) => setGuidance(Number(e.target.value))}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Aspect ratio</Label>
+                <Select value={aspectRatio} onValueChange={setAspectRatio}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ASPECT_RATIOS.map((ar) => (
+                      <SelectItem key={ar} value={ar}>
+                        {ar}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="composer-seed">Seed</Label>
+                <Input
+                  id="composer-seed"
+                  type="number"
+                  value={seed}
+                  onChange={(e) => setSeed(e.target.value)}
+                  placeholder="random"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="composer-count">Count</Label>
+                <Input
+                  id="composer-count"
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={count}
+                  onChange={(e) => setCount(Number(e.target.value))}
+                  disabled={countVariationJobs(promptText, 1) > 1}
+                  title={
+                    countVariationJobs(promptText, 1) > 1
+                      ? "Count is ignored when the prompt has {variation} placeholders"
+                      : undefined
+                  }
+                />
+              </div>
+            </div>
+
+            {generateMut.isError && (
+              <p className="text-xs text-red-600">
+                {(generateMut.error as Error)?.message ?? "Failed to start generation."}
+              </p>
+            )}
+
+            <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+              <span className="text-xs text-muted-foreground">
+                Will fire <span className="font-semibold text-foreground">{jobsCount}</span>{" "}
+                render{jobsCount === 1 ? "" : "s"}
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSaveOpen(true)}
+                  disabled={!promptText.trim()}
+                >
+                  <Save className="mr-1.5 h-3.5 w-3.5" />
+                  Save as template
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => generateMut.mutate()}
+                  disabled={!promptText.trim() || generateMut.isPending}
+                >
+                  {generateMut.isPending ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Generate
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          {/* Right: template library */}
+          <div className="flex flex-col rounded-lg border border-border bg-muted/20">
+            <div className="flex items-center gap-1.5 border-b border-border px-3 py-2">
+              <BookMarked className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="text-xs font-semibold text-muted-foreground">Templates</span>
+              {templatesQ.isLoading && <Loader2 className="ml-auto h-3 w-3 animate-spin text-muted-foreground" />}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1 border-b border-border px-3 py-2">
+              {(["all", "sfw", "explicit"] as const).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRatingFilter(r)}
+                  className={
+                    "rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors " +
+                    (ratingFilter === r ? "bg-indigo-100 text-indigo-700" : "bg-muted text-muted-foreground hover:bg-muted/70")
+                  }
+                >
+                  {r === "all" ? "All" : r === "sfw" ? "SFW" : "NSFW"}
+                </button>
+              ))}
+              {tagFilter && (
+                <button
+                  type="button"
+                  onClick={() => setTagFilter(null)}
+                  className="ml-auto inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700"
+                >
+                  <Tag className="h-2.5 w-2.5" />
+                  {tagFilter}
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-[360px] flex-1 space-y-1.5 overflow-y-auto p-2">
+              {visibleTemplates.length === 0 ? (
+                <p className="px-2 py-6 text-center text-[11px] text-muted-foreground">
+                  No templates yet. Compose a prompt and hit “Save as template”.
+                </p>
+              ) : (
+                visibleTemplates.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => loadTemplate(t)}
+                    className={
+                      "w-full rounded-md border p-2 text-left transition-colors " +
+                      (loadedTemplateId === t.id
+                        ? "border-indigo-300 bg-indigo-50"
+                        : "border-border bg-card hover:border-indigo-200 hover:bg-muted/50")
+                    }
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate text-xs font-medium">{t.name}</span>
+                      {t.contentRating === "explicit" ? (
+                        <span className="shrink-0 rounded bg-red-50 px-1 text-[9px] font-semibold text-red-600">NSFW</span>
+                      ) : null}
+                    </div>
+                    {t.description && (
+                      <p className="mt-0.5 line-clamp-2 text-[10px] text-muted-foreground">{t.description}</p>
+                    )}
+                    {t.tags && t.tags.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {t.tags.map((tag) => (
+                          <span
+                            key={tag}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setTagFilter(tag);
+                            }}
+                            className="rounded bg-muted px-1 text-[9px] text-muted-foreground hover:bg-indigo-100 hover:text-indigo-700"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+            {allTags.length > 0 && (
+              <div className="border-t border-border px-2 py-1.5 text-[10px] text-muted-foreground">
+                {allTags.length} tag{allTags.length === 1 ? "" : "s"} · click a tag to filter
+              </div>
+            )}
+          </div>
+        </div>
+
+        <SaveTemplateDialog
+          persona={persona}
+          open={saveOpen}
+          onOpenChange={setSaveOpen}
+          promptText={promptText}
+          loraScale={loraScale}
+          steps={steps}
+          guidance={guidance}
+          aspectRatio={aspectRatio}
+          onSaved={() => queryClient.invalidateQueries({ queryKey: ["image-studio", "templates", persona.id] })}
+        />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Live batch status row shown under a persona card while a batch is firing. */
+function BatchProgressRow({
+  persona,
+  batchId,
+  onClear,
+}: {
+  persona: ImageProvider;
+  batchId: string;
+  onClear: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const lastSucceeded = useRef(-1);
+
+  const batchQ = useQuery({
+    queryKey: ["image-studio", "batch", persona.id, batchId],
+    queryFn: () => imageStudioApi.getBatch(persona.id, batchId),
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs ?? [];
+      const active = jobs.some((j) => j.status !== "succeeded" && j.status !== "failed");
+      return active || jobs.length === 0 ? 5_000 : false;
+    },
+  });
+
+  const jobs: GenerationJob[] = batchQ.data?.jobs ?? [];
+  const total = jobs.length;
+  const succeeded = jobs.filter((j) => j.status === "succeeded").length;
+  const failed = jobs.filter((j) => j.status === "failed").length;
+  const inFlight = total - succeeded - failed;
+  const done = total > 0 && inFlight === 0;
+
+  // Stream finished images into the gallery as soon as they land.
+  useEffect(() => {
+    if (succeeded !== lastSucceeded.current) {
+      lastSucceeded.current = succeeded;
+      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", persona.id] });
+    }
+  }, [succeeded, persona.id, queryClient]);
+
+  return (
+    <div
+      className="mt-3 flex items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2"
+      data-testid="batch-progress-row"
+    >
+      <div className="flex items-center gap-2 text-xs">
+        {done ? (
+          <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" />
+        )}
+        <span className="font-medium text-indigo-900">
+          {done ? "Generated" : "Generating"} {succeeded}/{total || "…"}
+        </span>
+        <span className="text-indigo-700/80">
+          — {succeeded} succeeded{failed > 0 ? `, ${failed} failed` : ""}
+          {inFlight > 0 ? `, ${inFlight} in flight` : ""}
+        </span>
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 px-2 text-xs text-indigo-700 hover:text-indigo-900"
+        onClick={onClear}
+      >
+        {done ? "Dismiss" : "Cancel"}
+      </Button>
+    </div>
+  );
+}
+
+/** A single Trained Persona card: status, Generate/Train actions, batch row, gallery. */
+function PersonaCard({
+  persona,
+  job,
+  canTrain,
+  onTrain,
+}: {
+  persona: ImageProvider;
+  job: LoraTrainingJob | undefined;
+  canTrain: boolean;
+  onTrain: () => void;
+}) {
+  const [showComposer, setShowComposer] = useState(false);
+  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
+  const pill = trainingPill(job);
+
+  return (
+    <Card className="overflow-hidden">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            {providerIcon("local_lora", persona.name)}
+            <CardTitle className="text-sm">{persona.name}</CardTitle>
+          </div>
+          {pill ?? statusBadge(persona)}
+        </div>
+        {persona.model && <CardDescription className="text-xs">{persona.model}</CardDescription>}
+      </CardHeader>
+      <CardContent className="pb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Server className="h-3 w-3" />
+              ComfyUI :18801
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setShowComposer(true)}>
+              <Zap className="mr-1.5 h-3.5 w-3.5" />
+              Generate
+            </Button>
+            <Button size="sm" variant="outline" onClick={onTrain} disabled={!canTrain}>
+              <Cloud className="mr-1.5 h-3.5 w-3.5" />
+              Train
+            </Button>
+          </div>
+        </div>
+        {job?.status === "failed" && job.errorMessage && (
+          <p className="mt-2 text-xs text-red-600">{job.errorMessage}</p>
+        )}
+        {job?.status === "ready" && job.outputLoraPath && (
+          <p className="mt-2 truncate text-xs text-green-700" title={job.outputLoraPath}>
+            Installed: {job.outputLoraPath}
+          </p>
+        )}
+        {!job && persona.statusDetail && persona.status !== "ready" && persona.status !== "training" && (
+          <p className="mt-2 text-xs text-amber-600">{persona.statusDetail}</p>
+        )}
+
+        {activeBatchId && (
+          <BatchProgressRow
+            persona={persona}
+            batchId={activeBatchId}
+            onClear={() => setActiveBatchId(null)}
+          />
+        )}
+
+        <PersonaGallery persona={persona} />
+      </CardContent>
+
+      {showComposer && (
+        <GenerateComposerModal
+          persona={persona}
+          open={showComposer}
+          onOpenChange={setShowComposer}
+          onBatchStarted={(batchId) => setActiveBatchId(batchId)}
+        />
+      )}
+    </Card>
+  );
+}
+
 // ─── Section A: Trained Personas ─────────────────────────────────────────────
 
 function TrainedPersonasSection({
@@ -538,57 +1207,15 @@ function TrainedPersonasSection({
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {personas.map((p) => {
-            const job = jobsByPersona.get(p.id);
-            const pill = trainingPill(job);
-            return (
-              <Card key={p.id} className="overflow-hidden">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      {providerIcon("local_lora", p.name)}
-                      <CardTitle className="text-sm">{p.name}</CardTitle>
-                    </div>
-                    {pill ?? statusBadge(p)}
-                  </div>
-                  {p.model && (
-                    <CardDescription className="text-xs">{p.model}</CardDescription>
-                  )}
-                </CardHeader>
-                <CardContent className="pb-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <Server className="h-3 w-3" />
-                        ComfyUI :18801
-                      </span>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setTrainingPersona(p)}
-                      disabled={trainers.length === 0}
-                    >
-                      <Cloud className="mr-1.5 h-3.5 w-3.5" />
-                      Train
-                    </Button>
-                  </div>
-                  {job?.status === "failed" && job.errorMessage && (
-                    <p className="mt-2 text-xs text-red-600">{job.errorMessage}</p>
-                  )}
-                  {job?.status === "ready" && job.outputLoraPath && (
-                    <p className="mt-2 truncate text-xs text-green-700" title={job.outputLoraPath}>
-                      Installed: {job.outputLoraPath}
-                    </p>
-                  )}
-                  {!job && p.statusDetail && p.status !== "ready" && p.status !== "training" && (
-                    <p className="mt-2 text-xs text-amber-600">{p.statusDetail}</p>
-                  )}
-                  <PersonaGallery persona={p} />
-                </CardContent>
-              </Card>
-            );
-          })}
+          {personas.map((p) => (
+            <PersonaCard
+              key={p.id}
+              persona={p}
+              job={jobsByPersona.get(p.id)}
+              canTrain={trainers.length > 0}
+              onTrain={() => setTrainingPersona(p)}
+            />
+          ))}
         </div>
       )}
 
