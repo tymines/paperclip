@@ -27,7 +27,10 @@ export type ProviderKey =
   // streaming TTS provider. Adding new slots here automatically surfaces them
   // in the existing instance/settings/provider-keys page.
   | "openai_realtime"
-  | "elevenlabs";
+  | "elevenlabs"
+  // Replicate — hosted LoRA training (ostris/flux-dev-lora-trainer) for the
+  // Image Studio persona pipeline. Single bearer token, stored like elevenlabs.
+  | "replicate";
 
 export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "deepseek",
@@ -37,6 +40,7 @@ export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "gemini",
   "openai_realtime",
   "elevenlabs",
+  "replicate",
 ];
 
 interface StoredKey {

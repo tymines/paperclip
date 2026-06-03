@@ -37,8 +37,11 @@ export function listProviderCreditAdapters(): ProviderCreditAdapter[] {
   return Object.values(REGISTRY);
 }
 
-export function getProviderCreditAdapter(key: ProviderKey): ProviderCreditAdapter | null {
-  return REGISTRY[key] ?? null;
+// Accepts any provider-key string (the api-keys store has a wider union than
+// the credit registry, e.g. "replicate" has no balance adapter); unknown keys
+// resolve to null.
+export function getProviderCreditAdapter(key: string): ProviderCreditAdapter | null {
+  return REGISTRY[key as ProviderKey] ?? null;
 }
 
 /**

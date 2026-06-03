@@ -1,0 +1,164 @@
+/**
+ * Replicate cloud LoRA training client.
+ *
+ * Tyler is moving Sidney persona training off the local Mac mini FluxTrainer
+ * onto Replicate's hosted `ostris/flux-dev-lora-trainer` (~30 min on an H100,
+ * ~$3/run). This module centralises the HTTP surface: token resolution +
+ * verification, training creation, and training status polling.
+ *
+ * The bearer token is stored in the same provider-api-keys store as the
+ * elevenlabs key (see services/provider-api-keys). It can also be supplied via
+ * the REPLICATE_API_TOKEN env var as an out-of-band override.
+ */
+import { getRawKey } from "../provider-api-keys/index.js";
+
+export const REPLICATE_API_BASE = "https://api.replicate.com/v1";
+export const REPLICATE_TRAINER_MODEL = "ostris/flux-dev-lora-trainer";
+
+/**
+ * Current published version SHA of ostris/flux-dev-lora-trainer.
+ *
+ * Looked up from https://replicate.com/ostris/flux-dev-lora-trainer/versions
+ * on 2026-06-02 (most recent is 26dce37a…). The model GET endpoint requires
+ * auth, so we couldn't verify the full 64-char hash against the live API yet.
+ *
+ * TODO(replicate): once REPLICATE_API_TOKEN is set, confirm the full SHA with
+ *   GET /v1/models/ostris/flux-dev-lora-trainer  →  latest_version.id
+ * and update this constant if it has rolled forward.
+ */
+export const REPLICATE_TRAINER_VERSION =
+  "26dce37af90b9d997eeb970d92e47de3064d46c300504ae376c75bef6a9022d2";
+
+export type ReplicateTrainingStatus =
+  | "starting"
+  | "processing"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+export interface ReplicateTraining {
+  id: string;
+  status: ReplicateTrainingStatus;
+  output?: { weights?: string } | string | null;
+  error?: string | null;
+  urls?: { get?: string; cancel?: string };
+  metrics?: { predict_time?: number; total_time?: number } | null;
+  logs?: string | null;
+}
+
+/** Resolve the Replicate bearer token (env override → stored key). */
+export async function getReplicateToken(): Promise<string | null> {
+  const fromEnv = process.env.REPLICATE_API_TOKEN;
+  if (fromEnv && fromEnv.trim().length > 0) return fromEnv.trim();
+  return getRawKey("replicate");
+}
+
+function authHeaders(token: string): Record<string, string> {
+  // Replicate uses the legacy "Token <key>" scheme (not "Bearer").
+  return { Authorization: `Token ${token}`, "Content-Type": "application/json" };
+}
+
+export interface VerifyResult {
+  ok: boolean;
+  username?: string;
+  error?: string;
+}
+
+/**
+ * Verify a token by hitting GET /v1/account. Used at save-time so the UI can
+ * give green/red feedback before the token is trusted for a $3 training run.
+ */
+export async function verifyReplicateToken(token: string): Promise<VerifyResult> {
+  try {
+    const res = await fetch(`${REPLICATE_API_BASE}/account`, {
+      headers: authHeaders(token),
+    });
+    if (res.status === 401) return { ok: false, error: "Invalid token (401 from Replicate)." };
+    if (!res.ok) return { ok: false, error: `Replicate returned ${res.status}.` };
+    const body = (await res.json()) as { username?: string; type?: string };
+    return { ok: true, username: body.username };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export interface CreateTrainingInput {
+  /** Public URL or data URI of the zipped training images. */
+  inputImages: string;
+  triggerWord: string;
+  /** Where Replicate should push the trained weights, e.g. a model you own. */
+  destination: string;
+  steps?: number;
+  loraRank?: number;
+  batchSize?: number;
+  autocaption?: boolean;
+  /** Optional webhook Replicate calls on status change. */
+  webhook?: string;
+}
+
+/**
+ * Create a training run against the pinned trainer version.
+ *
+ * POST /v1/models/{owner}/{name}/versions/{version}/trainings
+ * Ref: https://replicate.com/docs/reference/http#trainings.create
+ *
+ * Throws if no token is configured — callers should guard with a mock path
+ * until REPLICATE_API_TOKEN is set (Tyler is generating it in parallel).
+ */
+export async function createReplicateTraining(
+  input: CreateTrainingInput,
+): Promise<ReplicateTraining> {
+  const token = await getReplicateToken();
+  if (!token) {
+    throw new Error(
+      "REPLICATE_API_TOKEN not set — save a token via POST /api/credentials/replicate first.",
+    );
+  }
+  const url = `${REPLICATE_API_BASE}/models/${REPLICATE_TRAINER_MODEL}/versions/${REPLICATE_TRAINER_VERSION}/trainings`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      destination: input.destination,
+      input: {
+        input_images: input.inputImages,
+        trigger_word: input.triggerWord,
+        steps: input.steps ?? 1500,
+        lora_rank: input.loraRank ?? 16,
+        batch_size: input.batchSize ?? 1,
+        autocaption: input.autocaption ?? true,
+      },
+      ...(input.webhook ? { webhook: input.webhook, webhook_events_filter: ["completed"] } : {}),
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate trainings.create failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as ReplicateTraining;
+}
+
+/**
+ * Poll a training's current status.
+ * GET /v1/trainings/{id}
+ */
+export async function getReplicateTraining(externalId: string): Promise<ReplicateTraining> {
+  const token = await getReplicateToken();
+  if (!token) throw new Error("REPLICATE_API_TOKEN not set.");
+  const res = await fetch(`${REPLICATE_API_BASE}/trainings/${externalId}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate trainings.get failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as ReplicateTraining;
+}
+
+/** Pull the .safetensors weights URL out of a finished training payload. */
+export function extractWeightsUrl(training: ReplicateTraining): string | null {
+  const out = training.output;
+  if (!out) return null;
+  if (typeof out === "string") return out;
+  return out.weights ?? null;
+}
