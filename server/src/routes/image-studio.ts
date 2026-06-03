@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { promises as fs } from "node:fs";
 import type { Db } from "@paperclipai/db";
 import { and, eq, or, isNull, desc } from "drizzle-orm";
-import { imageProviders, loraTrainingJobs } from "@paperclipai/db";
+import { imageProviders, loraTrainingJobs, personaGenerations } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { badRequest } from "../errors.js";
+import { resolveUploadPath } from "../services/image-studio/uploads.js";
 import {
   personaTrainingProfile,
   countTrainingPhotos,
@@ -358,6 +360,127 @@ export function imageStudioRoutes(db: Db) {
       .orderBy(desc(loraTrainingJobs.createdAt))
       .limit(50);
     res.json({ jobs });
+  });
+
+  // ── Persona generations gallery ───────────────────────────────────────────
+  // Personas are global (company_id IS NULL) or company-scoped, so these
+  // routes key off the persona id rather than a company in the path.
+
+  async function loadPersona(personaId: string) {
+    const [row] = await db
+      .select()
+      .from(imageProviders)
+      .where(eq(imageProviders.id, personaId))
+      .limit(1);
+    return row ?? null;
+  }
+
+  // GET /image-studio/personas/:personaId/generations?source=test|production&limit=20
+  router.get(
+    "/image-studio/personas/:personaId/generations",
+    async (req, res) => {
+      const { personaId } = req.params;
+      const persona = await loadPersona(personaId);
+      if (!persona || persona.type !== "local_lora") {
+        res.status(404).json({ error: "Persona not found" });
+        return;
+      }
+
+      const source = req.query.source;
+      const limitRaw = Number.parseInt(String(req.query.limit ?? ""), 10);
+      const limit = Number.isFinite(limitRaw)
+        ? Math.min(Math.max(limitRaw, 1), 100)
+        : 20;
+
+      const filters = [eq(personaGenerations.personaId, personaId)];
+      if (source === "test" || source === "production") {
+        filters.push(eq(personaGenerations.source, source));
+      }
+
+      const generations = await db
+        .select()
+        .from(personaGenerations)
+        .where(and(...filters))
+        .orderBy(desc(personaGenerations.createdAt))
+        .limit(limit);
+
+      res.json({ generations });
+    },
+  );
+
+  // POST /image-studio/personas/:personaId/generations
+  // Storage endpoint for inference results to land in the gallery. Body:
+  // { image_path (required, relative to uploads dir), thumbnail_path?, source?,
+  //   prompt?, lora_strength?, model?, generation_metadata?,
+  //   replicate_prediction_id?, cost_usd?, content_rating? }
+  router.post(
+    "/image-studio/personas/:personaId/generations",
+    async (req, res) => {
+      const { personaId } = req.params;
+      const persona = await loadPersona(personaId);
+      if (!persona || persona.type !== "local_lora") {
+        res.status(404).json({ error: "Persona not found" });
+        return;
+      }
+
+      const body = req.body ?? {};
+      const imagePath = typeof body.image_path === "string" ? body.image_path.trim() : "";
+      if (!imagePath) {
+        throw badRequest("image_path is required");
+      }
+      const source = body.source === "production" ? "production" : "test";
+      const contentRating = body.content_rating === "explicit" ? "explicit" : "sfw";
+
+      const [inserted] = await db
+        .insert(personaGenerations)
+        .values({
+          personaId,
+          source,
+          prompt: typeof body.prompt === "string" ? body.prompt : null,
+          loraStrength:
+            body.lora_strength != null ? String(body.lora_strength) : null,
+          model: typeof body.model === "string" ? body.model : null,
+          imagePath,
+          thumbnailPath:
+            typeof body.thumbnail_path === "string" ? body.thumbnail_path : null,
+          generationMetadata:
+            body.generation_metadata && typeof body.generation_metadata === "object"
+              ? body.generation_metadata
+              : null,
+          replicatePredictionId:
+            typeof body.replicate_prediction_id === "string"
+              ? body.replicate_prediction_id
+              : null,
+          costUsd: body.cost_usd != null ? String(body.cost_usd) : null,
+          contentRating,
+        })
+        .returning();
+
+      res.status(201).json({ generation: inserted });
+    },
+  );
+
+  // DELETE /image-studio/generations/:id
+  // Prune a bad output. Best-effort removes the underlying image + thumbnail.
+  router.delete("/image-studio/generations/:id", async (req, res) => {
+    const { id } = req.params;
+    const [deleted] = await db
+      .delete(personaGenerations)
+      .where(eq(personaGenerations.id, id))
+      .returning();
+
+    if (!deleted) {
+      res.status(404).json({ error: "Generation not found" });
+      return;
+    }
+
+    for (const rel of [deleted.imagePath, deleted.thumbnailPath]) {
+      if (!rel) continue;
+      const abs = resolveUploadPath(rel);
+      if (abs) await fs.rm(abs, { force: true }).catch(() => {});
+    }
+
+    res.json({ generation: deleted });
   });
 
   return router;

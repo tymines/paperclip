@@ -56,6 +56,7 @@ import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { designRoutes } from "./routes/design.js";
 import { designAssetsRoutes } from "./routes/design-assets.js";
 import { imageStudioRoutes } from "./routes/image-studio.js";
+import { uploadsRoot } from "./services/image-studio/uploads.js";
 import { credentialRoutes } from "./routes/credentials.js";
 import { applyUiBranding } from "./ui-branding.js";
 import { logger } from "./middleware/logger.js";
@@ -325,6 +326,17 @@ export async function createApp(
       deploymentExposure: opts.deploymentExposure,
       bindHost: opts.bindHost,
       allowedHostnames: opts.allowedHostnames,
+    }),
+  );
+  // User-uploaded media (Image Studio persona gallery, etc.) is served
+  // read-only from the instance uploads dir. Mounted ahead of the guarded
+  // `/api` router so plain <img> GETs need no session/origin handshake.
+  app.use(
+    "/api/uploads",
+    express.static(uploadsRoot(), {
+      index: false,
+      maxAge: "1h",
+      fallthrough: false,
     }),
   );
   app.use("/api", api);
