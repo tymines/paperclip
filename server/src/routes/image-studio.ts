@@ -1,11 +1,23 @@
 import { Router } from "express";
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, desc } from "drizzle-orm";
-import { imageProviders, loraTrainingJobs, personaGenerations } from "@paperclipai/db";
+import { and, eq, or, isNull, desc, asc } from "drizzle-orm";
+import {
+  imageProviders,
+  loraTrainingJobs,
+  personaGenerations,
+  promptTemplates,
+  generationJobs,
+} from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { badRequest } from "../errors.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
+import {
+  expandPromptVariations,
+  kickGenerationQueue,
+  personaContentRating,
+} from "../services/replicate-generator.js";
 import {
   personaTrainingProfile,
   countTrainingPhotos,
@@ -481,6 +493,204 @@ export function imageStudioRoutes(db: Db) {
     }
 
     res.json({ generation: deleted });
+  });
+
+  // ── Batch generate (Replicate inference) ──────────────────────────────────
+
+  const MAX_JOBS_PER_REQUEST = 24;
+
+  /** Coerce a numeric body field to a fixed-precision string, or null. */
+  function numOrNull(value: unknown): string | null {
+    if (value == null || value === "") return null;
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : null;
+  }
+
+  // POST /image-studio/personas/:personaId/generate
+  // Body: { prompt_text, lora_scale?, steps?, guidance?, aspect_ratio?, seed?,
+  //         count?, prompt_template_id? }
+  // Expands {variation:a|b|c} placeholders (cross-product); when there is no
+  // variation, `count` fans out N renders with different seeds. One
+  // generation_jobs row per expansion (capped at 24), then kicks the queue.
+  router.post("/image-studio/personas/:personaId/generate", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+
+    const body = req.body ?? {};
+    const promptText = typeof body.prompt_text === "string" ? body.prompt_text.trim() : "";
+    if (!promptText) throw badRequest("prompt_text is required");
+
+    const expanded = expandPromptVariations(promptText);
+    const countRaw = Number.parseInt(String(body.count ?? "1"), 10);
+    const count = Number.isFinite(countRaw) ? Math.min(Math.max(countRaw, 1), 8) : 1;
+
+    // Variation placeholders define the batch; otherwise `count` fans it out.
+    const prompts = expanded.length > 1 ? expanded : Array.from({ length: count }, () => expanded[0] ?? promptText);
+    const capped = prompts.slice(0, MAX_JOBS_PER_REQUEST);
+
+    const rating: "sfw" | "explicit" =
+      body.content_rating === "explicit" ? "explicit" : personaContentRating(persona);
+
+    const baseSeed = body.seed != null && body.seed !== "" ? Number(body.seed) : null;
+    const templateId =
+      typeof body.prompt_template_id === "string" && body.prompt_template_id.length > 0
+        ? body.prompt_template_id
+        : null;
+
+    const batchId = randomUUID();
+    const rows = capped.map((prompt, i) => ({
+      personaId,
+      promptTemplateId: templateId,
+      batchId,
+      promptText: prompt,
+      loraScale: numOrNull(body.lora_scale) ?? "1.0",
+      steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
+      guidance: numOrNull(body.guidance) ?? "3.5",
+      aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
+      seed: baseSeed != null && Number.isFinite(baseSeed) ? baseSeed + i : null,
+      status: "queued" as const,
+      contentRating: rating,
+    }));
+
+    const inserted = await db.insert(generationJobs).values(rows).returning({ id: generationJobs.id });
+
+    // Kick the queue immediately (fire-and-forget); the 15s scheduler also drives it.
+    void kickGenerationQueue(db).catch(() => {});
+
+    res.status(202).json({ batch_id: batchId, job_ids: inserted.map((r) => r.id) });
+  });
+
+  // GET /image-studio/personas/:personaId/generations/batch/:batchId
+  router.get(
+    "/image-studio/personas/:personaId/generations/batch/:batchId",
+    async (req, res) => {
+      const { personaId, batchId } = req.params;
+      const jobs = await db
+        .select()
+        .from(generationJobs)
+        .where(
+          and(eq(generationJobs.personaId, personaId), eq(generationJobs.batchId, batchId)),
+        )
+        .orderBy(asc(generationJobs.createdAt));
+      res.json({ jobs });
+    },
+  );
+
+  // ── Prompt templates ──────────────────────────────────────────────────────
+
+  // GET /image-studio/personas/:personaId/prompt-templates
+  // Returns this persona's templates + shared (persona_id IS NULL) templates.
+  router.get(
+    "/image-studio/personas/:personaId/prompt-templates",
+    async (req, res) => {
+      const { personaId } = req.params;
+      const templates = await db
+        .select()
+        .from(promptTemplates)
+        .where(
+          or(eq(promptTemplates.personaId, personaId), isNull(promptTemplates.personaId)),
+        )
+        .orderBy(desc(promptTemplates.createdAt));
+      res.json({ templates });
+    },
+  );
+
+  // POST /image-studio/personas/:personaId/prompt-templates
+  router.post(
+    "/image-studio/personas/:personaId/prompt-templates",
+    async (req, res) => {
+      const { personaId } = req.params;
+      const persona = await loadPersona(personaId);
+      if (!persona || persona.type !== "local_lora") {
+        res.status(404).json({ error: "Persona not found" });
+        return;
+      }
+      const body = req.body ?? {};
+      const name = typeof body.name === "string" ? body.name.trim() : "";
+      const templateText = typeof body.template_text === "string" ? body.template_text.trim() : "";
+      if (!name) throw badRequest("name is required");
+      if (!templateText) throw badRequest("template_text is required");
+
+      const rating: "sfw" | "explicit" =
+        body.content_rating === "explicit" ? "explicit" : personaContentRating(persona);
+
+      const [inserted] = await db
+        .insert(promptTemplates)
+        .values({
+          name,
+          description: typeof body.description === "string" ? body.description : null,
+          personaId,
+          templateText,
+          defaultLoraScale: body.default_lora_scale != null ? String(body.default_lora_scale) : null,
+          defaultSteps: Number.isFinite(Number(body.default_steps)) ? Number(body.default_steps) : null,
+          defaultGuidance: body.default_guidance != null ? String(body.default_guidance) : null,
+          defaultAspectRatio:
+            typeof body.default_aspect_ratio === "string" ? body.default_aspect_ratio : null,
+          contentRating: rating,
+          tags: Array.isArray(body.tags) ? body.tags.map((t: unknown) => String(t)) : null,
+        })
+        .returning();
+
+      res.status(201).json({ template: inserted });
+    },
+  );
+
+  // PATCH /image-studio/prompt-templates/:id
+  router.patch("/image-studio/prompt-templates/:id", async (req, res) => {
+    const { id } = req.params;
+    const body = req.body ?? {};
+    const [updated] = await db
+      .update(promptTemplates)
+      .set({
+        ...(typeof body.name === "string" && { name: body.name }),
+        ...(body.description !== undefined && { description: body.description }),
+        ...(typeof body.template_text === "string" && { templateText: body.template_text }),
+        ...(body.default_lora_scale !== undefined && {
+          defaultLoraScale: body.default_lora_scale != null ? String(body.default_lora_scale) : null,
+        }),
+        ...(body.default_steps !== undefined && {
+          defaultSteps: body.default_steps != null ? Number(body.default_steps) : null,
+        }),
+        ...(body.default_guidance !== undefined && {
+          defaultGuidance: body.default_guidance != null ? String(body.default_guidance) : null,
+        }),
+        ...(body.default_aspect_ratio !== undefined && {
+          defaultAspectRatio: body.default_aspect_ratio,
+        }),
+        ...(body.content_rating !== undefined && {
+          contentRating: body.content_rating === "explicit" ? "explicit" : "sfw",
+        }),
+        ...(body.tags !== undefined && {
+          tags: Array.isArray(body.tags) ? body.tags.map((t: unknown) => String(t)) : null,
+        }),
+        updatedAt: new Date(),
+      })
+      .where(eq(promptTemplates.id, id))
+      .returning();
+
+    if (!updated) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+    res.json({ template: updated });
+  });
+
+  // DELETE /image-studio/prompt-templates/:id
+  router.delete("/image-studio/prompt-templates/:id", async (req, res) => {
+    const { id } = req.params;
+    const [deleted] = await db
+      .delete(promptTemplates)
+      .where(eq(promptTemplates.id, id))
+      .returning();
+    if (!deleted) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+    res.json({ template: deleted });
   });
 
   return router;
