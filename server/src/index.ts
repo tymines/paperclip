@@ -37,6 +37,7 @@ import {
   routineService,
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
+import { pollGenerations } from "./services/replicate-generator.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createSocialScheduler } from "./workers/social-scheduler.js";
@@ -875,8 +876,17 @@ export async function startServer(): Promise<StartedServer> {
           logger.error({ err }, "periodic heartbeat recovery failed");
         });
     }, config.heartbeatSchedulerIntervalMs);
+
+    // Image Studio batch generator: poll in-flight Replicate predictions and
+    // submit queued generation_jobs up to the concurrency cap, every 15s. Plain
+    // HTTP worker — no agent loop. The generate route also kicks this on enqueue.
+    setInterval(() => {
+      void pollGenerations(db as any).catch((err) => {
+        logger.error({ err }, "image-studio generation queue tick failed");
+      });
+    }, 15_000);
   }
-  
+
   if (config.databaseBackupEnabled) {
     const backupIntervalMs = config.databaseBackupIntervalMinutes * 60 * 1000;
 

@@ -235,6 +235,78 @@ export async function getReplicateTraining(externalId: string): Promise<Replicat
   return (await res.json()) as ReplicateTraining;
 }
 
+// ── Inference predictions (Image Studio batch generate) ─────────────────────
+
+export type ReplicatePredictionStatus =
+  | "starting"
+  | "processing"
+  | "succeeded"
+  | "failed"
+  | "canceled";
+
+export interface ReplicatePrediction {
+  id: string;
+  status: ReplicatePredictionStatus;
+  /** Flux LoRA models return an array of output image URLs (num_outputs). */
+  output?: string[] | string | null;
+  error?: string | null;
+  metrics?: { predict_time?: number; total_time?: number } | null;
+}
+
+/**
+ * Create an inference prediction against an official/owned model's LATEST
+ * version (no version SHA needed for owner/name predictions).
+ *
+ * POST /v1/models/{owner}/{name}/predictions
+ * Ref: https://replicate.com/docs/reference/http#predictions.create
+ */
+export async function createReplicatePrediction(
+  model: string,
+  input: Record<string, unknown>,
+): Promise<ReplicatePrediction> {
+  const token = await getReplicateToken();
+  if (!token) {
+    throw new Error(
+      "REPLICATE_API_TOKEN not set — save a token via POST /api/credentials/replicate first.",
+    );
+  }
+  const res = await fetch(`${REPLICATE_API_BASE}/models/${model}/predictions`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ input }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate predictions.create failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as ReplicatePrediction;
+}
+
+/**
+ * Poll a prediction's current status.
+ * GET /v1/predictions/{id}
+ */
+export async function getReplicatePrediction(id: string): Promise<ReplicatePrediction> {
+  const token = await getReplicateToken();
+  if (!token) throw new Error("REPLICATE_API_TOKEN not set.");
+  const res = await fetch(`${REPLICATE_API_BASE}/predictions/${id}`, {
+    headers: authHeaders(token),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate predictions.get failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as ReplicatePrediction;
+}
+
+/** Pull the first output image URL out of a finished prediction payload. */
+export function extractOutputUrl(prediction: ReplicatePrediction): string | null {
+  const out = prediction.output;
+  if (!out) return null;
+  if (typeof out === "string") return out;
+  return Array.isArray(out) ? (out[0] ?? null) : null;
+}
+
 /** Pull the .safetensors weights URL out of a finished training payload. */
 export function extractWeightsUrl(training: ReplicateTraining): string | null {
   const out = training.output;
