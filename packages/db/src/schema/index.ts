@@ -95,6 +95,11 @@ export { jarvisLearnedPreferences } from "./jarvis_learned_preferences.js";
 export { webhookEventLog } from "./webhook_event_log.js";
 export { imageProviders } from "./image_providers.js";
 export {
+  loraTrainingJobs,
+  type LoraTrainingJob,
+  type NewLoraTrainingJob,
+} from "./lora_training_jobs.js";
+export {
   designRuns,
   designPresetRuns,
   type DesignRun,

@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, integer, jsonb, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, numeric, integer, jsonb, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 export const imageProviders = pgTable(
@@ -15,6 +15,10 @@ export const imageProviders = pgTable(
     costPerUnit: numeric("cost_per_unit", { precision: 10, scale: 6 }).notNull().default("0"),
     status: text("status"),
     statusDetail: text("status_detail"),
+    // Replicate cloud LoRA training: whether this provider can run training
+    // jobs, and the hosted trainer model it uses (e.g. ostris/flux-dev-lora-trainer).
+    trainingCapable: boolean("training_capable").notNull().default(false),
+    trainingModel: text("training_model"),
     sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

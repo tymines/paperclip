@@ -785,6 +785,20 @@
       "when": 1780531200000,
       "tag": "0111_design_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1780617600000,
+      "tag": "0112_image_providers",
+      "breakpoints": true
+    },
+    {
+      "idx": 113,
+      "version": "7",
+      "when": 1780704000000,
+      "tag": "0113_replicate_training",
+      "breakpoints": true
     }
   ]
 }
