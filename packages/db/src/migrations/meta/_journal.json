@@ -806,6 +806,13 @@
       "when": 1780790400000,
       "tag": "0114_persona_generations",
       "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1780876800000,
+      "tag": "0115_persona_prompts",
+      "breakpoints": true
     }
   ]
 }

@@ -105,6 +105,16 @@ export {
   type NewPersonaGeneration,
 } from "./persona_generations.js";
 export {
+  promptTemplates,
+  type PromptTemplate,
+  type NewPromptTemplate,
+} from "./prompt_templates.js";
+export {
+  generationJobs,
+  type GenerationJob,
+  type NewGenerationJob,
+} from "./generation_jobs.js";
+export {
   designRuns,
   designPresetRuns,
   type DesignRun,
