@@ -100,6 +100,11 @@ export {
   type NewLoraTrainingJob,
 } from "./lora_training_jobs.js";
 export {
+  personaGenerations,
+  type PersonaGeneration,
+  type NewPersonaGeneration,
+} from "./persona_generations.js";
+export {
   designRuns,
   designPresetRuns,
   type DesignRun,
