@@ -217,10 +217,10 @@ function TrainPersonaModal({
             </p>
           )}
           {isNsfw && (
-            <p className="flex items-center gap-1.5 text-xs text-red-600">
+            <p className="flex items-center gap-1.5 text-xs text-amber-600">
               <TriangleAlert className="h-3.5 w-3.5" />
               Trigger <code className="font-mono">{photos?.triggerWord}</code> — output is tagged
-              explicit and is hard-blocked from SFW surfaces (IG / TikTok).
+              NSFW. This is a label only; you choose where it posts.
             </p>
           )}
           {trainMut.isError && (

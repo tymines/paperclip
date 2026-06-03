@@ -21,7 +21,6 @@ import type { Db } from "@paperclipai/db";
 import { socialAccounts, socialPosts, socialPostTargets } from "@paperclipai/db";
 import type { SocialAccount, SocialPlatform } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
-import { evaluateNsfwGuard } from "../services/image-studio/nsfw-guard.js";
 import {
   ensureFreshToken,
   getSocialAdapter,
@@ -283,14 +282,6 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
       mediaUrls: Array.isArray(post.mediaUrls) ? (post.mediaUrls as string[]) : [],
       metadata: (post.metadata ?? undefined) as Record<string, unknown> | undefined,
     };
-
-    // NSFW guard: explicit-rated media (e.g. Sidney's sidney_nsfw LoRA output)
-    // is hard-rejected from SFW-only surfaces. Fail-open for untagged posts, so
-    // existing behaviour is unchanged. See services/image-studio/nsfw-guard.ts.
-    const nsfw = evaluateNsfwGuard(platform, draft.metadata);
-    if (nsfw.blocked) {
-      return failTarget(target.id, attempt, `NSFW guard: ${nsfw.reason}`, /*terminal=*/ true);
-    }
 
     try {
       const result = await adapter.publishPost(working, draft);
