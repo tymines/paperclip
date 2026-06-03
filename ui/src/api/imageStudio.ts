@@ -12,9 +12,48 @@ export interface ImageProvider {
   costPerUnit: string;
   status: string | null;
   statusDetail: string | null;
+  trainingCapable: boolean;
+  trainingModel: string | null;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export type TrainingStatus =
+  | "pending"
+  | "uploading"
+  | "training"
+  | "downloading"
+  | "ready"
+  | "failed";
+
+export interface LoraTrainingJob {
+  id: string;
+  companyId: string | null;
+  personaId: string;
+  providerId: string;
+  status: TrainingStatus;
+  contentRating: "sfw" | "explicit";
+  externalJobId: string | null;
+  trainingZipPath: string | null;
+  outputLoraPath: string | null;
+  triggerWord: string | null;
+  progress: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  costUsd: string | null;
+  errorMessage: string | null;
+  hyperparams: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersonaPhotos {
+  dir: string;
+  exists: boolean;
+  count: number;
+  triggerWord: string;
+  contentRating: "sfw" | "explicit";
 }
 
 export const imageStudioApi = {
@@ -47,5 +86,37 @@ export const imageStudioApi = {
   deleteProvider: (companyId: string, providerId: string) =>
     api.delete<{ provider: ImageProvider }>(
       `/companies/${companyId}/image-studio/providers/${providerId}`,
+    ),
+
+  /** Read the training photos directory + image count for a persona */
+  getPersonaPhotos: (companyId: string, personaId: string) =>
+    api.get<PersonaPhotos>(
+      `/companies/${companyId}/image-studio/personas/${personaId}/photos`,
+    ),
+
+  /** Kick off a training run for a persona. Returns 202 with the job. */
+  trainPersona: (
+    companyId: string,
+    personaId: string,
+    opts: { provider_id: string; training_photos_dir?: string },
+  ) =>
+    api.post<{
+      job: LoraTrainingJob;
+      photos: PersonaPhotos;
+      estimatedCostUsd: number;
+      estimatedMinutes: number;
+      note: string;
+    }>(`/companies/${companyId}/image-studio/personas/${personaId}/train`, opts),
+
+  /** Poll a single training job (server polls Replicate on read). */
+  getTrainingJob: (companyId: string, jobId: string) =>
+    api.get<{ job: LoraTrainingJob; pollError?: string }>(
+      `/companies/${companyId}/image-studio/training/${jobId}`,
+    ),
+
+  /** List recent training jobs for a company (newest first). */
+  listTrainingJobs: (companyId: string) =>
+    api.get<{ jobs: LoraTrainingJob[] }>(
+      `/companies/${companyId}/image-studio/training`,
     ),
 };

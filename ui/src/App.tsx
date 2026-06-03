@@ -43,6 +43,7 @@ import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
+import { ImageStudio } from "./pages/ImageStudio";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
