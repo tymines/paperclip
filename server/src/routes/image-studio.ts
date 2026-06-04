@@ -5,6 +5,7 @@ import type { Db } from "@paperclipai/db";
 import { and, eq, or, isNull, desc, asc, sql } from "drizzle-orm";
 import {
   imageProviders,
+  personaGroups,
   loraTrainingJobs,
   personaGenerations,
   promptTemplates,
@@ -180,6 +181,115 @@ export function imageStudioRoutes(db: Db) {
     }
 
     res.json({ provider: deleted });
+  });
+
+  // ── Persona CMS: create + groups (folders) ────────────────────────────────
+
+  // POST /companies/:companyId/image-studio/personas
+  // Create a new (untrained) persona. Distinct from the generic provider POST:
+  // forces type=local_lora, seeds the trigger word from the name, and starts at
+  // status='untrained' so it shows a "Start training" affordance in the list.
+  router.post("/companies/:companyId/image-studio/personas", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+
+    const body = req.body ?? {};
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) {
+      throw badRequest("Persona name is required");
+    }
+    // Trigger word: slug of the name unless one was supplied in attributes.
+    const attributes: Record<string, unknown> =
+      body.attributes && typeof body.attributes === "object" ? { ...body.attributes } : {};
+    if (!attributes.trigger_word || typeof attributes.trigger_word !== "string") {
+      attributes.trigger_word = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    }
+
+    const [inserted] = await db
+      .insert(imageProviders)
+      .values({
+        companyId,
+        name,
+        type: "local_lora",
+        bio: typeof body.bio === "string" && body.bio.trim() ? body.bio.trim() : null,
+        attributes,
+        groupId: body.group_id ? String(body.group_id) : null,
+        avatarPath:
+          typeof body.avatar_path === "string" && body.avatar_path.trim() ? body.avatar_path.trim() : null,
+        isFavorite: Boolean(body.is_favorite),
+        costPerUnit: "0",
+        status: "untrained",
+        statusDetail: "Upload photos and train to bring this persona online.",
+        sortOrder: 0,
+      })
+      .returning();
+
+    res.status(201).json({ provider: inserted });
+  });
+
+  // GET /companies/:companyId/image-studio/persona-groups
+  router.get("/companies/:companyId/image-studio/persona-groups", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const groups = await db
+      .select()
+      .from(personaGroups)
+      .where(or(eq(personaGroups.companyId, companyId), isNull(personaGroups.companyId)))
+      .orderBy(asc(personaGroups.sortOrder), asc(personaGroups.name));
+    res.json({ groups });
+  });
+
+  // POST /companies/:companyId/image-studio/persona-groups  Body: { name, color? }
+  router.post("/companies/:companyId/image-studio/persona-groups", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!name) {
+      throw badRequest("Group name is required");
+    }
+    const [inserted] = await db
+      .insert(personaGroups)
+      .values({ companyId, name, color: req.body?.color ?? null })
+      .returning();
+    res.status(201).json({ group: inserted });
+  });
+
+  // PATCH /companies/:companyId/image-studio/persona-groups/:groupId
+  router.patch("/companies/:companyId/image-studio/persona-groups/:groupId", async (req, res) => {
+    const { companyId, groupId } = req.params;
+    assertCompanyAccess(req, companyId);
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof req.body?.name === "string" && req.body.name.trim()) patch.name = req.body.name.trim();
+    if (req.body?.color !== undefined) patch.color = req.body.color ?? null;
+    if (req.body?.sort_order !== undefined && Number.isFinite(Number(req.body.sort_order))) {
+      patch.sortOrder = Number(req.body.sort_order);
+    }
+    const [updated] = await db
+      .update(personaGroups)
+      .set(patch)
+      .where(and(eq(personaGroups.id, groupId), eq(personaGroups.companyId, companyId)))
+      .returning();
+    if (!updated) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+    res.json({ group: updated });
+  });
+
+  // DELETE /companies/:companyId/image-studio/persona-groups/:groupId
+  // Personas in the group keep existing — the FK is ON DELETE SET NULL.
+  router.delete("/companies/:companyId/image-studio/persona-groups/:groupId", async (req, res) => {
+    const { companyId, groupId } = req.params;
+    assertCompanyAccess(req, companyId);
+    const [deleted] = await db
+      .delete(personaGroups)
+      .where(and(eq(personaGroups.id, groupId), eq(personaGroups.companyId, companyId)))
+      .returning();
+    if (!deleted) {
+      res.status(404).json({ error: "Group not found" });
+      return;
+    }
+    res.json({ group: deleted });
   });
 
   // ── Persona training (Replicate cloud LoRA) ───────────────────────────────
@@ -460,12 +570,45 @@ export function imageStudioRoutes(db: Db) {
     if (body.attributes !== undefined && body.attributes && typeof body.attributes === "object") {
       patch.attributes = body.attributes;
     }
+    // Persona CMS fields. Trigger word lives in attributes.trigger_word and is
+    // intentionally NOT editable here once a persona is trained (renaming it
+    // would break the installed LoRA); the UI locks it.
+    if (body.name !== undefined && typeof body.name === "string" && body.name.trim().length > 0) {
+      patch.name = body.name.trim();
+    }
+    if (body.group_id !== undefined) {
+      patch.groupId = body.group_id === null || body.group_id === "" ? null : String(body.group_id);
+    }
+    if (body.avatar_path !== undefined) {
+      patch.avatarPath =
+        typeof body.avatar_path === "string" && body.avatar_path.trim().length > 0
+          ? body.avatar_path.trim()
+          : null;
+    }
+    if (body.is_favorite !== undefined) {
+      patch.isFavorite = Boolean(body.is_favorite);
+    }
+    if (body.sort_order !== undefined && Number.isFinite(Number(body.sort_order))) {
+      patch.sortOrder = Number(body.sort_order);
+    }
     const [updated] = await db
       .update(imageProviders)
       .set(patch)
       .where(eq(imageProviders.id, personaId))
       .returning();
     res.json({ provider: updated });
+  });
+
+  // GET /image-studio/personas/:personaId — single persona (for the detail page
+  // / deep-links where the providers list isn't already loaded).
+  router.get("/image-studio/personas/:personaId", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+    res.json({ provider: persona });
   });
 
   // GET /image-studio/personas/:personaId/generations?source=test|production&limit=20

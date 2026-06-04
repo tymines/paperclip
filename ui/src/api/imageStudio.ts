@@ -17,6 +17,20 @@ export interface ImageProvider {
   trainingCapable: boolean;
   trainingModel: string | null;
   sortOrder: number;
+  // Persona CMS (0123)
+  groupId: string | null;
+  avatarPath: string | null;
+  isFavorite: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PersonaGroup {
+  id: string;
+  companyId: string | null;
+  name: string;
+  color: string | null;
+  sortOrder: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -392,14 +406,67 @@ export const imageStudioApi = {
       body,
     ),
 
-  /** Edit a persona's long-form bio + structured attribute defaults. */
+  /** Fetch a single persona by id (detail page / deep-links). */
+  getPersona: (personaId: string) =>
+    api.get<{ provider: ImageProvider }>(`/image-studio/personas/${personaId}`),
+
+  /** Edit a persona — bio, attributes, name, group, avatar, favorite, sort. */
   updatePersona: (
     personaId: string,
-    body: { bio?: string | null; attributes?: Record<string, unknown> },
+    body: {
+      bio?: string | null;
+      attributes?: Record<string, unknown>;
+      name?: string;
+      group_id?: string | null;
+      avatar_path?: string | null;
+      is_favorite?: boolean;
+      sort_order?: number;
+    },
   ) =>
     api.patch<{ provider: ImageProvider }>(
       `/image-studio/personas/${personaId}`,
       body,
+    ),
+
+  /** Create a new (untrained) persona under a company. */
+  createPersona: (
+    companyId: string,
+    body: {
+      name: string;
+      bio?: string | null;
+      attributes?: Record<string, unknown>;
+      group_id?: string | null;
+      avatar_path?: string | null;
+      is_favorite?: boolean;
+    },
+  ) =>
+    api.post<{ provider: ImageProvider }>(
+      `/companies/${companyId}/image-studio/personas`,
+      body,
+    ),
+
+  /** Persona folders (groups) for the Personas management surface. */
+  listPersonaGroups: (companyId: string) =>
+    api.get<{ groups: PersonaGroup[] }>(
+      `/companies/${companyId}/image-studio/persona-groups`,
+    ),
+  createPersonaGroup: (companyId: string, body: { name: string; color?: string | null }) =>
+    api.post<{ group: PersonaGroup }>(
+      `/companies/${companyId}/image-studio/persona-groups`,
+      body,
+    ),
+  updatePersonaGroup: (
+    companyId: string,
+    groupId: string,
+    body: { name?: string; color?: string | null; sort_order?: number },
+  ) =>
+    api.patch<{ group: PersonaGroup }>(
+      `/companies/${companyId}/image-studio/persona-groups/${groupId}`,
+      body,
+    ),
+  deletePersonaGroup: (companyId: string, groupId: string) =>
+    api.delete<{ group: PersonaGroup }>(
+      `/companies/${companyId}/image-studio/persona-groups/${groupId}`,
     ),
 
   /** Poll all jobs in a batch with current status. */

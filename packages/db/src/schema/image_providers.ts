@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, numeric, integer, jsonb, timestamp, boolean, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
+import { personaGroups } from "./persona_groups.js";
 
 export const imageProviders = pgTable(
   "image_providers",
@@ -25,6 +26,10 @@ export const imageProviders = pgTable(
     trainingCapable: boolean("training_capable").notNull().default(false),
     trainingModel: text("training_model"),
     sortOrder: integer("sort_order").notNull().default(0),
+    // Persona CMS (0123): folder, cover image (uploads-relative), pin flag.
+    groupId: uuid("group_id").references(() => personaGroups.id, { onDelete: "set null" }),
+    avatarPath: text("avatar_path"),
+    isFavorite: boolean("is_favorite").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -32,5 +37,6 @@ export const imageProviders = pgTable(
     companyIdx: index("image_providers_company_idx").on(table.companyId),
     typeIdx: index("image_providers_type_idx").on(table.type),
     sortOrderIdx: index("image_providers_sort_order_idx").on(table.companyId, table.sortOrder),
+    groupIdx: index("image_providers_group_idx").on(table.groupId),
   }),
 );

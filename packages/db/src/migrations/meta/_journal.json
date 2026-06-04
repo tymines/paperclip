@@ -862,6 +862,13 @@
       "when": 1781481600000,
       "tag": "0122_template_flexibility",
       "breakpoints": true
+    },
+    {
+      "idx": 123,
+      "version": "7",
+      "when": 1781568000000,
+      "tag": "0123_persona_cms",
+      "breakpoints": true
     }
   ]
 }

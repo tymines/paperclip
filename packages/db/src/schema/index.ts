@@ -94,6 +94,7 @@ export { companyJarvisSettings } from "./company_jarvis_settings.js";
 export { jarvisLearnedPreferences } from "./jarvis_learned_preferences.js";
 export { webhookEventLog } from "./webhook_event_log.js";
 export { imageProviders } from "./image_providers.js";
+export { personaGroups } from "./persona_groups.js";
 export {
   loraTrainingJobs,
   type LoraTrainingJob,
