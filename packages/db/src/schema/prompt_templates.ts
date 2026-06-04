@@ -31,6 +31,10 @@ export const promptTemplates = pgTable(
     previewImagePaths: jsonb("preview_image_paths").$type<string[]>().default([]),
     category: text("category"),
     genderTargeting: text("gender_targeting").default("any"),
+    // Which Image Studio tools this template appears in, and the models its
+    // prompt works well on (a ranking hint for the template-click picker).
+    applicableTools: text("applicable_tools").array().default(["photoshoot"]),
+    compatibleModels: text("compatible_models").array().default([]),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
