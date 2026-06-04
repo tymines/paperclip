@@ -38,7 +38,8 @@ import {
 import {
   getReplicateToken,
   getReplicateAccount,
-  createReplicatePrediction,
+  getLatestModelVersion,
+  createReplicatePredictionByVersion,
   getReplicatePrediction,
   extractOutputUrl,
   type ReplicatePrediction,
@@ -86,20 +87,32 @@ export function personaContentRating(persona: Persona): "sfw" | "explicit" {
 }
 
 /**
- * Resolve the LoRA weights reference passed to the inference model. Prefers an
- * explicit override in default_params.replicate_lora; otherwise derives the
- * trained destination model ref `<account>/<trainer-slug>` (the same destination
- * the training pipeline pushed weights to).
+ * Resolve the persona's published Replicate inference model ref (owner/name).
+ *
+ * Each persona's LoRA is published as a standalone inference-ready model (the
+ * LoRA baked into Flux dev), e.g. `tymines/sidney-sfw` — NOT a weights URL loaded
+ * into a separate base model. Prefers the persona's `endpoint` column; otherwise
+ * derives `<account-username>/<hyphenated-persona-slug>` (e.g. Sidney SFW →
+ * tymines/sidney-sfw), which matches the published model naming.
  */
-async function resolveLoraWeights(persona: Persona): Promise<string | null> {
-  const override = (persona.defaultParams as Record<string, unknown> | null)?.[
-    "replicate_lora"
-  ];
-  if (typeof override === "string" && override.length > 0) return override;
+async function resolvePersonaModel(persona: Persona): Promise<string | null> {
+  const endpoint = typeof persona.endpoint === "string" ? persona.endpoint.trim() : "";
+  if (endpoint.length > 0) return endpoint;
   const account = await getReplicateAccount();
   if (!account?.username) return null;
-  // training-runner pushes weights to `<username>/<profile.slug>` (underscored).
-  return `${account.username}/${personaTrainingProfile(persona.name).slug}`;
+  return `${account.username}/${personaSlug(persona.name)}`;
+}
+
+// Cache the latest version SHA per model ref for the process lifetime — the
+// version only rolls forward on a re-publish, and we don't want to GET /versions
+// on every single job submit.
+const versionCache = new Map<string, string>();
+async function resolveModelVersion(model: string): Promise<string> {
+  const cached = versionCache.get(model);
+  if (cached) return cached;
+  const version = await getLatestModelVersion(model);
+  versionCache.set(model, version);
+  return version;
 }
 
 /** Cross-product expand `{variation:a|b|c}` (or `{a|b|c}`) placeholders. */
@@ -151,23 +164,23 @@ async function loadPersona(db: Db, personaId: string): Promise<Persona | null> {
   return row ?? null;
 }
 
-/** Build the flux LoRA prediction input for a job. */
-function buildInput(
-  job: GenerationJob,
-  loraWeights: string,
-  disableSafety: boolean,
-): Record<string, unknown> {
+/**
+ * Build the inference input for a job. The persona's own model IS its LoRA on
+ * top of Flux dev, so there is no `lora_weights` — just the standard flux-dev
+ * trainer inference schema (`model: "dev"`, `guidance_scale`, …), matching the
+ * inputs the proven Sidney generations used.
+ */
+function buildInput(job: GenerationJob, disableSafety: boolean): Record<string, unknown> {
   const input: Record<string, unknown> = {
     prompt: job.promptText,
-    lora_weights: loraWeights,
+    model: "dev",
     lora_scale: job.loraScale != null ? Number(job.loraScale) : 1.0,
     num_inference_steps: job.steps ?? 28,
-    guidance: job.guidance != null ? Number(job.guidance) : 3.5,
+    guidance_scale: job.guidance != null ? Number(job.guidance) : 3.5,
     aspect_ratio: job.aspectRatio ?? "1:1",
-    num_outputs: 1,
     output_format: "png",
-    megapixels: "1",
-    go_fast: false,
+    output_quality: 95,
+    num_outputs: 1,
   };
   if (job.seed != null) input.seed = job.seed;
   // Standard adult-content knob for synthetic-character LoRAs — config path, not
@@ -184,17 +197,18 @@ export async function fireGeneration(db: Db, job: GenerationJob): Promise<string
   try {
     const persona = await loadPersona(db, job.personaId);
     if (!persona) throw new Error("Persona not found");
-    const loraWeights = await resolveLoraWeights(persona);
-    if (!loraWeights) {
+    const model = await resolvePersonaModel(persona);
+    if (!model) {
       throw new Error(
-        "Could not resolve LoRA weights — set default_params.replicate_lora or finish training.",
+        "Could not resolve the persona's Replicate model — set image_providers.endpoint (e.g. owner/sidney-sfw).",
       );
     }
+    const version = await resolveModelVersion(model);
     const disableSafety =
       job.contentRating === "explicit" || personaContentRating(persona) === "explicit";
-    const prediction = await createReplicatePrediction(
-      INFERENCE_MODEL,
-      buildInput(job, loraWeights, disableSafety),
+    const prediction = await createReplicatePredictionByVersion(
+      version,
+      buildInput(job, disableSafety),
     );
     await db
       .update(generationJobs)
@@ -224,6 +238,7 @@ async function landSucceededJob(
   if (!url) throw new Error("Prediction succeeded but returned no output URL");
 
   const persona = await loadPersona(db, job.personaId);
+  const modelRef = persona ? (await resolvePersonaModel(persona)) ?? INFERENCE_MODEL : INFERENCE_MODEL;
   const slug = personaSlug(persona?.name ?? "persona");
   const relDir = path.posix.join("personas", slug, "generated", job.batchId);
   const absDir = path.join(uploadsRoot(), relDir);
@@ -264,7 +279,7 @@ async function landSucceededJob(
     source: "production",
     prompt: job.promptText,
     loraStrength: job.loraScale != null ? String(job.loraScale) : null,
-    model: INFERENCE_MODEL,
+    model: modelRef,
     imagePath: relImage,
     thumbnailPath: relThumb,
     generationMetadata: {

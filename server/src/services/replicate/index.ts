@@ -282,6 +282,53 @@ export async function createReplicatePrediction(
   return (await res.json()) as ReplicatePrediction;
 }
 
+/** Fetch the latest published version SHA of an arbitrary model (owner/name). */
+export async function getLatestModelVersion(model: string, token?: string): Promise<string> {
+  const key = token ?? (await getReplicateToken());
+  if (!key) throw new Error("REPLICATE_API_TOKEN not set.");
+  const res = await fetch(`${REPLICATE_API_BASE}/models/${model}/versions`, {
+    headers: authHeaders(key),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate models.versions failed for ${model} (${res.status}): ${text}`);
+  }
+  const body = (await res.json()) as { results?: Array<{ id: string }> };
+  const id = body.results?.[0]?.id;
+  if (!id) throw new Error(`Model ${model} has no published versions`);
+  return id;
+}
+
+/**
+ * Create an inference prediction against a specific version SHA.
+ *
+ * POST /v1/predictions  { version, input }
+ * This is the path the proven Sidney generations used — the persona's own
+ * published model (LoRA baked into Flux dev) is the inference target, so there
+ * is NO external weights URL.
+ */
+export async function createReplicatePredictionByVersion(
+  version: string,
+  input: Record<string, unknown>,
+): Promise<ReplicatePrediction> {
+  const token = await getReplicateToken();
+  if (!token) {
+    throw new Error(
+      "REPLICATE_API_TOKEN not set — save a token via POST /api/credentials/replicate first.",
+    );
+  }
+  const res = await fetch(`${REPLICATE_API_BASE}/predictions`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ version, input }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Replicate predictions.create failed (${res.status}): ${text}`);
+  }
+  return (await res.json()) as ReplicatePrediction;
+}
+
 /**
  * Poll a prediction's current status.
  * GET /v1/predictions/{id}
