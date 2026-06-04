@@ -9,6 +9,10 @@ export const imageProviders = pgTable(
     companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     type: text("type").notNull().default("external_api"),
+    // Hosted inference host (0125 multi-provider): 'replicate' | 'atlascloud' |
+    // 'wavespeedai'. Distinct from `providerKey` (a free-form label) and `type`
+    // (local_lora vs external_api).
+    providerHost: text("provider_host").notNull().default("replicate"),
     providerKey: text("provider_key"),
     endpoint: text("endpoint"),
     model: text("model"),

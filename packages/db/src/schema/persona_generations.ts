@@ -22,6 +22,10 @@ export const personaGenerations = pgTable(
       .notNull()
       .references(() => imageProviders.id, { onDelete: "cascade" }),
     source: text("source").notNull().default("production"),
+    // Which hosted provider rendered this image (0125 multi-provider) — lets the
+    // gallery tag/group A/B results by provider. Nullable: legacy rows backfilled
+    // to 'replicate'.
+    providerHost: text("provider_host"),
     prompt: text("prompt"),
     loraStrength: numeric("lora_strength", { precision: 4, scale: 2 }),
     model: text("model"),

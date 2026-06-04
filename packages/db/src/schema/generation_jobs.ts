@@ -25,6 +25,13 @@ export const generationJobs = pgTable(
       onDelete: "set null",
     }),
     batchId: uuid("batch_id").notNull(),
+    // Which hosted inference provider this job runs on (0125 multi-provider):
+    // 'replicate' | 'atlascloud' | 'wavespeedai'.
+    providerHost: text("provider_host").notNull().default("replicate"),
+    // Provider-native model id actually fired (e.g. 'bytedance/seedream-v5.0-lite').
+    // Null = the provider's default persona/image model. Recorded so the A/B
+    // compare across providers is meaningful.
+    model: text("model"),
     promptText: text("prompt_text").notNull(),
     loraScale: numeric("lora_scale", { precision: 4, scale: 2 }),
     steps: integer("steps"),
@@ -36,6 +43,9 @@ export const generationJobs = pgTable(
     outputPath: text("output_path"),
     contentRating: text("content_rating").notNull().default("sfw"),
     costUsd: numeric("cost_usd", { precision: 10, scale: 4 }),
+    // Split cost tracking (0125): estimate at enqueue, actual once landed.
+    costEstimateUsd: numeric("cost_estimate_usd", { precision: 10, scale: 4 }),
+    actualCostUsd: numeric("actual_cost_usd", { precision: 10, scale: 4 }),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
@@ -47,6 +57,7 @@ export const generationJobs = pgTable(
     ),
     batchIdx: index("generation_jobs_batch_idx").on(table.batchId),
     statusIdx: index("generation_jobs_status_idx").on(table.status),
+    providerHostIdx: index("generation_jobs_provider_host_idx").on(table.providerHost),
   }),
 );
 
