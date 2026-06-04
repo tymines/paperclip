@@ -30,7 +30,8 @@ type ProviderKey =
   | "anthropic"
   | "gemini"
   | "elevenlabs"
-  | "replicate";
+  | "replicate"
+  | "atlascloud";
 
 interface ProviderMeta {
   key: ProviderKey;
@@ -110,6 +111,15 @@ const PROVIDERS: ProviderMeta[] = [
     // a prominent "rotate now" prompt after the first successful training, and
     // consider tracking token age to nudge periodic rotation.
     note: "Replicate doesn't expose balance via API — Test only verifies the token. To rotate, paste a new token above; it replaces the stored one. Rotate the bootstrap token after the first training succeeds.",
+  },
+  {
+    key: "atlascloud",
+    name: "Atlas Cloud",
+    description: "OpenAI-compatible LLM gateway (api.atlascloud.ai/v1) — one key, many open-source models. Bearer auth.",
+    placeholder: "apikey-…",
+    dashboardUrl: "https://www.atlascloud.ai/console/api-keys",
+    testReturnsBalance: false,
+    note: "Atlas Cloud has no account/username endpoint — Test verifies the token against GET /v1/models. To rotate, paste a new token above.",
   },
 ];
 

@@ -30,7 +30,10 @@ export type ProviderKey =
   | "elevenlabs"
   // Replicate — hosted LoRA training (ostris/flux-dev-lora-trainer) for the
   // Image Studio persona pipeline. Single bearer token, stored like elevenlabs.
-  | "replicate";
+  | "replicate"
+  // Atlas Cloud — OpenAI-compatible LLM gateway (api.atlascloud.ai/v1). Single
+  // bearer token (apikey-…), stored like the other provider keys.
+  | "atlascloud";
 
 export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "deepseek",
@@ -41,6 +44,7 @@ export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "openai_realtime",
   "elevenlabs",
   "replicate",
+  "atlascloud",
 ];
 
 interface StoredKey {
