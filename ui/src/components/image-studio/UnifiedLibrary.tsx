@@ -1,7 +1,7 @@
 /**
  * UnifiedLibrary — aggregated, cross-tool template browser. Search + filter chips
  * (tool · content rating · persona), thumbnail grid, and a "Use Template" that
- * opens the model picker. Used by the standalone /image-studio/library page and
+ * opens the model picker. Used by the Image Studio workbench's Library tab and
  * embedded under the external-provider "Browse templates" chip.
  */
 import { useMemo, useState } from "react";

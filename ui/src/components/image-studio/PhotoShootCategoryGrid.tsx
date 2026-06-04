@@ -1,6 +1,6 @@
 /**
- * PhotoShootCategoryGrid — the multi-category picker grid, shared by the inline
- * persona workbench and the standalone /tools/photoshoot page.
+ * PhotoShootCategoryGrid — the multi-category picker grid, rendered in the
+ * persona workbench's PhotoShoot tab.
  *
  * Features (ZenCreator parity): responsive 5/3/2-col grid, multi-preview carousel
  * (←/→ on hover when a card has >1 preview), per-card helper text, a "New" badge
