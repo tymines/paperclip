@@ -35,15 +35,13 @@ import {
   personaGenerations,
   type GenerationJob,
 } from "@paperclipai/db";
+import { getReplicateAccount, getLatestModelVersion } from "./replicate/index.js";
 import {
-  getReplicateToken,
-  getReplicateAccount,
-  getLatestModelVersion,
-  createReplicatePredictionByVersion,
-  getReplicatePrediction,
-  extractOutputUrl,
-  type ReplicatePrediction,
-} from "./replicate/index.js";
+  getProvider,
+  type GenerateParams,
+  type ImageProvider,
+  type PredictionStatus,
+} from "./image-providers/index.js";
 import { personaTrainingProfile } from "./image-studio/training.js";
 import { uploadsRoot } from "./image-studio/uploads.js";
 
@@ -165,56 +163,67 @@ async function loadPersona(db: Db, personaId: string): Promise<Persona | null> {
 }
 
 /**
- * Build the inference input for a job. The persona's own model IS its LoRA on
- * top of Flux dev, so there is no `lora_weights` — just the standard flux-dev
- * trainer inference schema (`model: "dev"`, `guidance_scale`, …), matching the
- * inputs the proven Sidney generations used.
+ * Build the normalised GenerateParams for a job. For Replicate the persona's own
+ * model IS its LoRA on top of Flux dev (no portable weights URL), so we resolve
+ * its published version SHA and pass it through. Atlas/WaveSpeed render the
+ * prompt as text-to-image on the chosen provider model (the persona LoRA isn't
+ * portable across hosts), so they only need the prompt + knobs.
  */
-function buildInput(job: GenerationJob, disableSafety: boolean): Record<string, unknown> {
-  const input: Record<string, unknown> = {
-    prompt: job.promptText,
-    model: "dev",
-    lora_scale: job.loraScale != null ? Number(job.loraScale) : 1.0,
-    num_inference_steps: job.steps ?? 28,
-    guidance_scale: job.guidance != null ? Number(job.guidance) : 3.5,
-    aspect_ratio: job.aspectRatio ?? "1:1",
-    output_format: "png",
-    output_quality: 95,
-    num_outputs: 1,
-  };
-  if (job.seed != null) input.seed = job.seed;
-  // Standard adult-content knob for synthetic-character LoRAs — config path, not
-  // a special case. Persona rating already baked into job.contentRating.
-  if (disableSafety) input.disable_safety_checker = true;
-  return input;
-}
+async function buildParams(
+  db: Db,
+  job: GenerationJob,
+  provider: ImageProvider,
+): Promise<{ params: GenerateParams; modelRef: string }> {
+  const persona = await loadPersona(db, job.personaId);
+  if (!persona) throw new Error("Persona not found");
+  const disableSafety =
+    job.contentRating === "explicit" || personaContentRating(persona) === "explicit";
 
-/**
- * Submit a single queued job to Replicate. Returns the prediction id, or marks
- * the job failed (with error_message) and returns null on any error.
- */
-export async function fireGeneration(db: Db, job: GenerationJob): Promise<string | null> {
-  try {
-    const persona = await loadPersona(db, job.personaId);
-    if (!persona) throw new Error("Persona not found");
-    const model = await resolvePersonaModel(persona);
-    if (!model) {
+  const params: GenerateParams = {
+    prompt: job.promptText,
+    model: job.model ?? undefined,
+    aspectRatio: job.aspectRatio ?? "1:1",
+    steps: job.steps ?? 28,
+    guidance: job.guidance != null ? Number(job.guidance) : 3.5,
+    seed: job.seed ?? null,
+    loraScale: job.loraScale != null ? Number(job.loraScale) : 1.0,
+    disableSafety,
+  };
+
+  if (provider.id === "replicate") {
+    // Persona generation always targets the persona's own published model.
+    const ref = await resolvePersonaModel(persona);
+    if (!ref) {
       throw new Error(
         "Could not resolve the persona's Replicate model — set image_providers.endpoint (e.g. owner/sidney-sfw).",
       );
     }
-    const version = await resolveModelVersion(model);
-    const disableSafety =
-      job.contentRating === "explicit" || personaContentRating(persona) === "explicit";
-    const prediction = await createReplicatePredictionByVersion(
-      version,
-      buildInput(job, disableSafety),
-    );
+    params.modelRef = ref;
+    params.versionSha = await resolveModelVersion(ref);
+    return { params, modelRef: ref };
+  }
+
+  // Non-Replicate: fall back to the provider's default model when unspecified.
+  const modelRef = params.model ?? provider.defaultModel();
+  params.model = modelRef;
+  return { params, modelRef };
+}
+
+/**
+ * Submit a single queued job to its provider. Returns the prediction id, or
+ * marks the job failed (with error_message) and returns null on any error.
+ */
+export async function fireGeneration(db: Db, job: GenerationJob): Promise<string | null> {
+  try {
+    const provider = getProvider(job.providerHost);
+    if (!provider) throw new Error(`Unknown provider_host '${job.providerHost}'`);
+    const { params } = await buildParams(db, job, provider);
+    const { predictionId } = await provider.submitGeneration(params);
     await db
       .update(generationJobs)
-      .set({ status: "submitted", replicatePredictionId: prediction.id })
+      .set({ status: "submitted", replicatePredictionId: predictionId })
       .where(eq(generationJobs.id, job.id));
-    return prediction.id;
+    return predictionId;
   } catch (err) {
     await db
       .update(generationJobs)
@@ -228,28 +237,44 @@ export async function fireGeneration(db: Db, job: GenerationJob): Promise<string
   }
 }
 
-/** Download the finished image, thumbnail it, and land it in the gallery. */
+/** Pick a file extension for a downloaded output from its URL (default .png). */
+function outputExt(url: string): string {
+  const m = /\.(png|jpe?g|webp|mp4|webm|gif)(?:\?|$)/i.exec(url);
+  return m ? `.${m[1].toLowerCase().replace("jpeg", "jpg")}` : ".png";
+}
+
+/** Download the finished asset, thumbnail it (images only), and land it in the gallery. */
 async function landSucceededJob(
   db: Db,
   job: GenerationJob,
-  prediction: ReplicatePrediction,
+  provider: ImageProvider,
+  status: PredictionStatus,
 ): Promise<void> {
-  const url = extractOutputUrl(prediction);
+  const url = status.outputUrl;
   if (!url) throw new Error("Prediction succeeded but returned no output URL");
 
   const persona = await loadPersona(db, job.personaId);
-  const modelRef = persona ? (await resolvePersonaModel(persona)) ?? INFERENCE_MODEL : INFERENCE_MODEL;
+  // Record the concrete model that ran (persona model for Replicate, else the
+  // job's provider model) so the A/B gallery can attribute results accurately.
+  const modelRef =
+    job.model ??
+    (provider.id === "replicate"
+      ? (persona ? (await resolvePersonaModel(persona)) ?? INFERENCE_MODEL : INFERENCE_MODEL)
+      : provider.defaultModel());
   const slug = personaSlug(persona?.name ?? "persona");
   const relDir = path.posix.join("personas", slug, "generated", job.batchId);
   const absDir = path.join(uploadsRoot(), relDir);
   await fs.mkdir(absDir, { recursive: true });
 
-  // Next sequential index within the batch dir (1-based).
+  const ext = outputExt(url);
+  const isImage = /\.(png|jpg|webp|gif)$/.test(ext);
+
+  // Next sequential index within the batch dir (1-based) across any extension.
   let n = 1;
   try {
     const existing = await fs.readdir(absDir);
     const nums = existing
-      .map((f) => /^(\d+)\.png$/.exec(f)?.[1])
+      .map((f) => /^(\d+)\./.exec(f)?.[1])
       .filter((x): x is string => Boolean(x))
       .map((x) => Number.parseInt(x, 10));
     if (nums.length > 0) n = Math.max(...nums) + 1;
@@ -257,26 +282,34 @@ async function landSucceededJob(
     // dir freshly created — n stays 1.
   }
 
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to download output (${res.status}) from ${url}`);
-  const buf = Buffer.from(await res.arrayBuffer());
+  const buf = await provider.downloadOutput(url);
 
-  const relImage = path.posix.join(relDir, `${n}.png`);
-  const relThumb = path.posix.join(relDir, `${n}_thumb.webp`);
+  const relImage = path.posix.join(relDir, `${n}${ext}`);
+  let relThumb: string | null = null;
   await fs.writeFile(path.join(uploadsRoot(), relImage), buf);
-  try {
-    const thumb = await sharp(buf).resize(512, 512, { fit: "cover" }).webp({ quality: 80 }).toBuffer();
-    await fs.writeFile(path.join(uploadsRoot(), relThumb), thumb);
-  } catch {
-    // Thumbnail is best-effort; the gallery falls back to the full image.
+  if (isImage) {
+    relThumb = path.posix.join(relDir, `${n}_thumb.webp`);
+    try {
+      const thumb = await sharp(buf).resize(512, 512, { fit: "cover" }).webp({ quality: 80 }).toBuffer();
+      await fs.writeFile(path.join(uploadsRoot(), relThumb), thumb);
+    } catch {
+      // Thumbnail is best-effort; the gallery falls back to the full image.
+      relThumb = null;
+    }
   }
 
-  const seconds = prediction.metrics?.predict_time ?? prediction.metrics?.total_time;
-  const costUsd = seconds ? (seconds * 0.001525).toFixed(4) : null;
+  // Prefer the provider's reported cost; fall back to the enqueue-time estimate.
+  const costUsd =
+    status.costUsd != null
+      ? status.costUsd.toFixed(4)
+      : job.costEstimateUsd != null
+        ? String(job.costEstimateUsd)
+        : null;
 
   await db.insert(personaGenerations).values({
     personaId: job.personaId,
     source: "production",
+    providerHost: job.providerHost,
     prompt: job.promptText,
     loraStrength: job.loraScale != null ? String(job.loraScale) : null,
     model: modelRef,
@@ -285,19 +318,26 @@ async function landSucceededJob(
     generationMetadata: {
       batch_id: job.batchId,
       job_id: job.id,
+      provider_host: job.providerHost,
       steps: job.steps,
       guidance: job.guidance,
       aspect_ratio: job.aspectRatio,
       seed: job.seed,
     },
-    replicatePredictionId: prediction.id,
+    replicatePredictionId: status.id,
     costUsd,
     contentRating: job.contentRating,
   });
 
   await db
     .update(generationJobs)
-    .set({ status: "succeeded", outputPath: relImage, costUsd, completedAt: new Date() })
+    .set({
+      status: "succeeded",
+      outputPath: relImage,
+      costUsd,
+      actualCostUsd: costUsd,
+      completedAt: new Date(),
+    })
     .where(eq(generationJobs.id, job.id));
 }
 
@@ -305,15 +345,17 @@ async function landSucceededJob(
 async function pollOne(db: Db, job: GenerationJob): Promise<void> {
   if (!job.replicatePredictionId) return;
   try {
-    const prediction = await getReplicatePrediction(job.replicatePredictionId);
-    if (prediction.status === "succeeded") {
-      await landSucceededJob(db, job, prediction);
-    } else if (prediction.status === "failed" || prediction.status === "canceled") {
+    const provider = getProvider(job.providerHost);
+    if (!provider) throw new Error(`Unknown provider_host '${job.providerHost}'`);
+    const status = await provider.pollPrediction(job.replicatePredictionId);
+    if (status.status === "succeeded") {
+      await landSucceededJob(db, job, provider, status);
+    } else if (status.status === "failed" || status.status === "canceled") {
       await db
         .update(generationJobs)
         .set({
           status: "failed",
-          errorMessage: prediction.error ?? `Prediction ${prediction.status}`,
+          errorMessage: status.error ?? `Prediction ${status.status}`,
           completedAt: new Date(),
         })
         .where(eq(generationJobs.id, job.id));
@@ -340,11 +382,21 @@ async function pollOne(db: Db, job: GenerationJob): Promise<void> {
 // don't double-submit or exceed the concurrency cap.
 let tickInFlight: Promise<void> | null = null;
 
-async function runTick(db: Db): Promise<void> {
-  // No token → nothing we can do; leave jobs queued for when one lands.
-  if ((await getReplicateToken()) === null) return;
+// Per-provider "is the token configured?" cache for one tick (cheap disk reads,
+// but avoid hammering the store inside the queued loop).
+async function configuredHosts(): Promise<Set<string>> {
+  const set = new Set<string>();
+  await Promise.all(
+    (["replicate", "atlascloud", "wavespeedai"] as const).map(async (host) => {
+      const p = getProvider(host);
+      if (p && (await p.isConfigured())) set.add(host);
+    }),
+  );
+  return set;
+}
 
-  // 1. Poll everything currently in flight.
+async function runTick(db: Db): Promise<void> {
+  // 1. Poll everything currently in flight (any provider).
   const inFlight = await db
     .select()
     .from(generationJobs)
@@ -368,7 +420,13 @@ async function runTick(db: Db): Promise<void> {
     .where(eq(generationJobs.status, "queued"))
     .orderBy(asc(generationJobs.createdAt))
     .limit(slots);
+  if (queued.length === 0) return;
+
+  // A job whose provider has no token stays queued (matches the old Replicate
+  // behaviour) — don't fail it just because a key isn't set yet.
+  const configured = await configuredHosts();
   for (const job of queued) {
+    if (!configured.has(job.providerHost)) continue;
     await fireGeneration(db, job);
   }
 }

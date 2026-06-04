@@ -37,6 +37,14 @@ import {
   getReplicateTraining,
   extractWeightsUrl,
 } from "../services/replicate/index.js";
+import {
+  getProvider,
+  listProviders,
+  isProviderHost,
+  DEFAULT_PROVIDER_HOST,
+  PROVIDER_HOSTS,
+  type ProviderHost,
+} from "../services/image-providers/index.js";
 
 /** Map a Replicate training status onto our lora_training_jobs status enum. */
 function mapReplicateStatus(
@@ -740,6 +748,28 @@ export function imageStudioRoutes(db: Db) {
     contentRating: "sfw" | "explicit";
     promptTemplateId: string | null;
     baseSeed: number | null;
+    providerHost: ProviderHost;
+    /** Provider-native model id, or null = the provider's default. */
+    model: string | null;
+  }
+
+  /**
+   * Rough enqueue-time render cost for a (host, model). Image cost is per render;
+   * video cost is per-second × an assumed ~5s clip. Returns a string for the
+   * numeric column, or null when the model/cost is unknown.
+   */
+  async function estimateCostUsd(
+    host: ProviderHost,
+    model: string | null,
+  ): Promise<string | null> {
+    const provider = getProvider(host);
+    if (!provider) return null;
+    const models = await provider.listModels().catch(() => []);
+    const id = model ?? provider.defaultModel();
+    const info = models.find((m) => m.id === id) ?? models.find((m) => m.recommended);
+    if (!info) return null;
+    const usd = info.costUnit === "second" ? info.costPerUnit * 5 : info.costPerUnit;
+    return usd.toFixed(4);
   }
 
   /** Build N generation_jobs rows for one prompt, fanning seeds out by index. */
@@ -749,11 +779,14 @@ export function imageStudioRoutes(db: Db) {
     prompts: string[],
     defaults: JobDefaults,
     seedOffset = 0,
+    costEstimate: string | null = null,
   ) {
     return prompts.map((prompt, i) => ({
       personaId,
       promptTemplateId: defaults.promptTemplateId,
       batchId,
+      providerHost: defaults.providerHost,
+      model: defaults.model,
       promptText: prompt,
       loraScale: defaults.loraScale,
       steps: defaults.steps,
@@ -765,7 +798,13 @@ export function imageStudioRoutes(db: Db) {
           : null,
       status: "queued" as const,
       contentRating: defaults.contentRating,
+      costEstimateUsd: costEstimate,
     }));
+  }
+
+  /** Resolve the provider host from a ?provider= query / body field (defaults to replicate). */
+  function resolveHost(value: unknown): ProviderHost {
+    return isProviderHost(value) ? value : DEFAULT_PROVIDER_HOST;
   }
 
   // POST /image-studio/personas/:personaId/generate
@@ -820,23 +859,196 @@ export function imageStudioRoutes(db: Db) {
         ? body.prompt_template_id
         : null;
 
+    // Provider routing (0125): ?provider= query or body.provider_host, default
+    // replicate. Optional body.model overrides the provider's default model.
+    const providerHost = resolveHost(req.query.provider ?? body.provider_host);
+    const model = typeof body.model === "string" && body.model.length > 0 ? body.model : null;
+    const costEstimate = await estimateCostUsd(providerHost, model);
+
     const batchId = randomUUID();
-    const rows = buildJobRows(personaId, batchId, capped, {
-      loraScale: numOrNull(body.lora_scale) ?? "1.0",
-      steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
-      guidance: numOrNull(body.guidance) ?? "3.5",
-      aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
-      contentRating: rating,
-      promptTemplateId: templateId,
-      baseSeed,
-    });
+    const rows = buildJobRows(
+      personaId,
+      batchId,
+      capped,
+      {
+        loraScale: numOrNull(body.lora_scale) ?? "1.0",
+        steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
+        guidance: numOrNull(body.guidance) ?? "3.5",
+        aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
+        contentRating: rating,
+        promptTemplateId: templateId,
+        baseSeed,
+        providerHost,
+        model,
+      },
+      0,
+      costEstimate,
+    );
 
     const inserted = await db.insert(generationJobs).values(rows).returning({ id: generationJobs.id });
 
     // Kick the queue immediately (fire-and-forget); the 15s scheduler also drives it.
     void kickGenerationQueue(db).catch(() => {});
 
-    res.status(202).json({ batch_id: batchId, job_ids: inserted.map((r) => r.id), prompt: promptText });
+    res.status(202).json({
+      batch_id: batchId,
+      job_ids: inserted.map((r) => r.id),
+      prompt: promptText,
+      provider_host: providerHost,
+    });
+  });
+
+  // ── Multi-provider: status, model catalogs, compare ───────────────────────
+
+  // GET /image-studio/providers — the 3 hosted inference providers with token
+  // status, balance (when exposed) and rate-limit notes. (Distinct from the
+  // company-scoped persona-rows list at /companies/:id/image-studio/providers.)
+  const RATE_LIMITS: Record<ProviderHost, string> = {
+    replicate: "~6 prediction-creates/min (account cap)",
+    atlascloud: "no published per-minute cap",
+    wavespeedai: "no published per-minute cap",
+  };
+  router.get("/image-studio/providers", async (_req, res) => {
+    const providers = await Promise.all(
+      listProviders().map(async (p) => {
+        const configured = await p.isConfigured();
+        const verification = configured
+          ? await p.verify().catch((err) => ({
+              ok: false,
+              error: err instanceof Error ? err.message : String(err),
+            }))
+          : null;
+        const models = await p.listModels().catch(() => []);
+        return {
+          host: p.id,
+          name: p.name,
+          color: p.color,
+          configured,
+          verified: verification?.ok ?? false,
+          detail: verification && "detail" in verification ? verification.detail ?? null : null,
+          error: verification && "error" in verification ? verification.error ?? null : null,
+          balanceUsd:
+            verification && "balanceUsd" in verification ? verification.balanceUsd ?? null : null,
+          rateLimit: RATE_LIMITS[p.id],
+          modelCount: models.length,
+          isDefault: p.id === DEFAULT_PROVIDER_HOST,
+        };
+      }),
+    );
+    res.json({ providers });
+  });
+
+  // GET /image-studio/providers/:host/models — model catalog for one provider.
+  router.get("/image-studio/providers/:host/models", async (req, res) => {
+    const provider = getProvider(req.params.host);
+    if (!provider) {
+      res.status(404).json({ error: `Unknown provider '${req.params.host}'` });
+      return;
+    }
+    const models = await provider.listModels().catch(() => []);
+    res.json({ host: provider.id, models });
+  });
+
+  // POST /image-studio/personas/:personaId/generate-compare
+  // Fire the SAME prompt across every configured provider (or an explicit
+  // body.providers list) so the outputs can be reviewed side-by-side. Each
+  // provider gets its own jobs under a shared batch_id, tagged by provider_host.
+  router.post("/image-studio/personas/:personaId/generate-compare", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+
+    const body = req.body ?? {};
+
+    // Assemble the prompt the same way the single-provider generate does.
+    const selections = coerceSelections(body.selections);
+    const hasStructured =
+      Object.keys(selections).length > 0 || typeof body.freeText === "string";
+    let promptText = typeof body.prompt_text === "string" ? body.prompt_text.trim() : "";
+    if (hasStructured) {
+      const { catalog } = await loadCatalog(db);
+      promptText = assemblePrompt(
+        { bio: persona.bio, attributes: persona.attributes },
+        selections,
+        typeof body.freeText === "string" ? body.freeText : "",
+        catalog,
+      );
+    }
+    if (!promptText) throw badRequest("prompt_text or selections is required");
+
+    // Which providers to compare: explicit list, else every configured host.
+    const requested: ProviderHost[] = Array.isArray(body.providers)
+      ? body.providers.filter(isProviderHost)
+      : PROVIDER_HOSTS;
+    const hosts: ProviderHost[] = [];
+    for (const host of requested) {
+      const provider = getProvider(host);
+      if (provider && (await provider.isConfigured())) hosts.push(host);
+    }
+    if (hosts.length === 0) {
+      throw badRequest("No configured providers to compare — save at least one provider key.");
+    }
+
+    const rating: "sfw" | "explicit" =
+      body.content_rating === "explicit" ? "explicit" : personaContentRating(persona);
+    const baseSeed = body.seed != null && body.seed !== "" ? Number(body.seed) : null;
+    const countRaw = Number.parseInt(String(body.count ?? "1"), 10);
+    const count = Number.isFinite(countRaw) ? Math.min(Math.max(countRaw, 1), 4) : 1;
+
+    const batchId = randomUUID();
+    const allRows: ReturnType<typeof buildJobRows> = [];
+    const byProvider: Record<string, number> = {};
+    let seedOffset = 0;
+    for (const host of hosts) {
+      const prompts = Array.from({ length: count }, () => promptText);
+      const costEstimate = await estimateCostUsd(host, null);
+      allRows.push(
+        ...buildJobRows(
+          personaId,
+          batchId,
+          prompts,
+          {
+            loraScale: numOrNull(body.lora_scale) ?? "1.0",
+            steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
+            guidance: numOrNull(body.guidance) ?? "3.5",
+            aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
+            contentRating: rating,
+            promptTemplateId: null,
+            baseSeed,
+            providerHost: host,
+            model: null,
+          },
+          seedOffset,
+          costEstimate,
+        ),
+      );
+      byProvider[host] = count;
+      // Share the same seed sequence across providers so each provider renders
+      // the SAME seeds — a fairer A/B than independent random seeds.
+    }
+
+    const inserted = await db
+      .insert(generationJobs)
+      .values(allRows)
+      .returning({ id: generationJobs.id, providerHost: generationJobs.providerHost });
+    void kickGenerationQueue(db).catch(() => {});
+
+    // Group the created job ids by provider for the side-by-side UI.
+    const jobsByProvider: Record<string, string[]> = {};
+    for (const row of inserted) {
+      (jobsByProvider[row.providerHost] ??= []).push(row.id);
+    }
+
+    res.status(202).json({
+      batch_id: batchId,
+      prompt: promptText,
+      providers: hosts,
+      jobs_by_provider: jobsByProvider,
+      total: inserted.length,
+    });
   });
 
   // POST /image-studio/personas/:personaId/batch-generate  (PhotoShoot mode)
@@ -860,6 +1072,9 @@ export function imageStudioRoutes(db: Db) {
     const rating: "sfw" | "explicit" =
       body.content_rating === "explicit" ? "explicit" : personaContentRating(persona);
     const baseSeed = body.seed != null && body.seed !== "" ? Number(body.seed) : null;
+    // PhotoShoot honors ?provider= too; defaults to replicate (persona LoRA).
+    const photoshootHost = resolveHost(req.query.provider ?? body.provider_host);
+    const photoshootCost = await estimateCostUsd(photoshootHost, null);
 
     const { catalog } = await loadCatalog(db);
     const batchId = randomUUID();
@@ -900,7 +1115,9 @@ export function imageStudioRoutes(db: Db) {
           contentRating: tpl.contentRating === "explicit" ? "explicit" : rating,
           promptTemplateId: templateId,
           baseSeed,
-        }, seedOffset),
+          providerHost: photoshootHost,
+          model: null,
+        }, seedOffset, photoshootCost),
       );
       seedOffset += count;
     }
