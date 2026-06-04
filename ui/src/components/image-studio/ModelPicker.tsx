@@ -4,7 +4,7 @@
  * card mode (ZC default) and a sortable table mode (our improvement).
  */
 import { useState } from "react";
-import { LayoutGrid, Table2, Check, ShieldCheck, ShieldAlert, Layers, Volume2 } from "lucide-react";
+import { LayoutGrid, Table2, Check, ShieldCheck, ShieldAlert, Layers, Volume2, Star } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   IMAGE_MODELS,
@@ -72,12 +72,15 @@ function ModelCard({
       onClick={onSelect}
       data-testid={`model-${model.id}`}
       aria-pressed={selected}
+      title={model.recommended ? model.recommendedNote : model.altReason}
       className={cn(
         "relative rounded-lg border p-2.5 text-left transition-all duration-200",
         "hover:-translate-y-0.5 hover:shadow-sm",
         selected
           ? "border-indigo-400 bg-indigo-500/5 shadow-[0_0_0_2px_rgba(99,102,241,0.3)]"
-          : "border-border hover:border-indigo-300",
+          : model.recommended
+            ? "border-amber-300/70 hover:border-amber-400"
+            : "border-border hover:border-indigo-300",
       )}
     >
       <div className="mb-1 flex items-center justify-between gap-2">
@@ -93,7 +96,9 @@ function ModelCard({
           ${model.costPerImage.toFixed(3)}/img
         </span>
       </div>
-      <p className="mb-1.5 line-clamp-1 text-[10px] text-muted-foreground">{model.description}</p>
+      <p className="mb-1.5 line-clamp-1 text-[10px] text-muted-foreground">
+        {model.recommended && model.recommendedNote ? model.recommendedNote : model.description}
+      </p>
       <CapBadges model={model} />
       {selected && (
         <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-white">
@@ -117,6 +122,8 @@ export function ModelPicker({
   const selected = findModel(value);
 
   const sorted = [...IMAGE_MODELS].sort((a, b) => {
+    // The ⭐ Recommended model always sorts first.
+    if (!!a.recommended !== !!b.recommended) return a.recommended ? -1 : 1;
     const av = a[sortKey];
     const bv = b[sortKey];
     const cmp =
@@ -168,12 +175,24 @@ export function ModelPicker({
 
       {mode === "cards" ? (
         <div className="space-y-2.5">
+          {/* ⭐ Recommended — rendered first with a visible badge. */}
+          {IMAGE_MODELS.filter((m) => m.recommended).map((m) => (
+            <div key={m.id}>
+              <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                <Star className="h-3 w-3 fill-amber-400 text-amber-400" /> Recommended
+              </p>
+              <ModelCard model={m} selected={m.id === value} onSelect={() => onChange(m.id)} />
+            </div>
+          ))}
+
+          {/* Alternative models — grouped by tier. */}
+          <p className="pt-1 text-[10px] font-medium text-muted-foreground/80">Alternative models</p>
           {MODEL_TIERS.map((tier: ModelTier) => {
-            const models = IMAGE_MODELS.filter((m) => m.tier === tier);
+            const models = IMAGE_MODELS.filter((m) => m.tier === tier && !m.recommended);
             if (models.length === 0) return null;
             return (
               <div key={tier}>
-                <p className="mb-1 text-[10px] font-medium text-muted-foreground/80">{tier}</p>
+                <p className="mb-1 text-[10px] font-medium text-muted-foreground/60">{tier}</p>
                 <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
                   {models.map((m) => (
                     <ModelCard
@@ -219,6 +238,7 @@ export function ModelPicker({
                   key={m.id}
                   onClick={() => onChange(m.id)}
                   data-testid={`model-row-${m.id}`}
+                  title={m.recommended ? m.recommendedNote : m.altReason}
                   className={cn(
                     "cursor-pointer border-t border-border transition-colors",
                     m.id === value ? "bg-indigo-500/10" : "hover:bg-muted/50",
@@ -226,6 +246,9 @@ export function ModelPicker({
                 >
                   <td className="px-2 py-1 font-medium">
                     {m.id === value && <Check className="mr-1 inline h-3 w-3 text-indigo-500" />}
+                    {m.recommended && (
+                      <Star className="mr-1 inline h-3 w-3 fill-amber-400 text-amber-400" aria-label="Recommended" />
+                    )}
                     {m.name}
                   </td>
                   <td className="px-2 py-1">

@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
+import { usePersistedModel } from "@/hooks/usePersistedModel";
 import {
   imageStudioApi,
   type ImageProvider,
@@ -286,7 +287,8 @@ function GenerateInline({
   const [defaultKeys, setDefaultKeys] = useState<Set<string>>(new Set());
   const [freeText, setFreeText] = useState("");
   const [search, setSearch] = useState("");
-  const [modelId, setModelId] = useState(DEFAULT_MODEL_ID);
+  // Model selection persists per persona × tool, defaulting to ⭐ Recommended.
+  const [modelId, setModelId] = usePersistedModel(persona.id, "persona_generate");
   const [count, setCount] = useState(4);
   const [loraScale, setLoraScale] = useState(1.0);
   const [steps, setSteps] = useState(28);

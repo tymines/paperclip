@@ -23,6 +23,12 @@ export interface ImageModel {
   /** USD per generated image — drives the live cost preview. */
   costPerImage: number;
   wired: boolean;
+  /** The one ⭐ Recommended pick (catalog-wide default). */
+  recommended?: boolean;
+  /** Shown on the Recommended card — why it's the best pick. */
+  recommendedNote?: string;
+  /** Tooltip on non-recommended models — why you might pick this one instead. */
+  altReason?: string;
 }
 
 export const IMAGE_MODELS: ImageModel[] = [
@@ -38,6 +44,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "1K",
     costPerImage: 0.02,
     wired: false,
+    altReason: "Faster + cheaper; slightly lower quality.",
   },
   {
     id: "flux-klein-nsfw",
@@ -50,6 +57,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "2MP",
     costPerImage: 0.03,
     wired: false,
+    altReason: "Uncensored LoRA — best for explicit detail.",
   },
   {
     id: "nano-banana-2",
@@ -62,6 +70,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "2K",
     costPerImage: 0.039,
     wired: false,
+    altReason: "Fastest, but safety filters are on.",
   },
   // ── Standard ──────────────────────────────────────────────────────────────
   {
@@ -75,6 +84,8 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "4K",
     costPerImage: 0.04,
     wired: true,
+    recommended: true,
+    recommendedNote: "Tested best quality on Sidney.",
   },
   {
     id: "qwen-2",
@@ -87,6 +98,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "2K",
     costPerImage: 0.05,
     wired: false,
+    altReason: "Sharper text + fine detail.",
   },
   {
     id: "seedream-5",
@@ -99,6 +111,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "2K",
     costPerImage: 0.05,
     wired: false,
+    altReason: "Different aesthetic, latest generation.",
   },
   // ── Premium ───────────────────────────────────────────────────────────────
   {
@@ -112,6 +125,7 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "2K",
     costPerImage: 0.08,
     wired: false,
+    altReason: "Premium fidelity at higher cost.",
   },
   {
     id: "wan-2-7",
@@ -124,12 +138,26 @@ export const IMAGE_MODELS: ImageModel[] = [
     maxResolution: "1K",
     costPerImage: 0.07,
     wired: false,
+    altReason: "WAN aesthetic — experimental.",
   },
 ];
 
 export const MODEL_TIERS: ModelTier[] = ["Quick & Cheap", "Standard", "Premium"];
 
-export const DEFAULT_MODEL_ID = "general";
+/** The single ⭐ Recommended model id (catalog-wide default). */
+export const RECOMMENDED_MODEL_ID = IMAGE_MODELS.find((m) => m.recommended)?.id ?? "general";
+
+/** Default selection = the Recommended pick. */
+export const DEFAULT_MODEL_ID = RECOMMENDED_MODEL_ID;
+
+/**
+ * Recommended model for a template: the first entry of compatible_models (if any
+ * is a known model), else the catalog Recommended pick.
+ */
+export function recommendedModelId(compatibleModels?: string[] | null): string {
+  const first = (compatibleModels ?? []).find((id) => IMAGE_MODELS.some((m) => m.id === id));
+  return first ?? RECOMMENDED_MODEL_ID;
+}
 
 /** Per-image fee breakdown for the cost-preview tooltip. */
 export const LORA_FEE = 0;

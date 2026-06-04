@@ -30,7 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { IMAGE_MODELS, DEFAULT_MODEL_ID } from "./models";
+import { IMAGE_MODELS, recommendedModelId } from "./models";
 import { TOOLS, toolDef } from "./tools";
 
 export interface TemplateApply {
@@ -67,9 +67,12 @@ export function UseTemplatePicker({
   const def = toolDef(tool);
 
   const recommended = template.compatibleModels ?? [];
-  const recommendedModels = IMAGE_MODELS.filter((m) => recommended.includes(m.id));
-  const otherModels = IMAGE_MODELS.filter((m) => !recommended.includes(m.id));
-  const [model, setModel] = useState<string>(recommended[0] ?? DEFAULT_MODEL_ID);
+  // The first compatible model is THE recommended pick; show only it under
+  // "Recommended", the rest under "All models".
+  const topModelId = recommendedModelId(recommended);
+  const recommendedModels = IMAGE_MODELS.filter((m) => m.id === topModelId);
+  const otherModels = IMAGE_MODELS.filter((m) => m.id !== topModelId);
+  const [model, setModel] = useState<string>(topModelId);
 
   const [personaId, setPersonaId] = useState<string>(currentPersonaId ?? personas[0]?.id ?? "");
 
