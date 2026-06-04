@@ -346,7 +346,7 @@ function GenerateInline({
   }
   useEffect(() => { registerActions({ surpriseMe, reset }); });
 
-  function useTemplate(t: PromptTemplate) {
+  function useTemplate(t: PromptTemplate, apply?: { tool: string; model: string; personaId: string | null }) {
     const preset = t.attributePreset ?? {};
     setSelections((prev) => ({ ...prev, ...preset }));
     setDefaultKeys((prev) => {
@@ -357,6 +357,7 @@ function GenerateInline({
     if (t.defaultAspectRatio) setAspectRatio(t.defaultAspectRatio);
     if (t.defaultLoraScale != null) setLoraScale(Number(t.defaultLoraScale));
     if (t.defaultSteps != null) setSteps(t.defaultSteps);
+    if (apply?.model) setModelId(apply.model); // honor the picker's model choice
     setEditing(false);
     setSubTab("compose");
   }
@@ -499,7 +500,7 @@ function GenerateInline({
       </div>
 
       {subTab === "library" ? (
-        <TemplateLibraryTab persona={persona} showExplicit={showExplicit} onUseTemplate={useTemplate} />
+        <TemplateLibraryTab persona={persona} showExplicit={showExplicit} onUseTemplate={useTemplate} currentTool="persona_generate" />
       ) : (
         <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-5">
           <div className="min-w-0">

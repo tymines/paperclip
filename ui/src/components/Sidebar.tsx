@@ -27,6 +27,7 @@ import {
   ImageIcon,
   Camera,
   Shirt,
+  BookMarked,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -217,6 +218,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
+        <SidebarNavItem to="/image-studio/library" label="Template Library" icon={BookMarked} />
         <SidebarNavItem to="/image-studio/tools/photoshoot" label="PhotoShoot" icon={Camera} />
         <SidebarNavItem to="/image-studio/tools/female-undresser" label="Female Undresser" icon={Shirt} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
@@ -304,6 +306,7 @@ function SidebarV1({
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
+        <SidebarNavItem to="/image-studio/library" label="Template Library" icon={BookMarked} />
         <SidebarNavItem to="/image-studio/tools/photoshoot" label="PhotoShoot" icon={Camera} />
         <SidebarNavItem to="/image-studio/tools/female-undresser" label="Female Undresser" icon={Shirt} />
         {showWorkspacesLink ? (

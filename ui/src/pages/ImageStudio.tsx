@@ -63,6 +63,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { PersonaWorkbench } from "@/components/image-studio/PersonaWorkbench";
+import { ExternalProviderQuickGenerate } from "@/components/image-studio/ExternalProviderQuickGenerate";
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
 
@@ -768,8 +769,65 @@ function externalProviderDescription(name: string): string {
   return EXTERNAL_PROVIDER_LABELS[name] ?? name;
 }
 
+/** External provider card — click "Quick Generate" to expand an inline generate
+ *  panel (prompt + params + Browse templates), replacing the dead display card. */
+function ExternalProviderCard({
+  provider,
+  personas,
+}: {
+  provider: ImageProvider;
+  personas: ImageProvider[];
+}) {
+  const [open, setOpen] = useState(false);
+  const label = externalProviderDescription(provider.name);
+  const costLabel =
+    provider.costPerUnit && provider.costPerUnit !== "0"
+      ? provider.trainingCapable
+        ? `$${parseFloat(provider.costPerUnit).toFixed(2)}/run`
+        : `$${parseFloat(provider.costPerUnit).toFixed(4)}/img`
+      : null;
+
+  return (
+    <Card className={cn("overflow-hidden", open && "sm:col-span-2 ring-1 ring-indigo-400/40")}>
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-2">
+            {providerIcon("external_api", provider.name)}
+            <div>
+              <CardTitle className="text-sm">{provider.name}</CardTitle>
+              <CardDescription className="text-xs">{label}</CardDescription>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {provider.trainingCapable && (
+              <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">trainer</Badge>
+            )}
+            {costLabel && <span className="text-xs text-muted-foreground">{costLabel}</span>}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="pb-4">
+        <div className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-1 text-xs text-muted-foreground">
+            <Bot className="h-3 w-3" />
+            {provider.model ?? label}
+          </span>
+          {!provider.trainingCapable && (
+            <Button size="sm" variant="outline" onClick={() => setOpen((o) => !o)} data-testid={`external-open-${provider.id}`}>
+              {open ? <ChevronUp className="mr-1.5 h-3.5 w-3.5" /> : <Zap className="mr-1.5 h-3.5 w-3.5" />}
+              {open ? "Hide" : "Quick Generate"}
+            </Button>
+          )}
+        </div>
+        {open && <ExternalProviderQuickGenerate provider={provider} personas={personas} />}
+      </CardContent>
+    </Card>
+  );
+}
+
 function GeneralImageGenSection({ providers, loading }: { providers: ImageProvider[]; loading: boolean }) {
   const external = useMemo(() => providers.filter((p) => p.type === "external_api"), [providers]);
+  const personas = useMemo(() => providers.filter((p) => p.type === "local_lora"), [providers]);
 
   if (loading) {
     return (
@@ -805,54 +863,9 @@ function GeneralImageGenSection({ providers, loading }: { providers: ImageProvid
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {external.map((p) => {
-            const label = externalProviderDescription(p.name);
-            const costLabel =
-              p.costPerUnit && p.costPerUnit !== "0"
-                ? p.trainingCapable
-                  ? `$${parseFloat(p.costPerUnit).toFixed(2)}/run`
-                  : `$${parseFloat(p.costPerUnit).toFixed(4)}/img`
-                : null;
-
-            return (
-              <Card key={p.id} className="overflow-hidden">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      {providerIcon("external_api", p.name)}
-                      <div>
-                        <CardTitle className="text-sm">{p.name}</CardTitle>
-                        <CardDescription className="text-xs">{label}</CardDescription>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {p.trainingCapable && (
-                        <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">
-                          trainer
-                        </Badge>
-                      )}
-                      {costLabel && (
-                        <span className="text-xs text-muted-foreground">{costLabel}</span>
-                      )}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="pb-4">
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span className="flex items-center gap-1">
-                      <Bot className="h-3 w-3" />
-                      {p.model ?? label}
-                    </span>
-                    {p.endpoint && (
-                      <span className="truncate max-w-[160px]" title={p.endpoint}>
-                        {p.endpoint}
-                      </span>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
+          {external.map((p) => (
+            <ExternalProviderCard key={p.id} provider={p} personas={personas} />
+          ))}
         </div>
       )}
     </div>

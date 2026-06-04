@@ -14,6 +14,7 @@ import {
   type ImageProvider,
   type PromptTemplate,
 } from "@/api/imageStudio";
+import { UseTemplatePicker, type TemplateApply } from "./UseTemplatePicker";
 
 function gradientFor(value: string): string {
   let h = 0;
@@ -25,13 +26,20 @@ export function TemplateLibraryTab({
   persona,
   showExplicit,
   onUseTemplate,
+  personas = [],
+  currentTool = "persona_generate",
 }: {
   persona: ImageProvider;
   showExplicit: boolean;
-  onUseTemplate: (template: PromptTemplate) => void;
+  /** Receives the picker's tool/model/persona choice (undefined = Shift-skip). */
+  onUseTemplate: (template: PromptTemplate, apply?: TemplateApply) => void;
+  /** Personas for the picker's Persona dropdown (cross-tool model-flex flow). */
+  personas?: ImageProvider[];
+  currentTool?: string;
 }) {
   const [category, setCategory] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [picking, setPicking] = useState<PromptTemplate | null>(null);
 
   const templatesQ = useQuery({
     queryKey: ["image-studio", "templates", persona.id],
@@ -138,7 +146,11 @@ export function TemplateLibraryTab({
                 <button
                   type="button"
                   data-testid={`use-template-${t.id}`}
-                  onClick={() => onUseTemplate(t)}
+                  title="Click to choose tool + model · Shift-click to use defaults"
+                  onClick={(e) => {
+                    if (e.shiftKey) onUseTemplate(t); // power-user: skip picker
+                    else setPicking(t);
+                  }}
                   className="mt-auto inline-flex items-center justify-center gap-1 rounded-md bg-indigo-500/10 px-2 py-1 text-[11px] font-medium text-indigo-700 transition-colors hover:bg-indigo-500/20 dark:text-indigo-300"
                 >
                   <Wand2 className="h-3 w-3" />
@@ -148,6 +160,21 @@ export function TemplateLibraryTab({
             </div>
           ))}
         </div>
+      )}
+
+      {picking && (
+        <UseTemplatePicker
+          template={picking}
+          open={!!picking}
+          onOpenChange={(o) => !o && setPicking(null)}
+          personas={personas.length ? personas : [persona]}
+          currentTool={currentTool}
+          currentPersonaId={persona.id}
+          onApply={(apply) => {
+            onUseTemplate(picking, apply);
+            setPicking(null);
+          }}
+        />
       )}
     </div>
   );

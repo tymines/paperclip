@@ -46,6 +46,7 @@ import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
 import { PhotoShootTool } from "./pages/image-studio/PhotoShootTool";
 import { FemaleUndresserTool } from "./pages/image-studio/FemaleUndresserTool";
+import { ImageStudioLibrary } from "./pages/image-studio/ImageStudioLibrary";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -172,6 +173,7 @@ function boardRoutes() {
       <Route path="image-studio" element={<ImageStudio />} />
       <Route path="image-studio/tools/photoshoot" element={<PhotoShootTool />} />
       <Route path="image-studio/tools/female-undresser" element={<FemaleUndresserTool />} />
+      <Route path="image-studio/library" element={<ImageStudioLibrary />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath/*" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />

@@ -141,6 +141,8 @@ export interface PromptTemplate {
   previewImagePaths: string[] | null;
   category: string | null;
   genderTargeting: string | null;
+  applicableTools: string[] | null;
+  compatibleModels: string[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -347,6 +349,41 @@ export const imageStudioApi = {
       `/image-studio/personas/${personaId}/preview-prompt`,
       body,
     ),
+
+  /** Unified, cross-tool template browser. */
+  listTemplates: (opts?: {
+    tool?: string;
+    model?: string;
+    contentRating?: "sfw" | "explicit";
+    personaId?: string;
+    tags?: string[];
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.tool) params.set("tool", opts.tool);
+    if (opts?.model) params.set("model", opts.model);
+    if (opts?.contentRating) params.set("content_rating", opts.contentRating);
+    if (opts?.personaId) params.set("persona_id", opts.personaId);
+    if (opts?.tags?.length) params.set("tags", opts.tags.join(","));
+    const qs = params.toString();
+    return api.get<{ templates: PromptTemplate[] }>(
+      `/image-studio/templates${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** Apply a template to a chosen tool/model/persona → assembled prompt + params. */
+  applyTemplate: (
+    id: string,
+    body: { tool: string; model: string; persona_id?: string | null },
+  ) =>
+    api.post<{
+      prompt: string;
+      template_text: string;
+      attribute_preset: Record<string, string>;
+      tool: string;
+      model: string;
+      persona_id: string | null;
+      params: { lora_scale: number; steps: number; guidance: number; aspect_ratio: string };
+    }>(`/image-studio/templates/${id}/apply`, body),
 
   /** Female Undresser tool — stub until the generation backend lands. */
   femaleUndresserGenerate: (body: Record<string, unknown>) =>

@@ -122,7 +122,15 @@ export function PhotoShootTool() {
               </TabsContent>
               <TabsContent value="library" className="mt-3">
                 {persona && (
-                  <TemplateLibraryTab persona={persona} showExplicit={showExplicit} onUseTemplate={() => {}} />
+                  <TemplateLibraryTab
+                    persona={persona}
+                    showExplicit={showExplicit}
+                    personas={personas}
+                    currentTool="photoshoot"
+                    onUseTemplate={(_t, apply) => {
+                      if (apply?.personaId) setPersonaId(apply.personaId);
+                    }}
+                  />
                 )}
               </TabsContent>
             </Tabs>
