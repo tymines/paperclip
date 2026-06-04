@@ -650,31 +650,46 @@ export function PersonaWorkbench({
   return (
     <div className="mt-3 rounded-xl border border-border bg-card p-3 sm:p-4" data-testid="persona-workbench">
       {/* Apple-Wallet-style tool strip: a single horizontally-scrollable pill
-          row, sticky to the top of the card, with the SFW/18+ toggle pinned at
-          the trailing edge so it never gets clipped on mobile. */}
-      <div className="sticky top-0 z-20 -mx-3 mb-3 flex items-center gap-2 border-b border-border bg-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4">
-        <div className="min-w-0 flex-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="inline-flex gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5 text-sm" role="tablist">
-            {WORKBENCH_TABS.map(({ key, label, icon: Icon }) => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={tab === key}
-                onClick={() => selectTab(key)}
-                data-testid={`tab-${key}`}
-                className={cn(
-                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 font-medium transition-colors",
-                  tab === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" /> {label}
-              </button>
-            ))}
+          row, sticky to the top of the card. On mobile the SFW/18+ toggle sits
+          on its own row above so the full viewport width is free for the pills
+          (and they never get squeezed down to a single visible tab); on ≥sm the
+          toggle moves to the trailing edge of the same row. */}
+      <div className="sticky top-0 z-20 -mx-3 mb-3 border-b border-border bg-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative order-2 min-w-0 flex-1 sm:order-1">
+            <div className="overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <div className="inline-flex gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5 text-sm" role="tablist">
+              {WORKBENCH_TABS.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === key}
+                  onClick={() => selectTab(key)}
+                  data-testid={`tab-${key}`}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 font-medium transition-colors",
+                    tab === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" /> {label}
+                </button>
+              ))}
+            </div>
+            </div>
+            {/* Mobile scroll affordance: fade the trailing edge so the off-screen
+                tabs (Undresser · Library) read as "scroll for more". */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-card to-transparent sm:hidden"
+            />
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <ExplicitToggle value={showExplicit} onChange={setShowExplicit} />
+          <div className="order-1 flex shrink-0 items-center justify-end gap-1.5 sm:order-2">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:hidden">
+              Content
+            </span>
+            <ExplicitToggle value={showExplicit} onChange={setShowExplicit} />
+          </div>
         </div>
       </div>
 
