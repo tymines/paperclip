@@ -9,6 +9,8 @@ export interface ImageProvider {
   endpoint: string | null;
   model: string | null;
   defaultParams: Record<string, unknown> | null;
+  bio: string | null;
+  attributes: Record<string, unknown> | null;
   costPerUnit: string;
   status: string | null;
   statusDetail: string | null;
@@ -17,6 +19,54 @@ export interface ImageProvider {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// ─── Structured attribute controls ──────────────────────────────────────────
+
+export type ControlType = "toggle" | "slider" | "swatch" | "card_grid";
+export type AttributeCategory =
+  | "identity"
+  | "body"
+  | "face"
+  | "pose"
+  | "wardrobe"
+  | "scene"
+  | "lighting";
+
+export interface AttributeOption {
+  id: number;
+  controlId: number;
+  value: string;
+  label: string;
+  promptFragment: string;
+  previewImagePath: string | null;
+  sortOrder: number;
+  enabled: boolean;
+  contentRating: "sfw" | "explicit";
+}
+
+export interface AttributeControl {
+  id: number;
+  key: string;
+  label: string;
+  controlType: ControlType;
+  category: AttributeCategory;
+  promptTemplate: string;
+  helperText: string | null;
+  sortOrder: number;
+  applicableTo: string[] | null;
+  enabled: boolean;
+  options: AttributeOption[];
+}
+
+export type Selections = Record<string, string>;
+
+export interface PromptConflict {
+  controlKey: string;
+  controlLabel: string;
+  selectedValue: string;
+  selectedLabel: string;
+  conflictingLabel: string;
 }
 
 export type TrainingStatus =
@@ -86,6 +136,10 @@ export interface PromptTemplate {
   defaultAspectRatio: string | null;
   contentRating: "sfw" | "explicit";
   tags: string[] | null;
+  attributePreset: Record<string, string> | null;
+  previewImagePath: string | null;
+  category: string | null;
+  genderTargeting: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -119,7 +173,10 @@ export interface GenerationJob {
 }
 
 export interface GenerateBatchBody {
-  prompt_text: string;
+  prompt_text?: string;
+  /** Structured-control mode: clicked attributes compiled by the assembler. */
+  selections?: Selections;
+  freeText?: string;
   lora_scale?: number;
   steps?: number;
   guidance?: number;
@@ -127,6 +184,18 @@ export interface GenerateBatchBody {
   seed?: number | null;
   count?: number;
   prompt_template_id?: string | null;
+  content_rating?: "sfw" | "explicit";
+}
+
+export interface PhotoShootCategory {
+  templateId: string;
+  count: number;
+}
+
+export interface BatchGenerateBody {
+  categories: PhotoShootCategory[];
+  shared_selections?: Selections;
+  seed?: number | null;
   content_rating?: "sfw" | "explicit";
 }
 
@@ -242,8 +311,49 @@ export const imageStudioApi = {
 
   /** Fire a batch generation. Returns the batch id + queued job ids. */
   generateBatch: (personaId: string, body: GenerateBatchBody) =>
-    api.post<{ batch_id: string; job_ids: string[] }>(
+    api.post<{ batch_id: string; job_ids: string[]; prompt?: string }>(
       `/image-studio/personas/${personaId}/generate`,
+      body,
+    ),
+
+  /** PhotoShoot: fire N categories × per-category quantity as one batch. */
+  batchGenerate: (personaId: string, body: BatchGenerateBody) =>
+    api.post<{ batch_id: string; job_ids: string[]; total: number }>(
+      `/image-studio/personas/${personaId}/batch-generate`,
+      body,
+    ),
+
+  /** The data-driven structured-control catalog for the Generate panel. */
+  getAttributeControls: (opts?: {
+    category?: string;
+    contentRating?: "sfw" | "explicit";
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.category) params.set("category", opts.category);
+    if (opts?.contentRating) params.set("content_rating", opts.contentRating);
+    const qs = params.toString();
+    return api.get<{ controls: AttributeControl[] }>(
+      `/image-studio/attribute-controls${qs ? `?${qs}` : ""}`,
+    );
+  },
+
+  /** Assemble the live prompt for a persona's current selections + free text. */
+  previewPrompt: (
+    personaId: string,
+    body: { selections?: Selections; freeText?: string },
+  ) =>
+    api.post<{ prompt: string; conflicts: PromptConflict[] }>(
+      `/image-studio/personas/${personaId}/preview-prompt`,
+      body,
+    ),
+
+  /** Edit a persona's long-form bio + structured attribute defaults. */
+  updatePersona: (
+    personaId: string,
+    body: { bio?: string | null; attributes?: Record<string, unknown> },
+  ) =>
+    api.patch<{ provider: ImageProvider }>(
+      `/image-studio/personas/${personaId}`,
       body,
     ),
 
@@ -254,10 +364,18 @@ export const imageStudioApi = {
     ),
 
   /** List a persona's prompt templates + shared (persona_id NULL) templates. */
-  listPromptTemplates: (personaId: string) =>
-    api.get<{ templates: PromptTemplate[] }>(
-      `/image-studio/personas/${personaId}/prompt-templates`,
-    ),
+  listPromptTemplates: (
+    personaId: string,
+    opts?: { category?: string; contentRating?: "sfw" | "explicit" },
+  ) => {
+    const params = new URLSearchParams();
+    if (opts?.category) params.set("category", opts.category);
+    if (opts?.contentRating) params.set("content_rating", opts.contentRating);
+    const qs = params.toString();
+    return api.get<{ templates: PromptTemplate[] }>(
+      `/image-studio/personas/${personaId}/prompt-templates${qs ? `?${qs}` : ""}`,
+    );
+  },
 
   /** Save a new prompt template for a persona. */
   createPromptTemplate: (
@@ -272,6 +390,10 @@ export const imageStudioApi = {
       default_aspect_ratio?: string;
       content_rating?: "sfw" | "explicit";
       tags?: string[];
+      attribute_preset?: Record<string, string>;
+      category?: string;
+      gender_targeting?: string;
+      preview_image_path?: string;
     },
   ) =>
     api.post<{ template: PromptTemplate }>(
