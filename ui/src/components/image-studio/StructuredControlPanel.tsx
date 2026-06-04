@@ -146,10 +146,19 @@ function SwatchControl({ control, value, onChange, showExplicit, search, isDefau
                   : "border-border bg-muted/40 text-muted-foreground hover:border-indigo-300 hover:bg-muted",
               )}
             >
-              <span
-                className="h-2.5 w-2.5 rounded-full ring-1 ring-black/10"
-                style={{ background: gradientFor(o.value) }}
-              />
+              {o.previewImagePath ? (
+                <img
+                  src={uploadUrl(o.previewImagePath)}
+                  alt=""
+                  loading="lazy"
+                  className="h-4 w-4 rounded-full object-cover ring-1 ring-black/10"
+                />
+              ) : (
+                <span
+                  className="h-2.5 w-2.5 rounded-full ring-1 ring-black/10"
+                  style={{ background: gradientFor(o.value) }}
+                />
+              )}
               {o.label}
             </button>
           );

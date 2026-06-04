@@ -27,6 +27,13 @@ import { findModel, DEFAULT_MODEL_ID } from "./models";
 
 const QUANTITY_CHIPS = [5, 10, 15] as const;
 
+function personaRating(persona: ImageProvider): "sfw" | "explicit" {
+  const tw = String(persona.attributes?.["trigger_word"] ?? "");
+  if (/nsfw/i.test(tw) || /nsfw/i.test(persona.name)) return "explicit";
+  const fromParams = (persona.defaultParams as Record<string, unknown> | null)?.["content_rating"];
+  return fromParams === "explicit" ? "explicit" : "sfw";
+}
+
 function gradientFor(value: string): string {
   let h = 0;
   for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) % 360;
@@ -45,7 +52,7 @@ export function PhotoShootModal({
   onBatchStarted: (batchId: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [showExplicit, setShowExplicit] = useState(false);
+  const [showExplicit, setShowExplicit] = useState(personaRating(persona) === "explicit");
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const templatesQ = useQuery({
@@ -54,15 +61,17 @@ export function PhotoShootModal({
     enabled: open,
   });
 
-  // Only templates with a structured preset make good PhotoShoot categories.
+  // A template is a usable PhotoShoot category if it has a structured preset OR
+  // a curated preview image (the photoshoot-category templates carry a preview +
+  // their own prompt text, which batch-generate falls back to).
   const categories = useMemo(
     () =>
-      (templatesQ.data?.templates ?? []).filter(
-        (t) =>
-          t.attributePreset &&
-          Object.keys(t.attributePreset).length > 0 &&
-          (showExplicit || t.contentRating !== "explicit"),
-      ),
+      (templatesQ.data?.templates ?? []).filter((t) => {
+        const usable =
+          (t.attributePreset && Object.keys(t.attributePreset).length > 0) ||
+          !!t.previewImagePath;
+        return usable && (showExplicit || t.contentRating !== "explicit");
+      }),
     [templatesQ.data, showExplicit],
   );
 
