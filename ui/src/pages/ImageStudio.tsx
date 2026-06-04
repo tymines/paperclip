@@ -59,10 +59,10 @@ import {
   X,
   Tag,
   BookMarked,
-  Camera,
+  ChevronUp,
 } from "lucide-react";
-import { GeneratePanel } from "@/components/image-studio/GeneratePanel";
-import { PhotoShootModal } from "@/components/image-studio/PhotoShootModal";
+import { cn } from "@/lib/utils";
+import { PersonaWorkbench } from "@/components/image-studio/PersonaWorkbench";
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
 
@@ -498,7 +498,7 @@ function PersonaGallery({ persona }: { persona: ImageProvider }) {
   );
 }
 
-// (Legacy single-textarea composer removed — replaced by GeneratePanel / PhotoShootModal.)
+// (Legacy modals removed — Generate + PhotoShoot now live inline via PersonaWorkbench.)
 
 /** Live batch status row shown under a persona card while a batch is firing. */
 function BatchProgressRow({
@@ -581,13 +581,18 @@ function PersonaCard({
   canTrain: boolean;
   onTrain: () => void;
 }) {
-  const [showComposer, setShowComposer] = useState(false);
-  const [showPhotoShoot, setShowPhotoShoot] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const pill = trainingPill(job);
 
+  function toggleExpand() {
+    setMounted(true);
+    setExpanded((e) => !e);
+  }
+
   return (
-    <Card className="overflow-hidden">
+    <Card className={cn("overflow-hidden transition-all", expanded && "sm:col-span-2 ring-1 ring-indigo-400/40")}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
@@ -607,18 +612,18 @@ function PersonaCard({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => setShowComposer(true)} data-testid="generate-open">
-              <Zap className="mr-1.5 h-3.5 w-3.5" />
-              Generate
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowPhotoShoot(true)}
-              data-testid="photoshoot-open"
-            >
-              <Camera className="mr-1.5 h-3.5 w-3.5" />
-              PhotoShoot
+            <Button size="sm" onClick={toggleExpand} data-testid="generate-open">
+              {expanded ? (
+                <>
+                  <ChevronUp className="mr-1.5 h-3.5 w-3.5" />
+                  Hide studio
+                </>
+              ) : (
+                <>
+                  <Zap className="mr-1.5 h-3.5 w-3.5" />
+                  Open studio
+                </>
+              )}
             </Button>
             <Button size="sm" variant="outline" onClick={onTrain} disabled={!canTrain}>
               <Cloud className="mr-1.5 h-3.5 w-3.5" />
@@ -638,6 +643,23 @@ function PersonaCard({
           <p className="mt-2 text-xs text-amber-600">{persona.statusDetail}</p>
         )}
 
+        {/* Inline workbench — expands downward (no modal/overlay). */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows] duration-300 ease-out",
+            expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+          )}
+        >
+          <div className="overflow-hidden">
+            {mounted && (
+              <PersonaWorkbench
+                persona={persona}
+                onBatchStarted={(batchId) => setActiveBatchId(batchId)}
+              />
+            )}
+          </div>
+        </div>
+
         {activeBatchId && (
           <BatchProgressRow
             persona={persona}
@@ -648,24 +670,6 @@ function PersonaCard({
 
         <PersonaGallery persona={persona} />
       </CardContent>
-
-      {showComposer && (
-        <GeneratePanel
-          persona={persona}
-          open={showComposer}
-          onOpenChange={setShowComposer}
-          onBatchStarted={(batchId) => setActiveBatchId(batchId)}
-        />
-      )}
-
-      {showPhotoShoot && (
-        <PhotoShootModal
-          persona={persona}
-          open={showPhotoShoot}
-          onOpenChange={setShowPhotoShoot}
-          onBatchStarted={(batchId) => setActiveBatchId(batchId)}
-        />
-      )}
     </Card>
   );
 }

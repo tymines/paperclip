@@ -19,6 +19,8 @@ export interface ControlProps {
   search?: string;
   /** Marks the value as coming from the persona default (not an explicit pick). */
   isDefault?: boolean;
+  /** Hide the built-in label header (the mobile accordion owns the title). */
+  hideHeader?: boolean;
 }
 
 /** Stable pastel gradient per option value, for cards without a preview image. */
@@ -62,12 +64,12 @@ function ControlHeader({ control, isDefault }: { control: AttributeControl; isDe
 }
 
 /** card_grid — photo-preview cards. */
-function CardGridControl({ control, value, onChange, showExplicit, search, isDefault }: ControlProps) {
+function CardGridControl({ control, value, onChange, showExplicit, search, isDefault, hideHeader }: ControlProps) {
   const opts = visibleOptions(control, showExplicit, search);
   if (opts.length === 0) return null;
   return (
     <div>
-      <ControlHeader control={control} isDefault={isDefault} />
+      {!hideHeader && <ControlHeader control={control} isDefault={isDefault} />}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
         {opts.map((o) => {
           const selected = o.value === value;
@@ -123,12 +125,12 @@ function CardGridControl({ control, value, onChange, showExplicit, search, isDef
 }
 
 /** swatch — compact chip row (lighting, colors). */
-function SwatchControl({ control, value, onChange, showExplicit, search, isDefault }: ControlProps) {
+function SwatchControl({ control, value, onChange, showExplicit, search, isDefault, hideHeader }: ControlProps) {
   const opts = visibleOptions(control, showExplicit, search);
   if (opts.length === 0) return null;
   return (
     <div>
-      <ControlHeader control={control} isDefault={isDefault} />
+      {!hideHeader && <ControlHeader control={control} isDefault={isDefault} />}
       <div className="flex flex-wrap gap-1.5">
         {opts.map((o) => {
           const selected = o.value === value;
@@ -169,12 +171,12 @@ function SwatchControl({ control, value, onChange, showExplicit, search, isDefau
 }
 
 /** toggle — 2-3 option segmented control. */
-function ToggleControl({ control, value, onChange, showExplicit, search, isDefault }: ControlProps) {
+function ToggleControl({ control, value, onChange, showExplicit, search, isDefault, hideHeader }: ControlProps) {
   const opts = visibleOptions(control, showExplicit, search);
   if (opts.length === 0) return null;
   return (
     <div>
-      <ControlHeader control={control} isDefault={isDefault} />
+      {!hideHeader && <ControlHeader control={control} isDefault={isDefault} />}
       <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
         {opts.map((o) => {
           const selected = o.value === value;
@@ -202,13 +204,13 @@ function ToggleControl({ control, value, onChange, showExplicit, search, isDefau
 }
 
 /** slider — option stops along a track (ordinal attributes). */
-function SliderControl({ control, value, onChange, showExplicit, search, isDefault }: ControlProps) {
+function SliderControl({ control, value, onChange, showExplicit, search, isDefault, hideHeader }: ControlProps) {
   const opts = visibleOptions(control, showExplicit, search);
   const idx = useMemo(() => Math.max(0, opts.findIndex((o) => o.value === value)), [opts, value]);
   if (opts.length === 0) return null;
   return (
     <div>
-      <ControlHeader control={control} isDefault={isDefault} />
+      {!hideHeader && <ControlHeader control={control} isDefault={isDefault} />}
       <input
         type="range"
         min={0}
