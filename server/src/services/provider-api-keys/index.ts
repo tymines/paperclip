@@ -33,7 +33,10 @@ export type ProviderKey =
   | "replicate"
   // Atlas Cloud — OpenAI-compatible LLM gateway (api.atlascloud.ai/v1). Single
   // bearer token (apikey-…), stored like the other provider keys.
-  | "atlascloud";
+  | "atlascloud"
+  // WaveSpeed AI — image/video generation API (api.wavespeed.ai/api/v3). Single
+  // bearer token (wsk_live_…), stored like the other provider keys.
+  | "wavespeedai";
 
 export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "deepseek",
@@ -45,6 +48,7 @@ export const SUPPORTED_PROVIDERS: ProviderKey[] = [
   "elevenlabs",
   "replicate",
   "atlascloud",
+  "wavespeedai",
 ];
 
 interface StoredKey {

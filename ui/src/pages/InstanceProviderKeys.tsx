@@ -31,7 +31,8 @@ type ProviderKey =
   | "gemini"
   | "elevenlabs"
   | "replicate"
-  | "atlascloud";
+  | "atlascloud"
+  | "wavespeedai";
 
 interface ProviderMeta {
   key: ProviderKey;
@@ -120,6 +121,15 @@ const PROVIDERS: ProviderMeta[] = [
     dashboardUrl: "https://www.atlascloud.ai/console/api-keys",
     testReturnsBalance: false,
     note: "Atlas Cloud has no account/username endpoint — Test verifies the token against GET /v1/models. To rotate, paste a new token above.",
+  },
+  {
+    key: "wavespeedai",
+    name: "WaveSpeed AI",
+    description: "Image/video generation API (api.wavespeed.ai/api/v3). Bearer auth; the wsk_live_ prefix is a production key.",
+    placeholder: "wsk_live_…",
+    dashboardUrl: "https://wavespeed.ai/accesskey",
+    testReturnsBalance: false,
+    note: "WaveSpeed exposes balance via GET /api/v3/balance (USD); a balance adapter isn't wired into Test yet. To rotate, paste a new token above.",
   },
 ];
 
