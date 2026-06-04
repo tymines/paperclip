@@ -65,6 +65,7 @@ import {
 import { cn } from "@/lib/utils";
 import { PersonaWorkbench } from "@/components/image-studio/PersonaWorkbench";
 import { ExternalProviderQuickGenerate } from "@/components/image-studio/ExternalProviderQuickGenerate";
+import { TrainPersonaModal } from "@/components/image-studio/TrainPersonaModal";
 
 // ─── Local helpers ──────────────────────────────────────────────────────────
 
@@ -145,125 +146,6 @@ function trainingPill(job: LoraTrainingJob | undefined) {
 function providerIcon(type: string, _name: string) {
   if (type === "local_lora") return <Train className="h-5 w-5 text-indigo-500" />;
   return <Sparkles className="h-5 w-5 text-blue-500" />;
-}
-
-// ─── Train modal ──────────────────────────────────────────────────────────────
-
-function TrainPersonaModal({
-  open,
-  onOpenChange,
-  companyId,
-  persona,
-  trainers,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  companyId: string;
-  persona: ImageProvider;
-  trainers: ImageProvider[];
-}) {
-  const queryClient = useQueryClient();
-  const defaultTrainer = trainers.find((t) => t.providerKey === "replicate") ?? trainers[0];
-  const [providerId, setProviderId] = useState(defaultTrainer?.id ?? "");
-
-  const photosQ = useQuery({
-    queryKey: ["image-studio", "persona-photos", companyId, persona.id],
-    queryFn: () => imageStudioApi.getPersonaPhotos(companyId, persona.id),
-    enabled: open,
-  });
-
-  const trainMut = useMutation({
-    mutationFn: () => imageStudioApi.trainPersona(companyId, persona.id, { provider_id: providerId }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["image-studio", "training", companyId] });
-      onOpenChange(false);
-    },
-  });
-
-  const photos = photosQ.data;
-  const isNsfw = photos?.contentRating === "explicit";
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5 text-indigo-500" />
-            Train {persona.name}
-          </DialogTitle>
-          <DialogDescription>
-            Train a Flux + LoRA model on Replicate's hosted H100s.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 py-2">
-          {/* Provider dropdown */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">Training provider</label>
-            <Select value={providerId} onValueChange={setProviderId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select a provider" />
-              </SelectTrigger>
-              <SelectContent>
-                {trainers.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name} {t.trainingModel ? `· ${t.trainingModel}` : ""}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Stats row */}
-          <div className="grid grid-cols-3 gap-3 rounded-lg border border-border p-3 text-center">
-            <div>
-              <p className="text-xs text-muted-foreground">Photos</p>
-              <p className="text-sm font-semibold">
-                {photosQ.isLoading ? "…" : photos?.count ?? 0}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Est. cost</p>
-              <p className="text-sm font-semibold">$3</p>
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Est. time</p>
-              <p className="text-sm font-semibold">~30 min</p>
-            </div>
-          </div>
-
-          {photos && !photos.exists && (
-            <p className="flex items-center gap-1.5 text-xs text-amber-600">
-              <TriangleAlert className="h-3.5 w-3.5" />
-              Photos directory not found: <code className="font-mono">{photos.dir}</code>
-            </p>
-          )}
-          {isNsfw && (
-            <p className="flex items-center gap-1.5 text-xs text-amber-600">
-              <TriangleAlert className="h-3.5 w-3.5" />
-              Trigger <code className="font-mono">{photos?.triggerWord}</code> — output is tagged
-              NSFW. This is a label only; you choose where it posts.
-            </p>
-          )}
-          {trainMut.isError && (
-            <p className="text-xs text-red-600">
-              {(trainMut.error as Error)?.message ?? "Failed to start training."}
-            </p>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button onClick={() => trainMut.mutate()} disabled={!providerId || trainMut.isPending}>
-            {trainMut.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
-            Start training
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 // ─── Persona gallery ──────────────────────────────────────────────────────────
@@ -699,10 +581,12 @@ function TrainedPersonasSection({
     [providers],
   );
   const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
-  // Arriving via ?tab= (e.g. a legacy /tools/* redirect) auto-opens the first
-  // persona's studio on that tab, so the deep-link lands on something useful.
+  // Deep-links auto-open a persona's studio:
+  //   ?persona=<id>&tab=<tab>  — open that specific persona (Personas quick actions)
+  //   ?tab=<tab>               — legacy /tools/* redirect: open the first persona
   const [searchParams] = useSearchParams();
   const deepLinkTab = searchParams.get("tab");
+  const deepLinkPersona = searchParams.get("persona");
 
   if (loading) {
     return (
@@ -745,7 +629,7 @@ function TrainedPersonasSection({
               job={jobsByPersona.get(p.id)}
               canTrain={trainers.length > 0}
               onTrain={() => setTrainingPersona(p)}
-              autoOpen={i === 0 && !!deepLinkTab}
+              autoOpen={deepLinkPersona ? p.id === deepLinkPersona : i === 0 && !!deepLinkTab}
             />
           ))}
         </div>

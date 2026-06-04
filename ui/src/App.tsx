@@ -44,6 +44,8 @@ import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
+import { Personas } from "./pages/Personas";
+import { PersonaDetail } from "./pages/PersonaDetail";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -167,6 +169,8 @@ function boardRoutes() {
       <Route path="design/library" element={<DesignLibrary />} />
       <Route path="jarvis" element={<Jarvis />} />
       <Route path="voice-memos" element={<VoiceMemos />} />
+      <Route path="personas" element={<Personas />} />
+      <Route path="personas/:personaId" element={<PersonaDetail />} />
       <Route path="image-studio" element={<ImageStudio />} />
       {/* Legacy standalone tool routes — collapsed into the unified Image Studio
           workbench. Redirect old links to the matching ?tab= rather than 404. */}
@@ -403,6 +407,8 @@ export function App() {
           <Route path="rooms/:roomId" element={<UnprefixedBoardRedirect />} />
           <Route path="social" element={<UnprefixedBoardRedirect />} />
           <Route path="social/posts/:postId" element={<UnprefixedBoardRedirect />} />
+          <Route path="personas" element={<UnprefixedBoardRedirect />} />
+          <Route path="personas/:personaId" element={<UnprefixedBoardRedirect />} />
           <Route path="image-studio" element={<UnprefixedBoardRedirect />} />
           {/* Old standalone tool URLs (often typed directly / bookmarked on mobile)
               had no company prefix and fell through to :companyPrefix → 404.

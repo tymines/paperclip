@@ -30,6 +30,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "plugins",
   "image-studio",
   "voice-memos",
+  "personas",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set([

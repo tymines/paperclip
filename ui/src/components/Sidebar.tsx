@@ -25,6 +25,7 @@ import {
   Mic,
   Palette,
   ImageIcon,
+  Drama,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -214,6 +215,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/personas" label="Personas" icon={Drama} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
       </SidebarSection>
@@ -299,6 +301,7 @@ function SidebarV1({
         <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/personas" label="Personas" icon={Drama} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
