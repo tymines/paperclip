@@ -2,7 +2,7 @@ import { Router } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, desc, asc } from "drizzle-orm";
+import { and, eq, or, isNull, desc, asc, sql } from "drizzle-orm";
 import {
   imageProviders,
   loraTrainingJobs,
@@ -798,6 +798,90 @@ export function imageStudioRoutes(db: Db) {
     res.status(200).json({
       status: "backend_pending",
       message: "Generation backend wiring in flight from peer agent",
+    });
+  });
+
+  // ── Unified template browser (cross-tool Library + template-click picker) ──
+
+  // GET /image-studio/templates?tool=&model=&content_rating=&persona_id=&tags=a,b
+  // Cross-tool template browser. `tool` matches applicable_tools; `persona_id`
+  // includes shared (NULL) templates; `tags` is comma-separated (overlap).
+  router.get("/image-studio/templates", async (req, res) => {
+    const filters: ReturnType<typeof sql>[] = [];
+    const tool = typeof req.query.tool === "string" ? req.query.tool : "";
+    if (tool) filters.push(sql`${tool} = ANY(${promptTemplates.applicableTools})`);
+    if (req.query.content_rating === "sfw" || req.query.content_rating === "explicit") {
+      filters.push(eq(promptTemplates.contentRating, req.query.content_rating));
+    }
+    if (typeof req.query.persona_id === "string" && req.query.persona_id.length > 0) {
+      filters.push(
+        or(eq(promptTemplates.personaId, req.query.persona_id), isNull(promptTemplates.personaId))!,
+      );
+    }
+    if (typeof req.query.model === "string" && req.query.model.length > 0) {
+      filters.push(sql`${req.query.model} = ANY(${promptTemplates.compatibleModels})`);
+    }
+    if (typeof req.query.tags === "string" && req.query.tags.length > 0) {
+      const tags = req.query.tags.split(",").map((t) => t.trim()).filter(Boolean);
+      if (tags.length > 0) filters.push(sql`${promptTemplates.tags} && ${tags}`);
+    }
+    const templates = await db
+      .select()
+      .from(promptTemplates)
+      .where(filters.length > 0 ? and(...filters) : undefined)
+      .orderBy(desc(promptTemplates.createdAt))
+      .limit(500);
+    res.json({ templates });
+  });
+
+  // POST /image-studio/templates/:id/apply
+  // Body: { tool, model, persona_id? } → assembled prompt + recommended params.
+  // For a persona + structured preset the prompt is assembled with the bio;
+  // otherwise the raw template_text is returned. The UI loads the result into
+  // the target tool's composer.
+  router.post("/image-studio/templates/:id/apply", async (req, res) => {
+    const { id } = req.params;
+    const [tpl] = await db
+      .select()
+      .from(promptTemplates)
+      .where(eq(promptTemplates.id, id))
+      .limit(1);
+    if (!tpl) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+    const body = req.body ?? {};
+    const personaId =
+      typeof body.persona_id === "string" && body.persona_id.length > 0 ? body.persona_id : null;
+    const preset = coerceSelections(tpl.attributePreset);
+
+    let prompt = tpl.templateText;
+    if (personaId && Object.keys(preset).length > 0) {
+      const persona = await loadPersona(personaId);
+      if (persona) {
+        const { catalog } = await loadCatalog(db);
+        prompt = assemblePrompt(
+          { bio: persona.bio, attributes: persona.attributes },
+          preset,
+          "",
+          catalog,
+        );
+      }
+    }
+
+    res.json({
+      prompt,
+      template_text: tpl.templateText,
+      attribute_preset: preset,
+      tool: typeof body.tool === "string" ? body.tool : (tpl.applicableTools?.[0] ?? "photoshoot"),
+      model: typeof body.model === "string" ? body.model : (tpl.compatibleModels?.[0] ?? "general"),
+      persona_id: personaId,
+      params: {
+        lora_scale: tpl.defaultLoraScale != null ? Number(tpl.defaultLoraScale) : 1.0,
+        steps: tpl.defaultSteps ?? 28,
+        guidance: tpl.defaultGuidance != null ? Number(tpl.defaultGuidance) : 3.5,
+        aspect_ratio: tpl.defaultAspectRatio ?? "3:4",
+      },
     });
   });
 
