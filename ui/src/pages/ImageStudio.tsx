@@ -11,6 +11,7 @@ import {
   type GenerationJob,
 } from "../api/imageStudio";
 import { useCompany } from "../context/CompanyContext";
+import { useSearchParams } from "@/lib/router";
 import {
   Card,
   CardContent,
@@ -576,14 +577,17 @@ function PersonaCard({
   job,
   canTrain,
   onTrain,
+  autoOpen = false,
 }: {
   persona: ImageProvider;
   job: LoraTrainingJob | undefined;
   canTrain: boolean;
   onTrain: () => void;
+  /** Landed here via an ?tab= deep-link — open the studio and own the URL tab. */
+  autoOpen?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const [expanded, setExpanded] = useState(autoOpen);
+  const [mounted, setMounted] = useState(autoOpen);
   const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
   const pill = trainingPill(job);
 
@@ -656,6 +660,7 @@ function PersonaCard({
               <PersonaWorkbench
                 persona={persona}
                 onBatchStarted={(batchId) => setActiveBatchId(batchId)}
+                syncTabToUrl={autoOpen}
               />
             )}
           </div>
@@ -694,6 +699,10 @@ function TrainedPersonasSection({
     [providers],
   );
   const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
+  // Arriving via ?tab= (e.g. a legacy /tools/* redirect) auto-opens the first
+  // persona's studio on that tab, so the deep-link lands on something useful.
+  const [searchParams] = useSearchParams();
+  const deepLinkTab = searchParams.get("tab");
 
   if (loading) {
     return (
@@ -729,13 +738,14 @@ function TrainedPersonasSection({
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {personas.map((p) => (
+          {personas.map((p, i) => (
             <PersonaCard
               key={p.id}
               persona={p}
               job={jobsByPersona.get(p.id)}
               canTrain={trainers.length > 0}
               onTrain={() => setTrainingPersona(p)}
+              autoOpen={i === 0 && !!deepLinkTab}
             />
           ))}
         </div>

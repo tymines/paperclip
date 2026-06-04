@@ -23,7 +23,10 @@ import {
   ChevronDown,
   Camera,
   Wand2,
+  Shirt,
+  Library,
 } from "lucide-react";
+import { useSearchParams } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { usePersistedModel } from "@/hooks/usePersistedModel";
@@ -58,6 +61,9 @@ import { PromptPreview } from "./PromptPreview";
 import { ModelPicker } from "./ModelPicker";
 import { TemplateLibraryTab } from "./TemplateLibraryTab";
 import { PhotoShootCategoryGrid } from "./PhotoShootCategoryGrid";
+import { UndresserInline } from "./UndresserInline";
+import { UnifiedLibrary } from "./UnifiedLibrary";
+import { type TemplateApply } from "./UseTemplatePicker";
 import { assemblePrompt, detectConflicts, randomizeSelections } from "./assemble";
 import { findModel, DEFAULT_MODEL_ID, LORA_FEE, UPSCALE_FEE } from "./models";
 
@@ -279,7 +285,11 @@ function GenerateInline({
   showExplicit: boolean;
   rating: "sfw" | "explicit";
   onBatchStarted: (batchId: string) => void;
-  registerActions: (a: { surpriseMe: () => void; reset: () => void }) => void;
+  registerActions: (a: {
+    surpriseMe: () => void;
+    reset: () => void;
+    applyTemplate: (t: PromptTemplate, apply?: TemplateApply) => void;
+  }) => void;
 }) {
   const queryClient = useQueryClient();
   const isMobile = useIsMobile();
@@ -346,9 +356,9 @@ function GenerateInline({
     setFreeText("");
     setEditing(false);
   }
-  useEffect(() => { registerActions({ surpriseMe, reset }); });
+  useEffect(() => { registerActions({ surpriseMe, reset, applyTemplate: useTemplate }); });
 
-  function useTemplate(t: PromptTemplate, apply?: { tool: string; model: string; personaId: string | null }) {
+  function useTemplate(t: PromptTemplate, apply?: TemplateApply) {
     const preset = t.attributePreset ?? {};
     setSelections((prev) => ({ ...prev, ...preset }));
     setDefaultKeys((prev) => {
@@ -566,65 +576,123 @@ function GenerateInline({
   );
 }
 
+// ── The single unified tool strip ───────────────────────────────────────────
+const WORKBENCH_TABS = [
+  { key: "generate", label: "Generate", icon: Wand2 },
+  { key: "photoshoot", label: "PhotoShoot", icon: Camera },
+  { key: "undresser", label: "Undresser", icon: Shirt },
+  { key: "library", label: "Library", icon: Library },
+] as const;
+type WorkbenchTab = (typeof WORKBENCH_TABS)[number]["key"];
+
+function isWorkbenchTab(v: string | null): v is WorkbenchTab {
+  return !!v && WORKBENCH_TABS.some((t) => t.key === v);
+}
+
+type WorkbenchActions = {
+  surpriseMe: () => void;
+  reset: () => void;
+  applyTemplate: (t: PromptTemplate, apply?: TemplateApply) => void;
+};
+
 // ── Main inline workbench ───────────────────────────────────────────────────
 export function PersonaWorkbench({
   persona,
   onBatchStarted,
+  syncTabToUrl = false,
 }: {
   persona: ImageProvider;
   onBatchStarted: (batchId: string) => void;
+  /** When this card owns the page's ?tab= deep-link, mirror the active tab to
+      the URL. Only the auto-expanded card opts in, so multiple open workbenches
+      don't fight over the query param. */
+  syncTabToUrl?: boolean;
 }) {
   const rating = personaRating(persona);
-  const [tab, setTab] = useState<"generate" | "photoshoot">("generate");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tab, setTabState] = useState<WorkbenchTab>(() => {
+    const fromUrl = searchParams.get("tab");
+    return syncTabToUrl && isWorkbenchTab(fromUrl) ? fromUrl : "generate";
+  });
   const [showExplicit, setShowExplicit] = useState(rating === "explicit");
   const [gender, setGender] = useState<"female" | "male">("female");
-  const actionsRef = useRef<{ surpriseMe: () => void; reset: () => void }>({ surpriseMe: () => {}, reset: () => {} });
+  const [libNotice, setLibNotice] = useState<string | null>(null);
+  const actionsRef = useRef<WorkbenchActions>({ surpriseMe: () => {}, reset: () => {}, applyTemplate: () => {} });
+
+  function selectTab(next: WorkbenchTab) {
+    setTabState(next);
+    if (syncTabToUrl) {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.set("tab", next);
+          return n;
+        },
+        { replace: true },
+      );
+    }
+  }
+
+  // Library → run a template on the matching tool tab without leaving the page.
+  function applyLibraryTemplate(template: PromptTemplate, apply: TemplateApply) {
+    setLibNotice(null);
+    if (apply.tool === "persona_generate") {
+      selectTab("generate");
+      actionsRef.current.applyTemplate(template, apply);
+    } else if (apply.tool === "photoshoot") {
+      selectTab("photoshoot");
+      setLibNotice(`Loaded "${template.name}" intent — pick PhotoShoot categories to fire it.`);
+    } else {
+      setLibNotice(`"${template.name}" targets ${apply.tool.replace(/_/g, " ")} — prompt is ready for that surface.`);
+    }
+  }
 
   return (
     <div className="mt-3 rounded-xl border border-border bg-card p-3 sm:p-4" data-testid="persona-workbench">
-      {/* Header: tabs + the obvious SFW/18+ toggle always share the top row so
-          the toggle is never clipped on mobile; Surprise/Reset wrap below. */}
-      <div className="mb-3 space-y-2">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex self-start rounded-lg border border-border bg-muted/40 p-0.5 text-sm">
-            <button
-              type="button"
-              onClick={() => setTab("generate")}
-              data-testid="tab-generate"
-              className={cn("flex items-center gap-1.5 rounded-md px-3 py-1 font-medium transition-colors", tab === "generate" ? "bg-background shadow-sm" : "text-muted-foreground")}
-            >
-              <Wand2 className="h-3.5 w-3.5" /> Generate
-            </button>
-            <button
-              type="button"
-              onClick={() => setTab("photoshoot")}
-              data-testid="tab-photoshoot"
-              className={cn("flex items-center gap-1.5 rounded-md px-3 py-1 font-medium transition-colors", tab === "photoshoot" ? "bg-background shadow-sm" : "text-muted-foreground")}
-            >
-              <Camera className="h-3.5 w-3.5" /> PhotoShoot
-            </button>
-          </div>
-          <div className="flex items-center gap-2 self-end sm:self-auto">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground sm:hidden">
-              Content
-            </span>
-            <ExplicitToggle value={showExplicit} onChange={setShowExplicit} />
+      {/* Apple-Wallet-style tool strip: a single horizontally-scrollable pill
+          row, sticky to the top of the card, with the SFW/18+ toggle pinned at
+          the trailing edge so it never gets clipped on mobile. */}
+      <div className="sticky top-0 z-20 -mx-3 mb-3 flex items-center gap-2 border-b border-border bg-card/95 px-3 py-2 backdrop-blur sm:-mx-4 sm:px-4">
+        <div className="min-w-0 flex-1 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <div className="inline-flex gap-0.5 rounded-lg border border-border bg-muted/40 p-0.5 text-sm" role="tablist">
+            {WORKBENCH_TABS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={tab === key}
+                onClick={() => selectTab(key)}
+                data-testid={`tab-${key}`}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1 font-medium transition-colors",
+                  tab === key ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" /> {label}
+              </button>
+            ))}
           </div>
         </div>
-        {tab === "generate" && (
-          <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" onClick={() => actionsRef.current.surpriseMe()} data-testid="surprise-me">
-              <Dice5 className="mr-1.5 h-3.5 w-3.5" /> Surprise Me
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => actionsRef.current.reset()} data-testid="reset">
-              <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
-            </Button>
-          </div>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <ExplicitToggle value={showExplicit} onChange={setShowExplicit} />
+        </div>
       </div>
 
-      {/* Keep both tabs mounted (display-toggle) so their state + the shared
-          toggle filter survive tab switches. */}
+      {/* Generate-only secondary actions. */}
+      {tab === "generate" && (
+        <div className="mb-3 flex items-center gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => actionsRef.current.surpriseMe()} data-testid="surprise-me">
+            <Dice5 className="mr-1.5 h-3.5 w-3.5" /> Surprise Me
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => actionsRef.current.reset()} data-testid="reset">
+            <RotateCcw className="mr-1.5 h-3.5 w-3.5" /> Reset
+          </Button>
+        </div>
+      )}
+
+      {/* Generate + PhotoShoot stay mounted (display-toggle) so their composer
+          state and the shared SFW/18+ filter survive tab switches. Undresser +
+          Library are lighter and mount on demand. */}
       <div className={cn(tab === "generate" ? "block" : "hidden")}>
         <GenerateInline
           persona={persona}
@@ -641,6 +709,23 @@ export function PersonaWorkbench({
         </div>
         <PhotoShootCategoryGrid persona={persona} showExplicit={showExplicit} gender={gender} onBatchStarted={onBatchStarted} />
       </div>
+      {tab === "undresser" && <UndresserInline persona={persona} showExplicit={showExplicit} />}
+      {tab === "library" && (
+        <div className="space-y-2">
+          <p className="text-[11px] text-muted-foreground">
+            Every template across all tools. Click one, pick a model, and it runs on the matching tab.
+          </p>
+          {libNotice && (
+            <div
+              className="rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+              data-testid="library-notice"
+            >
+              {libNotice}
+            </div>
+          )}
+          <UnifiedLibrary personas={[persona]} onApply={applyLibraryTemplate} />
+        </div>
+      )}
     </div>
   );
 }
