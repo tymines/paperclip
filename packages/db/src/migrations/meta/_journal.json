@@ -834,6 +834,13 @@
       "when": 1781136000000,
       "tag": "0118_attribute_preview_thumbnails",
       "breakpoints": true
+    },
+    {
+      "idx": 119,
+      "version": "7",
+      "when": 1781222400000,
+      "tag": "0119_share_nsfw_photoshoot_templates",
+      "breakpoints": true
     }
   ]
 }
