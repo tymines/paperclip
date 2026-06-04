@@ -27,6 +27,8 @@ export const promptTemplates = pgTable(
     // Generate panel loads into the composer. Drives category cards.
     attributePreset: jsonb("attribute_preset").$type<Record<string, string>>().default({}),
     previewImagePath: text("preview_image_path"),
+    // Optional multi-preview carousel; UI falls back to previewImagePath if empty.
+    previewImagePaths: jsonb("preview_image_paths").$type<string[]>().default([]),
     category: text("category"),
     genderTargeting: text("gender_targeting").default("any"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
