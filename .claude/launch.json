@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "paperclip",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["dev"],
+      "port": 3100
+    },
+    {
+      "name": "paperclip-ui",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@paperclipai/ui", "dev"],
+      "port": 5173
+    }
+  ]
+}

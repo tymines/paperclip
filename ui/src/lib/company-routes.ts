@@ -28,6 +28,8 @@ const BOARD_ROUTE_ROOTS = new Set([
   "work",
   "jarvis",
   "plugins",
+  "image-studio",
+  "voice-memos",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set([

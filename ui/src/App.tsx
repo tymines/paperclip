@@ -44,9 +44,6 @@ import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
-import { PhotoShootTool } from "./pages/image-studio/PhotoShootTool";
-import { FemaleUndresserTool } from "./pages/image-studio/FemaleUndresserTool";
-import { ImageStudioLibrary } from "./pages/image-studio/ImageStudioLibrary";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -171,9 +168,11 @@ function boardRoutes() {
       <Route path="jarvis" element={<Jarvis />} />
       <Route path="voice-memos" element={<VoiceMemos />} />
       <Route path="image-studio" element={<ImageStudio />} />
-      <Route path="image-studio/tools/photoshoot" element={<PhotoShootTool />} />
-      <Route path="image-studio/tools/female-undresser" element={<FemaleUndresserTool />} />
-      <Route path="image-studio/library" element={<ImageStudioLibrary />} />
+      {/* Legacy standalone tool routes — collapsed into the unified Image Studio
+          workbench. Redirect old links to the matching ?tab= rather than 404. */}
+      <Route path="image-studio/tools/photoshoot" element={<LegacyImageToolRedirect tab="photoshoot" />} />
+      <Route path="image-studio/tools/female-undresser" element={<LegacyImageToolRedirect tab="undresser" />} />
+      <Route path="image-studio/library" element={<LegacyImageToolRedirect tab="library" />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath/*" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />
@@ -283,6 +282,36 @@ function UnprefixedBoardRedirect() {
   );
 }
 
+/**
+ * Redirects the retired standalone Image Studio tool URLs
+ * (`image-studio/tools/*`, `image-studio/library`) into the unified workbench
+ * at `<company>/image-studio?tab=<tab>`. Works whether the old URL carried a
+ * company prefix (`:companyPrefix` param) or not (typed/bookmarked bare).
+ */
+function LegacyImageToolRedirect({ tab }: { tab: string }) {
+  const location = useLocation();
+  const { companies, selectedCompany, loading } = useCompany();
+  const { companyPrefix } = useParams<{ companyPrefix?: string }>();
+
+  if (loading) {
+    return <div className="mx-auto max-w-xl py-10 text-sm text-muted-foreground">Loading...</div>;
+  }
+
+  const fromPrefix = companyPrefix
+    ? companies.find((c) => c.issuePrefix.toUpperCase() === companyPrefix.toUpperCase()) ?? null
+    : null;
+  const targetCompany = fromPrefix ?? selectedCompany ?? companies[0] ?? null;
+
+  if (!targetCompany) {
+    if (shouldRedirectCompanylessRouteToOnboarding({ pathname: location.pathname, hasCompanies: false })) {
+      return <Navigate to="/onboarding" replace />;
+    }
+    return <NoCompaniesStartPage />;
+  }
+
+  return <Navigate to={`/${targetCompany.issuePrefix}/image-studio?tab=${tab}`} replace />;
+}
+
 function NoCompaniesStartPage() {
   const { openOnboarding } = useDialogActions();
   const { t } = useTranslation();
@@ -375,6 +404,12 @@ export function App() {
           <Route path="social" element={<UnprefixedBoardRedirect />} />
           <Route path="social/posts/:postId" element={<UnprefixedBoardRedirect />} />
           <Route path="image-studio" element={<UnprefixedBoardRedirect />} />
+          {/* Old standalone tool URLs (often typed directly / bookmarked on mobile)
+              had no company prefix and fell through to :companyPrefix → 404.
+              Redirect them into the unified workbench with the matching tab. */}
+          <Route path="image-studio/tools/photoshoot" element={<LegacyImageToolRedirect tab="photoshoot" />} />
+          <Route path="image-studio/tools/female-undresser" element={<LegacyImageToolRedirect tab="undresser" />} />
+          <Route path="image-studio/library" element={<LegacyImageToolRedirect tab="library" />} />
           <Route path="jarvis" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard" element={<UnprefixedBoardRedirect />} />
           <Route path="dashboard/live" element={<UnprefixedBoardRedirect />} />

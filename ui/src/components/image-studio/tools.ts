@@ -15,7 +15,7 @@ export interface ToolDef {
 
 export const TOOLS: ToolDef[] = [
   { key: "persona_generate", label: "Generate (Persona)", built: true, needsPersona: true },
-  { key: "photoshoot", label: "PhotoShoot", built: true, route: "/image-studio/tools/photoshoot", needsPersona: true },
+  { key: "photoshoot", label: "PhotoShoot", built: true, needsPersona: true },
   { key: "external_image_gen", label: "External Image Gen", built: true, needsPersona: false },
   { key: "variations", label: "Variations", built: false, needsPersona: true },
   { key: "image_to_image", label: "Image-To-Image", built: false, needsPersona: true },
