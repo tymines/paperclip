@@ -12,6 +12,11 @@ export const imageProviders = pgTable(
     endpoint: text("endpoint"),
     model: text("model"),
     defaultParams: jsonb("default_params").$type<Record<string, unknown>>(),
+    // Long-form persona bio, prepended as prompt context by the assembler.
+    bio: text("bio"),
+    // Structured attribute defaults (gender/age/body_type/hair/etc + trigger_word)
+    // that pre-fill the Generate panel's controls. See prompt-assembler.ts.
+    attributes: jsonb("attributes").$type<Record<string, unknown>>().default({}),
     costPerUnit: numeric("cost_per_unit", { precision: 10, scale: 6 }).notNull().default("0"),
     status: text("status"),
     statusDetail: text("status_detail"),

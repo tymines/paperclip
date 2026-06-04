@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, numeric, integer, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, numeric, integer, jsonb, timestamp, index } from "drizzle-orm/pg-core";
 import { imageProviders } from "./image_providers.js";
 
 /**
@@ -23,6 +23,12 @@ export const promptTemplates = pgTable(
     defaultAspectRatio: text("default_aspect_ratio"),
     contentRating: text("content_rating").notNull().default("sfw"),
     tags: text("tags").array(),
+    // Structured-attribute preset ({ pose, outfit, scene, ... }) the PhotoShoot /
+    // Generate panel loads into the composer. Drives category cards.
+    attributePreset: jsonb("attribute_preset").$type<Record<string, string>>().default({}),
+    previewImagePath: text("preview_image_path"),
+    category: text("category"),
+    genderTargeting: text("gender_targeting").default("any"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

@@ -115,6 +115,16 @@ export {
   type NewGenerationJob,
 } from "./generation_jobs.js";
 export {
+  attributeControls,
+  type AttributeControl,
+  type NewAttributeControl,
+} from "./attribute_controls.js";
+export {
+  attributeOptions,
+  type AttributeOption,
+  type NewAttributeOption,
+} from "./attribute_options.js";
+export {
   designRuns,
   designPresetRuns,
   type DesignRun,
