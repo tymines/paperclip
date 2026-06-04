@@ -869,6 +869,13 @@
       "when": 1781568000000,
       "tag": "0123_persona_cms",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1781654400000,
+      "tag": "0124_regen_sfw_previews",
+      "breakpoints": true
     }
   ]
 }
