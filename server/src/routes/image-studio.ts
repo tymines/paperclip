@@ -18,6 +18,12 @@ import {
   kickGenerationQueue,
   personaContentRating,
 } from "../services/replicate-generator.js";
+import { loadCatalog } from "../services/image-studio/attribute-catalog.js";
+import {
+  assemblePrompt,
+  detectFreeTextConflicts,
+  type Selections,
+} from "../services/prompt-assembler.js";
 import {
   personaTrainingProfile,
   countTrainingPhotos,
@@ -387,6 +393,81 @@ export function imageStudioRoutes(db: Db) {
     return row ?? null;
   }
 
+  /** Coerce an arbitrary body field into a clean Record<string,string>. */
+  function coerceSelections(raw: unknown): Selections {
+    if (!raw || typeof raw !== "object") return {};
+    const out: Selections = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim().length > 0) out[k] = v.trim();
+    }
+    return out;
+  }
+
+  // ── Structured attribute controls ─────────────────────────────────────────
+
+  // GET /image-studio/attribute-controls?category=&content_rating=
+  // The data-driven control catalog (controls + nested options) for the Generate
+  // panel. Filterable so the UI can request just SFW options, or one category.
+  router.get("/image-studio/attribute-controls", async (req, res) => {
+    const category = typeof req.query.category === "string" ? req.query.category : undefined;
+    const contentRating =
+      req.query.content_rating === "sfw" || req.query.content_rating === "explicit"
+        ? req.query.content_rating
+        : undefined;
+    const { controls } = await loadCatalog(db, { category, contentRating });
+    res.json({ controls });
+  });
+
+  // POST /image-studio/personas/:personaId/preview-prompt
+  // Body: { selections?: Record<string,string>, freeText?: string }
+  // Returns the assembled prompt for the live preview, plus any soft conflicts.
+  router.post("/image-studio/personas/:personaId/preview-prompt", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+    const body = req.body ?? {};
+    const selections = coerceSelections(body.selections);
+    const freeText = typeof body.freeText === "string" ? body.freeText : "";
+    const { catalog, controlLabels } = await loadCatalog(db);
+    const prompt = assemblePrompt(
+      { bio: persona.bio, attributes: persona.attributes },
+      selections,
+      freeText,
+      catalog,
+    );
+    const conflicts = detectFreeTextConflicts(selections, freeText, catalog, controlLabels);
+    res.json({ prompt, conflicts });
+  });
+
+  // PATCH /image-studio/personas/:personaId
+  // Body: { bio?: string|null, attributes?: Record<string,unknown> }
+  // Edits a persona's long-form bio + structured attribute defaults.
+  router.patch("/image-studio/personas/:personaId", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+    const body = req.body ?? {};
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.bio !== undefined) {
+      patch.bio = typeof body.bio === "string" && body.bio.trim().length > 0 ? body.bio.trim() : null;
+    }
+    if (body.attributes !== undefined && body.attributes && typeof body.attributes === "object") {
+      patch.attributes = body.attributes;
+    }
+    const [updated] = await db
+      .update(imageProviders)
+      .set(patch)
+      .where(eq(imageProviders.id, personaId))
+      .returning();
+    res.json({ provider: updated });
+  });
+
   // GET /image-studio/personas/:personaId/generations?source=test|production&limit=20
   router.get(
     "/image-studio/personas/:personaId/generations",
@@ -498,12 +579,50 @@ export function imageStudioRoutes(db: Db) {
   // ── Batch generate (Replicate inference) ──────────────────────────────────
 
   const MAX_JOBS_PER_REQUEST = 24;
+  const MAX_PHOTOSHOOT_JOBS = 96;
 
   /** Coerce a numeric body field to a fixed-precision string, or null. */
   function numOrNull(value: unknown): string | null {
     if (value == null || value === "") return null;
     const n = Number(value);
     return Number.isFinite(n) ? String(n) : null;
+  }
+
+  /** Shared knobs for a generation job row. */
+  interface JobDefaults {
+    loraScale: string;
+    steps: number;
+    guidance: string;
+    aspectRatio: string;
+    contentRating: "sfw" | "explicit";
+    promptTemplateId: string | null;
+    baseSeed: number | null;
+  }
+
+  /** Build N generation_jobs rows for one prompt, fanning seeds out by index. */
+  function buildJobRows(
+    personaId: string,
+    batchId: string,
+    prompts: string[],
+    defaults: JobDefaults,
+    seedOffset = 0,
+  ) {
+    return prompts.map((prompt, i) => ({
+      personaId,
+      promptTemplateId: defaults.promptTemplateId,
+      batchId,
+      promptText: prompt,
+      loraScale: defaults.loraScale,
+      steps: defaults.steps,
+      guidance: defaults.guidance,
+      aspectRatio: defaults.aspectRatio,
+      seed:
+        defaults.baseSeed != null && Number.isFinite(defaults.baseSeed)
+          ? defaults.baseSeed + seedOffset + i
+          : null,
+      status: "queued" as const,
+      contentRating: defaults.contentRating,
+    }));
   }
 
   // POST /image-studio/personas/:personaId/generate
@@ -521,8 +640,25 @@ export function imageStudioRoutes(db: Db) {
     }
 
     const body = req.body ?? {};
-    const promptText = typeof body.prompt_text === "string" ? body.prompt_text.trim() : "";
-    if (!promptText) throw badRequest("prompt_text is required");
+
+    // Structured-control mode: when `selections` (or `freeText`) is present, the
+    // prompt is assembled from the persona bio + clicked attributes. Otherwise we
+    // honor a raw `prompt_text` (backward-compatible composer path).
+    const selections = coerceSelections(body.selections);
+    const hasStructured =
+      Object.keys(selections).length > 0 || typeof body.freeText === "string";
+
+    let promptText = typeof body.prompt_text === "string" ? body.prompt_text.trim() : "";
+    if (hasStructured) {
+      const { catalog } = await loadCatalog(db);
+      promptText = assemblePrompt(
+        { bio: persona.bio, attributes: persona.attributes },
+        selections,
+        typeof body.freeText === "string" ? body.freeText : "",
+        catalog,
+      );
+    }
+    if (!promptText) throw badRequest("prompt_text or selections is required");
 
     const expanded = expandPromptVariations(promptText);
     const countRaw = Number.parseInt(String(body.count ?? "1"), 10);
@@ -542,26 +678,100 @@ export function imageStudioRoutes(db: Db) {
         : null;
 
     const batchId = randomUUID();
-    const rows = capped.map((prompt, i) => ({
-      personaId,
-      promptTemplateId: templateId,
-      batchId,
-      promptText: prompt,
+    const rows = buildJobRows(personaId, batchId, capped, {
       loraScale: numOrNull(body.lora_scale) ?? "1.0",
       steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
       guidance: numOrNull(body.guidance) ?? "3.5",
       aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
-      seed: baseSeed != null && Number.isFinite(baseSeed) ? baseSeed + i : null,
-      status: "queued" as const,
       contentRating: rating,
-    }));
+      promptTemplateId: templateId,
+      baseSeed,
+    });
 
     const inserted = await db.insert(generationJobs).values(rows).returning({ id: generationJobs.id });
 
     // Kick the queue immediately (fire-and-forget); the 15s scheduler also drives it.
     void kickGenerationQueue(db).catch(() => {});
 
-    res.status(202).json({ batch_id: batchId, job_ids: inserted.map((r) => r.id) });
+    res.status(202).json({ batch_id: batchId, job_ids: inserted.map((r) => r.id), prompt: promptText });
+  });
+
+  // POST /image-studio/personas/:personaId/batch-generate  (PhotoShoot mode)
+  // Body: { categories: [{ templateId, count }], shared_selections?, seed? }
+  // For each category template, assemble persona bio + (shared_selections merged
+  // with the template's attribute_preset) and fan out `count` renders. All
+  // categories fire as one batch so the UI shows a single progress meter.
+  router.post("/image-studio/personas/:personaId/batch-generate", async (req, res) => {
+    const { personaId } = req.params;
+    const persona = await loadPersona(personaId);
+    if (!persona || persona.type !== "local_lora") {
+      res.status(404).json({ error: "Persona not found" });
+      return;
+    }
+
+    const body = req.body ?? {};
+    const categories = Array.isArray(body.categories) ? body.categories : [];
+    if (categories.length === 0) throw badRequest("categories is required");
+
+    const shared = coerceSelections(body.shared_selections);
+    const rating: "sfw" | "explicit" =
+      body.content_rating === "explicit" ? "explicit" : personaContentRating(persona);
+    const baseSeed = body.seed != null && body.seed !== "" ? Number(body.seed) : null;
+
+    const { catalog } = await loadCatalog(db);
+    const batchId = randomUUID();
+    const personaForAssembly = { bio: persona.bio, attributes: persona.attributes };
+
+    const allRows: ReturnType<typeof buildJobRows> = [];
+    let seedOffset = 0;
+    for (const entry of categories) {
+      const templateId = typeof entry?.templateId === "string" ? entry.templateId : null;
+      if (!templateId) continue;
+      const reqCount = Number.parseInt(String(entry?.count ?? "0"), 10);
+      const count = Number.isFinite(reqCount) ? Math.min(Math.max(reqCount, 1), 30) : 1;
+
+      const [tpl] = await db
+        .select()
+        .from(promptTemplates)
+        .where(eq(promptTemplates.id, templateId))
+        .limit(1);
+      if (!tpl) continue;
+
+      // Template preset defines the category; shared selections fill the gaps.
+      const selections: Selections = { ...shared, ...coerceSelections(tpl.attributePreset) };
+      // Fall back to the template's raw text if it has no structured preset.
+      const prompt =
+        Object.keys(selections).length > 0
+          ? assemblePrompt(personaForAssembly, selections, "", catalog)
+          : tpl.templateText;
+      if (!prompt) continue;
+
+      if (allRows.length + count > MAX_PHOTOSHOOT_JOBS) break;
+      const prompts = Array.from({ length: count }, () => prompt);
+      allRows.push(
+        ...buildJobRows(personaId, batchId, prompts, {
+          loraScale: tpl.defaultLoraScale != null ? String(tpl.defaultLoraScale) : "1.0",
+          steps: tpl.defaultSteps ?? 28,
+          guidance: tpl.defaultGuidance != null ? String(tpl.defaultGuidance) : "3.5",
+          aspectRatio: tpl.defaultAspectRatio ?? "3:4",
+          contentRating: tpl.contentRating === "explicit" ? "explicit" : rating,
+          promptTemplateId: templateId,
+          baseSeed,
+        }, seedOffset),
+      );
+      seedOffset += count;
+    }
+
+    if (allRows.length === 0) throw badRequest("No valid categories resolved");
+
+    const inserted = await db.insert(generationJobs).values(allRows).returning({ id: generationJobs.id });
+    void kickGenerationQueue(db).catch(() => {});
+
+    res.status(202).json({
+      batch_id: batchId,
+      job_ids: inserted.map((r) => r.id),
+      total: inserted.length,
+    });
   });
 
   // GET /image-studio/personas/:personaId/generations/batch/:batchId
@@ -582,18 +792,26 @@ export function imageStudioRoutes(db: Db) {
 
   // ── Prompt templates ──────────────────────────────────────────────────────
 
-  // GET /image-studio/personas/:personaId/prompt-templates
-  // Returns this persona's templates + shared (persona_id IS NULL) templates.
+  // GET /image-studio/personas/:personaId/prompt-templates?category=&content_rating=
+  // Returns this persona's templates + shared (persona_id IS NULL) templates,
+  // optionally filtered by category / content_rating (for the Library tab chips).
   router.get(
     "/image-studio/personas/:personaId/prompt-templates",
     async (req, res) => {
       const { personaId } = req.params;
+      const filters = [
+        or(eq(promptTemplates.personaId, personaId), isNull(promptTemplates.personaId)),
+      ];
+      if (typeof req.query.category === "string" && req.query.category.length > 0) {
+        filters.push(eq(promptTemplates.category, req.query.category));
+      }
+      if (req.query.content_rating === "sfw" || req.query.content_rating === "explicit") {
+        filters.push(eq(promptTemplates.contentRating, req.query.content_rating));
+      }
       const templates = await db
         .select()
         .from(promptTemplates)
-        .where(
-          or(eq(promptTemplates.personaId, personaId), isNull(promptTemplates.personaId)),
-        )
+        .where(and(...filters))
         .orderBy(desc(promptTemplates.createdAt));
       res.json({ templates });
     },
@@ -632,6 +850,15 @@ export function imageStudioRoutes(db: Db) {
             typeof body.default_aspect_ratio === "string" ? body.default_aspect_ratio : null,
           contentRating: rating,
           tags: Array.isArray(body.tags) ? body.tags.map((t: unknown) => String(t)) : null,
+          attributePreset:
+            body.attribute_preset && typeof body.attribute_preset === "object"
+              ? body.attribute_preset
+              : {},
+          category: typeof body.category === "string" ? body.category : null,
+          genderTargeting:
+            typeof body.gender_targeting === "string" ? body.gender_targeting : "any",
+          previewImagePath:
+            typeof body.preview_image_path === "string" ? body.preview_image_path : null,
         })
         .returning();
 
