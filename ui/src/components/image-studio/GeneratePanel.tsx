@@ -31,7 +31,7 @@ import {
   type PromptTemplate,
   type Selections,
 } from "@/api/imageStudio";
-import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import {
   Dialog,
   DialogContent,
@@ -507,20 +507,24 @@ export function GeneratePanel({
         )}
         data-testid="generate-panel"
       >
+        <SheetTitle className="sr-only">{persona.name} · Generate</SheetTitle>
+        <SheetDescription className="sr-only">
+          Build a prompt from structured attribute controls and fire a batch.
+        </SheetDescription>
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="flex flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-indigo-500" />
-            <div>
-              <h2 className="text-sm font-semibold">{persona.name} · Generate</h2>
-              <p className="text-[11px] text-muted-foreground">
+            <Sparkles className="h-5 w-5 shrink-0 text-indigo-500" />
+            <div className="min-w-0">
+              <h2 className="truncate text-sm font-semibold">{persona.name} · Generate</h2>
+              <p className="hidden text-[11px] text-muted-foreground sm:block">
                 Click attributes to build a prompt — preview updates live
               </p>
             </div>
             <Badge
               variant="outline"
               className={cn(
-                "ml-1",
+                "ml-1 shrink-0",
                 rating === "explicit"
                   ? "border-red-200 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
                   : "border-green-200 bg-green-50 text-green-700 dark:border-green-500/30 dark:bg-green-500/10 dark:text-green-300",
@@ -529,7 +533,7 @@ export function GeneratePanel({
               {rating === "explicit" ? "NSFW" : "SFW"}
             </Badge>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5">
             <Button variant="outline" size="sm" onClick={surpriseMe} data-testid="surprise-me">
               <Dice5 className="mr-1.5 h-3.5 w-3.5" />
               Surprise Me
