@@ -3,13 +3,12 @@
  * agent's lane; Generate currently hits a stub endpoint that returns
  * { status: "backend_pending" }. Swap for the real call once it ships.
  *
- * Tier 4 / legal hygiene: a one-time per-session consent gate (dismissable
- * forever via localStorage). Tyler authorized "no limitations" — this is a soft
- * gate, not a hard block.
+ * Paperclip v1 is single-operator (Tyler only), so there is no consent gate —
+ * Tyler self-authorizes every action. A consumer-facing gate would belong in v2.
  */
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Shirt, Upload, Loader2, ShieldAlert } from "lucide-react";
+import { Shirt, Upload, Loader2 } from "lucide-react";
 import { useCompany } from "@/context/CompanyContext";
 import { imageStudioApi } from "@/api/imageStudio";
 import { Button } from "@/components/ui/button";
@@ -22,50 +21,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-
-const CONSENT_KEY = "image-studio-undresser-consent";
-
-function ConsentGate() {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (typeof window !== "undefined" && !localStorage.getItem(CONSENT_KEY)) setOpen(true);
-  }, []);
-  function accept(forever: boolean) {
-    if (forever) localStorage.setItem(CONSENT_KEY, "1");
-    setOpen(false);
-  }
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && setOpen(false)}>
-      <DialogContent data-testid="undresser-consent">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="h-5 w-5 text-amber-500" />
-            Before you continue
-          </DialogTitle>
-          <DialogDescription className="leading-relaxed">
-            By using this tool you confirm you have the rights to all uploaded photos and consent to
-            depict them in generated content. Generations involving identifiable persons without
-            consent may violate the TAKE IT DOWN Act and platform terms.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter className="gap-2 sm:justify-between">
-          <Button variant="ghost" size="sm" onClick={() => accept(true)} data-testid="consent-forever">
-            Don't show again
-          </Button>
-          <Button onClick={() => accept(false)} data-testid="consent-ok">Continue</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 export function FemaleUndresserTool() {
   const { selectedCompanyId } = useCompany();
@@ -96,7 +51,6 @@ export function FemaleUndresserTool() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-      <ConsentGate />
       <div className="mb-5 flex items-center gap-2">
         <Shirt className="h-6 w-6 text-indigo-500" />
         <div>
