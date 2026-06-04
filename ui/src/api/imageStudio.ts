@@ -138,6 +138,7 @@ export interface PromptTemplate {
   tags: string[] | null;
   attributePreset: Record<string, string> | null;
   previewImagePath: string | null;
+  previewImagePaths: string[] | null;
   category: string | null;
   genderTargeting: string | null;
   createdAt: string;
@@ -344,6 +345,13 @@ export const imageStudioApi = {
   ) =>
     api.post<{ prompt: string; conflicts: PromptConflict[] }>(
       `/image-studio/personas/${personaId}/preview-prompt`,
+      body,
+    ),
+
+  /** Female Undresser tool — stub until the generation backend lands. */
+  femaleUndresserGenerate: (body: Record<string, unknown>) =>
+    api.post<{ status: string; message: string }>(
+      `/image-studio/tools/female-undresser/generate`,
       body,
     ),
 

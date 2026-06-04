@@ -23,13 +23,11 @@ import {
   ChevronDown,
   Camera,
   Wand2,
-  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import {
   imageStudioApi,
-  uploadUrl,
   type ImageProvider,
   type AttributeControl,
   type PromptTemplate,
@@ -58,11 +56,11 @@ import { StructuredControlPanel } from "./StructuredControlPanel";
 import { PromptPreview } from "./PromptPreview";
 import { ModelPicker } from "./ModelPicker";
 import { TemplateLibraryTab } from "./TemplateLibraryTab";
+import { PhotoShootCategoryGrid } from "./PhotoShootCategoryGrid";
 import { assemblePrompt, detectConflicts, randomizeSelections } from "./assemble";
 import { findModel, DEFAULT_MODEL_ID, LORA_FEE, UPSCALE_FEE } from "./models";
 
 const ASPECT_RATIOS = ["1:1", "3:4", "4:3", "16:9", "9:16"] as const;
-const QUANTITY_CHIPS = [5, 10, 15] as const;
 
 export function personaRating(persona: ImageProvider): "sfw" | "explicit" {
   const tw = String(persona.attributes?.["trigger_word"] ?? "");
@@ -82,14 +80,8 @@ function defaultsFromPersona(controls: AttributeControl[], persona: ImageProvide
   return out;
 }
 
-function gradientFor(value: string): string {
-  let h = 0;
-  for (let i = 0; i < value.length; i++) h = (h * 31 + value.charCodeAt(i)) % 360;
-  return `linear-gradient(135deg, oklch(0.6 0.12 ${h}) 0%, oklch(0.5 0.13 ${(h + 60) % 360}) 100%)`;
-}
-
 // ── Obvious, animated SFW / 18+ pill toggle ─────────────────────────────────
-function ExplicitToggle({
+export function ExplicitToggle({
   value,
   onChange,
 }: {
@@ -271,140 +263,6 @@ function SaveStructuredTemplateDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-// ── PhotoShoot inline grid ──────────────────────────────────────────────────
-function PhotoShootInline({
-  persona,
-  showExplicit,
-  onBatchStarted,
-}: {
-  persona: ImageProvider;
-  showExplicit: boolean;
-  onBatchStarted: (batchId: string) => void;
-}) {
-  const queryClient = useQueryClient();
-  const [counts, setCounts] = useState<Record<string, number>>({});
-  const templatesQ = useQuery({
-    queryKey: ["image-studio", "templates", persona.id],
-    queryFn: () => imageStudioApi.listPromptTemplates(persona.id),
-  });
-  const categories = useMemo(
-    () =>
-      (templatesQ.data?.templates ?? []).filter((t) => {
-        const usable =
-          (t.attributePreset && Object.keys(t.attributePreset).length > 0) || !!t.previewImagePath;
-        return usable && (showExplicit || t.contentRating !== "explicit");
-      }),
-    [templatesQ.data, showExplicit],
-  );
-  const selectedCount = Object.values(counts).reduce((a, b) => a + b, 0);
-  const selectedCats = Object.values(counts).filter((c) => c > 0).length;
-  const model = findModel(DEFAULT_MODEL_ID);
-  const totalCost = selectedCount * model.costPerImage;
-
-  function setCount(id: string, value: number) {
-    setCounts((prev) => {
-      const next = { ...prev };
-      if (prev[id] === value || value <= 0) delete next[id];
-      else next[id] = value;
-      return next;
-    });
-  }
-
-  const fireMut = useMutation({
-    mutationFn: () =>
-      imageStudioApi.batchGenerate(persona.id, {
-        categories: Object.entries(counts).filter(([, c]) => c > 0).map(([templateId, count]) => ({ templateId, count })),
-        content_rating: showExplicit ? "explicit" : undefined,
-      }),
-    onSuccess: (res) => {
-      onBatchStarted(res.batch_id);
-      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", persona.id] });
-      setCounts({});
-    },
-  });
-
-  return (
-    <div data-testid="photoshoot-inline">
-      <p className="mb-2 text-[11px] text-muted-foreground">
-        Pick categories + counts — they all fire as one batch.
-      </p>
-      {templatesQ.isLoading ? (
-        <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Loading categories…
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {categories.map((t: PromptTemplate) => {
-            const active = (counts[t.id] ?? 0) > 0;
-            return (
-              <div
-                key={t.id}
-                data-testid={`photoshoot-cat-${t.id}`}
-                className={cn(
-                  "overflow-hidden rounded-lg border transition-all duration-200",
-                  active ? "border-indigo-400 shadow-[0_0_0_2px_rgba(99,102,241,0.3)]" : "border-border hover:border-indigo-300",
-                )}
-              >
-                <div className="relative aspect-[4/3] overflow-hidden">
-                  {t.previewImagePath ? (
-                    <img src={uploadUrl(t.previewImagePath)} alt={t.name} loading="lazy" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="h-full w-full" style={{ background: gradientFor(t.category ?? t.name) }} />
-                  )}
-                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent px-2 pb-1 pt-5">
-                    <span className="text-xs font-semibold text-white drop-shadow">{t.name}</span>
-                  </div>
-                  {active && (
-                    <span className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500 text-white">
-                      <Check className="h-3 w-3" />
-                    </span>
-                  )}
-                  {t.contentRating === "explicit" && (
-                    <span className="absolute left-1.5 top-1.5 rounded bg-red-600/90 px-1 text-[8px] font-semibold text-white">18+</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-1 p-1.5">
-                  {QUANTITY_CHIPS.map((q) => (
-                    <button
-                      key={q}
-                      type="button"
-                      onClick={() => setCount(t.id, q)}
-                      data-testid={`photoshoot-qty-${t.id}-${q}`}
-                      className={cn(
-                        "flex-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors",
-                        counts[t.id] === q ? "bg-indigo-500 text-white" : "bg-muted text-muted-foreground hover:bg-muted/70",
-                      )}
-                    >
-                      {q}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Sticky fire bar (safe-area aware) */}
-      <div className="sticky bottom-0 z-10 mt-3 flex items-center justify-between gap-2 border-t border-border bg-card/95 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
-        <span className="text-xs text-muted-foreground" data-testid="photoshoot-total">
-          {selectedCount > 0 ? (
-            <>
-              <span className="font-semibold text-foreground">{selectedCount} images</span> · {selectedCats} categor{selectedCats === 1 ? "y" : "ies"} · ${totalCost.toFixed(2)}
-            </>
-          ) : (
-            "Pick a quantity on one or more categories"
-          )}
-        </span>
-        <Button onClick={() => fireMut.mutate()} disabled={selectedCount === 0 || fireMut.isPending} data-testid="photoshoot-fire">
-          {fireMut.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
-          Generate {selectedCount > 0 ? selectedCount : ""}
-        </Button>
-      </div>
-    </div>
   );
 }
 
@@ -716,6 +574,7 @@ export function PersonaWorkbench({
   const rating = personaRating(persona);
   const [tab, setTab] = useState<"generate" | "photoshoot">("generate");
   const [showExplicit, setShowExplicit] = useState(rating === "explicit");
+  const [gender, setGender] = useState<"female" | "male">("female");
   const actionsRef = useRef<{ surpriseMe: () => void; reset: () => void }>({ surpriseMe: () => {}, reset: () => {} });
 
   return (
@@ -773,8 +632,40 @@ export function PersonaWorkbench({
         />
       </div>
       <div className={cn(tab === "photoshoot" ? "block" : "hidden")}>
-        <PhotoShootInline persona={persona} showExplicit={showExplicit} onBatchStarted={onBatchStarted} />
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[11px] text-muted-foreground">Pick categories + counts — they all fire as one batch.</p>
+          <GenderFilter value={gender} onChange={setGender} />
+        </div>
+        <PhotoShootCategoryGrid persona={persona} showExplicit={showExplicit} gender={gender} onBatchStarted={onBatchStarted} />
       </div>
+    </div>
+  );
+}
+
+/** Female / Male filter chip row for the PhotoShoot category grid. */
+export function GenderFilter({
+  value,
+  onChange,
+}: {
+  value: "female" | "male";
+  onChange: (g: "female" | "male") => void;
+}) {
+  return (
+    <div className="inline-flex rounded-md border border-border bg-muted/40 p-0.5 text-[11px]" data-testid="gender-filter">
+      {(["female", "male"] as const).map((g) => (
+        <button
+          key={g}
+          type="button"
+          onClick={() => onChange(g)}
+          data-testid={`gender-${g}`}
+          className={cn(
+            "rounded px-2.5 py-0.5 font-medium capitalize transition-colors",
+            value === g ? "bg-background shadow-sm" : "text-muted-foreground",
+          )}
+        >
+          {g}
+        </button>
+      ))}
     </div>
   );
 }

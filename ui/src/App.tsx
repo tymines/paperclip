@@ -44,6 +44,8 @@ import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
+import { PhotoShootTool } from "./pages/image-studio/PhotoShootTool";
+import { FemaleUndresserTool } from "./pages/image-studio/FemaleUndresserTool";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
 import { InstanceAccess } from "./pages/InstanceAccess";
 import { InstanceSettings } from "./pages/InstanceSettings";
@@ -168,6 +170,8 @@ function boardRoutes() {
       <Route path="jarvis" element={<Jarvis />} />
       <Route path="voice-memos" element={<VoiceMemos />} />
       <Route path="image-studio" element={<ImageStudio />} />
+      <Route path="image-studio/tools/photoshoot" element={<PhotoShootTool />} />
+      <Route path="image-studio/tools/female-undresser" element={<FemaleUndresserTool />} />
       <Route path="instance/settings/adapters" element={<AdapterManager />} />
       <Route path=":pluginRoutePath/*" element={<PluginPage />} />
       <Route path="*" element={<NotFoundPage scope="board" />} />

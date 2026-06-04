@@ -25,6 +25,8 @@ import {
   Mic,
   Palette,
   ImageIcon,
+  Camera,
+  Shirt,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -215,6 +217,8 @@ function SidebarLegacy({
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
+        <SidebarNavItem to="/image-studio/tools/photoshoot" label="PhotoShoot" icon={Camera} />
+        <SidebarNavItem to="/image-studio/tools/female-undresser" label="Female Undresser" icon={Shirt} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
       </SidebarSection>
 
@@ -300,6 +304,8 @@ function SidebarV1({
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/image-studio" label="Image Studio" icon={ImageIcon} />
+        <SidebarNavItem to="/image-studio/tools/photoshoot" label="PhotoShoot" icon={Camera} />
+        <SidebarNavItem to="/image-studio/tools/female-undresser" label="Female Undresser" icon={Shirt} />
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
         ) : null}
