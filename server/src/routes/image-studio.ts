@@ -790,6 +790,17 @@ export function imageStudioRoutes(db: Db) {
     },
   );
 
+  // ── Tools: Female Undresser (UI shell — backend wiring is a peer agent's lane) ──
+  // POST /image-studio/tools/female-undresser/generate
+  // Returns a stub until the Replicate "remove clothing" backend lands. The UI
+  // shows the message; swap this for the real prediction call once shipped.
+  router.post("/image-studio/tools/female-undresser/generate", (_req, res) => {
+    res.status(200).json({
+      status: "backend_pending",
+      message: "Generation backend wiring in flight from peer agent",
+    });
+  });
+
   // ── Prompt templates ──────────────────────────────────────────────────────
 
   // GET /image-studio/personas/:personaId/prompt-templates?category=&content_rating=
