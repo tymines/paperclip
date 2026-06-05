@@ -29,7 +29,7 @@ import { notFound, badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import type { SocialScheduler } from "../workers/social-scheduler.js";
 import type { SocialDmPoller } from "../workers/social-dm-poller.js";
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { socialDms } from "@paperclipai/db";
 
 function isSocialPlatform(value: string): value is SocialPlatform {
@@ -178,26 +178,38 @@ export function socialRoutes(
   });
 
   // GET /companies/:companyId/social/dms/unread-count — sidebar badge.
+  // This fires on every page load, so it must never 500: a failure here would
+  // surface as a loud console error on every navigation. We use Drizzle's
+  // `inArray` (an `IN (...)` list) rather than a raw `ANY($1::uuid[])` — the
+  // postgres.js driver binds a JS array to a single uuid[] placeholder as a
+  // scalar, which Postgres rejects as a "malformed array literal". Any
+  // unexpected failure falls back to a safe `{ unread: 0 }`.
   router.get("/companies/:companyId/social/dms/unread-count", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const accounts = await svc.listAccounts(companyId);
-    const accountIds = accounts.map((a) => a.id);
-    if (accountIds.length === 0) {
+    try {
+      const accounts = await svc.listAccounts(companyId);
+      const accountIds = accounts.map((a) => a.id);
+      if (accountIds.length === 0) {
+        res.json({ unread: 0 });
+        return;
+      }
+      const result = await db
+        .select({ unread: sql<number>`count(*)::int` })
+        .from(socialDms)
+        .where(
+          and(
+            inArray(socialDms.socialAccountId, accountIds),
+            isNull(socialDms.readAt),
+            eq(socialDms.direction, "inbound"),
+          ),
+        );
+      res.json({ unread: result[0]?.unread ?? 0 });
+    } catch (err) {
+      // Never break a page load over a badge count — degrade to zero.
+      req.log?.error?.({ err }, "social/dms/unread-count failed; returning 0");
       res.json({ unread: 0 });
-      return;
     }
-    const result = await db
-      .select({ unread: sql<number>`count(*)::int` })
-      .from(socialDms)
-      .where(
-        and(
-          sql`${socialDms.socialAccountId} = ANY(${accountIds}::uuid[])`,
-          isNull(socialDms.readAt),
-          eq(socialDms.direction, "inbound"),
-        ),
-      );
-    res.json({ unread: result[0]?.unread ?? 0 });
   });
 
   // POST /social/scheduler/fire-now/:postId — admin/test bypass that runs
