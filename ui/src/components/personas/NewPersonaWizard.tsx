@@ -12,7 +12,7 @@
  * to the asset store; feeding them to the Replicate trainer (which today zips a
  * server-side dir) is the same backend lane as the rest of the training pipeline.
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Upload, Wand2, Camera, Cloud } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -98,12 +98,57 @@ export function NewPersonaWizard({
     [controlsQ.data],
   );
 
-  const providersQ = useQuery({
-    queryKey: ["image-studio", "providers", selectedCompanyId],
-    queryFn: () => imageStudioApi.listProviders(selectedCompanyId!),
-    enabled: open && !!selectedCompanyId,
+  // Provider-grouped LoRA trainer catalog (Replicate · WaveSpeed AI · …).
+  const trainersQ = useQuery({
+    queryKey: ["image-studio", "trainers"],
+    queryFn: () => imageStudioApi.listTrainers(),
+    enabled: open,
+    staleTime: 5 * 60_000,
   });
-  const trainer = (providersQ.data?.providers ?? []).find((p) => p.trainingCapable);
+  // Flatten the configured providers' trainers into selectable options.
+  const trainerOptions = useMemo(() => {
+    const out: {
+      key: string;
+      host: string;
+      trainerId: string;
+      providerName: string;
+      color: string;
+      costUsd: number;
+      etaMinutes: number;
+      recommended: boolean;
+      label: string;
+      note?: string;
+    }[] = [];
+    for (const g of trainersQ.data?.providers ?? []) {
+      if (!g.configured) continue;
+      for (const t of g.trainers) {
+        out.push({
+          key: `${g.host}::${t.id}`,
+          host: g.host,
+          trainerId: t.id,
+          providerName: g.name,
+          color: g.color,
+          costUsd: t.costEstimateUsd,
+          etaMinutes: t.etaMinutes,
+          recommended: Boolean(t.recommended),
+          label: t.name,
+          note: t.note,
+        });
+      }
+    }
+    // Recommended first, then cheapest.
+    return out.sort(
+      (a, b) => Number(b.recommended) - Number(a.recommended) || a.costUsd - b.costUsd,
+    );
+  }, [trainersQ.data]);
+
+  const [trainerKey, setTrainerKey] = useState<string | null>(null);
+  // Default to the ⭐ recommended trainer (or the first) once options load.
+  useEffect(() => {
+    if (trainerKey || trainerOptions.length === 0) return;
+    setTrainerKey((trainerOptions.find((o) => o.recommended) ?? trainerOptions[0]).key);
+  }, [trainerOptions, trainerKey]);
+  const selectedTrainer = trainerOptions.find((o) => o.key === trainerKey) ?? null;
 
   function reset() {
     setStep(1);
@@ -113,6 +158,7 @@ export function NewPersonaWizard({
     setPersonaId(null);
     setPhotos([]);
     setError(null);
+    setTrainerKey(null);
   }
 
   function close() {
@@ -160,8 +206,11 @@ export function NewPersonaWizard({
 
   const trainMut = useMutation({
     mutationFn: () => {
-      if (!trainer) throw new Error("No training-capable provider configured.");
-      return imageStudioApi.trainPersona(selectedCompanyId!, personaId!, { provider_id: trainer.id });
+      if (!selectedTrainer) throw new Error("No trainer selected.");
+      return imageStudioApi.trainPersona(selectedCompanyId!, personaId!, {
+        provider_host: selectedTrainer.host,
+        trainer: selectedTrainer.trainerId,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] });
@@ -358,6 +407,43 @@ export function NewPersonaWizard({
           {/* ── Step 3: Generate & train ── */}
           {step === 3 && (
             <div className="space-y-3">
+              {/* Trainer picker — provider-grouped, same multi-provider pattern
+                  as the generation model picker. */}
+              <div className="space-y-1.5">
+                <Label className="text-xs">Trainer</Label>
+                <Select value={trainerKey ?? ""} onValueChange={setTrainerKey}>
+                  <SelectTrigger className="h-9" data-testid="np-trainer">
+                    <SelectValue placeholder={trainersQ.isLoading ? "Loading trainers…" : "Pick a trainer"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {trainerOptions.map((o) => (
+                      <SelectItem key={o.key} value={o.key}>
+                        <span className="flex items-center gap-2">
+                          <span
+                            className="inline-block h-2 w-2 rounded-full"
+                            style={{ backgroundColor: o.color }}
+                          />
+                          <span className="font-medium">{o.providerName}</span>
+                          <span className="text-muted-foreground">· {o.label}</span>
+                          <span className="text-muted-foreground">
+                            (${o.costUsd.toFixed(2)} · ~{o.etaMinutes}m)
+                          </span>
+                          {o.recommended && <span className="text-amber-500">★</span>}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {trainerOptions.length === 0 && !trainersQ.isLoading && (
+                  <p className="text-[11px] text-amber-600">
+                    No trainers available — add a Replicate or WaveSpeed AI API key.
+                  </p>
+                )}
+                {selectedTrainer?.note && (
+                  <p className="text-[11px] text-muted-foreground">{selectedTrainer.note}</p>
+                )}
+              </div>
+
               <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Persona</span>
@@ -369,17 +455,17 @@ export function NewPersonaWizard({
                 </div>
                 <div className="mt-1 flex items-center justify-between">
                   <span className="text-muted-foreground">Est. cost · time</span>
-                  <span className="font-medium">$1.58 · ~17 min</span>
-                </div>
-                <div className="mt-1 flex items-center justify-between">
-                  <span className="text-muted-foreground">Trainer</span>
-                  <span className="font-medium">{trainer?.name ?? "none configured"}</span>
+                  <span className="font-medium" data-testid="np-cost-preview">
+                    {selectedTrainer
+                      ? `$${selectedTrainer.costUsd.toFixed(2)} · ~${selectedTrainer.etaMinutes} min via ${selectedTrainer.providerName}`
+                      : "—"}
+                  </span>
                 </div>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Training runs on Replicate (Flux LoRA). The persona flips to <b>ready</b> and its
-                trigger word locks when it completes — you can close this and watch progress from the
-                list.
+                Training runs the Flux LoRA trainer on your chosen provider. The persona flips to{" "}
+                <b>ready</b> and its trigger word locks when it completes — you can close this and
+                watch progress from the list.
               </p>
             </div>
           )}
@@ -420,7 +506,7 @@ export function NewPersonaWizard({
             {step === 3 && (
               <Button
                 onClick={() => trainMut.mutate()}
-                disabled={trainMut.isPending || !trainer}
+                disabled={trainMut.isPending || !selectedTrainer}
                 data-testid="np-train"
               >
                 {trainMut.isPending ? (

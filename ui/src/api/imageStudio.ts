@@ -120,6 +120,26 @@ export interface PersonaPhotos {
   contentRating: "sfw" | "explicit";
 }
 
+export interface TrainerInfo {
+  id: string;
+  name: string;
+  costEstimateUsd: number;
+  etaMinutes: number;
+  defaultSteps: number;
+  defaultRank: number;
+  recommended?: boolean;
+  nsfw?: boolean;
+  note?: string;
+}
+
+export interface TrainerProviderGroup {
+  host: string;
+  name: string;
+  color: string;
+  configured: boolean;
+  trainers: TrainerInfo[];
+}
+
 export type GenerationSource = "test" | "production";
 
 export interface PersonaGeneration {
@@ -292,15 +312,26 @@ export const imageStudioApi = {
   trainPersona: (
     companyId: string,
     personaId: string,
-    opts: { provider_id: string; training_photos_dir?: string },
+    opts: {
+      provider_host?: string;
+      trainer?: string;
+      provider_id?: string;
+      training_photos_dir?: string;
+    },
   ) =>
     api.post<{
       job: LoraTrainingJob;
       photos: PersonaPhotos;
+      provider?: string;
+      trainer?: string;
       estimatedCostUsd: number;
       estimatedMinutes: number;
       note: string;
     }>(`/companies/${companyId}/image-studio/personas/${personaId}/train`, opts),
+
+  /** Provider-grouped LoRA trainer catalog for the wizard picker. */
+  listTrainers: () =>
+    api.get<{ providers: TrainerProviderGroup[] }>(`/image-studio/trainers`),
 
   /** Poll a single training job (server polls Replicate on read). */
   getTrainingJob: (companyId: string, jobId: string) =>
