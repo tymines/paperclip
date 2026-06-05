@@ -18,6 +18,14 @@ export interface PersonaTrainingProfile {
   defaultPhotosDir: string;
   /** Filesystem-safe slug used for the installed .safetensors filename. */
   slug: string;
+  /**
+   * Hyphenated slug used for the published Replicate model name + endpoint
+   * (e.g. Sidney SFW → "sidney-sfw"). MUST match replicate-generator's
+   * personaSlug so a freshly-trained persona resolves to the same model the
+   * gallery generates against. (Distinct from `slug`, which is underscored to
+   * match the trigger word / local .safetensors filename.)
+   */
+  modelSlug: string;
 }
 
 const HOME = os.homedir();
@@ -29,12 +37,14 @@ const HOME = os.homedir();
  */
 export function personaTrainingProfile(name: string): PersonaTrainingProfile {
   const slug = slugify(name);
+  const modelSlug = personaModelSlug(name);
   if (/nsfw/i.test(name)) {
     return {
       triggerWord: "sidney_nsfw",
       contentRating: "explicit",
       defaultPhotosDir: path.join(HOME, ".openclaw", "sidney-training-photos-nsfw"),
       slug,
+      modelSlug,
     };
   }
   if (/sidney/i.test(name)) {
@@ -43,6 +53,7 @@ export function personaTrainingProfile(name: string): PersonaTrainingProfile {
       contentRating: "sfw",
       defaultPhotosDir: path.join(HOME, ".openclaw", "sidney-training-photos"),
       slug,
+      modelSlug,
     };
   }
   return {
@@ -50,6 +61,7 @@ export function personaTrainingProfile(name: string): PersonaTrainingProfile {
     contentRating: "sfw",
     defaultPhotosDir: path.join(HOME, ".openclaw", `${slug}-training-photos`),
     slug,
+    modelSlug,
   };
 }
 
@@ -59,6 +71,21 @@ export function slugify(name: string): string {
     .trim()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
+}
+
+/**
+ * Hyphenated persona slug for the published Replicate model name/endpoint.
+ * Kept byte-for-byte in sync with replicate-generator's `personaSlug` so a
+ * persona trained here is generated against the same `<owner>/<slug>` model.
+ */
+export function personaModelSlug(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "persona"
+  );
 }
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".heic", ".tiff"]);

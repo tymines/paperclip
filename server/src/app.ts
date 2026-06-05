@@ -238,7 +238,7 @@ export async function createApp(
   api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(designRoutes(db));
   api.use(designAssetsRoutes(db));
-  api.use(imageStudioRoutes(db));
+  api.use(imageStudioRoutes(db, opts.storageService));
   api.use(credentialRoutes(db));
   api.use(userProfileRoutes(db));
   api.use(sidebarBadgeRoutes(db));

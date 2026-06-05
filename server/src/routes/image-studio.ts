@@ -29,14 +29,15 @@ import {
   personaTrainingProfile,
   countTrainingPhotos,
   defaultHyperparams,
-  downloadLora,
 } from "../services/image-studio/training.js";
-import { startPersonaTraining } from "../services/image-studio/training-runner.js";
 import {
-  getReplicateToken,
-  getReplicateTraining,
-  extractWeightsUrl,
-} from "../services/replicate/index.js";
+  startPersonaTraining,
+  stagePersonaTrainingPhotos,
+  syncTrainingJob,
+  startBackgroundTrainingPoller,
+} from "../services/image-studio/training-runner.js";
+import { getReplicateToken } from "../services/replicate/index.js";
+import type { StorageService } from "../storage/types.js";
 import {
   getProvider,
   listProviders,
@@ -45,22 +46,6 @@ import {
   PROVIDER_HOSTS,
   type ProviderHost,
 } from "../services/image-providers/index.js";
-
-/** Map a Replicate training status onto our lora_training_jobs status enum. */
-function mapReplicateStatus(
-  status: string,
-): "training" | "downloading" | "ready" | "failed" {
-  switch (status) {
-    case "succeeded":
-      return "downloading";
-    case "failed":
-    case "canceled":
-      return "failed";
-    default:
-      // starting | processing
-      return "training";
-  }
-}
 
 /** Load a global-or-company-scoped provider row by id. */
 async function loadProvider(db: Db, companyId: string, providerId: string) {
@@ -77,7 +62,7 @@ async function loadProvider(db: Db, companyId: string, providerId: string) {
   return row ?? null;
 }
 
-export function imageStudioRoutes(db: Db) {
+export function imageStudioRoutes(db: Db, storage?: StorageService) {
   const router = Router();
 
   // GET /api/companies/:companyId/image-studio/providers
@@ -355,10 +340,24 @@ export function imageStudioRoutes(db: Db) {
       }
 
       const profile = personaTrainingProfile(persona.name);
-      const photosDir =
+      // Photos resolution, in priority order:
+      //   1. an explicit server-side dir in the request body (power users),
+      //   2. the photos the wizard uploaded to the asset store (staged to a
+      //      temp dir the trainer can zip),
+      //   3. the persona's default server-side photos dir (Sidney built-ins).
+      let photosDir: string;
+      const explicitDir =
         typeof req.body?.training_photos_dir === "string" && req.body.training_photos_dir.length > 0
           ? req.body.training_photos_dir
-          : profile.defaultPhotosDir;
+          : null;
+      if (explicitDir) {
+        photosDir = explicitDir;
+      } else {
+        const staged = storage
+          ? await stagePersonaTrainingPhotos(db, storage, companyId, persona.id)
+          : null;
+        photosDir = staged?.dir ?? profile.defaultPhotosDir;
+      }
       const photos = await countTrainingPhotos(photosDir);
       const hyperparams = defaultHyperparams(profile.triggerWord);
 
@@ -375,6 +374,9 @@ export function imageStudioRoutes(db: Db) {
             photosDir,
             companyId,
           });
+          // Drive the job to completion (download LoRA + flip persona to ready)
+          // even if no client polls the status route.
+          startBackgroundTrainingPoller(db, job.id);
           res.status(202).json({
             job,
             photos,
@@ -434,54 +436,11 @@ export function imageStudioRoutes(db: Db) {
         return;
       }
 
-      const terminal = job.status === "ready" || job.status === "failed";
-      const token = await getReplicateToken();
-      if (terminal || !job.externalJobId || !token) {
-        res.json({ job });
-        return;
-      }
-
-      // Live poll. Errors here are non-fatal — return the last-known row.
-      try {
-        const training = await getReplicateTraining(job.externalJobId);
-        let next = mapReplicateStatus(training.status);
-        const patch: Record<string, unknown> = { updatedAt: new Date() };
-
-        if (next === "failed") {
-          patch.status = "failed";
-          patch.errorMessage = training.error ?? "Training failed on Replicate";
-          patch.completedAt = new Date();
-        } else if (next === "downloading") {
-          const weights = extractWeightsUrl(training);
-          if (weights) {
-            const profile = personaTrainingProfile(
-              (await loadProvider(db, companyId, job.personaId))?.name ?? "persona",
-            );
-            const installed = await downloadLora(weights, profile.slug);
-            patch.status = "ready";
-            patch.outputLoraPath = installed;
-            patch.progress = 100;
-            patch.completedAt = new Date();
-            const seconds = training.metrics?.total_time ?? training.metrics?.predict_time;
-            // H100 ~ $0.001525/s; fall back to the flat ~$3 estimate.
-            patch.costUsd = seconds ? (seconds * 0.001525).toFixed(4) : "3.0000";
-            next = "ready";
-          } else {
-            patch.status = "downloading";
-          }
-        } else {
-          patch.status = "training";
-        }
-
-        const [updated] = await db
-          .update(loraTrainingJobs)
-          .set(patch)
-          .where(eq(loraTrainingJobs.id, job.id))
-          .returning();
-        res.json({ job: updated });
-      } catch (err) {
-        res.json({ job, pollError: err instanceof Error ? err.message : String(err) });
-      }
+      // Poll Replicate + sync both the job and its persona (status → ready/
+      // failed, endpoint registration on success). Non-throwing: returns the
+      // last-known row on any poll error.
+      const updated = await syncTrainingJob(db, job);
+      res.json({ job: updated });
     },
   );
 
