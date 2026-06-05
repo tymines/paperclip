@@ -25,6 +25,7 @@ import {
   Wand2,
   Shirt,
   Library,
+  GitCompare,
 } from "lucide-react";
 import { useSearchParams } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -299,6 +300,8 @@ function GenerateInline({
   const [search, setSearch] = useState("");
   // Model selection persists per persona × tool, defaulting to ⭐ Recommended.
   const [modelId, setModelId] = usePersistedModel(persona.id, "persona_generate");
+  // Compare-across-providers: fire the same prompt on every configured provider.
+  const [compareMode, setCompareMode] = useState(false);
   const [count, setCount] = useState(4);
   const [loraScale, setLoraScale] = useState(1.0);
   const [steps, setSteps] = useState(28);
@@ -380,9 +383,24 @@ function GenerateInline({
     mutationFn: () => {
       const ratingOut: "sfw" | "explicit" = showExplicit ? "explicit" : rating;
       const common = { lora_scale: loraScale, steps, aspect_ratio: aspectRatio, seed: seed.trim() === "" ? null : Number(seed), count, content_rating: ratingOut };
-      return editing && editedPrompt.trim()
-        ? imageStudioApi.generateBatch(persona.id, { prompt_text: editedPrompt.trim(), ...common })
-        : imageStudioApi.generateBatch(persona.id, { selections, freeText, ...common });
+      const promptBody = editing && editedPrompt.trim()
+        ? { prompt_text: editedPrompt.trim() }
+        : { selections, freeText };
+      // Compare mode fires the SAME prompt across every configured provider and
+      // tags each result by provider for side-by-side review. Normalise its
+      // result to the { batch_id } shape onSuccess expects.
+      if (compareMode) {
+        return imageStudioApi
+          .generateCompare(persona.id, { ...promptBody, ...common })
+          .then((r) => ({
+            batch_id: r.batch_id,
+            job_ids: Object.values(r.jobs_by_provider).flat(),
+            prompt: r.prompt,
+          }));
+      }
+      // Single-provider: route to the picked model's provider + native model.
+      const routed = { ...common, provider_host: model.provider, model: model.nativeModel };
+      return imageStudioApi.generateBatch(persona.id, { ...promptBody, ...routed });
     },
     onSuccess: (res) => {
       onBatchStarted(res.batch_id);
@@ -456,6 +474,41 @@ function GenerateInline({
         />
       </div>
       <ModelPicker value={modelId} onChange={setModelId} />
+      <button
+        type="button"
+        onClick={() => setCompareMode((v) => !v)}
+        aria-pressed={compareMode}
+        data-testid="compare-toggle"
+        className={cn(
+          "flex w-full items-center justify-between gap-2 rounded-lg border p-2.5 text-left transition-colors",
+          compareMode
+            ? "border-indigo-400 bg-indigo-500/5"
+            : "border-border hover:border-indigo-300",
+        )}
+      >
+        <span className="flex items-center gap-2">
+          <GitCompare className={cn("h-4 w-4", compareMode ? "text-indigo-500" : "text-muted-foreground")} />
+          <span>
+            <span className="block text-xs font-semibold">Compare across providers</span>
+            <span className="block text-[10px] text-muted-foreground">
+              Fire this prompt on all 3 providers · tag results by provider
+            </span>
+          </span>
+        </span>
+        <span
+          className={cn(
+            "relative h-4 w-7 shrink-0 rounded-full transition-colors",
+            compareMode ? "bg-indigo-500" : "bg-muted-foreground/30",
+          )}
+        >
+          <span
+            className={cn(
+              "absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all",
+              compareMode ? "left-3.5" : "left-0.5",
+            )}
+          />
+        </span>
+      </button>
       <details className="rounded-lg border border-border">
         <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold text-muted-foreground">
           <Sliders className="h-3 w-3" /> Advanced

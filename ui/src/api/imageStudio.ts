@@ -189,6 +189,8 @@ export interface GenerationJob {
   completedAt: string | null;
 }
 
+export type ProviderHost = "replicate" | "atlascloud" | "wavespeedai";
+
 export interface GenerateBatchBody {
   prompt_text?: string;
   /** Structured-control mode: clicked attributes compiled by the assembler. */
@@ -202,6 +204,33 @@ export interface GenerateBatchBody {
   count?: number;
   prompt_template_id?: string | null;
   content_rating?: "sfw" | "explicit";
+  /** Which hosted provider to render on (default 'replicate'). */
+  provider_host?: ProviderHost;
+  /** Provider-native model id; null = the provider's default. */
+  model?: string | null;
+}
+
+/** Status of one hosted provider (token + balance + rate limits). */
+export interface ProviderHostStatus {
+  host: ProviderHost;
+  name: string;
+  color: string;
+  configured: boolean;
+  verified: boolean;
+  detail: string | null;
+  error: string | null;
+  balanceUsd: number | null;
+  rateLimit: string;
+  modelCount: number;
+  isDefault: boolean;
+}
+
+export interface CompareResult {
+  batch_id: string;
+  prompt: string;
+  providers: ProviderHost[];
+  jobs_by_provider: Record<string, string[]>;
+  total: number;
 }
 
 export interface PhotoShootCategory {
@@ -339,6 +368,17 @@ export const imageStudioApi = {
       `/image-studio/personas/${personaId}/batch-generate`,
       body,
     ),
+
+  /** Fire the same prompt across every configured provider for side-by-side A/B. */
+  generateCompare: (personaId: string, body: GenerateBatchBody & { providers?: ProviderHost[] }) =>
+    api.post<CompareResult>(
+      `/image-studio/personas/${personaId}/generate-compare`,
+      body,
+    ),
+
+  /** The 3 hosted providers with token status, balance, and rate limits. */
+  getProviderHosts: () =>
+    api.get<{ providers: ProviderHostStatus[] }>(`/image-studio/providers`),
 
   /** The data-driven structured-control catalog for the Generate panel. */
   getAttributeControls: (opts?: {
