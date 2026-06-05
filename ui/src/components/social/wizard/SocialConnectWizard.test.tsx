@@ -19,6 +19,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WIZARD_PLATFORM_SPECS, type WizardPlatformSpec } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { SocialConnectWizard } from "./SocialConnectWizard";
 import { ToastProvider } from "../../../context/ToastContext";
 
@@ -68,7 +69,7 @@ describe("SocialConnectWizard StepConnect — iOS popup gesture preservation", (
   let container: HTMLDivElement;
   let root: Root;
   let queryClient: QueryClient;
-  let openSpy: ReturnType<typeof vi.spyOn<Window & typeof globalThis, "open">>;
+  let openSpy: MockInstance<typeof window.open>;
   let fakePopup: { closed: boolean; close: () => void; location: { href: string } };
 
   beforeEach(() => {
