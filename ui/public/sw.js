@@ -1,16 +1,41 @@
-const CACHE_NAME = "paperclip-v2";
+// Bump CACHE_NAME on every change that must invalidate stale clients. The
+// byte change here is what lets a browser holding an OLD/broken service worker
+// detect that /sw.js has updated and install this one.
+const CACHE_NAME = "paperclip-v3";
 
 self.addEventListener("install", () => {
+  // Activate immediately instead of waiting for all old tabs to close.
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.map((key) => caches.delete(key)))
-    )
+    (async () => {
+      // Drop every cache from any prior service worker version — this is what
+      // clears a broken app shell that was cached while the backend was down.
+      const keys = await caches.keys();
+      await Promise.all(keys.map((key) => caches.delete(key)));
+
+      // Take control of all open pages right now.
+      await self.clients.claim();
+
+      // The pages currently on screen were rendered by the OLD service worker
+      // (possibly the broken black shell). claim() controls them but does NOT
+      // refresh them, so force a one-time reload so they re-fetch fresh,
+      // network-first content. activate() only fires once per SW version, so
+      // this cannot loop.
+      const clients = await self.clients.matchAll({ type: "window" });
+      await Promise.all(
+        clients.map((client) => {
+          try {
+            return client.navigate(client.url).catch(() => undefined);
+          } catch {
+            return undefined;
+          }
+        })
+      );
+    })()
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {

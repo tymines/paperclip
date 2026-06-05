@@ -375,7 +375,11 @@ export async function createApp(
         express.static(uiDist, {
           maxAge: "1h",
           setHeaders(res, filePath) {
-            if (path.basename(filePath) === "index.html") {
+            const name = path.basename(filePath);
+            // index.html must never outlive the asset hashes it points at, and
+            // sw.js must always be revalidated so a browser holding a stale (or
+            // broken) service worker detects the updated /sw.js on next load.
+            if (name === "index.html" || name === "sw.js") {
               res.set("Cache-Control", "no-cache");
             }
           },
