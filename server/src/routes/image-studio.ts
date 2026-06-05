@@ -37,6 +37,7 @@ import {
   startBackgroundTrainingPoller,
 } from "../services/image-studio/training-runner.js";
 import { getReplicateToken } from "../services/replicate/index.js";
+import { runUndresserGeneration } from "../services/image-studio/undresser.js";
 import type { StorageService } from "../storage/types.js";
 import {
   getProvider,
@@ -1109,15 +1110,32 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
     },
   );
 
-  // ── Tools: Female Undresser (UI shell — backend wiring is a peer agent's lane) ──
+  // ── Tools: Female Undresser ──────────────────────────────────────────────
   // POST /image-studio/tools/female-undresser/generate
-  // Returns a stub until the Replicate "remove clothing" backend lands. The UI
-  // shows the message; swap this for the real prediction call once shipped.
-  router.post("/image-studio/tools/female-undresser/generate", (_req, res) => {
-    res.status(200).json({
-      status: "backend_pending",
-      message: "Generation backend wiring in flight from peer agent",
+  // Body: { persona_id, source_file?, source_image?, model?, prompt?, count?,
+  //         content_rating? }
+  // Structurally complete: resolves the persona's configured undresser model
+  // (image_providers.default_params.undresser_model) and fires through the
+  // provider abstraction. Until Hermes' model selection lands as config, the
+  // persona has no undresser_model and this returns a structured
+  // `backend_pending` — setting the config is the only change needed to go live.
+  router.post("/image-studio/tools/female-undresser/generate", async (req, res) => {
+    const body = req.body ?? {};
+    const personaId = typeof body.persona_id === "string" ? body.persona_id : "";
+    if (!personaId) {
+      throw badRequest("persona_id is required");
+    }
+    const contentRating = body.content_rating === "explicit" ? "explicit" : "sfw";
+    const result = await runUndresserGeneration(db, {
+      personaId,
+      sourceImage: typeof body.source_image === "string" ? body.source_image : null,
+      sourceFile: typeof body.source_file === "string" ? body.source_file : null,
+      uiModel: typeof body.model === "string" ? body.model : null,
+      prompt: typeof body.prompt === "string" ? body.prompt : null,
+      count: Number.isFinite(Number(body.count)) ? Math.max(1, Number(body.count)) : 1,
+      contentRating,
     });
+    res.status(200).json(result);
   });
 
   // ── Unified template browser (cross-tool Library + template-click picker) ──
