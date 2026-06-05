@@ -349,6 +349,22 @@ async function pollOne(db: Db, job: GenerationJob): Promise<void> {
     if (!provider) throw new Error(`Unknown provider_host '${job.providerHost}'`);
     const status = await provider.pollPrediction(job.replicatePredictionId);
     if (status.status === "succeeded") {
+      // Atomically claim the job before downloading/inserting so a concurrent
+      // tick — or a second server process sharing this DB — can't land the same
+      // prediction twice (which would duplicate the gallery row + double-count
+      // cost). Only the worker whose UPDATE flips it out of an in-flight status
+      // proceeds; others see 0 rows and bail.
+      const claimed = await db
+        .update(generationJobs)
+        .set({ status: "succeeded" })
+        .where(
+          and(
+            eq(generationJobs.id, job.id),
+            inArray(generationJobs.status, [...IN_FLIGHT_STATUSES]),
+          ),
+        )
+        .returning({ id: generationJobs.id });
+      if (claimed.length === 0) return; // another worker already claimed it
       await landSucceededJob(db, job, provider, status);
     } else if (status.status === "failed" || status.status === "canceled") {
       await db
@@ -427,6 +443,15 @@ async function runTick(db: Db): Promise<void> {
   const configured = await configuredHosts();
   for (const job of queued) {
     if (!configured.has(job.providerHost)) continue;
+    // Atomically claim queued → submitted so a concurrent tick / second server
+    // process can't double-submit the same job (which would waste a paid
+    // prediction). Only the worker that flips the row proceeds.
+    const claimed = await db
+      .update(generationJobs)
+      .set({ status: "submitted" })
+      .where(and(eq(generationJobs.id, job.id), eq(generationJobs.status, "queued")))
+      .returning({ id: generationJobs.id });
+    if (claimed.length === 0) continue; // another worker grabbed it
     await fireGeneration(db, job);
   }
 }
