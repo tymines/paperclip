@@ -68,7 +68,7 @@ describe("SocialConnectWizard StepConnect — iOS popup gesture preservation", (
   let container: HTMLDivElement;
   let root: Root;
   let queryClient: QueryClient;
-  let openSpy: ReturnType<typeof vi.spyOn>;
+  let openSpy: ReturnType<typeof vi.spyOn<Window & typeof globalThis, "open">>;
   let fakePopup: { closed: boolean; close: () => void; location: { href: string } };
 
   beforeEach(() => {
