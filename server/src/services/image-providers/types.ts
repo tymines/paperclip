@@ -124,6 +124,73 @@ export interface ImageProvider {
   pollPrediction(id: string): Promise<PredictionStatus>;
   /** Fetch an output asset (image/video) by its URL into a Buffer. */
   downloadOutput(url: string): Promise<Buffer>;
+
+  // ── LoRA training (optional capability) ──────────────────────────────────
+  // Not every host can TRAIN a LoRA. Replicate (ostris/flux-dev-lora-trainer)
+  // and WaveSpeed (wavespeed-ai/flux-dev-lora-trainer) can; Atlas Cloud only
+  // runs pre-trained LoRAs (inference), so it omits these. The persona-training
+  // runner checks `listTrainers` / `submitLoraTraining` presence before use.
+
+  /** LoRA trainers this provider offers. Omit/empty = training unsupported. */
+  listTrainers?(): TrainerInfo[];
+  /** Submit a LoRA training run from a zip of images. */
+  submitLoraTraining?(params: LoraTrainingSubmit): Promise<LoraTrainingHandle>;
+  /** Poll a training run; weightsUrl is set once the .safetensors is ready. */
+  pollTraining?(externalId: string): Promise<LoraTrainingStatus>;
+  /** Best-effort cancel (may no-op if the run is already terminal). */
+  cancelTraining?(externalId: string): Promise<void>;
+}
+
+/** One selectable LoRA trainer in a provider's catalog (for the wizard picker). */
+export interface TrainerInfo {
+  /** Provider-native trainer model id (e.g. "wavespeed-ai/flux-dev-lora-trainer"). */
+  id: string;
+  name: string;
+  /** Rough USD cost for one training run. */
+  costEstimateUsd: number;
+  /** Rough end-to-end wall time in minutes. */
+  etaMinutes: number;
+  defaultSteps: number;
+  defaultRank: number;
+  /** The single ⭐ Recommended trainer across all providers. */
+  recommended?: boolean;
+  /** Can train explicit personas (no SFW-only restriction). */
+  nsfw?: boolean;
+  note?: string;
+}
+
+/** Normalised LoRA training request. Each provider maps this onto its own API. */
+export interface LoraTrainingSubmit {
+  /** Which trainer model (from listTrainers). */
+  trainerId: string;
+  /** LoRA trigger word baked into the trained model. */
+  triggerWord: string;
+  /** Zip of training images. */
+  zip: Buffer;
+  zipFilename: string;
+  steps?: number;
+  loraRank?: number;
+  /**
+   * Where the host should publish the trained model (owner/name). Required by
+   * Replicate (push-to-model); ignored by hosts that return a weights URL.
+   */
+  destination?: string;
+}
+
+export interface LoraTrainingHandle {
+  /** Provider-native training/prediction id used for polling. */
+  externalId: string;
+  /** Published model owner/name when the host publishes one (Replicate). */
+  destinationModel?: string | null;
+}
+
+export interface LoraTrainingStatus {
+  id: string;
+  status: PredictionState;
+  /** URL of the trained .safetensors once succeeded; null until then. */
+  weightsUrl: string | null;
+  error?: string | null;
+  costUsd?: number | null;
 }
 
 /** Map an aspect ratio onto concrete pixel dimensions (Atlas/WaveSpeed need W×H). */

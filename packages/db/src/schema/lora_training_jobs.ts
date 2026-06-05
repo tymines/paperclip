@@ -23,10 +23,15 @@ export const loraTrainingJobs = pgTable(
     personaId: uuid("persona_id")
       .notNull()
       .references(() => imageProviders.id, { onDelete: "cascade" }),
-    // The trainer provider (e.g. Replicate).
-    providerId: uuid("provider_id")
-      .notNull()
-      .references(() => imageProviders.id, { onDelete: "cascade" }),
+    // The trainer provider row (legacy; host-based training uses providerHost).
+    // Nullable since 0128 — WaveSpeed/Replicate jobs key off providerHost.
+    providerId: uuid("provider_id").references(() => imageProviders.id, {
+      onDelete: "cascade",
+    }),
+    // Which hosted provider ran this job (0128: replicate | wavespeedai).
+    providerHost: text("provider_host").notNull().default("replicate"),
+    // Provider-native trainer model id (e.g. wavespeed-ai/flux-dev-lora-trainer).
+    trainerModel: text("trainer_model"),
     status: text("status").notNull().default("pending"),
     contentRating: text("content_rating").notNull().default("sfw"),
     externalJobId: text("external_job_id"),

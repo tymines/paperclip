@@ -36,7 +36,6 @@ import {
   syncTrainingJob,
   startBackgroundTrainingPoller,
 } from "../services/image-studio/training-runner.js";
-import { getReplicateToken } from "../services/replicate/index.js";
 import { runUndresserGeneration } from "../services/image-studio/undresser.js";
 import type { StorageService } from "../storage/types.js";
 import {
@@ -312,32 +311,63 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
   );
 
   // POST /companies/:companyId/image-studio/personas/:personaId/train
-  // Body: { provider_id: string (uuid), training_photos_dir?: string }
-  // Creates a lora_training_jobs row and (once a token is set) kicks off a
-  // Replicate training. Returns 202 with the job id.
+  //   ?provider=<host>            which hosted trainer (replicate | wavespeedai)
+  //   body { trainer?, provider_host?, provider_id?, training_photos_dir? }
+  // Resolves the trainer through the provider abstraction and (once that
+  // provider is configured) kicks off a LoRA training. Returns 202 + the job.
   router.post(
     "/companies/:companyId/image-studio/personas/:personaId/train",
     async (req, res) => {
       const { companyId, personaId } = req.params;
       assertCompanyAccess(req, companyId);
 
-      const providerId = req.body?.provider_id;
-      if (typeof providerId !== "string" || providerId.length === 0) {
-        throw badRequest("provider_id is required");
-      }
-
       const persona = await loadProvider(db, companyId, personaId);
       if (!persona || persona.type !== "local_lora") {
         res.status(404).json({ error: "Persona not found" });
         return;
       }
-      const trainer = await loadProvider(db, companyId, providerId);
-      if (!trainer) {
-        res.status(404).json({ error: "Training provider not found" });
-        return;
+
+      // Resolve the provider host: explicit ?provider=/provider_host wins; else
+      // derive it from a legacy provider_id trainer row; else the default host.
+      const hostParam =
+        (typeof req.query.provider === "string" && req.query.provider) ||
+        (typeof req.body?.provider_host === "string" && req.body.provider_host) ||
+        null;
+      const legacyProviderId =
+        typeof req.body?.provider_id === "string" && req.body.provider_id.length > 0
+          ? req.body.provider_id
+          : null;
+
+      let providerHost: ProviderHost;
+      let legacyTrainerRowId: string | null = null;
+      if (hostParam && isProviderHost(hostParam)) {
+        providerHost = hostParam;
+      } else if (legacyProviderId) {
+        const trainerRow = await loadProvider(db, companyId, legacyProviderId);
+        if (!trainerRow) {
+          res.status(404).json({ error: "Training provider not found" });
+          return;
+        }
+        providerHost = isProviderHost(trainerRow.providerHost)
+          ? trainerRow.providerHost
+          : DEFAULT_PROVIDER_HOST;
+        legacyTrainerRowId = trainerRow.id;
+      } else {
+        providerHost = DEFAULT_PROVIDER_HOST;
       }
-      if (!trainer.trainingCapable) {
-        throw badRequest(`Provider '${trainer.name}' is not training-capable`);
+
+      const provider = getProvider(providerHost);
+      if (!provider?.listTrainers || !provider.submitLoraTraining) {
+        throw badRequest(`Provider '${providerHost}' does not support LoRA training.`);
+      }
+      const trainers = provider.listTrainers();
+      const trainerId =
+        (typeof req.body?.trainer === "string" && req.body.trainer) ||
+        trainers.find((t) => t.recommended)?.id ||
+        trainers[0]?.id;
+      const trainerInfo = trainers.find((t) => t.id === trainerId) ?? trainers[0];
+      if (!trainerInfo) {
+        throw badRequest(`Provider '${providerHost}' has no trainers configured.`);
       }
 
       const profile = personaTrainingProfile(persona.name);
@@ -360,20 +390,21 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
         photosDir = staged?.dir ?? profile.defaultPhotosDir;
       }
       const photos = await countTrainingPhotos(photosDir);
-      const hyperparams = defaultHyperparams(profile.triggerWord);
 
-      // Fire the run when a Replicate token is configured. Without one, create
-      // a 'pending' row that is never billed (token lands via the credentials
-      // endpoint). The runner zips photosDir → uploads → ensures the
-      // destination model → creates the training and records the job.
-      const hasToken = (await getReplicateToken()) !== null;
-      if (hasToken) {
+      // Fire the run when the chosen provider is configured. Without a key,
+      // create a 'pending' row that is never billed (the key lands later via the
+      // credentials endpoint). The runner zips photosDir and submits through the
+      // provider abstraction.
+      const configured = await provider.isConfigured();
+      if (configured) {
         try {
           const job = await startPersonaTraining(db, {
             persona: { id: persona.id, name: persona.name },
-            trainer: { id: trainer.id },
             photosDir,
             companyId,
+            providerHost,
+            trainerId: trainerInfo.id,
+            providerId: legacyTrainerRowId,
           });
           // Drive the job to completion (download LoRA + flip persona to ready)
           // even if no client polls the status route.
@@ -381,10 +412,12 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
           res.status(202).json({
             job,
             photos,
-            estimatedCostUsd: 3,
-            estimatedMinutes: 30,
+            provider: providerHost,
+            trainer: trainerInfo.id,
+            estimatedCostUsd: trainerInfo.costEstimateUsd,
+            estimatedMinutes: trainerInfo.etaMinutes,
             externalJobId: job.externalJobId,
-            note: "Training submitted to Replicate.",
+            note: `Training submitted to ${provider.name}.`,
           });
           return;
         } catch (err) {
@@ -398,25 +431,45 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
         .values({
           companyId,
           personaId: persona.id,
-          providerId: trainer.id,
+          providerId: legacyTrainerRowId,
+          providerHost,
+          trainerModel: trainerInfo.id,
           status: "pending",
           contentRating: profile.contentRating,
           externalJobId: null,
           triggerWord: profile.triggerWord,
           trainingZipPath: null,
-          hyperparams,
+          hyperparams: defaultHyperparams(profile.triggerWord),
         })
         .returning();
 
       res.status(202).json({
         job,
         photos,
-        estimatedCostUsd: 3,
-        estimatedMinutes: 30,
-        note: "No Replicate token set yet — job created in 'pending'. Set one via POST /api/credentials/replicate.",
+        provider: providerHost,
+        trainer: trainerInfo.id,
+        estimatedCostUsd: trainerInfo.costEstimateUsd,
+        estimatedMinutes: trainerInfo.etaMinutes,
+        note: `${provider.name} not configured yet — job created in 'pending'. Add its API key to enable.`,
       });
     },
   );
+
+  // GET /image-studio/trainers — provider-grouped LoRA trainer catalog for the
+  // wizard picker (mirrors the generation model picker). Marks which providers
+  // are configured + the single ⭐ recommended trainer across all providers.
+  router.get("/image-studio/trainers", async (_req, res) => {
+    const groups = await Promise.all(
+      listProviders().map(async (p) => ({
+        host: p.id,
+        name: p.name,
+        color: p.color,
+        configured: await p.isConfigured(),
+        trainers: p.listTrainers?.() ?? [],
+      })),
+    );
+    res.json({ providers: groups.filter((g) => g.trainers.length > 0) });
+  });
 
   // GET /companies/:companyId/image-studio/training/:jobId
   // Returns the job; if it has a live Replicate job and a token is set, polls

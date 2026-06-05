@@ -21,16 +21,11 @@ import {
   type LoraTrainingJob,
 } from "@paperclipai/db";
 import type { StorageService } from "../../storage/types.js";
+import { getReplicateAccount } from "../replicate/index.js";
 import {
-  getReplicateToken,
-  getReplicateAccount,
-  getLatestTrainerVersion,
-  uploadReplicateFile,
-  ensureReplicateModel,
-  createReplicateTraining,
-  getReplicateTraining,
-  extractWeightsUrl,
-} from "../replicate/index.js";
+  getProvider,
+  type ProviderHost,
+} from "../image-providers/index.js";
 import { personaTrainingProfile, defaultHyperparams, downloadLora } from "./training.js";
 
 const execFileAsync = promisify(execFile);
@@ -107,49 +102,59 @@ export async function stagePersonaTrainingPhotos(
 
 export interface StartTrainingArgs {
   persona: { id: string; name: string };
-  trainer: { id: string };
   photosDir: string;
   companyId: string | null;
+  /** Which hosted provider trains this persona (replicate | wavespeedai). */
+  providerHost: ProviderHost;
+  /** Provider-native trainer model id (from the provider's listTrainers). */
+  trainerId: string;
+  /** Legacy trainer provider row id (FK), optional. */
+  providerId?: string | null;
 }
 
 /**
- * Fire a training run and persist a lora_training_jobs row. Also flips the
- * persona's status to 'training' so the list/Studio reflect it immediately.
- * Throws if no token is configured.
+ * Fire a training run through the selected provider's LoRA-training capability
+ * and persist a lora_training_jobs row. Also flips the persona's status to
+ * 'training' so the list/Studio reflect it immediately. Throws if the provider
+ * can't train or isn't configured.
  */
 export async function startPersonaTraining(
   db: Db,
   args: StartTrainingArgs,
 ): Promise<LoraTrainingJob> {
-  const token = await getReplicateToken();
-  if (!token) {
-    throw new Error(
-      "REPLICATE_API_TOKEN not set — save a token via POST /api/credentials/replicate first.",
-    );
+  const provider = getProvider(args.providerHost);
+  if (!provider?.submitLoraTraining || !provider.listTrainers) {
+    throw new Error(`Provider '${args.providerHost}' does not support LoRA training.`);
   }
-  const profile = personaTrainingProfile(args.persona.name);
-  const account = await getReplicateAccount(token);
-  if (!account?.username) throw new Error("Could not resolve Replicate account username");
+  if (!(await provider.isConfigured())) {
+    throw new Error(`Provider '${provider.name}' is not configured — add its API key first.`);
+  }
+  const trainers = provider.listTrainers();
+  const trainer = trainers.find((t) => t.id === args.trainerId) ?? trainers[0];
+  if (!trainer) throw new Error(`No trainer '${args.trainerId}' on ${provider.name}.`);
 
+  const profile = personaTrainingProfile(args.persona.name);
   const zipPath = await zipDir(args.photosDir, profile.slug);
   const zipBuf = await fs.readFile(zipPath);
-  const inputImages = await uploadReplicateFile(zipBuf, `${profile.slug}.zip`, token);
 
-  // Published model name + endpoint use the hyphenated slug so the gallery
-  // (replicate-generator.personaSlug) resolves the same `<owner>/<slug>` model.
-  const destName = profile.modelSlug; // e.g. tymines/sidney-sfw
-  await ensureReplicateModel(account.username, destName, token);
-  const version = await getLatestTrainerVersion(token);
+  // Replicate publishes to a model you own; derive the destination owner/name
+  // (hyphenated slug, matching replicate-generator.personaSlug). Other hosts
+  // return a weights URL instead and ignore destination.
+  let destination: string | undefined;
+  if (args.providerHost === "replicate") {
+    const account = await getReplicateAccount();
+    if (!account?.username) throw new Error("Could not resolve Replicate account username");
+    destination = `${account.username}/${profile.modelSlug}`;
+  }
 
-  const training = await createReplicateTraining({
-    inputImages,
+  const handle = await provider.submitLoraTraining({
+    trainerId: trainer.id,
     triggerWord: profile.triggerWord,
-    destination: `${account.username}/${destName}`,
-    steps: 1500,
-    loraRank: 16,
-    batchSize: 1,
-    autocaption: true,
-    version,
+    zip: zipBuf,
+    zipFilename: `${profile.slug}.zip`,
+    steps: trainer.defaultSteps,
+    loraRank: trainer.defaultRank,
+    destination,
   });
 
   const [job] = await db
@@ -157,15 +162,24 @@ export async function startPersonaTraining(
     .values({
       companyId: args.companyId,
       personaId: args.persona.id,
-      providerId: args.trainer.id,
+      providerId: args.providerId ?? null,
+      providerHost: args.providerHost,
+      trainerModel: trainer.id,
       status: "training",
       contentRating: profile.contentRating,
-      externalJobId: training.id,
+      externalJobId: handle.externalId,
       trainingZipPath: zipPath,
       triggerWord: profile.triggerWord,
       progress: 5,
       startedAt: new Date(),
-      hyperparams: defaultHyperparams(profile.triggerWord),
+      hyperparams: {
+        ...defaultHyperparams(profile.triggerWord),
+        steps: trainer.defaultSteps,
+        lora_rank: trainer.defaultRank,
+        provider_host: args.providerHost,
+        trainer_id: trainer.id,
+        destination_model: handle.destinationModel ?? null,
+      },
     })
     .returning();
 
@@ -174,7 +188,7 @@ export async function startPersonaTraining(
     .update(imageProviders)
     .set({
       status: "training",
-      statusDetail: "Training on Replicate…",
+      statusDetail: `Training on ${provider.name}…`,
       updatedAt: new Date(),
     })
     .where(eq(imageProviders.id, args.persona.id));
@@ -182,80 +196,53 @@ export async function startPersonaTraining(
   return job;
 }
 
-/** Map a Replicate training status onto our lora_training_jobs status enum. */
-export function mapTrainingStatus(
-  status: string,
-): "training" | "downloading" | "ready" | "failed" {
-  switch (status) {
-    case "succeeded":
-      return "downloading";
-    case "failed":
-    case "canceled":
-      return "failed";
-    default:
-      // starting | processing
-      return "training";
-  }
-}
-
 /**
- * Poll Replicate once for a training job and apply the result to BOTH the job
- * row and its persona (status → ready/failed, endpoint registration on success).
- * Idempotent and non-throwing: returns the last-known job on any poll error so
- * it is safe to call from a request handler or a background loop.
+ * Poll the job's provider once and apply the result to BOTH the job row and its
+ * persona (status → ready/failed, endpoint/weights registration on success).
+ * Provider-agnostic, idempotent, and non-throwing: returns the last-known job on
+ * any poll error, so it is safe from a request handler or a background loop.
  */
 export async function syncTrainingJob(db: Db, job: LoraTrainingJob): Promise<LoraTrainingJob> {
   if (job.status === "ready" || job.status === "failed") return job;
   if (!job.externalJobId) return job;
-  const token = await getReplicateToken();
-  if (!token) return job;
+  const host = (job.providerHost as ProviderHost | null) ?? "replicate";
+  const provider = getProvider(host);
+  if (!provider?.pollTraining) return job;
 
-  let training;
+  let st;
   try {
-    training = await getReplicateTraining(job.externalJobId);
+    st = await provider.pollTraining(job.externalJobId);
   } catch {
     return job;
   }
 
-  const next = mapTrainingStatus(training.status);
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   let personaPatch: Record<string, unknown> | null = null;
 
-  if (next === "failed") {
+  if (st.status === "failed" || st.status === "canceled") {
     patch.status = "failed";
-    patch.errorMessage = training.error ?? "Training failed on Replicate";
+    patch.errorMessage = st.error ?? `Training ${st.status} on ${provider.name}`;
     patch.completedAt = new Date();
     // Hand the persona back a retry affordance.
     personaPatch = {
       status: "untrained",
       statusDetail: `Training failed — ${patch.errorMessage}`,
     };
-  } else if (next === "downloading") {
-    const weights = extractWeightsUrl(training);
-    if (weights) {
+  } else if (st.status === "succeeded") {
+    if (st.weightsUrl) {
       const [persona] = await db
         .select()
         .from(imageProviders)
         .where(eq(imageProviders.id, job.personaId))
         .limit(1);
       const profile = personaTrainingProfile(persona?.name ?? "persona");
-      const installed = await downloadLora(weights, profile.slug);
+      const installed = await downloadLora(st.weightsUrl, profile.slug);
       patch.status = "ready";
       patch.outputLoraPath = installed;
       patch.progress = 100;
       patch.completedAt = new Date();
-      const seconds = training.metrics?.total_time ?? training.metrics?.predict_time;
-      // H100 ~ $0.001525/s; fall back to the flat ~$3 estimate.
-      patch.costUsd = seconds ? (seconds * 0.001525).toFixed(4) : "3.0000";
-      const account = await getReplicateAccount(token);
-      const endpoint = account?.username
-        ? `${account.username}/${profile.modelSlug}`
-        : null;
-      personaPatch = {
-        status: "ready",
-        statusDetail: "LoRA trained — ready for generation.",
-        ...(endpoint ? { endpoint } : {}),
-      };
+      if (st.costUsd != null) patch.costUsd = String(st.costUsd);
+      personaPatch = registerTrainedPersona(host, persona, job, st.weightsUrl);
     } else {
       patch.status = "downloading";
     }
@@ -277,6 +264,38 @@ export async function syncTrainingJob(db: Db, job: LoraTrainingJob): Promise<Lor
   }
 
   return updated ?? job;
+}
+
+/**
+ * Build the persona update that makes a freshly-trained LoRA generatable.
+ *   • Replicate publishes a model you own → set `endpoint` to <owner>/<slug>.
+ *   • WaveSpeed returns a portable .safetensors URL → point the persona at the
+ *     WaveSpeed host and stash the weights URL in default_params so the
+ *     generator can load it as a LoRA.
+ */
+function registerTrainedPersona(
+  host: ProviderHost,
+  persona: { defaultParams?: unknown } | undefined,
+  job: LoraTrainingJob,
+  weightsUrl: string,
+): Record<string, unknown> {
+  const base = {
+    status: "ready",
+    statusDetail: "LoRA trained — ready for generation.",
+  };
+  if (host === "replicate") {
+    const destination =
+      (job.hyperparams as Record<string, unknown> | null)?.destination_model;
+    const endpoint = typeof destination === "string" && destination ? destination : null;
+    return { ...base, ...(endpoint ? { endpoint } : {}) };
+  }
+  // WaveSpeed (or any weights-URL host): generate against this host's LoRA.
+  const params = (persona?.defaultParams as Record<string, unknown> | null) ?? {};
+  return {
+    ...base,
+    providerHost: host,
+    defaultParams: { ...params, lora_weights_url: weightsUrl, trained_via: host },
+  };
 }
 
 /**

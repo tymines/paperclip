@@ -219,6 +219,20 @@ export async function createReplicateTraining(
 }
 
 /**
+ * Cancel a training run. Best-effort: returns false if Replicate rejects it
+ * (e.g. the run is already terminal). POST /v1/trainings/{id}/cancel
+ */
+export async function cancelReplicateTraining(externalId: string): Promise<boolean> {
+  const token = await getReplicateToken();
+  if (!token) throw new Error("REPLICATE_API_TOKEN not set.");
+  const res = await fetch(`${REPLICATE_API_BASE}/trainings/${externalId}/cancel`, {
+    method: "POST",
+    headers: authHeaders(token),
+  });
+  return res.ok;
+}
+
+/**
  * Poll a training's current status.
  * GET /v1/trainings/{id}
  */

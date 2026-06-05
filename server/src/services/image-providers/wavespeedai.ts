@@ -21,6 +21,10 @@ import type {
   PredictionState,
   PredictionStatus,
   VerifyResult,
+  TrainerInfo,
+  LoraTrainingSubmit,
+  LoraTrainingHandle,
+  LoraTrainingStatus,
 } from "./types.js";
 import { aspectToDimensions } from "./types.js";
 import { getRawKey } from "../provider-api-keys/index.js";
@@ -206,5 +210,107 @@ export const wavespeedaiProvider: ImageProvider = {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`WaveSpeed output download failed (${res.status}) from ${url}`);
     return Buffer.from(await res.arrayBuffer());
+  },
+
+  // ── LoRA training (wavespeed-ai/flux-dev-lora-trainer) ────────────────────
+  // Flow: upload the dataset zip → /media/upload/binary (returns a download_url)
+  // → POST /api/v3/{trainerId} { data: <url>, trigger_word, steps, lora_rank }
+  // → poll /api/v3/predictions/{id}/result, outputs[0] is the .safetensors.
+
+  listTrainers(): TrainerInfo[] {
+    return [
+      {
+        id: "wavespeed-ai/flux-dev-lora-trainer",
+        name: "Flux Dev LoRA Trainer",
+        costEstimateUsd: 1.0,
+        etaMinutes: 16,
+        defaultSteps: 1000,
+        defaultRank: 16,
+        recommended: true,
+        nsfw: true,
+        note: "Cheapest real trainer (~$1) at comparable speed (~15.5 min).",
+      },
+      {
+        id: "wavespeed-ai/flux-dev-lora-trainer-turbo",
+        name: "Flux Dev LoRA Trainer (Turbo)",
+        costEstimateUsd: 0.75,
+        etaMinutes: 9,
+        defaultSteps: 1000,
+        defaultRank: 16,
+        nsfw: true,
+        note: "Faster turbo variant — final cost scales with steps.",
+      },
+    ];
+  },
+
+  async submitLoraTraining(params: LoraTrainingSubmit): Promise<LoraTrainingHandle> {
+    const t = await token();
+    // 1. Upload the dataset zip → a fetchable download_url.
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([new Uint8Array(params.zip)], { type: "application/zip" }),
+      params.zipFilename,
+    );
+    const upRes = await fetch(`${BASE}/api/v3/media/upload/binary`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${t}` },
+      body: form,
+    });
+    const upBody = (await upRes.json().catch(() => ({}))) as {
+      data?: { download_url?: string };
+      message?: string;
+    };
+    const datasetUrl = upBody.data?.download_url;
+    if (!upRes.ok || !datasetUrl) {
+      throw new Error(
+        `WaveSpeed dataset upload failed (${upRes.status}): ${upBody.message ?? JSON.stringify(upBody)}`,
+      );
+    }
+
+    // 2. Submit the training run.
+    const res = await fetch(`${BASE}/api/v3/${params.trainerId}`, {
+      method: "POST",
+      headers: authHeaders(t),
+      body: JSON.stringify({
+        data: datasetUrl,
+        trigger_word: params.triggerWord,
+        steps: params.steps ?? 1000,
+        lora_rank: params.loraRank ?? 16,
+      }),
+    });
+    const env = (await res.json().catch(() => ({}))) as WaveEnvelope;
+    if (!res.ok || !env.data?.id) {
+      throw new Error(
+        `WaveSpeed training submit failed (${res.status}) for ${params.trainerId}: ${env.message ?? JSON.stringify(env)}`,
+      );
+    }
+    return { externalId: env.data.id, destinationModel: null };
+  },
+
+  async pollTraining(externalId: string): Promise<LoraTrainingStatus> {
+    const t = await token();
+    const res = await fetch(`${BASE}/api/v3/predictions/${externalId}/result`, {
+      headers: authHeaders(t),
+    });
+    if (!res.ok) throw new Error(`WaveSpeed training poll failed (${res.status}) for ${externalId}`);
+    const env = (await res.json()) as WaveEnvelope;
+    const data = env.data ?? {};
+    return {
+      id: externalId,
+      status: mapStatus(data.status),
+      weightsUrl: Array.isArray(data.outputs) && data.outputs.length > 0 ? data.outputs[0] : null,
+      error: data.error || null,
+      costUsd: null,
+    };
+  },
+
+  async cancelTraining(externalId: string): Promise<void> {
+    const t = await token();
+    // Best-effort — WaveSpeed rejects cancel on already-terminal runs (400).
+    await fetch(`${BASE}/api/v3/predictions/${externalId}/cancel`, {
+      method: "POST",
+      headers: authHeaders(t),
+    }).catch(() => undefined);
   },
 };

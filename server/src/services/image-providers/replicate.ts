@@ -12,7 +12,12 @@ import type {
   ImageProvider,
   ModelInfo,
   PredictionStatus,
+  PredictionState,
   VerifyResult,
+  TrainerInfo,
+  LoraTrainingSubmit,
+  LoraTrainingHandle,
+  LoraTrainingStatus,
 } from "./types.js";
 import {
   getReplicateToken,
@@ -21,7 +26,32 @@ import {
   createReplicatePredictionByVersion,
   getReplicatePrediction,
   extractOutputUrl,
+  getLatestTrainerVersion,
+  uploadReplicateFile,
+  ensureReplicateModel,
+  createReplicateTraining,
+  getReplicateTraining,
+  cancelReplicateTraining,
+  extractWeightsUrl,
 } from "../replicate/index.js";
+
+const REPLICATE_TRAINER_ID = "ostris/flux-dev-lora-trainer";
+
+function mapReplicateTrainState(raw: string | undefined): PredictionState {
+  switch (raw) {
+    case "succeeded":
+      return "succeeded";
+    case "failed":
+      return "failed";
+    case "canceled":
+    case "cancelled":
+      return "canceled";
+    case "processing":
+      return "processing";
+    default:
+      return "starting";
+  }
+}
 
 /** Public flux LoRA inference model (used when no persona version SHA is given). */
 const DEFAULT_MODEL =
@@ -120,5 +150,63 @@ export const replicateProvider: ImageProvider = {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Replicate output download failed (${res.status}) from ${url}`);
     return Buffer.from(await res.arrayBuffer());
+  },
+
+  // ── LoRA training (ostris/flux-dev-lora-trainer) ──────────────────────────
+
+  listTrainers(): TrainerInfo[] {
+    return [
+      {
+        id: REPLICATE_TRAINER_ID,
+        name: "Flux Dev LoRA Trainer",
+        costEstimateUsd: 1.58,
+        etaMinutes: 17,
+        defaultSteps: 1500,
+        defaultRank: 16,
+        nsfw: true,
+        note: "Proven on Sidney — highest face fidelity. Publishes a private model you own.",
+      },
+    ];
+  },
+
+  async submitLoraTraining(params: LoraTrainingSubmit): Promise<LoraTrainingHandle> {
+    const token = await getReplicateToken();
+    if (!token) throw new Error("Replicate token not set.");
+    if (!params.destination) {
+      throw new Error("Replicate training requires a destination model (owner/name).");
+    }
+    const [owner, name] = params.destination.split("/");
+    if (!owner || !name) throw new Error(`Invalid destination '${params.destination}'.`);
+
+    const inputImages = await uploadReplicateFile(params.zip, params.zipFilename, token);
+    await ensureReplicateModel(owner, name, token);
+    const version = await getLatestTrainerVersion(token);
+    const training = await createReplicateTraining({
+      inputImages,
+      triggerWord: params.triggerWord,
+      destination: params.destination,
+      steps: params.steps ?? 1500,
+      loraRank: params.loraRank ?? 16,
+      batchSize: 1,
+      autocaption: true,
+      version,
+    });
+    return { externalId: training.id, destinationModel: params.destination };
+  },
+
+  async pollTraining(externalId: string): Promise<LoraTrainingStatus> {
+    const t = await getReplicateTraining(externalId);
+    const seconds = t.metrics?.total_time ?? t.metrics?.predict_time;
+    return {
+      id: externalId,
+      status: mapReplicateTrainState(t.status),
+      weightsUrl: extractWeightsUrl(t),
+      error: t.error ?? null,
+      costUsd: seconds ? Number((seconds * PREDICT_USD_PER_SEC).toFixed(4)) : null,
+    };
+  },
+
+  async cancelTraining(externalId: string): Promise<void> {
+    await cancelReplicateTraining(externalId);
   },
 };
