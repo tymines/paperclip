@@ -48,6 +48,7 @@ import {
 import { llmRoutes } from "./routes/llms.js";
 import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
+import { issueService } from "./services/index.js";
 import { bulkUploadRoutes } from "./routes/bulk-upload.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
@@ -332,6 +333,10 @@ export async function createApp(
   // read-only from the instance uploads dir. Mounted ahead of the guarded
   // `/api` router so plain <img> GETs need no session/origin handshake.
   app.use(
+    "/api/project-shots",
+    express.static(process.env.HOME + "/.openclaw/project-shots", { index: false, maxAge: "30s", fallthrough: false }),
+  );
+  app.use(
     "/api/uploads",
     express.static(uploadsRoot(), {
       index: false,
@@ -339,6 +344,47 @@ export async function createApp(
       fallthrough: false,
     }),
   );
+  // ── Public app-feedback intake (Baily's App "Request a Feature") ──────────
+  // Mounted ahead of the guarded /api router so the app can POST off-Tailnet
+  // with no session. Defense-in-depth: single-purpose token (a speed bump, NOT
+  // a secret — it ships in the IPA), a GENEROUS anti-flood guard (not a usage
+  // cap), and create-issue-only scope. Worst case if the token leaks = spam issues.
+  {
+    const FEEDBACK_TOKEN = process.env.APP_FEEDBACK_TOKEN || "baily-feedback-7c4f2a9e";
+    const FEEDBACK_COMPANY = process.env.APP_FEEDBACK_COMPANY || "414c172d-7013-4728-b781-aad604d8e2d7";
+    const hits = new Map<string, number[]>();
+    app.post("/api/app-feedback", async (req: any, res: any) => {
+      const token = (req.headers["x-app-token"] as string) || req.body?.token;
+      if (token !== FEEDBACK_TOKEN) { res.status(401).json({ error: "unauthorized" }); return; }
+      const ip = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.ip || "anon";
+      const now = Date.now();
+      const log = (hits.get(ip) || []).filter((t) => now - t < 60_000);
+      if (log.length >= 120) { res.status(429).json({ error: "easy there - try again in a moment" }); return; }
+      log.push(now); hits.set(ip, log);
+      const kind = String(req.body?.kind || "feature").toLowerCase() === "bug" ? "bug" : "feature";
+      const title = String(req.body?.title || "").trim().slice(0, 200);
+      const bodyText = String(req.body?.body || "").trim().slice(0, 4000);
+      const appName = String(req.body?.app || "bailysapp").slice(0, 40);
+      const appVersion = String(req.body?.appVersion || "?").slice(0, 24);
+      const device = String(req.body?.device || "").slice(0, 80);
+      if (!title) { res.status(400).json({ error: "title is required" }); return; }
+      try {
+        const svc = issueService(db);
+        const issue: any = await svc.create(FEEDBACK_COMPANY, {
+          title: `[Baily \u2022 ${kind}] ${title}`,
+          description: `${bodyText}\n\n- ${appName} v${appVersion}${device ? " - " + device : ""} - via in-app feedback`,
+          status: "todo",
+          priority: kind === "bug" ? "high" : "medium",
+          createdByAgentId: null,
+          createdByUserId: null,
+        } as any);
+        res.json({ ok: true, issueId: issue?.id ?? null });
+      } catch (e: any) {
+        res.status(500).json({ error: "could not record feedback", detail: String(e?.message || e).slice(0, 200) });
+      }
+    });
+  }
+
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
