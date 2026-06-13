@@ -195,10 +195,10 @@ export function costRoutes(
       const cfg = JSON.parse(await nodefs.readFile(`${os.homedir()}/.openclaw/openclaw.json`, "utf8"));
       env = (cfg.env ?? {}) as Record<string, string>;
     } catch { /* no config */ }
-    type Bal = { provider: string; label: string; balanceUsd: number | null; currency: string; low: boolean; error?: string };
+    type Bal = { provider: string; label: string; balanceUsd: number | null; currency: string; low: boolean; billing: "prepaid" | "postpaid"; error?: string };
     const LOW = 5;
     async function moonshot(key?: string): Promise<Bal> {
-      const b: Bal = { provider: "moonshot", label: "Kimi (Moonshot)", balanceUsd: null, currency: "USD", low: false };
+      const b: Bal = { provider: "moonshot", label: "Kimi (Moonshot)", balanceUsd: null, currency: "USD", low: false, billing: "prepaid" };
       if (!key) { b.error = "no key"; return b; }
       try {
         const r = await fetch("https://api.moonshot.ai/v1/users/me/balance", { headers: { Authorization: `Bearer ${key}` } });
@@ -209,7 +209,7 @@ export function costRoutes(
       return b;
     }
     async function deepseek(key?: string): Promise<Bal> {
-      const b: Bal = { provider: "deepseek", label: "DeepSeek", balanceUsd: null, currency: "USD", low: false };
+      const b: Bal = { provider: "deepseek", label: "DeepSeek", balanceUsd: null, currency: "USD", low: false, billing: "prepaid" };
       if (!key) { b.error = "no key"; return b; }
       try {
         const r = await fetch("https://api.deepseek.com/user/balance", { headers: { Authorization: `Bearer ${key}` } });
@@ -221,10 +221,22 @@ export function costRoutes(
       b.low = b.balanceUsd != null && b.balanceUsd < LOW;
       return b;
     }
-    const balances = await Promise.all([
+    const prepaid = await Promise.all([
       moonshot(env.MOONSHOT_API_KEY ?? env.KIMI_API_KEY),
       deepseek(env.DEEPSEEK_API_KEY),
     ]);
+    // Pay-as-you-go providers: no prepaid wallet to run out — billed monthly.
+    // Listed so every paid model is visible; balance is N/A, spend is tracked via cost_events.
+    const postpaidDefs: Array<{ provider: string; label: string; keyPresent: boolean }> = [
+      { provider: "openai", label: "OpenAI (GPT / Codex)", keyPresent: !!env.OPENAI_API_KEY },
+      { provider: "google", label: "Gemini (Google)", keyPresent: !!env.GEMINI_API_KEY },
+      { provider: "mistral", label: "Mistral", keyPresent: !!env.MISTRAL_API_KEY },
+      { provider: "replicate", label: "Replicate (image)", keyPresent: true },
+    ];
+    const postpaid: Bal[] = postpaidDefs
+      .filter((p) => p.keyPresent)
+      .map((p) => ({ provider: p.provider, label: p.label, balanceUsd: null, currency: "USD", low: false, billing: "postpaid" as const }));
+    const balances = [...prepaid, ...postpaid];
     res.json({ balances, checkedAt: new Date().toISOString() });
   });
 
