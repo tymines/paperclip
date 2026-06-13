@@ -182,6 +182,52 @@ export function costRoutes(
     res.json(rows);
   });
 
+  // GET /companies/:companyId/provider-balances — LIVE wallet balances pulled from
+  // each model provider's billing API (real money remaining, not the token×rate
+  // estimates in cost_events). Tells us when to reload. Keys read from openclaw.json.
+  router.get("/companies/:companyId/provider-balances", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { promises: nodefs } = await import("node:fs");
+    const os = await import("node:os");
+    let env: Record<string, string> = {};
+    try {
+      const cfg = JSON.parse(await nodefs.readFile(`${os.homedir()}/.openclaw/openclaw.json`, "utf8"));
+      env = (cfg.env ?? {}) as Record<string, string>;
+    } catch { /* no config */ }
+    type Bal = { provider: string; label: string; balanceUsd: number | null; currency: string; low: boolean; error?: string };
+    const LOW = 5;
+    async function moonshot(key?: string): Promise<Bal> {
+      const b: Bal = { provider: "moonshot", label: "Kimi (Moonshot)", balanceUsd: null, currency: "USD", low: false };
+      if (!key) { b.error = "no key"; return b; }
+      try {
+        const r = await fetch("https://api.moonshot.ai/v1/users/me/balance", { headers: { Authorization: `Bearer ${key}` } });
+        const j: any = await r.json();
+        b.balanceUsd = j?.data?.available_balance != null ? Number(j.data.available_balance) : null;
+      } catch (e: any) { b.error = String(e?.message ?? e); }
+      b.low = b.balanceUsd != null && b.balanceUsd < LOW;
+      return b;
+    }
+    async function deepseek(key?: string): Promise<Bal> {
+      const b: Bal = { provider: "deepseek", label: "DeepSeek", balanceUsd: null, currency: "USD", low: false };
+      if (!key) { b.error = "no key"; return b; }
+      try {
+        const r = await fetch("https://api.deepseek.com/user/balance", { headers: { Authorization: `Bearer ${key}` } });
+        const j: any = await r.json();
+        const info = j?.balance_infos?.[0];
+        b.balanceUsd = info ? Number(info.total_balance) : null;
+        b.currency = info?.currency ?? "USD";
+      } catch (e: any) { b.error = String(e?.message ?? e); }
+      b.low = b.balanceUsd != null && b.balanceUsd < LOW;
+      return b;
+    }
+    const balances = await Promise.all([
+      moonshot(env.MOONSHOT_API_KEY ?? env.KIMI_API_KEY),
+      deepseek(env.DEEPSEEK_API_KEY),
+    ]);
+    res.json({ balances, checkedAt: new Date().toISOString() });
+  });
+
   router.get("/companies/:companyId/costs/finance-summary", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
