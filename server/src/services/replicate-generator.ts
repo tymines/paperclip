@@ -153,6 +153,51 @@ export function expandPromptVariations(prompt: string): string[] {
   return results.map((r) => r.trim()).filter((r) => r.length > 0);
 }
 
+/**
+ * Apply a persona's locked generation config (stored in default_params +
+ * attributes) onto the normalised params before submission:
+ *
+ *   - trigger word: prepended so the persona LoRA actually fires. Skipped if the
+ *     prompt already contains it (the structured assembler leads with it; a raw
+ *     prompt_text typed by the user does not), case-insensitive.
+ *   - positive_template: the persona's locked quality/anatomy/identity emphasis,
+ *     appended once. This is how Raven's "(jet black hair…), (perfect hands…)"
+ *     specs ride along every prompt without the user retyping them.
+ *   - extra_lora / extra_lora_scale: the realism LoRA stacked over the persona
+ *     LoRA in one prediction (Raven's proven v6 photoreal recipe).
+ *
+ * The negative_template is intentionally NOT consumed here: Replicate's
+ * flux-dev-lora input schema has no `negative_prompt` field, so passing it would
+ * 422 the prediction. It's kept on the persona for record / portability to a
+ * negative-capable host (SDXL/WaveSpeed) later.
+ *
+ * Generic: any persona that sets these default_params benefits — there's nothing
+ * Raven-specific in the code path.
+ */
+function applyPersonaGenerationConfig(persona: Persona, params: GenerateParams): void {
+  const dp = (persona.defaultParams as Record<string, unknown> | null) ?? {};
+  const attrs = (persona.attributes as Record<string, unknown> | null) ?? {};
+  let prompt = params.prompt ?? "";
+
+  const trigger = typeof attrs["trigger_word"] === "string" ? attrs["trigger_word"].trim() : "";
+  if (trigger && !prompt.toLowerCase().includes(trigger.toLowerCase())) {
+    prompt = prompt.length > 0 ? `${trigger}, ${prompt}` : trigger;
+  }
+
+  const positive = typeof dp["positive_template"] === "string" ? dp["positive_template"].trim() : "";
+  if (positive && !prompt.includes(positive)) {
+    prompt = prompt.length > 0 ? `${prompt}, ${positive}` : positive;
+  }
+  params.prompt = prompt;
+
+  const extraLora = typeof dp["extra_lora"] === "string" ? dp["extra_lora"].trim() : "";
+  if (extraLora) {
+    params.extraLora = extraLora;
+    const scale = Number(dp["extra_lora_scale"]);
+    params.extraLoraScale = Number.isFinite(scale) ? scale : 1.0;
+  }
+}
+
 async function loadPersona(db: Db, personaId: string): Promise<Persona | null> {
   const [row] = await db
     .select()
@@ -190,7 +235,20 @@ async function buildParams(
     disableSafety,
   };
 
+  // Fold in the persona's locked prompt templates + realism LoRA stack (no-op
+  // for personas that don't set them).
+  applyPersonaGenerationConfig(persona, params);
+
   if (provider.id === "replicate") {
+    // General (non-persona) text-to-image: there is no LoRA / published model to
+    // resolve. Render the raw prompt on the base Flux model (DEFAULT_MODEL) by
+    // leaving modelRef/versionSha unset. Gated to the system "general" persona
+    // (attributes.general === true) so real personas can't silently lose their LoRA.
+    const isGeneral =
+      (persona.attributes as Record<string, unknown> | null)?.["general"] === true;
+    if (isGeneral) {
+      return { params, modelRef: "general" };
+    }
     // Persona generation always targets the persona's own published model.
     const ref = await resolvePersonaModel(persona);
     if (!ref) {

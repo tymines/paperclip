@@ -911,6 +911,96 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
     });
   });
 
+  // POST /image-studio/generate — general (non-persona) text-to-image. Renders a
+  // raw prompt on the base Flux model (no LoRA), ZenCreator-style. Uses a system
+  // "General" persona row (attributes.general=true) to satisfy the generation_jobs
+  // FK; the generator falls back to the base model for that persona.
+  router.post("/image-studio/generate", async (req, res) => {
+    const body = req.body ?? {};
+    const companyId =
+      typeof body.company_id === "string" && body.company_id.length > 0
+        ? body.company_id
+        : typeof req.query.company_id === "string"
+          ? String(req.query.company_id)
+          : null;
+    if (!companyId) throw badRequest("company_id is required");
+
+    const promptText = typeof body.prompt === "string" ? body.prompt.trim() : "";
+    if (!promptText) throw badRequest("prompt is required");
+
+    // Find-or-create the system general persona for this company.
+    let [general] = await db
+      .select()
+      .from(imageProviders)
+      .where(
+        and(
+          eq(imageProviders.companyId, companyId),
+          sql`(${imageProviders.attributes} ->> 'general') = 'true'`,
+        ),
+      )
+      .limit(1);
+    if (!general) {
+      [general] = await db
+        .insert(imageProviders)
+        .values({
+          companyId,
+          name: "General",
+          type: "external_api",
+          providerHost: "replicate",
+          attributes: { general: true },
+          costPerUnit: "0",
+        })
+        .returning();
+    }
+
+    const countRaw = Number.parseInt(String(body.count ?? "1"), 10);
+    const count = Number.isFinite(countRaw) ? Math.min(Math.max(countRaw, 1), 8) : 1;
+    const capped = Array.from({ length: count }, () => promptText).slice(0, MAX_JOBS_PER_REQUEST);
+
+    const rating: "sfw" | "explicit" = body.content_rating === "explicit" ? "explicit" : "sfw";
+    const providerHost = resolveHost(req.query.provider ?? body.provider_host);
+    const model = typeof body.model === "string" && body.model.length > 0 ? body.model : null;
+    const costEstimate = await estimateCostUsd(providerHost, model);
+    const baseSeed = body.seed != null && body.seed !== "" ? Number(body.seed) : null;
+
+    const batchId = randomUUID();
+    const rows = buildJobRows(
+      general.id,
+      batchId,
+      capped,
+      {
+        loraScale: "1.0",
+        steps: Number.isFinite(Number(body.steps)) ? Number(body.steps) : 28,
+        guidance: "3.5",
+        aspectRatio: typeof body.aspect_ratio === "string" ? body.aspect_ratio : "1:1",
+        contentRating: rating,
+        promptTemplateId:
+          typeof body.prompt_template_id === "string" && body.prompt_template_id.length > 0
+            ? body.prompt_template_id
+            : null,
+        baseSeed,
+        providerHost,
+        model,
+      },
+      0,
+      costEstimate,
+    );
+
+    const inserted = await db
+      .insert(generationJobs)
+      .values(rows)
+      .returning({ id: generationJobs.id });
+    void kickGenerationQueue(db).catch(() => {});
+
+    res.status(202).json({
+      batch_id: batchId,
+      persona_id: general.id,
+      job_ids: inserted.map((r) => r.id),
+      prompt: promptText,
+      provider_host: providerHost,
+    });
+  });
+
   // ── Multi-provider: status, model catalogs, compare ───────────────────────
 
   // GET /image-studio/providers — the 3 hosted inference providers with token
