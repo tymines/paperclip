@@ -2,7 +2,7 @@ import { Router } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, desc, asc, sql } from "drizzle-orm";
+import { and, eq, or, isNull, isNotNull, inArray, desc, asc, sql } from "drizzle-orm";
 import {
   imageProviders,
   personaGroups,
@@ -999,6 +999,54 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
       prompt: promptText,
       provider_host: providerHost,
     });
+  });
+
+  // GET /image-studio/generations?company_id=&limit= — Library/gallery: every
+  // succeeded SFW creation for the company (across the general persona + any SFW
+  // persona), newest first. Powers the MissionControl "Library" tab. NSFW is
+  // intentionally excluded from the app gallery.
+  router.get("/image-studio/generations", async (req, res) => {
+    const companyId =
+      typeof req.query.company_id === "string" && req.query.company_id.length > 0
+        ? String(req.query.company_id)
+        : null;
+    if (!companyId) throw badRequest("company_id is required");
+
+    const limitRaw = Number.parseInt(String(req.query.limit ?? ""), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 60;
+
+    const personas = await db
+      .select({ id: imageProviders.id })
+      .from(imageProviders)
+      .where(eq(imageProviders.companyId, companyId));
+    const personaIds = personas.map((p) => p.id);
+    if (personaIds.length === 0) {
+      res.json({ generations: [] });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        id: generationJobs.id,
+        prompt: generationJobs.promptText,
+        outputPath: generationJobs.outputPath,
+        aspectRatio: generationJobs.aspectRatio,
+        contentRating: generationJobs.contentRating,
+        createdAt: generationJobs.createdAt,
+      })
+      .from(generationJobs)
+      .where(
+        and(
+          inArray(generationJobs.personaId, personaIds),
+          eq(generationJobs.status, "succeeded"),
+          isNotNull(generationJobs.outputPath),
+          eq(generationJobs.contentRating, "sfw"),
+        ),
+      )
+      .orderBy(desc(generationJobs.createdAt))
+      .limit(limit);
+
+    res.json({ generations: rows });
   });
 
   // ── Multi-provider: status, model catalogs, compare ───────────────────────
