@@ -8,7 +8,7 @@ import {
   ROOM_MESSAGE_HARD_CAP,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
-import { roomService, logActivity, publishLiveEvent, heartbeatService } from "../services/index.js";
+import { roomService, agentService, logActivity, publishLiveEvent, heartbeatService } from "../services/index.js";
 import { createDesignRunsService } from "../services/design-runs.js";
 import { dispatchAgentBridge } from "../services/agent-bridge.js";
 import { conflict, notFound } from "../errors.js";
@@ -26,6 +26,42 @@ export function roomRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
+  });
+
+  // GET /companies/:companyId/crew-activity — recent agent activity across rooms
+  router.get("/companies/:companyId/crew-activity", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const agentSvc = agentService(db);
+    const [roomsList, agents] = await Promise.all([
+      svc.list(companyId),
+      agentSvc.list(companyId, { includeTerminated: true }),
+    ]);
+    const nameById = new Map<string, string>(agents.map((a: any) => [a.id, a.name]));
+    const roomsToScan = roomsList.slice(0, 12);
+    const perRoom = await Promise.all(
+      roomsToScan.map(async (room: any) => {
+        const { messages } = await svc.listMessages(room.id, { limit: 4 });
+        return messages
+          .filter((m: any) => m.senderType === "agent")
+          .map((m: any) => {
+            const ts = m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt);
+            return {
+              id: String(m.id),
+              actorName: nameById.get(m.senderId) ?? "Agent",
+              action: "posted in",
+              target: String(m.content ?? "").replace(/\s+/g, " ").slice(0, 100),
+              roomName: room.name as string,
+              timestamp: ts.toISOString(),
+            };
+          });
+      }),
+    );
+    const activity = perRoom
+      .flat()
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 25);
+    res.json({ activity });
   });
 
   // POST /companies/:companyId/rooms
