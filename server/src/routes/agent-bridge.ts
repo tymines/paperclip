@@ -350,6 +350,219 @@ export function agentBridgeRoutes(db: Db) {
     }
   });
 
+  // ── LIVE agent telemetry (ADDITIVE) ──────────────────────────────────────
+  // The bridge daemon calls this fire-and-forget on each dispatch (status=
+  // "running" + currentTask) and on each reply/turn-complete (status="idle" or
+  // "error", currentTask cleared). It updates the agent's status +
+  // lastHeartbeatAt and stores the human-readable current task in
+  // metadata.currentTask (no schema migration — metadata is an existing jsonb
+  // column). It then publishes an `agent.status` LiveEvent on the company WS
+  // channel so the iOS Roster refreshes live. Authentication reuses the SAME
+  // per-agent bridge token as /agent-bridge/reply. This path never touches the
+  // reply/dispatch flow, so it cannot break normal fleet operation.
+  router.post("/agent-bridge/telemetry", async (req, res) => {
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) throw unauthorized("Missing bearer token");
+      const presentedToken = match[1]!.trim();
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const rawStatus = typeof body.status === "string" ? body.status.trim() : "";
+      // currentTask: string sets/replaces it; null or "" clears it; undefined leaves it.
+      const hasCurrentTask = Object.prototype.hasOwnProperty.call(body, "currentTask");
+      const currentTaskRaw = body.currentTask;
+      const outcome =
+        typeof body.outcome === "string" ? body.outcome : null;
+
+      if (!agentId) throw badRequest("agentId is required");
+
+      // Whitelist statuses the bridge may set, so a bug can't write garbage.
+      const ALLOWED_STATUSES = new Set(["running", "idle", "error"]);
+      const status = ALLOWED_STATUSES.has(rawStatus) ? rawStatus : null;
+      if (!status) throw badRequest("status must be one of running|idle|error");
+
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+          metadata: agents.metadata,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) throw notFound("Agent not found");
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        throw forbidden("Agent has no bridge configured");
+      }
+      if (bridge.authToken !== presentedToken) {
+        throw forbidden("Bridge token mismatch");
+      }
+
+      const now = new Date();
+
+      // Merge currentTask into metadata without disturbing other keys.
+      let nextMetadata: Record<string, unknown> | null = null;
+      let currentTaskForEvent: string | null = null;
+      if (hasCurrentTask) {
+        const base =
+          typeof agent.metadata === "object" &&
+          agent.metadata !== null &&
+          !Array.isArray(agent.metadata)
+            ? { ...(agent.metadata as Record<string, unknown>) }
+            : {};
+        if (typeof currentTaskRaw === "string" && currentTaskRaw.trim().length > 0) {
+          const trimmed = currentTaskRaw.trim().slice(0, 500);
+          base.currentTask = trimmed;
+          currentTaskForEvent = trimmed;
+        } else {
+          // null / "" → clear the field.
+          delete base.currentTask;
+          currentTaskForEvent = null;
+        }
+        nextMetadata = base;
+      } else {
+        // currentTask omitted — surface the existing value in the event only.
+        const existing =
+          typeof agent.metadata === "object" &&
+          agent.metadata !== null &&
+          !Array.isArray(agent.metadata)
+            ? (agent.metadata as Record<string, unknown>).currentTask
+            : null;
+        currentTaskForEvent = typeof existing === "string" ? existing : null;
+      }
+
+      const setPatch: Record<string, unknown> = {
+        status,
+        lastHeartbeatAt: now,
+        updatedAt: now,
+      };
+      if (nextMetadata !== null) setPatch.metadata = nextMetadata;
+
+      const [updated] = await db
+        .update(agents)
+        .set(setPatch)
+        .where(eq(agents.id, agentId))
+        .returning({
+          id: agents.id,
+          companyId: agents.companyId,
+          status: agents.status,
+          lastHeartbeatAt: agents.lastHeartbeatAt,
+        });
+
+      if (updated) {
+        publishLiveEvent({
+          companyId: updated.companyId,
+          type: "agent.status",
+          payload: {
+            agentId: updated.id,
+            status: updated.status,
+            lastHeartbeatAt: updated.lastHeartbeatAt
+              ? new Date(updated.lastHeartbeatAt).toISOString()
+              : null,
+            currentTask: currentTaskForEvent,
+            outcome,
+            source: "agent-bridge-telemetry",
+          },
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        agentId,
+        status: updated?.status ?? status,
+        lastHeartbeatAt: updated?.lastHeartbeatAt
+          ? new Date(updated.lastHeartbeatAt).toISOString()
+          : now.toISOString(),
+        currentTask: currentTaskForEvent,
+      });
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "status" in err
+          ? Number((err as { status?: number }).status) || 500
+          : 500;
+      const message = err instanceof Error ? err.message : "telemetry failed";
+      return res.status(code).json({ error: message });
+    }
+  });
+
+  // ── Phase 2: structural proof-of-work events (ADDITIVE) ──────────────────
+  // The bridge posts a typed `agent.work` event per turn. Unlike /telemetry
+  // (which owns agent.status + the agents row), this path is BROADCAST-ONLY: it
+  // validates the same per-agent bridge token, then republishes the event on
+  // the company WS channel via publishLiveEvent so the app can render proof-of-
+  // work (a turn that fired no mutating tool event is definitionally a
+  // non-change). No DB write, no migration. The discriminator is payload.kind
+  // (turn.started | tool.call | tool.result | turn.completed); proof-of-work is
+  // carried generically as outcome.mutated + a discriminated outcome.artifact,
+  // never a bare commit sha, so non-code project types ride the same wire.
+  const WORK_KINDS = new Set(["turn.started", "tool.call", "tool.result", "turn.completed"]);
+  router.post("/agent-bridge/work", async (req, res) => {
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) throw unauthorized("Missing bearer token");
+      const presentedToken = match[1]!.trim();
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const roomId = typeof body.roomId === "string" ? body.roomId : null;
+      const turnId = typeof body.turnId === "string" ? body.turnId : null;
+      const kind = typeof body.kind === "string" ? body.kind : "";
+      if (!agentId) throw badRequest("agentId is required");
+      if (!turnId) throw badRequest("turnId is required");
+      if (!WORK_KINDS.has(kind)) {
+        throw badRequest("kind must be one of turn.started|tool.call|tool.result|turn.completed");
+      }
+
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) throw notFound("Agent not found");
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        throw forbidden("Agent has no bridge configured");
+      }
+      if (bridge.authToken !== presentedToken) {
+        throw forbidden("Bridge token mismatch");
+      }
+
+      // Pass through the optional structured fields untouched; the server adds
+      // createdAt. outcome / tool are opaque to the server (typed app-side).
+      const payload: Record<string, unknown> = {
+        agentId: agent.id,
+        roomId,
+        turnId,
+        kind,
+        createdAt: new Date().toISOString(),
+      };
+      if (body.outcome != null) payload.outcome = body.outcome;
+      if (body.tool != null) payload.tool = body.tool;
+
+      publishLiveEvent({ companyId: agent.companyId, type: "agent.work", payload });
+
+      return res.status(202).json({ ok: true, agentId: agent.id, turnId, kind });
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "status" in err
+          ? Number((err as { status?: number }).status) || 500
+          : 500;
+      const message = err instanceof Error ? err.message : "work event failed";
+      return res.status(code).json({ error: message });
+    }
+  });
+
   // Synthetic health check — the bridge daemon pings this on an interval to
   // verify that POST → persist → readback is intact. The daemon compares the
   // returned id+checksum to detect silent persistence failures.
