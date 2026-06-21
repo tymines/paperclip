@@ -152,7 +152,7 @@ function SidebarLegacy({
     <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
       <div className="flex flex-col gap-0.5">
         <button
-          onClick={openNewIssue}
+          onClick={() => openNewIssue()}
           className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
           data-pp-new-issue="true"
         >
@@ -251,7 +251,7 @@ function SidebarV1({
     <nav className="flex-1 min-h-0 overflow-y-auto scrollbar-auto-hide flex flex-col gap-4 px-3 py-2">
       <div className="flex flex-col gap-0.5">
         <button
-          onClick={openNewIssue}
+          onClick={() => openNewIssue()}
           className="flex items-center gap-2.5 px-3 py-2 text-[13px] font-medium text-muted-foreground hover:bg-accent/50 hover:text-foreground transition-colors"
           data-pp-new-issue="true"
         >

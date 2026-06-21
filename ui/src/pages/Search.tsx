@@ -566,7 +566,7 @@ function SearchTabContent({
               Search all scopes
             </Button>
           ) : null}
-          <Button onClick={openNewIssue} size="sm" variant="default">
+          <Button onClick={() => openNewIssue()} size="sm" variant="default">
             <Plus className="mr-1.5 h-4 w-4" />
             Create {issueNoun.singular} from this query
           </Button>

@@ -84,7 +84,16 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [onboardingOptions, setOnboardingOptions] = useState<OnboardingOptions>({});
 
   const openNewIssue = useCallback((defaults: NewIssueDefaults = {}) => {
-    setNewIssueDefaults(defaults);
+    // Guard against being wired directly to a DOM handler (e.g. onClick={openNewIssue}),
+    // which would pass a SyntheticEvent as `defaults`. Storing that leaks circular
+    // DOM/Fiber references into newIssueDefaults and crashes the dialog when it later
+    // JSON.stringifies the defaults. Ignore anything that isn't a plain defaults object.
+    const isPlainDefaults =
+      defaults != null &&
+      typeof defaults === "object" &&
+      !("nativeEvent" in defaults) &&
+      !((defaults as { $$typeof?: unknown }).$$typeof);
+    setNewIssueDefaults(isPlainDefaults ? defaults : {});
     setNewIssueOpen(true);
   }, []);
 
