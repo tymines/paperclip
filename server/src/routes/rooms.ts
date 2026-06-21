@@ -1,4 +1,7 @@
 import { Router } from "express";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Db } from "@paperclipai/db";
 import {
   createRoomSchema,
@@ -26,6 +29,35 @@ export function roomRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const result = await svc.list(companyId);
     res.json(result);
+  });
+
+  // ── Projects review (product-owner review of agent-built apps) ──
+  const projectsFile = path.join(os.homedir(), ".openclaw", "projects.json");
+  const reviewsLog = path.join(os.homedir(), ".openclaw", "project-reviews.jsonl");
+  const readProjects = () => { try { return JSON.parse(fs.readFileSync(projectsFile, "utf8")); } catch { return []; } };
+
+  // GET /companies/:companyId/projects
+  router.get("/companies/:companyId/review-projects", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    res.json({ projects: readProjects() });
+  });
+
+  // POST /companies/:companyId/review-projects/:projectId/review  { decision, note }
+  router.post("/companies/:companyId/review-projects/:projectId/review", async (req, res) => {
+    assertCompanyAccess(req, req.params.companyId as string);
+    const { projectId } = req.params;
+    const decision = String((req.body?.decision ?? "")).toLowerCase();
+    const note = String(req.body?.note ?? "");
+    const allowed: Record<string,string> = { approve: "approved", reject: "rejected", changes: "changes_requested" };
+    const status = allowed[decision];
+    if (!status) { res.status(400).json({ error: "decision must be approve | reject | changes" }); return; }
+    const projects = readProjects();
+    const proj = projects.find((p: any) => p.id === projectId);
+    if (!proj) { res.status(404).json({ error: "project not found" }); return; }
+    proj.status = status; proj.reviewNote = note; proj.reviewedAt = new Date().toISOString();
+    try { fs.writeFileSync(projectsFile, JSON.stringify(projects, null, 1)); } catch {}
+    try { fs.appendFileSync(reviewsLog, JSON.stringify({ ts: proj.reviewedAt, projectId, decision: status, note }) + "\n"); } catch {}
+    res.json({ ok: true, project: proj });
   });
 
   // GET /companies/:companyId/crew-activity — recent agent activity across rooms
