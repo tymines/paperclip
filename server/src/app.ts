@@ -375,6 +375,16 @@ export async function createApp(
           description: `${bodyText}\n\n- ${appName} v${appVersion}${device ? " - " + device : ""} - via in-app feedback`,
           status: "todo",
           priority: kind === "bug" ? "high" : "medium",
+          // Structured, additive provenance so Mission Control can reliably
+          // identify these as app feedback and GROUP them by app — instead of
+          // sniffing the title prefix. The /companies/:id/issues list endpoint
+          // already supports ?originKind= & ?originId= filters, and returns
+          // these fields on each issue. Legacy feedback issues (created before
+          // this) lack them; MC also recognizes the `[Baily \u2022 …]` /
+          // `via in-app feedback` markers as a fallback, so nothing is missed.
+          originKind: "app-feedback",
+          originId: appName,
+          originFingerprint: appVersion || "default",
           createdByAgentId: null,
           createdByUserId: null,
         } as any);
