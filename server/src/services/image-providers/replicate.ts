@@ -74,6 +74,12 @@ function buildInput(params: GenerateParams): Record<string, unknown> {
   };
   if (params.seed != null) input.seed = params.seed;
   if (params.disableSafety) input.disable_safety_checker = true;
+  // Stack a second LoRA in the same prediction (e.g. XLabs realism over a
+  // persona LoRA). Both fields are in the flux-dev-lora input schema.
+  if (params.extraLora) {
+    input.extra_lora = params.extraLora;
+    input.extra_lora_scale = params.extraLoraScale ?? 1.0;
+  }
   return input;
 }
 

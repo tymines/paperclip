@@ -61,6 +61,15 @@ export interface GenerateParams {
   loraScale?: number;
   /** Extra LoRA stack (WaveSpeed multi-LoRA). */
   loras?: LoraWeight[];
+  /**
+   * A single extra LoRA stacked on top of the persona's own model in ONE
+   * prediction — Replicate flux-dev-lora's native `extra_lora` /
+   * `extra_lora_scale` inputs. Used to layer e.g. an XLabs realism LoRA over a
+   * persona LoRA (the proven Raven "v6" photoreal stack). HF repo id or a
+   * public .safetensors URL the model can fetch.
+   */
+  extraLora?: string;
+  extraLoraScale?: number;
   /** Input image (data URI or URL) for image-to-video / edit models. */
   image?: string;
   /** Turn off the provider's safety checker (explicit personas). */
