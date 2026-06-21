@@ -97,7 +97,7 @@ export function Home() {
   }
 
   return (
-    <div className="flex flex-col" data-pp-page-v2="home">
+    <div className="flex flex-col bg-gradient-to-b from-background via-background to-primary/[0.03]" data-pp-page-v2="home">
       <div data-pp-agent-strip="true">
         <AgentStrip companyId={selectedCompanyId} />
       </div>
@@ -129,8 +129,9 @@ export function Home() {
       </div>
 
       <div className="flex items-center justify-between border-b border-border px-3 py-3 md:px-5" data-pp-home-now="true">
-        <div className="flex min-w-0 items-center gap-3">
-          <h1 className="text-base font-semibold">Now</h1>
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>
+          <h1 className="text-lg font-bold tracking-tight">Now</h1>
           <span className="hidden text-xs text-muted-foreground sm:inline">
             {waitingItems.length} waiting on you
           </span>
@@ -155,7 +156,7 @@ export function Home() {
       <div className="grid min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]" data-pp-home-grid="true">
         <section className="border-b border-border px-3 py-4 md:px-5 lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/90">
               Goals
             </span>
             <Link
@@ -179,7 +180,7 @@ export function Home() {
 
         <section className="px-3 py-4 md:px-5">
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/90">
               Waiting on you
             </span>
             <span className="text-xs text-muted-foreground">{waitingItems.length} items</span>
@@ -196,7 +197,7 @@ export function Home() {
                   <button
                     type="button"
                     onClick={() => goToIssue(issue)}
-                    className="flex min-h-[44px] w-full items-start gap-3 rounded-lg border border-border bg-card px-3 py-3 text-left transition-colors hover:border-border hover:bg-accent/40 md:py-2.5"
+                    className="flex min-h-[44px] w-full items-start gap-3 rounded-xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-3.5 py-3 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md md:py-2.5"
                   >
                     <span
                       className={

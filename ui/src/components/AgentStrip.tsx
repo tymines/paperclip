@@ -95,81 +95,99 @@ export function AgentStrip({ companyId, className }: AgentStripProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 overflow-x-auto border-b border-border bg-background/60 px-3 py-2 text-[13px] scrollbar-auto-hide md:px-4",
+        "flex items-center gap-2.5 overflow-x-auto border-b border-border/70 bg-gradient-to-b from-background/80 to-background/40 px-3 py-3 scrollbar-auto-hide md:px-4",
         className,
       )}
     >
-      <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        Agents
+      <span className="shrink-0 self-center pr-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+        Fleet
       </span>
-      <div className="flex items-center gap-3 md:gap-4">
-        {sortedAgents.map((agent) => {
-          const isRunning = runningAgentIds.has(agent.id);
-          const dot: DotKind = isRunning
-            ? "running"
-            : agent.status === "error"
-              ? "error"
-              : agent.status === "paused"
-                ? "paused"
-                : agent.status === "active"
-                  ? "active"
-                  : "idle";
-          const spent = agent.spentMonthlyCents ?? 0;
-          const budget = agent.budgetMonthlyCents ?? 0;
-          const burn = liveBurnByAgent.get(agent.id) ?? 0;
-          const showSpend = spent > 0 || budget > 0;
-          const utilPct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
-          const overBudget = budget > 0 && spent > budget;
-          const spendTooltip = budget > 0
-            ? `$${(spent / 100).toFixed(2)} of $${(budget / 100).toFixed(2)} this month`
-            : spent > 0
-              ? `$${(spent / 100).toFixed(2)} this month`
-              : null;
-          const title = [
-            `${agent.name} — ${dot}`,
-            spendTooltip,
-            burn > 0 ? `Live burn ${formatCostUsdCompact(burn)}` : null,
-          ].filter(Boolean).join("\n");
-          return (
-            <Link
-              key={agent.id}
-              to={agentUrl(agent)}
-              className={cn(
-                "flex h-8 shrink-0 items-center gap-1.5 hover:underline",
-                TEXT_CLASS[dot],
-              )}
-              title={title}
-              data-pp-agent-pill={agent.id}
-            >
-              <span className={cn("h-2 w-2 shrink-0 rounded-full", DOT_CLASS[dot])} />
-              <span className="max-w-[140px] truncate">{agent.name}</span>
-              {showSpend ? (
-                <span
-                  className={cn(
-                    "shrink-0 rounded-sm px-1 font-mono text-[10px] tabular-nums",
-                    overBudget
-                      ? "bg-rose-500/15 text-rose-300"
-                      : "bg-muted/40 text-muted-foreground",
-                  )}
-                  data-pp-agent-spend={agent.id}
-                  aria-label={spendTooltip ?? undefined}
-                >
-                  {budget > 0 ? `${utilPct}%` : `$${(spent / 100).toFixed(0)}`}
-                </span>
-              ) : null}
-              {burn > 0 ? (
-                <span
-                  className="shrink-0 rounded-sm bg-emerald-500/15 px-1 font-mono text-[10px] tabular-nums text-emerald-300"
-                  data-pp-agent-live-burn={agent.id}
-                  aria-label={`Live burn ${formatCostUsdCompact(burn)}`}
-                >
-                  {formatCostUsdCompact(burn)}
-                </span>
-              ) : null}
-            </Link>
-          );
-        })}
-      </div>
+      {sortedAgents.map((agent) => {
+        const isRunning = runningAgentIds.has(agent.id);
+        const dot: DotKind = isRunning
+          ? "running"
+          : agent.status === "error"
+            ? "error"
+            : agent.status === "paused"
+              ? "paused"
+              : agent.status === "active"
+                ? "active"
+                : "idle";
+        const spent = agent.spentMonthlyCents ?? 0;
+        const budget = agent.budgetMonthlyCents ?? 0;
+        const burn = liveBurnByAgent.get(agent.id) ?? 0;
+        const showSpend = spent > 0 || budget > 0;
+        const utilPct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
+        const overBudget = budget > 0 && spent > budget;
+        const spendTooltip = budget > 0
+          ? `$${(spent / 100).toFixed(2)} of $${(budget / 100).toFixed(2)} this month`
+          : spent > 0
+            ? `$${(spent / 100).toFixed(2)} this month`
+            : null;
+        const initial = (agent.name ?? "?").trim().charAt(0).toUpperCase();
+        const title = [
+          `${agent.name} — ${dot}`,
+          spendTooltip,
+          burn > 0 ? `Live burn ${formatCostUsdCompact(burn)}` : null,
+        ].filter(Boolean).join("\n");
+        return (
+          <Link
+            key={agent.id}
+            to={agentUrl(agent)}
+            title={title}
+            data-pp-agent-pill={agent.id}
+            className={cn(
+              "group relative flex w-[86px] shrink-0 flex-col items-center gap-1.5 rounded-2xl border border-border/50 bg-card/50 px-2 py-2.5 transition-all duration-200",
+              "hover:-translate-y-0.5 hover:border-border hover:bg-card hover:shadow-lg hover:shadow-black/20",
+            )}
+          >
+            <div className="relative">
+              <div
+                className={cn(
+                  "flex h-11 w-11 items-center justify-center rounded-full text-base font-bold text-white shadow-inner ring-1 ring-white/10",
+                  isRunning
+                    ? "bg-gradient-to-br from-emerald-400 to-cyan-600"
+                    : dot === "error"
+                      ? "bg-gradient-to-br from-rose-500 to-rose-700"
+                      : dot === "idle"
+                        ? "bg-gradient-to-br from-slate-600 to-slate-800"
+                        : "bg-gradient-to-br from-violet-500 to-indigo-700",
+                )}
+              >
+                {initial}
+              </div>
+              <span
+                className={cn(
+                  "absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-card",
+                  DOT_CLASS[dot],
+                  isRunning && "animate-pulse",
+                )}
+              />
+            </div>
+            <span className={cn("max-w-[78px] truncate text-[11px] font-medium leading-none", TEXT_CLASS[dot])}>
+              {agent.name}
+            </span>
+            {burn > 0 ? (
+              <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-emerald-300">
+                {formatCostUsdCompact(burn)}
+              </span>
+            ) : showSpend ? (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 py-0.5 font-mono text-[9px] tabular-nums",
+                  overBudget ? "bg-rose-500/15 text-rose-300" : "bg-muted/50 text-muted-foreground",
+                )}
+              >
+                {budget > 0 ? `${utilPct}%` : `$${(spent / 100).toFixed(0)}`}
+              </span>
+            ) : (
+              <span className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground/60">
+                {isRunning ? "live" : dot}
+              </span>
+            )}
+          </Link>
+        );
+      })}
     </div>
   );
 }
