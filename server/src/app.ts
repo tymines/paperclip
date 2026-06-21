@@ -1,6 +1,7 @@
 import express, { Router, type Request as ExpressRequest } from "express";
 import path from "node:path";
 import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
@@ -368,11 +369,46 @@ export async function createApp(
       const appVersion = String(req.body?.appVersion || "?").slice(0, 24);
       const device = String(req.body?.device || "").slice(0, 80);
       if (!title) { res.status(400).json({ error: "title is required" }); return; }
+
+      // \u2500\u2500 Optional photo attachments \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+      // Baily can attach screenshots/photos to her feedback. They arrive as
+      // base64 strings (optionally a `data:image/...;base64,` data-URL) in an
+      // `images` array. We persist them to the SAME read-only uploads store the
+      // Image Studio uses (served at /api/uploads/<rel>), under feedback/<id>/,
+      // and record the relative paths as an `[attachments] \u2026` marker line on
+      // the issue description. Mission Control parses that marker and renders
+      // the photos on the feedback item \u2014 no DB-schema change, no new bucket.
+      const MAX_IMAGES = 4;
+      const MAX_BYTES_PER_IMAGE = 4 * 1024 * 1024; // 4 MB decoded ceiling/image
+      const rawImages: unknown[] = Array.isArray(req.body?.images) ? req.body.images : [];
+      const attachId = randomUUID();
+      const savedRelPaths: string[] = [];
+      for (const entry of rawImages.slice(0, MAX_IMAGES)) {
+        if (typeof entry !== "string" || !entry) continue;
+        const comma = entry.indexOf(",");
+        const b64 = entry.startsWith("data:") && comma >= 0 ? entry.slice(comma + 1) : entry;
+        let buf: Buffer;
+        try { buf = Buffer.from(b64, "base64"); } catch { continue; }
+        if (buf.length === 0 || buf.length > MAX_BYTES_PER_IMAGE) continue;
+        const rel = `feedback/${attachId}/${savedRelPaths.length}.jpg`;
+        const abs = path.resolve(uploadsRoot(), rel);
+        try {
+          await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+          await fs.promises.writeFile(abs, buf);
+          savedRelPaths.push(rel);
+        } catch (e) {
+          logger.error({ err: e }, "Failed to persist feedback attachment");
+        }
+      }
+      const attachmentsLine = savedRelPaths.length
+        ? `\n[attachments] ${savedRelPaths.join(" | ")}`
+        : "";
+
       try {
         const svc = issueService(db);
         const issue: any = await svc.create(FEEDBACK_COMPANY, {
           title: `[Baily \u2022 ${kind}] ${title}`,
-          description: `${bodyText}\n\n- ${appName} v${appVersion}${device ? " - " + device : ""} - via in-app feedback`,
+          description: `${bodyText}\n\n- ${appName} v${appVersion}${device ? " - " + device : ""} - via in-app feedback${attachmentsLine}`,
           status: "todo",
           priority: kind === "bug" ? "high" : "medium",
           // Structured, additive provenance so Mission Control can reliably
@@ -388,7 +424,7 @@ export async function createApp(
           createdByAgentId: null,
           createdByUserId: null,
         } as any);
-        res.json({ ok: true, issueId: issue?.id ?? null });
+        res.json({ ok: true, issueId: issue?.id ?? null, attachments: savedRelPaths });
       } catch (e: any) {
         res.status(500).json({ error: "could not record feedback", detail: String(e?.message || e).slice(0, 200) });
       }
