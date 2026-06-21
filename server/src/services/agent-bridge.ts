@@ -2,6 +2,19 @@ import { eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, roomMessages } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
+import { createHmac as _bridgeCreateHmac } from "node:crypto";
+import { readFileSync as _bridgeReadFileSync, existsSync as _bridgeExistsSync } from "node:fs";
+import { homedir as _bridgeHomedir } from "node:os";
+import { join as _bridgeJoin } from "node:path";
+
+// Shared HMAC secret with the OpenClaw bridge (file-based; absent = signing off).
+function _bridgeLoadHmacSecret(): string {
+  try {
+    const f = process.env.BRIDGE_HMAC_SECRET_FILE || _bridgeJoin(_bridgeHomedir(), ".openclaw", "bridge-hmac-secret");
+    if (_bridgeExistsSync(f)) return _bridgeReadFileSync(f, "utf8").trim();
+  } catch { /* ignore */ }
+  return process.env.BRIDGE_HMAC_SECRET || "";
+}
 
 export type AgentBridgeConfig = {
   kind: string;
@@ -149,13 +162,22 @@ export async function dispatchAgentBridge(
   const timer = setTimeout(() => controller.abort(), BRIDGE_REQUEST_TIMEOUT_MS);
 
   try {
+    const _bridgeBodyStr = JSON.stringify(body);
+    const _bridgeHeaders: Record<string, string> = {
+      "content-type": "application/json",
+      authorization: `Bearer ${bridge.authToken}`,
+    };
+    const _bridgeSecret = _bridgeLoadHmacSecret();
+    if (_bridgeSecret) {
+      const _ts = Date.now().toString();
+      const _sig = _bridgeCreateHmac("sha256", _bridgeSecret).update(`${_ts}.${_bridgeBodyStr}`).digest("hex");
+      _bridgeHeaders["x-bridge-timestamp"] = _ts;
+      _bridgeHeaders["x-bridge-signature"] = _sig;
+    }
     const response = await fetch(targetUrl, {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${bridge.authToken}`,
-      },
-      body: JSON.stringify(body),
+      headers: _bridgeHeaders,
+      body: _bridgeBodyStr,
       signal: controller.signal,
     });
     if (!response.ok) {
