@@ -1820,6 +1820,39 @@ export function issueRoutes(
     res.json({ count });
   });
 
+  // ── Manual feedback/issue completion toggle ──────────────────────────────
+  // A lightweight, board-facing status switch: lets Mission Control manually
+  // cross a feedback item off (Todo → Done) or reopen it (Done → Todo) straight
+  // from the in-app feedback list. Deliberately scoped to {todo, done} so it
+  // can't drive the heavier agent/execution lifecycle — that still lives on
+  // PATCH /issues/:id. Reuses the SAME issues service + table (no parallel
+  // store); selecting "done" records completedAt via the service's status
+  // side-effects, and reopening to "todo" clears it.
+  const updateIssueStatusToggleSchema = z
+    .object({ status: z.enum(["todo", "done"]) })
+    .strict();
+  router.patch(
+    "/companies/:companyId/issues/:issueId/status",
+    validate(updateIssueStatusToggleSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const issueId = req.params.issueId as string;
+      assertCompanyAccess(req, companyId);
+      const existing = await svc.getById(issueId);
+      if (!existing || existing.companyId !== companyId) {
+        res.status(404).json({ error: "Issue not found" });
+        return;
+      }
+      const status = req.body.status as "todo" | "done";
+      const updated = await svc.update(issueId, { status });
+      res.json({
+        id: issueId,
+        status: updated?.status ?? status,
+        completedAt: updated?.completedAt ?? null,
+      });
+    },
+  );
+
   router.get("/companies/:companyId/labels", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
