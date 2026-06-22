@@ -237,18 +237,20 @@ export function CompanySettings() {
   }
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <div className="flex items-center gap-2">
-        <Settings className="h-5 w-5 text-muted-foreground" />
-        <h1 className="text-lg font-semibold">Company Settings</h1>
+    <div className="max-w-2xl space-y-6 bg-gradient-to-b from-background via-background to-primary/[0.03]" data-pp-page-v2="company-settings">
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card/60 text-muted-foreground">
+          <Settings className="h-4 w-4" />
+        </span>
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Company Settings</h1>
       </div>
 
       {/* General */}
       <div className="space-y-4">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-muted-foreground/90 uppercase tracking-widest">
           General
         </div>
-        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+        <div className="space-y-3 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-5 py-5 shadow-sm">
           <Field label="Company name" hint="The display name for your company.">
             <input
               className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-sm outline-none"
@@ -274,10 +276,10 @@ export function CompanySettings() {
 
       {/* Appearance */}
       <div className="space-y-4">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-muted-foreground/90 uppercase tracking-widest">
           Appearance
         </div>
-        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+        <div className="space-y-3 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-5 py-5 shadow-sm">
           <div className="flex items-start gap-4">
             <div className="shrink-0">
               <CompanyPatternIcon
@@ -418,10 +420,10 @@ export function CompanySettings() {
 
       {/* Hiring */}
       <div className="space-y-4" data-testid="company-settings-team-section">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-muted-foreground/90 uppercase tracking-widest">
           Hiring
         </div>
-        <div className="rounded-md border border-border px-4 py-3">
+        <div className="rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-5 py-4 shadow-sm">
           <ToggleField
             label="Require board approval for new hires"
             hint="New agent hires stay pending until approved by board."
@@ -434,10 +436,10 @@ export function CompanySettings() {
 
       {/* Invites */}
       <div className="space-y-4" data-testid="company-settings-invites-section">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-muted-foreground/90 uppercase tracking-widest">
           Invites
         </div>
-        <div className="space-y-3 rounded-md border border-border px-4 py-4">
+        <div className="space-y-3 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-5 py-5 shadow-sm">
           <div className="flex items-center gap-1.5">
             <span className="text-xs text-muted-foreground">
               Generate an OpenClaw agent invite snippet.
@@ -461,7 +463,7 @@ export function CompanySettings() {
           )}
           {inviteSnippet && (
             <div
-              className="rounded-md border border-border bg-muted/30 p-2"
+              className="rounded-xl border border-border/60 bg-card/40 p-3"
               data-testid="company-settings-invites-snippet"
             >
               <div className="flex items-center justify-between gap-2">
@@ -471,7 +473,7 @@ export function CompanySettings() {
                 {snippetCopied && (
                   <span
                     key={snippetCopyDelightId}
-                    className="flex items-center gap-1 text-xs text-green-600 animate-pulse"
+                    className="flex items-center gap-1 text-xs text-[#2FE38A] animate-pulse"
                   >
                     <Check className="h-3 w-3" />
                     Copied
@@ -512,10 +514,10 @@ export function CompanySettings() {
 
       {/* Import / Export */}
       <div className="space-y-4">
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-muted-foreground/90 uppercase tracking-widest">
           Company Packages
         </div>
-        <div className="rounded-md border border-border px-4 py-4">
+        <div className="rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-5 py-5 shadow-sm">
           <p className="text-sm text-muted-foreground">
             Import and export have moved to dedicated pages accessible from the{" "}
             <a href="/org" className="underline hover:text-foreground">Org Chart</a> header.
@@ -539,10 +541,10 @@ export function CompanySettings() {
 
       {/* Danger Zone */}
       <div className="space-y-4">
-        <div className="text-xs font-medium text-destructive uppercase tracking-wide">
+        <div className="text-[11px] font-semibold text-[#FF5B5B] uppercase tracking-widest">
           Danger Zone
         </div>
-        <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 px-4 py-4">
+        <div className="space-y-3 rounded-2xl border border-[#FF5B5B]/40 bg-[#FF5B5B]/[0.06] px-5 py-5 shadow-sm">
           <p className="text-sm text-muted-foreground">
             Archive this company to hide it from the sidebar. This persists in
             the database.
