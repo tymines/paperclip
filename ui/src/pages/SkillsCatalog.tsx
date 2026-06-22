@@ -189,20 +189,20 @@ function SkillCard({
       data-testid="skill-card"
       data-skill-id={skill.id}
       className={cn(
-        "group relative flex flex-col gap-3 rounded-xl border bg-card/60 p-4",
-        "backdrop-blur-sm transition-colors hover:border-foreground/30 hover:bg-card/80",
-        skill.enabled ? "border-border" : "border-border/60 opacity-75",
+        "group relative flex flex-col gap-3 rounded-2xl border bg-gradient-to-br from-card to-card/40 p-4 shadow-sm",
+        "backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md",
+        skill.enabled ? "border-border/60" : "border-border/40 opacity-75",
       )}
     >
       <button
         type="button"
         onClick={onOpen}
-        className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute inset-0 z-0 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`Open ${skill.name} details`}
       />
       <div className="relative z-10 flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-background/60">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-border bg-background/60">
             <SourceIcon className="h-5 w-5 text-muted-foreground" />
           </div>
           <div className="min-w-0">
@@ -244,16 +244,16 @@ function SkillCard({
         )}
       </div>
 
-      <div className="relative z-10 flex items-center justify-between border-t border-border/60 pt-3 text-[11px] text-muted-foreground">
+      <div className="relative z-10 flex items-center justify-between border-t border-border/40 pt-3 text-[11px] text-muted-foreground">
         <span>
           Enabled for{" "}
-          <span className="text-foreground">
+          <span className="font-mono tabular-nums text-foreground">
             {skill.attachedAgentCount}/{skill.totalAgentCount}
           </span>{" "}
           agents
         </span>
         <span>
-          {formatNumber(skill.usage30d.invocations)} invocations · 30d
+          <span className="font-mono tabular-nums text-foreground/80">{formatNumber(skill.usage30d.invocations)}</span> invocations · 30d
         </span>
       </div>
     </div>
@@ -567,10 +567,14 @@ export function SkillsCatalog() {
   const hasNoSkills = !isLoading && skills.length === 0;
 
   return (
-    <div className="flex flex-col gap-6" data-testid="skills-catalog">
+    <div
+      className="flex flex-col gap-6 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      data-testid="skills-catalog"
+      data-pp-page-v2="skills"
+    >
       <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Skills</h1>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Skills</h1>
           <p className="text-sm text-muted-foreground">
             Atomic capabilities your {selectedCompany?.name ?? "company"} agents can use — manage,
             inspect, and grant per-agent access.
@@ -719,20 +723,20 @@ function StatCard({
   tone?: "default" | "emerald";
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-border bg-card/60 px-4 py-3 backdrop-blur-sm">
+    <div className="flex items-center gap-3 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-4 py-3.5 shadow-sm backdrop-blur-sm">
       <div
         className={cn(
-          "flex h-9 w-9 items-center justify-center rounded-lg border",
+          "flex h-9 w-9 items-center justify-center rounded-xl border",
           tone === "emerald"
-            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
+            ? "border-[#2FE38A]/40 bg-[#2FE38A]/10 text-[#2FE38A]"
             : "border-border bg-background/60 text-muted-foreground",
         )}
       >
         <Icon className="h-4 w-4" />
       </div>
       <div className="min-w-0">
-        <div className="truncate text-lg font-semibold leading-tight">{value}</div>
-        <div className="truncate text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+        <div className="truncate font-mono text-xl font-semibold leading-tight tabular-nums text-foreground">{value}</div>
+        <div className="truncate text-[11px] uppercase tracking-widest text-muted-foreground">{label}</div>
       </div>
     </div>
   );

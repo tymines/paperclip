@@ -116,10 +116,13 @@ export function SocialScheduler() {
   const hasNoAccounts = !accountsQuery.isLoading && accounts.length === 0;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div
+      className="flex flex-col gap-5 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      data-pp-page-v2="social"
+    >
       <header className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Social</h1>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Social</h1>
           <p className="text-sm text-muted-foreground">
             Schedule posts across {selectedCompany?.name ?? "your"} connected accounts.
           </p>
@@ -128,7 +131,7 @@ export function SocialScheduler() {
 
       <nav
         aria-label="Social scheduler sections"
-        className="flex flex-wrap items-center gap-1 border-b border-border pb-1"
+        className="flex flex-wrap items-center gap-1 rounded-2xl border border-border/60 bg-card/40 p-1.5 shadow-sm"
       >
         {TABS.map((t) => {
           const Icon = t.icon;
@@ -139,14 +142,14 @@ export function SocialScheduler() {
               type="button"
               onClick={() => setTab(t.key)}
               className={cn(
-                "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                "inline-flex min-h-[36px] items-center gap-2 rounded-xl px-3 py-1.5 text-sm font-medium transition-colors",
                 active
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+                  ? "border border-primary/40 bg-primary/10 text-foreground"
+                  : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
               )}
               aria-current={active ? "page" : undefined}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className={cn("h-4 w-4", active && "text-primary")} />
               {t.label}
             </button>
           );
@@ -154,9 +157,9 @@ export function SocialScheduler() {
       </nav>
 
       {hasNoAccounts && tab !== "accounts" ? (
-        <div className="rounded-md border border-amber-300/70 bg-amber-50/90 px-4 py-3 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
-          <p className="font-medium">Let's connect your first account.</p>
-          <p className="mt-1 leading-5">
+        <div className="rounded-2xl border border-[#F4B940]/30 bg-[#F4B940]/[0.08] px-4 py-3 text-sm text-foreground">
+          <p className="font-semibold text-[#F4B940]">Let's connect your first account.</p>
+          <p className="mt-1 leading-5 text-muted-foreground">
             Connect Instagram, X, Facebook, Threads, or Reddit to start composing and scheduling posts.
           </p>
           <Button variant="outline" size="sm" className="mt-2" onClick={() => setTab("accounts")}>
@@ -166,12 +169,14 @@ export function SocialScheduler() {
       ) : null}
 
       {demoMode ? (
-        <div className="rounded-md border border-sky-400/60 bg-sky-50/80 px-3 py-2 text-xs text-sky-900 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-200">
-          Demo mode is on — showing seeded stub accounts. Remove <code>?demo=true</code> from the URL to hide them.
+        <div className="rounded-xl border border-primary/30 bg-primary/[0.08] px-3 py-2 text-xs text-muted-foreground">
+          Demo mode is on — showing seeded stub accounts. Remove{" "}
+          <code className="font-mono text-foreground/80">?demo=true</code> from the URL to hide them.
         </div>
       ) : stubHidden > 0 ? (
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-          {stubHidden} stub account{stubHidden === 1 ? "" : "s"} hidden. Append <code>?demo=true</code> to the URL to preview them.
+        <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+          {stubHidden} stub account{stubHidden === 1 ? "" : "s"} hidden. Append{" "}
+          <code className="font-mono text-foreground/80">?demo=true</code> to the URL to preview them.
         </div>
       ) : null}
 
