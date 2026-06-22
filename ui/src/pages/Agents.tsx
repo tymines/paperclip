@@ -1,40 +1,93 @@
-import { useState, useEffect, useMemo, type MouseEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useMemo,
+  type CSSProperties,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { Link, useNavigate, useLocation } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
+import { costsApi } from "../api/costs";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
-import { useSidebar } from "../context/SidebarContext";
 import { useToastActions } from "../context/ToastContext";
 import { queryKeys } from "../lib/queryKeys";
-import { StatusBadge } from "../components/StatusBadge";
-import { agentStatusDot, agentStatusDotDefault } from "../lib/status-colors";
-import { EntityRow } from "../components/EntityRow";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { relativeTime, cn, agentRouteRef, agentUrl } from "../lib/utils";
 import {
-  relativeTime,
-  cn,
-  agentRouteRef,
-  agentUrl,
-  formatCostUsdCompact,
-} from "../lib/utils";
-import { PageTabBar } from "../components/PageTabBar";
-import { Tabs } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Bot, Plus, List, GitBranch, SlidersHorizontal, Pause, Play } from "lucide-react";
-import { AGENT_ROLE_LABELS, type Agent } from "@paperclipai/shared";
-
+  Bot,
+  Plus,
+  List,
+  GitBranch,
+  Pause,
+  Play,
+  Settings2,
+  X,
+  ArrowUpRight,
+} from "lucide-react";
+import { AGENT_ROLE_LABELS, type Agent, type AgentDetail, type HeartbeatRun } from "@paperclipai/shared";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked) — applied locally so the      */
+/* Fleet redesign is self-contained and does not mutate global theme vars     */
+/* used by other (not-yet-redesigned) pages.                                  */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  warning: "#F4B940",
+  critical: "#FF5B5B",
+  automation: "#A56EFF",
+  analytics: "#31D9FF",
+} as const;
+
+// Decorative per-agent avatar ring hues (styling only — not data).
+const RING_HUES = [
+  DS.primary,
+  DS.automation,
+  DS.analytics,
+  DS.success,
+  "#7C5CFF",
+  "#22B8CF",
+  DS.warning,
+  "#5B8CFF",
+];
+
+function ringHue(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return RING_HUES[h % RING_HUES.length]!;
+}
+
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
+
 type FilterTab = "all" | "active" | "paused" | "error";
 
-function matchesFilter(status: string, tab: FilterTab, showTerminated: boolean): boolean {
-  if (status === "terminated") return showTerminated;
+function matchesFilter(status: string, tab: FilterTab): boolean {
+  if (status === "terminated") return false;
   if (tab === "all") return true;
   if (tab === "active") return status === "active" || status === "running" || status === "idle";
   if (tab === "paused") return status === "paused";
@@ -42,10 +95,45 @@ function matchesFilter(status: string, tab: FilterTab, showTerminated: boolean):
   return true;
 }
 
-function filterAgents(agents: Agent[], tab: FilterTab, showTerminated: boolean): Agent[] {
-  return agents
-    .filter((a) => matchesFilter(a.status, tab, showTerminated))
-    .sort((a, b) => a.name.localeCompare(b.name));
+function statusColor(status: string): string {
+  switch (status) {
+    case "active":
+    case "running":
+      return DS.success;
+    case "paused":
+      return DS.warning;
+    case "idle":
+      return DS.warning;
+    case "error":
+      return DS.critical;
+    case "terminated":
+      return DS.textFaint;
+    case "pending_approval":
+      return DS.analytics;
+    default:
+      return DS.textFaint;
+  }
+}
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case "active":
+      return "Active";
+    case "running":
+      return "Running";
+    case "paused":
+      return "Paused";
+    case "idle":
+      return "Idle";
+    case "error":
+      return "Error";
+    case "terminated":
+      return "Off";
+    case "pending_approval":
+      return "Pending";
+    default:
+      return status.replace(/_/g, " ");
+  }
 }
 
 function getConfiguredModel(agent: Agent): string | null {
@@ -55,94 +143,717 @@ function getConfiguredModel(agent: Agent): string | null {
   return model.length > 0 ? model : null;
 }
 
-/**
- * Compact monthly-spend chip rendered next to each agent in the list / org
- * views. Reads pre-aggregated agent.spentMonthlyCents + budgetMonthlyCents;
- * dims when there's no spend so the chrome stays calm.
- */
-function AgentSpendChip({ agent }: { agent: Agent }) {
-  const spent = agent.spentMonthlyCents ?? 0;
-  const budget = agent.budgetMonthlyCents ?? 0;
-  if (spent <= 0 && budget <= 0) {
-    return (
-      <span className="font-mono text-[11px] text-muted-foreground/40 tabular-nums" aria-hidden="true">
-        —
-      </span>
-    );
-  }
-  const overBudget = budget > 0 && spent > budget;
-  const pct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : null;
-  const tooltip = budget > 0
-    ? `$${(spent / 100).toFixed(2)} of $${(budget / 100).toFixed(2)} this month`
-    : `$${(spent / 100).toFixed(2)} this month`;
+function formatUsd(cents: number): string {
+  return `$${(cents / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Small shared atoms                                                         */
+/* -------------------------------------------------------------------------- */
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
     <span
-      className="inline-flex items-center gap-1 font-mono text-[11px] tabular-nums"
-      data-pp-agent-list-spend={agent.id}
-      title={tooltip}
+      className="text-[11px] font-semibold uppercase tracking-[0.14em]"
+      style={{ color: DS.textFaint }}
     >
-      <span className={overBudget ? "text-rose-300" : "text-foreground/80"}>
-        {formatCostUsdCompact(spent / 100)}
-      </span>
-      {pct !== null ? (
-        <span className="hidden text-muted-foreground sm:inline">
-          {" "}/ {pct}%
-        </span>
-      ) : null}
+      {children}
     </span>
+  );
+}
+
+function AgentAvatar({ agent, size = 38 }: { agent: Agent | OrgNode; size?: number }) {
+  const icon = "icon" in agent ? (agent as Agent).icon : null;
+  const isImg = !!icon && (icon.startsWith("http") || icon.startsWith("/"));
+  const initial = (agent.name ?? "?").trim().charAt(0).toUpperCase();
+  const ring = ringHue(agent.id);
+  return (
+    <span className="relative shrink-0" style={{ width: size, height: size }}>
+      <span
+        className="flex items-center justify-center rounded-full font-bold"
+        style={{
+          width: size,
+          height: size,
+          fontSize: size * 0.4,
+          color: DS.text,
+          background: DS.surface3,
+          boxShadow: `0 0 0 2px ${ring}`,
+        }}
+      >
+        {isImg ? (
+          <img src={icon!} alt="" className="h-full w-full rounded-full object-cover" />
+        ) : (
+          initial
+        )}
+      </span>
+      <span
+        className="absolute -bottom-0.5 -right-0.5 rounded-full"
+        style={{
+          width: size * 0.3,
+          height: size * 0.3,
+          background: statusColor(agent.status),
+          boxShadow: `0 0 0 2px ${DS.surface}`,
+        }}
+      />
+    </span>
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const c = statusColor(status);
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium"
+      style={{ background: `${c}1A`, color: c }}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c }} />
+      {statusLabel(status)}
+    </span>
+  );
+}
+
+function UtilizationCost({ agent }: { agent: Agent }) {
+  const spent = agent.spentMonthlyCents ?? 0;
+  const budget = agent.budgetMonthlyCents ?? 0;
+  const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+  const over = budget > 0 && spent > budget;
+  const barColor = over ? DS.critical : pct > 80 ? DS.warning : DS.primary;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="font-mono text-[12px] tabular-nums" style={{ color: DS.text }}>
+        {formatUsd(spent)}
+        <span style={{ color: DS.textFaint }}> / {budget > 0 ? formatUsd(budget) : "—"}</span>
+      </div>
+      <div className="h-1 w-full overflow-hidden rounded-full" style={{ background: DS.border }}>
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${Math.max(budget > 0 ? 2 : 0, pct)}%`, background: barColor }}
+        />
+      </div>
+    </div>
   );
 }
 
 const PAUSE_RESUME_ELIGIBLE = new Set(["paused", "idle", "active", "running"]);
 
-function FleetPauseResumeButton({
-  isPaused,
-  onClick,
-  disabled,
+function RowControls({
+  agent,
+  pending,
+  onPauseResume,
 }: {
-  isPaused: boolean;
-  onClick: () => void;
-  disabled?: boolean;
+  agent: Agent;
+  pending: boolean;
+  onPauseResume: (a: Agent, action: "pause" | "resume") => void;
 }) {
-  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (disabled) return;
-    onClick();
+  const isPaused = agent.status === "paused";
+  const eligible = PAUSE_RESUME_ELIGIBLE.has(agent.status);
+  return (
+    <div className="flex items-center justify-end gap-1.5" onClick={(e) => e.stopPropagation()}>
+      {eligible && (
+        <button
+          type="button"
+          disabled={pending}
+          title={isPaused ? "Resume" : "Pause"}
+          aria-label={isPaused ? "Resume agent" : "Pause agent"}
+          onClick={(e: MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!pending) onPauseResume(agent, isPaused ? "resume" : "pause");
+          }}
+          className="flex h-8 w-8 items-center justify-center rounded-[9px] transition-colors disabled:opacity-40"
+          style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+          data-pp-fleet-pause-resume={isPaused ? "resume" : "pause"}
+        >
+          {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+        </button>
+      )}
+      <Link
+        to={`${agentUrl(agent)}/configuration`}
+        title="Configure"
+        aria-label="Configure agent"
+        onClick={(e) => e.stopPropagation()}
+        className="flex h-8 w-8 items-center justify-center rounded-[9px] transition-colors no-underline"
+        style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+      >
+        <Settings2 className="h-3.5 w-3.5" />
+      </Link>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Section grouping derived from the org (reportsTo) hierarchy                 */
+/* -------------------------------------------------------------------------- */
+interface Groups {
+  leadership: Agent[];
+  agents: Agent[];
+  external: Agent[];
+}
+
+function countNodes(node: OrgNode): number {
+  return 1 + node.reports.reduce((s, c) => s + countNodes(c), 0);
+}
+
+function deriveGroups(agents: Agent[], orgTree: OrgNode[] | undefined): Groups {
+  const sortName = (a: Agent, b: Agent) => a.name.localeCompare(b.name);
+  if (!orgTree || orgTree.length === 0) {
+    return { leadership: [], agents: [...agents].sort(sortName), external: [] };
+  }
+  // Main hierarchy = the root with the largest subtree (Hermes). Other roots
+  // (e.g. Baily AI, which reports to no-one) are treated as External.
+  const mainRoot = [...orgTree].sort((a, b) => countNodes(b) - countNodes(a))[0]!;
+
+  const depthById = new Map<string, number>();
+  const hasReports = new Map<string, boolean>();
+  const walk = (node: OrgNode, depth: number) => {
+    depthById.set(node.id, depth);
+    hasReports.set(node.id, node.reports.length > 0);
+    node.reports.forEach((c) => walk(c, depth + 1));
   };
-  const label = isPaused ? "Resume" : "Pause";
+  walk(mainRoot, 0);
+
+  const leadership: Agent[] = [];
+  const workers: Agent[] = [];
+  const external: Agent[] = [];
+  for (const a of agents) {
+    if (!depthById.has(a.id)) {
+      external.push(a);
+    } else if (hasReports.get(a.id)) {
+      leadership.push(a); // managers in the main tree (Hermes, Ares)
+    } else {
+      workers.push(a);
+    }
+  }
+  leadership.sort((a, b) => (depthById.get(a.id)! - depthById.get(b.id)!) || sortName(a, b));
+  workers.sort(sortName);
+  external.sort(sortName);
+  return { leadership, agents: workers, external };
+}
+
+/* -------------------------------------------------------------------------- */
+/* List row                                                                   */
+/* -------------------------------------------------------------------------- */
+const GRID_COLS =
+  "grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]";
+
+function ColumnHeader() {
+  return (
+    <div
+      className={cn("hidden items-center gap-4 px-5 py-2.5 lg:grid", GRID_COLS)}
+      style={{ borderBottom: `1px solid ${DS.border}` }}
+    >
+      {["Agent", "Model", "Current Task", "Utilization / Cost", "Last Active", "Status", ""].map(
+        (h, i) => (
+          <span
+            key={i}
+            className={cn(
+              "text-[10px] font-semibold uppercase tracking-[0.12em]",
+              i >= 4 && i <= 5 ? "text-right" : "",
+            )}
+            style={{ color: DS.textFaint }}
+          >
+            {h}
+          </span>
+        ),
+      )}
+    </div>
+  );
+}
+
+function AgentRow({
+  agent,
+  currentTask,
+  live,
+  pending,
+  onOpen,
+  onPauseResume,
+  external,
+}: {
+  agent: Agent;
+  currentTask: string;
+  live: boolean;
+  pending: boolean;
+  onOpen: (a: Agent) => void;
+  onPauseResume: (a: Agent, action: "pause" | "resume") => void;
+  external?: boolean;
+}) {
+  const model = getConfiguredModel(agent) ?? "—";
+  const dim = agent.status === "paused" || agent.status === "terminated";
+  const role = roleLabels[agent.role] ?? agent.role;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(agent)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(agent);
+        }
+      }}
+      className={cn(
+        "grid cursor-pointer items-center gap-4 px-5 py-3 transition-colors",
+        "grid-cols-[1fr_auto] lg:gap-4",
+        GRID_COLS,
+      )}
+      style={{ borderBottom: `1px solid ${DS.border}` }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.025)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      data-pp-fleet-row={agent.id}
+    >
+      {/* Agent */}
+      <div className={cn("flex min-w-0 items-center gap-3", dim && "opacity-55")}>
+        <AgentAvatar agent={agent} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-[14px] font-semibold" style={{ color: DS.text }}>
+              {agent.name}
+            </span>
+            {external && (
+              <span
+                className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                style={{ background: DS.surface3, color: DS.textMuted, border: `1px solid ${DS.border2}` }}
+              >
+                External
+              </span>
+            )}
+          </div>
+          <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>
+            {agent.title ?? role}
+          </div>
+        </div>
+      </div>
+
+      {/* Model */}
+      <div className={cn("hidden truncate font-mono text-[11px] lg:block", dim && "opacity-55")} style={{ color: DS.textMuted }} title={model}>
+        {model}
+      </div>
+
+      {/* Current task */}
+      <div className={cn("hidden min-w-0 items-center gap-2 lg:flex", dim && "opacity-55")}>
+        {live && (
+          <span className="relative flex h-1.5 w-1.5 shrink-0">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full" style={{ background: DS.success, opacity: 0.7 }} />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ background: DS.success }} />
+          </span>
+        )}
+        <span className="truncate text-[12px]" style={{ color: live ? DS.text : DS.textMuted }} title={currentTask}>
+          {currentTask}
+        </span>
+      </div>
+
+      {/* Utilization / cost */}
+      <div className={cn("hidden lg:block", dim && "opacity-55")}>
+        <UtilizationCost agent={agent} />
+      </div>
+
+      {/* Last active */}
+      <div className={cn("hidden text-right font-mono text-[11px] lg:block", dim && "opacity-55")} style={{ color: DS.textFaint }}>
+        {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
+      </div>
+
+      {/* Status */}
+      <div className="hidden justify-end lg:flex">
+        <StatusPill status={agent.status} />
+      </div>
+
+      {/* Controls */}
+      <RowControls agent={agent} pending={pending} onPauseResume={onPauseResume} />
+    </div>
+  );
+}
+
+function ListSection({
+  label,
+  rows,
+  external,
+  currentTaskFor,
+  liveFor,
+  pendingIds,
+  onOpen,
+  onPauseResume,
+}: {
+  label: string;
+  rows: Agent[];
+  external?: boolean;
+  currentTaskFor: (a: Agent) => string;
+  liveFor: (a: Agent) => boolean;
+  pendingIds: Set<string>;
+  onOpen: (a: Agent) => void;
+  onPauseResume: (a: Agent, action: "pause" | "resume") => void;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      <div
+        className="px-5 py-2"
+        style={{ background: "rgba(255,255,255,0.015)", borderBottom: `1px solid ${DS.border}` }}
+      >
+        <SectionLabel>{label}</SectionLabel>
+      </div>
+      {rows.map((agent) => (
+        <AgentRow
+          key={agent.id}
+          agent={agent}
+          external={external}
+          currentTask={currentTaskFor(agent)}
+          live={liveFor(agent)}
+          pending={pendingIds.has(agent.id)}
+          onOpen={onOpen}
+          onPauseResume={onPauseResume}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Org chart view (Hermes -> Ares -> workers; Baily AI external)              */
+/* -------------------------------------------------------------------------- */
+function OrgCard({
+  agent,
+  node,
+  onOpen,
+  wide,
+}: {
+  agent?: Agent;
+  node: OrgNode;
+  onOpen: (id: string) => void;
+  wide?: boolean;
+}) {
+  const model = agent ? getConfiguredModel(agent) : null;
+  const subject = agent ?? node;
+  const title = agent?.title ?? roleLabels[node.role] ?? node.role;
   return (
     <button
       type="button"
-      onClick={handleClick}
-      disabled={disabled}
-      aria-label={`${label} agent`}
-      title={label}
+      onClick={() => onOpen(node.id)}
       className={cn(
-        "inline-flex items-center justify-center gap-1.5 border border-border bg-background text-xs transition-colors",
-        "min-h-[44px] min-w-[44px] px-2 sm:min-h-9 sm:min-w-0 sm:h-9 sm:px-2.5",
-        "hover:bg-accent disabled:opacity-50 disabled:cursor-not-allowed",
+        "flex items-center gap-3 rounded-[14px] px-4 py-3 text-left transition-colors",
+        wide ? "w-[320px]" : "w-full",
       )}
-      data-pp-fleet-pause-resume={isPaused ? "resume" : "pause"}
+      style={{ background: DS.surface3, border: `1px solid ${DS.border2}` }}
+      onMouseEnter={(e) => (e.currentTarget.style.borderColor = DS.border3)}
+      onMouseLeave={(e) => (e.currentTarget.style.borderColor = DS.border2)}
     >
-      {isPaused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-      <span className="hidden sm:inline">{label}</span>
+      <AgentAvatar agent={subject} size={36} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-semibold" style={{ color: DS.text }}>
+          {node.name}
+        </div>
+        <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>
+          {title}
+        </div>
+        {model && (
+          <div className="truncate font-mono text-[10px]" style={{ color: DS.textMuted }}>
+            {model}
+          </div>
+        )}
+      </div>
+      <span className="flex shrink-0 items-center gap-1.5 text-[11px]" style={{ color: statusColor(node.status) }}>
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: statusColor(node.status) }} />
+        {statusLabel(node.status)}
+      </span>
     </button>
   );
 }
 
-function filterOrgTree(nodes: OrgNode[], tab: FilterTab, showTerminated: boolean): OrgNode[] {
-  return nodes
-    .reduce<OrgNode[]>((acc, node) => {
-      const filteredReports = filterOrgTree(node.reports, tab, showTerminated);
-      if (matchesFilter(node.status, tab, showTerminated) || filteredReports.length > 0) {
-        acc.push({ ...node, reports: filteredReports });
-      }
-      return acc;
-    }, [])
-    .sort((a, b) => a.name.localeCompare(b.name));
+function Connector({ height = 22 }: { height?: number }) {
+  return <div style={{ width: 1, height, background: DS.border3 }} />;
 }
 
+function OrgView({
+  orgTree,
+  agentMap,
+  onOpen,
+}: {
+  orgTree: OrgNode[];
+  agentMap: Map<string, Agent>;
+  onOpen: (id: string) => void;
+}) {
+  const mainRoot = [...orgTree].sort((a, b) => countNodes(b) - countNodes(a))[0];
+  const externalRoots = orgTree.filter((r) => r.id !== mainRoot?.id);
+  if (!mainRoot) return null;
+
+  // Hierarchy: root (Hermes) -> manager children (Ares) -> their reports (grid).
+  const managers = mainRoot.reports;
+
+  return (
+    <div className="flex flex-col items-center gap-0 px-4 py-8">
+      {/* Root */}
+      <OrgCard node={mainRoot} agent={agentMap.get(mainRoot.id)} onOpen={onOpen} wide />
+
+      {managers.map((mgr) => (
+        <div key={mgr.id} className="flex w-full flex-col items-center">
+          <Connector />
+          <OrgCard node={mgr} agent={agentMap.get(mgr.id)} onOpen={onOpen} wide />
+          {mgr.reports.length > 0 && (
+            <>
+              <Connector />
+              <div
+                className="grid w-full max-w-[1100px] gap-3 px-2"
+                style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
+              >
+                {mgr.reports.map((child) => (
+                  <OrgCard key={child.id} node={child} agent={agentMap.get(child.id)} onOpen={onOpen} />
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+
+      {externalRoots.length > 0 && (
+        <div className="mt-10 w-full max-w-[1100px]">
+          <div className="mb-3 flex items-center gap-3">
+            <SectionLabel>External</SectionLabel>
+            <div className="h-px flex-1" style={{ background: DS.border }} />
+          </div>
+          <div
+            className="grid gap-3"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}
+          >
+            {externalRoots.map((r) => (
+              <OrgCard key={r.id} node={r} agent={agentMap.get(r.id)} onOpen={onOpen} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Agent detail drawer (run history + config)                                 */
+/* -------------------------------------------------------------------------- */
+function DetailField({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.1em]" style={{ color: DS.textFaint }}>
+        {label}
+      </span>
+      <span className={cn("text-[13px]", mono && "font-mono")} style={{ color: DS.text }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function runTaskText(run: HeartbeatRun): string {
+  if (run.nextAction && run.nextAction.trim()) return run.nextAction.trim();
+  if (run.error && run.error.trim()) return run.error.trim();
+  return `${run.invocationSource} run`;
+}
+
+function AgentDrawer({
+  agentId,
+  companyId,
+  agentMap,
+  onClose,
+  onPauseResume,
+  pending,
+}: {
+  agentId: string;
+  companyId: string;
+  agentMap: Map<string, Agent>;
+  onClose: () => void;
+  onPauseResume: (a: Agent, action: "pause" | "resume") => void;
+  pending: boolean;
+}) {
+  const { data: detail } = useQuery<AgentDetail>({
+    queryKey: [...queryKeys.agents.list(companyId), "detail-drawer", agentId],
+    queryFn: () => agentsApi.get(agentId, companyId),
+    enabled: !!agentId,
+  });
+  const { data: runs } = useQuery<HeartbeatRun[]>({
+    queryKey: [...queryKeys.liveRuns(companyId), "drawer-runs", agentId],
+    queryFn: () => heartbeatsApi.list(companyId, agentId, 8),
+    enabled: !!agentId,
+  });
+
+  const agent = detail ?? agentMap.get(agentId);
+  if (!agent) return null;
+  const manager = agent.reportsTo ? agentMap.get(agent.reportsTo) : null;
+  const model = getConfiguredModel(agent) ?? "—";
+
+  return (
+    <>
+      <div
+        className="fixed inset-0 z-40"
+        style={{ background: "rgba(3,5,9,0.6)" }}
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside
+        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[440px] flex-col"
+        style={{ background: DS.surface, borderLeft: `1px solid ${DS.border2}`, boxShadow: "-20px 0 50px -20px rgba(0,0,0,0.8)" }}
+        role="dialog"
+        aria-label={`${agent.name} detail`}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 p-6" style={{ borderBottom: `1px solid ${DS.border}` }}>
+          <div className="flex min-w-0 items-center gap-3">
+            <AgentAvatar agent={agent} size={44} />
+            <div className="min-w-0">
+              <div className="truncate text-[18px] font-semibold" style={{ color: DS.text }}>
+                {agent.name}
+              </div>
+              <div className="truncate text-[12px]" style={{ color: DS.textMuted }}>
+                {agent.title ?? roleLabels[agent.role] ?? agent.role}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex h-8 w-8 items-center justify-center rounded-[9px]"
+            style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* Status + controls */}
+          <div className="mb-5 flex items-center justify-between">
+            <StatusPill status={agent.status} />
+            <RowControls agent={agent} pending={pending} onPauseResume={onPauseResume} />
+          </div>
+
+          {/* Config */}
+          <div className="mb-2">
+            <SectionLabel>Configuration</SectionLabel>
+          </div>
+          <div
+            className="mb-6 grid grid-cols-2 gap-x-4 gap-y-4 rounded-[12px] p-4"
+            style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+          >
+            <DetailField label="Model" value={model} mono />
+            <DetailField label="Adapter" value={getAdapterLabel(agent.adapterType)} mono />
+            <DetailField label="Reports to" value={manager ? manager.name : "—"} />
+            <DetailField label="Last active" value={agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"} />
+            <DetailField
+              label="Monthly spend"
+              value={
+                <span className="font-mono">
+                  {formatUsd(agent.spentMonthlyCents ?? 0)}
+                  <span style={{ color: DS.textFaint }}>
+                    {" "}/ {agent.budgetMonthlyCents > 0 ? formatUsd(agent.budgetMonthlyCents) : "—"}
+                  </span>
+                </span>
+              }
+            />
+            <DetailField label="Role" value={roleLabels[agent.role] ?? agent.role} />
+            {agent.capabilities ? (
+              <div className="col-span-2">
+                <DetailField label="Capabilities" value={agent.capabilities} />
+              </div>
+            ) : null}
+          </div>
+
+          {/* Run history */}
+          <div className="mb-2 flex items-center justify-between">
+            <SectionLabel>Recent Runs</SectionLabel>
+            <Link
+              to={`${agentUrl(agent)}/runs`}
+              onClick={onClose}
+              className="text-[11px] font-medium no-underline hover:underline"
+              style={{ color: DS.primary }}
+            >
+              View all
+            </Link>
+          </div>
+          <div className="flex flex-col gap-2">
+            {(runs ?? []).length === 0 ? (
+              <p className="text-[12px]" style={{ color: DS.textMuted }}>
+                No recent runs.
+              </p>
+            ) : (
+              (runs ?? []).map((run) => (
+                <Link
+                  key={run.id}
+                  to={`/agents/${agentRouteRef(agent)}/runs/${run.id}`}
+                  onClick={onClose}
+                  className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 no-underline transition-colors"
+                  style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+                >
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: statusColor(run.status) }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px]" style={{ color: DS.text }}>
+                      {runTaskText(run)}
+                    </div>
+                    <div className="text-[10px]" style={{ color: DS.textFaint }}>
+                      {statusLabel(run.status)} ·{" "}
+                      {run.startedAt
+                        ? relativeTime(run.startedAt)
+                        : relativeTime(run.createdAt)}
+                    </div>
+                  </div>
+                </Link>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-5" style={{ borderTop: `1px solid ${DS.border}` }}>
+          <Link
+            to={agentUrl(agent)}
+            onClick={onClose}
+            className="flex w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold no-underline"
+            style={{ background: DS.primary, color: "#fff" }}
+          >
+            Open full detail
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Filter pill                                                                */
+/* -------------------------------------------------------------------------- */
+function FilterPill({
+  label,
+  count,
+  dot,
+  active,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  dot?: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-center gap-2 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+      style={{
+        background: active ? `${DS.primary}1F` : DS.surface2,
+        border: `1px solid ${active ? DS.primary : DS.border2}`,
+        color: active ? DS.text : DS.textMuted,
+      }}
+    >
+      {dot && <span className="h-1.5 w-1.5 rounded-full" style={{ background: dot }} />}
+      {label}
+      <span className="font-mono text-[11px] tabular-nums" style={{ color: active ? DS.text : DS.textFaint }}>
+        {count}
+      </span>
+    </button>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Main                                                                       */
+/* -------------------------------------------------------------------------- */
 export function Agents() {
   const { selectedCompanyId } = useCompany();
   const { openNewAgent } = useDialogActions();
@@ -151,15 +862,15 @@ export function Agents() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isMobile } = useSidebar();
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
+  const [view, setView] = useState<"list" | "org">("list");
+  const [openAgentId, setOpenAgentId] = useState<string | null>(null);
+
   const pathSegment = location.pathname.split("/").pop() ?? "all";
-  const tab: FilterTab = (pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error") ? pathSegment : "all";
-  const [view, setView] = useState<"list" | "org">("org");
-  const forceListView = isMobile;
-  const effectiveView: "list" | "org" = forceListView ? "list" : view;
-  const [showTerminated, setShowTerminated] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const tab: FilterTab =
+    pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error"
+      ? pathSegment
+      : "all";
 
   const { data: agents, isLoading, error } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -170,36 +881,69 @@ export function Agents() {
   const { data: orgTree } = useQuery({
     queryKey: queryKeys.org(selectedCompanyId!),
     queryFn: () => agentsApi.org(selectedCompanyId!),
-    enabled: !!selectedCompanyId && effectiveView === "org",
+    enabled: !!selectedCompanyId,
   });
 
-  const { data: runs } = useQuery({
-    queryKey: [...queryKeys.liveRuns(selectedCompanyId!), "agents-page"],
+  const { data: costSummary } = useQuery({
+    queryKey: queryKeys.costs(selectedCompanyId!),
+    queryFn: () => costsApi.summary(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  const { data: liveRuns } = useQuery({
+    queryKey: [...queryKeys.liveRuns(selectedCompanyId!), "fleet"],
     queryFn: () => heartbeatsApi.liveRunsForCompany(selectedCompanyId!),
     enabled: !!selectedCompanyId,
     refetchInterval: 15_000,
   });
 
-  // Map agentId -> first live run + live run count
-  const liveRunByAgent = useMemo(() => {
-    const map = new Map<string, { runId: string; liveCount: number }>();
-    for (const r of runs ?? []) {
-      if (r.status !== "running" && r.status !== "queued") continue;
-      const existing = map.get(r.agentId);
-      if (existing) {
-        existing.liveCount += 1;
-        continue;
-      }
-      map.set(r.agentId, { runId: r.id, liveCount: 1 });
-    }
-    return map;
-  }, [runs]);
+  const { data: recentRuns } = useQuery({
+    queryKey: [...queryKeys.liveRuns(selectedCompanyId!), "fleet-recent"],
+    queryFn: () => heartbeatsApi.list(selectedCompanyId!, undefined, 200),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 30_000,
+  });
 
   const agentMap = useMemo(() => {
-    const map = new Map<string, Agent>();
-    for (const a of agents ?? []) map.set(a.id, a);
-    return map;
+    const m = new Map<string, Agent>();
+    for (const a of agents ?? []) m.set(a.id, a);
+    return m;
   }, [agents]);
+
+  const liveByAgent = useMemo(() => {
+    const m = new Map<string, { runId: string; nextAction: string | null }>();
+    for (const r of liveRuns ?? []) {
+      if (r.status !== "running" && r.status !== "queued") continue;
+      if (!m.has(r.agentId)) m.set(r.agentId, { runId: r.id, nextAction: r.nextAction ?? null });
+    }
+    return m;
+  }, [liveRuns]);
+
+  const latestRunByAgent = useMemo(() => {
+    const m = new Map<string, HeartbeatRun>();
+    for (const r of recentRuns ?? []) {
+      const existing = m.get(r.agentId);
+      const t = new Date(r.startedAt ?? r.createdAt).getTime();
+      if (!existing || t > new Date(existing.startedAt ?? existing.createdAt).getTime()) {
+        m.set(r.agentId, r);
+      }
+    }
+    return m;
+  }, [recentRuns]);
+
+  const currentTaskFor = useMemo(() => {
+    return (a: Agent): string => {
+      if (a.status === "paused") return "Paused";
+      if (a.status === "error") return "Needs attention";
+      const live = liveByAgent.get(a.id);
+      if (live) return live.nextAction?.trim() || "Working";
+      const last = latestRunByAgent.get(a.id);
+      if (last?.nextAction?.trim()) return last.nextAction.trim();
+      return "Idle";
+    };
+  }, [liveByAgent, latestRunByAgent]);
+
+  const liveFor = useMemo(() => (a: Agent) => liveByAgent.has(a.id), [liveByAgent]);
 
   const pauseResumeAgent = useMutation({
     mutationFn: ({ agent, action }: { agent: Agent; action: "pause" | "resume" }) =>
@@ -207,27 +951,17 @@ export function Agents() {
         ? agentsApi.pause(agent.id, selectedCompanyId ?? undefined)
         : agentsApi.resume(agent.id, selectedCompanyId ?? undefined),
     onMutate: ({ agent, action }) => {
-      setPendingAgentIds((current) => {
-        const next = new Set(current);
-        next.add(agent.id);
-        return next;
-      });
+      setPendingAgentIds((cur) => new Set(cur).add(agent.id));
       if (selectedCompanyId) {
         const key = queryKeys.agents.list(selectedCompanyId);
         const previous = queryClient.getQueryData<Agent[]>(key);
         if (previous) {
           const nextStatus: Agent["status"] = action === "pause" ? "paused" : "idle";
-          const now = new Date();
           queryClient.setQueryData<Agent[]>(
             key,
             previous.map((a) =>
               a.id === agent.id
-                ? ({
-                    ...a,
-                    status: nextStatus,
-                    pausedAt: action === "pause" ? now : null,
-                    pauseReason: action === "pause" ? a.pauseReason : null,
-                  } satisfies Agent)
+                ? ({ ...a, status: nextStatus, pausedAt: action === "pause" ? new Date() : null } satisfies Agent)
                 : a,
             ),
           );
@@ -236,26 +970,26 @@ export function Agents() {
       }
       return {};
     },
-    onError: (error, { agent, action }, context) => {
+    onError: (err, { agent, action }, context) => {
       if (selectedCompanyId && context && "previous" in context && context.previous) {
         queryClient.setQueryData(queryKeys.agents.list(selectedCompanyId), context.previous);
       }
       pushToast({
         title: action === "pause" ? "Could not pause agent" : "Could not resume agent",
-        body: error instanceof Error ? error.message : agent.name,
+        body: err instanceof Error ? err.message : agent.name,
         tone: "error",
       });
     },
-    onSuccess: (_data, { agent, action }) => {
+    onSuccess: (_d, { agent, action }) => {
       pushToast({
         title: action === "pause" ? "Agent paused" : "Agent resumed",
         body: agent.name,
         tone: "success",
       });
     },
-    onSettled: (_data, _error, { agent }) => {
-      setPendingAgentIds((current) => {
-        const next = new Set(current);
+    onSettled: (_d, _e, { agent }) => {
+      setPendingAgentIds((cur) => {
+        const next = new Set(cur);
         next.delete(agent.id);
         return next;
       });
@@ -265,374 +999,169 @@ export function Agents() {
       }
     },
   });
+  const onPauseResume = (agent: Agent, action: "pause" | "resume") =>
+    pauseResumeAgent.mutate({ agent, action });
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Fleet" }]);
   }, [setBreadcrumbs]);
 
   if (!selectedCompanyId) {
-    return <EmptyState icon={Bot} message="Select a company to view agents." />;
+    return <EmptyState icon={Bot} message="Select a company to view the fleet." />;
   }
-
   if (isLoading) {
     return <PageSkeleton variant="list" />;
   }
 
-  const filtered = filterAgents(agents ?? [], tab, showTerminated);
-  const filteredOrg = filterOrgTree(orgTree ?? [], tab, showTerminated);
+  const allAgents = (agents ?? []).filter((a) => a.status !== "terminated");
+  const counts = {
+    all: allAgents.length,
+    active: allAgents.filter((a) => matchesFilter(a.status, "active")).length,
+    paused: allAgents.filter((a) => a.status === "paused").length,
+    error: allAgents.filter((a) => a.status === "error").length,
+  };
+
+  const visibleAgents = allAgents.filter((a) => matchesFilter(a.status, tab));
+  const groups = deriveGroups(visibleAgents, orgTree);
+
+  const summarySpend = costSummary
+    ? formatUsd(costSummary.spendCents)
+    : formatUsd(allAgents.reduce((s, a) => s + (a.spentMonthlyCents ?? 0), 0));
+  const summaryBudget = costSummary && costSummary.budgetCents > 0 ? formatUsd(costSummary.budgetCents) : null;
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Tabs value={tab} onValueChange={(v) => navigate(`/agents/${v}`)}>
-          <PageTabBar
-            items={[
-              { value: "all", label: "All" },
-              { value: "active", label: "Active" },
-              { value: "paused", label: "Paused" },
-              { value: "error", label: "Error" },
-            ]}
-            value={tab}
-            onValueChange={(v) => navigate(`/agents/${v}`)}
-          />
-        </Tabs>
+    <div
+      className="flex min-h-full flex-col gap-5 p-8"
+      style={{ background: DS.canvas }}
+      data-pp-page-v2="fleet"
+    >
+      {/* Header */}
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h1 className="text-[28px] font-semibold leading-tight" style={{ color: DS.text }}>
+            Fleet
+          </h1>
+          <p className="text-[13px]" style={{ color: DS.textMuted }}>
+            {allAgents.length} agents · <span className="font-mono">{summarySpend}</span>
+            {summaryBudget ? <span className="font-mono"> / {summaryBudget}</span> : null} this month
+          </p>
+        </div>
+
         <div className="flex items-center gap-2">
-          {/* Filters */}
-          <div className="relative">
-            <button
-              className={cn(
-                "flex items-center gap-1.5 px-2 py-1.5 text-xs transition-colors border border-border",
-                filtersOpen || showTerminated ? "text-foreground bg-accent" : "text-muted-foreground hover:bg-accent/50"
-              )}
-              onClick={() => setFiltersOpen(!filtersOpen)}
-            >
-              <SlidersHorizontal className="h-3 w-3" />
-              Filters
-              {showTerminated && <span className="ml-0.5 px-1 bg-foreground/10 rounded text-[10px]">1</span>}
-            </button>
-            {filtersOpen && (
-              <div className="absolute right-0 top-full mt-1 z-50 w-48 border border-border bg-popover shadow-md p-1">
-                <button
-                  className="flex items-center gap-2 w-full px-2 py-1.5 text-xs text-left hover:bg-accent/50 transition-colors"
-                  onClick={() => setShowTerminated(!showTerminated)}
-                >
-                  <span className={cn(
-                    "flex items-center justify-center h-3.5 w-3.5 border border-border rounded-sm",
-                    showTerminated && "bg-foreground"
-                  )}>
-                    {showTerminated && <span className="text-background text-[10px] leading-none">&#10003;</span>}
-                  </span>
-                  Show terminated
-                </button>
-              </div>
-            )}
-          </div>
           {/* View toggle */}
-          {!forceListView && (
-            <div className="flex items-center border border-border">
-              <button
-                className={cn(
-                  "p-1.5 transition-colors",
-                  effectiveView === "list" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
-                )}
-                onClick={() => setView("list")}
-              >
-                <List className="h-3.5 w-3.5" />
-              </button>
-              <button
-                className={cn(
-                  "p-1.5 transition-colors",
-                  effectiveView === "org" ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent/50"
-                )}
-                onClick={() => setView("org")}
-              >
-                <GitBranch className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          )}
-          <Button size="sm" variant="outline" onClick={openNewAgent}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
+          <div className="flex items-center rounded-[10px] p-0.5" style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}>
+            <button
+              type="button"
+              onClick={() => setView("list")}
+              className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              style={view === "list" ? { background: DS.surface3, color: DS.text } : { color: DS.textMuted }}
+            >
+              <List className="h-3.5 w-3.5" />
+              List
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("org")}
+              className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              style={view === "org" ? { background: DS.surface3, color: DS.text } : { color: DS.textMuted }}
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              Org
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={openNewAgent}
+            className="flex items-center gap-1.5 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
+            style={{ background: DS.primary, color: "#fff" }}
+          >
+            <Plus className="h-4 w-4" />
             New Agent
-          </Button>
+          </button>
         </div>
       </div>
 
-      {filtered.length > 0 && (
-        <p className="text-xs text-muted-foreground">
-          {filtered.length} agent{filtered.length !== 1 ? "s" : ""}
-          {(() => {
-            const totalSpend = filtered.reduce((acc, a) => acc + (a.spentMonthlyCents ?? 0), 0);
-            const totalBudget = filtered.reduce((acc, a) => acc + (a.budgetMonthlyCents ?? 0), 0);
-            if (totalSpend <= 0 && totalBudget <= 0) return null;
-            return (
-              <span className="ml-2 font-mono" data-pp-agents-total-spend>
-                · {formatCostUsdCompact(totalSpend / 100)}
-                {totalBudget > 0 ? ` / ${formatCostUsdCompact(totalBudget / 100)}` : ""} this month
-              </span>
-            );
-          })()}
-        </p>
+      {/* Status filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterPill label="All" count={counts.all} active={tab === "all"} onClick={() => navigate("/agents/all")} />
+        <FilterPill label="Active" count={counts.active} dot={DS.success} active={tab === "active"} onClick={() => navigate("/agents/active")} />
+        <FilterPill label="Paused" count={counts.paused} dot={DS.warning} active={tab === "paused"} onClick={() => navigate("/agents/paused")} />
+        <FilterPill label="Error" count={counts.error} dot={DS.critical} active={tab === "error"} onClick={() => navigate("/agents/error")} />
+      </div>
+
+      {error && <p className="text-[13px]" style={{ color: DS.critical }}>{error.message}</p>}
+
+      {allAgents.length === 0 ? (
+        <EmptyState icon={Bot} message="Create your first agent to get started." action="New Agent" onAction={openNewAgent} />
+      ) : view === "list" ? (
+        <section style={surfaceCard} className="overflow-hidden">
+          <ColumnHeader />
+          {visibleAgents.length === 0 ? (
+            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+              No agents match the selected filter.
+            </p>
+          ) : (
+            <>
+              <ListSection
+                label="Leadership"
+                rows={groups.leadership}
+                currentTaskFor={currentTaskFor}
+                liveFor={liveFor}
+                pendingIds={pendingAgentIds}
+                onOpen={(a) => setOpenAgentId(a.id)}
+                onPauseResume={onPauseResume}
+              />
+              <ListSection
+                label="Agents"
+                rows={groups.agents}
+                currentTaskFor={currentTaskFor}
+                liveFor={liveFor}
+                pendingIds={pendingAgentIds}
+                onOpen={(a) => setOpenAgentId(a.id)}
+                onPauseResume={onPauseResume}
+              />
+              <ListSection
+                label="External"
+                rows={groups.external}
+                external
+                currentTaskFor={currentTaskFor}
+                liveFor={liveFor}
+                pendingIds={pendingAgentIds}
+                onOpen={(a) => setOpenAgentId(a.id)}
+                onPauseResume={onPauseResume}
+              />
+              <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+                Showing {visibleAgents.length} of {counts.all} agents
+              </div>
+            </>
+          )}
+        </section>
+      ) : (
+        <section style={surfaceCard} className="overflow-hidden">
+          <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: `1px solid ${DS.border}` }}>
+            <GitBranch className="h-3.5 w-3.5" style={{ color: DS.textFaint }} />
+            <SectionLabel>Org Chart View</SectionLabel>
+          </div>
+          {orgTree && orgTree.length > 0 ? (
+            <OrgView orgTree={orgTree} agentMap={agentMap} onOpen={(id) => setOpenAgentId(id)} />
+          ) : (
+            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+              No organizational hierarchy defined.
+            </p>
+          )}
+        </section>
       )}
 
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
-
-      {agents && agents.length === 0 && (
-        <EmptyState
-          icon={Bot}
-          message="Create your first agent to get started."
-          action="New Agent"
-          onAction={openNewAgent}
+      {openAgentId && (
+        <AgentDrawer
+          agentId={openAgentId}
+          companyId={selectedCompanyId}
+          agentMap={agentMap}
+          pending={pendingAgentIds.has(openAgentId)}
+          onClose={() => setOpenAgentId(null)}
+          onPauseResume={onPauseResume}
         />
       )}
-
-      {/* List view */}
-      {effectiveView === "list" && filtered.length > 0 && (
-        <div className="border border-border">
-          {filtered.map((agent) => {
-            return (
-              <EntityRow
-                key={agent.id}
-                title={agent.name}
-                subtitle={`${roleLabels[agent.role] ?? agent.role}${agent.title ? ` - ${agent.title}` : ""}`}
-                to={agentUrl(agent)}
-                className={agent.pausedAt && tab !== "paused" ? "opacity-50" : ""}
-                leading={
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span
-                      className={`absolute inline-flex h-full w-full rounded-full ${agentStatusDot[agent.status] ?? agentStatusDotDefault}`}
-                    />
-                  </span>
-                }
-                trailing={
-                  <div className="flex items-center gap-3">
-                    <span className="sm:hidden">
-                      {liveRunByAgent.has(agent.id) ? (
-                        <LiveRunIndicator
-                          agentRef={agentRouteRef(agent)}
-                          runId={liveRunByAgent.get(agent.id)!.runId}
-                          liveCount={liveRunByAgent.get(agent.id)!.liveCount}
-                        />
-                      ) : (
-                        <StatusBadge status={agent.status} />
-                      )}
-                    </span>
-                    <div className="hidden sm:flex items-center gap-3">
-                      {liveRunByAgent.has(agent.id) && (
-                        <LiveRunIndicator
-                          agentRef={agentRouteRef(agent)}
-                          runId={liveRunByAgent.get(agent.id)!.runId}
-                          liveCount={liveRunByAgent.get(agent.id)!.liveCount}
-                        />
-                      )}
-                      <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
-                        {getAdapterLabel(agent.adapterType)}
-                      </span>
-                      <span
-                        className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
-                        title={getConfiguredModel(agent) ?? undefined}
-                      >
-                        {getConfiguredModel(agent) ?? "—"}
-                      </span>
-                      <span className="w-24 flex justify-end">
-                        <AgentSpendChip agent={agent} />
-                      </span>
-                      <span className="text-xs text-muted-foreground w-16 text-right">
-                        {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
-                      </span>
-                      <span className="w-20 flex justify-end">
-                        <StatusBadge status={agent.status} />
-                      </span>
-                    </div>
-                    {PAUSE_RESUME_ELIGIBLE.has(agent.status) && (
-                      <FleetPauseResumeButton
-                        isPaused={agent.status === "paused"}
-                        disabled={pendingAgentIds.has(agent.id)}
-                        onClick={() =>
-                          pauseResumeAgent.mutate({
-                            agent,
-                            action: agent.status === "paused" ? "resume" : "pause",
-                          })
-                        }
-                      />
-                    )}
-                  </div>
-                }
-              />
-            );
-          })}
-        </div>
-      )}
-
-      {effectiveView === "list" && agents && agents.length > 0 && filtered.length === 0 && (
-        <p className="text-sm text-muted-foreground text-center py-8">
-          No agents match the selected filter.
-        </p>
-      )}
-
-      {/* Org chart view */}
-      {effectiveView === "org" && filteredOrg.length > 0 && (
-        <div className="border border-border py-1">
-          {filteredOrg.map((node) => (
-            <OrgTreeNode
-              key={node.id}
-              node={node}
-              depth={0}
-              agentMap={agentMap}
-              liveRunByAgent={liveRunByAgent}
-              tab={tab}
-              pendingAgentIds={pendingAgentIds}
-              onPauseResume={(agent, action) => pauseResumeAgent.mutate({ agent, action })}
-            />
-          ))}
-        </div>
-      )}
-
-      {effectiveView === "org" && orgTree && orgTree.length > 0 && filteredOrg.length === 0 && (
-        <p className="text-sm text-muted-foreground text-center py-8">
-          No agents match the selected filter.
-        </p>
-      )}
-
-      {effectiveView === "org" && orgTree && orgTree.length === 0 && (
-        <p className="text-sm text-muted-foreground text-center py-8">
-          No organizational hierarchy defined.
-        </p>
-      )}
     </div>
-  );
-}
-
-function OrgTreeNode({
-  node,
-  depth,
-  agentMap,
-  liveRunByAgent,
-  tab,
-  pendingAgentIds,
-  onPauseResume,
-}: {
-  node: OrgNode;
-  depth: number;
-  agentMap: Map<string, Agent>;
-  liveRunByAgent: Map<string, { runId: string; liveCount: number }>;
-  tab: FilterTab;
-  pendingAgentIds: Set<string>;
-  onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
-}) {
-  const agent = agentMap.get(node.id);
-
-  const statusColor = agentStatusDot[node.status] ?? agentStatusDotDefault;
-
-  return (
-    <div style={{ paddingLeft: depth * 24 }}>
-      <Link
-        to={agent ? agentUrl(agent) : `/agents/${node.id}`}
-        className={cn("flex items-center gap-3 px-3 py-2 hover:bg-accent/30 transition-colors w-full text-left no-underline text-inherit", agent?.pausedAt && tab !== "paused" && "opacity-50")}
-      >
-        <span className="relative flex h-2.5 w-2.5 shrink-0">
-          <span className={`absolute inline-flex h-full w-full rounded-full ${statusColor}`} />
-        </span>
-        <div className="flex-1 min-w-0">
-          <span className="text-sm font-medium">{node.name}</span>
-          <span className="text-xs text-muted-foreground ml-2">
-            {roleLabels[node.role] ?? node.role}
-            {agent?.title ? ` - ${agent.title}` : ""}
-          </span>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          <span className="sm:hidden">
-            {liveRunByAgent.has(node.id) ? (
-              <LiveRunIndicator
-                agentRef={agent ? agentRouteRef(agent) : node.id}
-                runId={liveRunByAgent.get(node.id)!.runId}
-                liveCount={liveRunByAgent.get(node.id)!.liveCount}
-              />
-            ) : (
-              <StatusBadge status={node.status} />
-            )}
-          </span>
-          <div className="hidden sm:flex items-center gap-3">
-            {liveRunByAgent.has(node.id) && (
-              <LiveRunIndicator
-                agentRef={agent ? agentRouteRef(agent) : node.id}
-                runId={liveRunByAgent.get(node.id)!.runId}
-                liveCount={liveRunByAgent.get(node.id)!.liveCount}
-              />
-            )}
-            {agent && (
-              <>
-                <span className="w-28 whitespace-nowrap text-left font-mono text-xs text-muted-foreground">
-                  {getAdapterLabel(agent.adapterType)}
-                </span>
-                <span
-                  className="w-36 truncate text-left font-mono text-xs text-muted-foreground"
-                  title={getConfiguredModel(agent) ?? undefined}
-                >
-                  {getConfiguredModel(agent) ?? "—"}
-                </span>
-                <span className="w-24 flex justify-end">
-                  <AgentSpendChip agent={agent} />
-                </span>
-                <span className="text-xs text-muted-foreground w-16 text-right">
-                  {agent.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
-                </span>
-              </>
-            )}
-            <span className="w-20 flex justify-end">
-              <StatusBadge status={node.status} />
-            </span>
-          </div>
-          {agent && PAUSE_RESUME_ELIGIBLE.has(agent.status) && (
-            <FleetPauseResumeButton
-              isPaused={agent.status === "paused"}
-              disabled={pendingAgentIds.has(agent.id)}
-              onClick={() => onPauseResume(agent, agent.status === "paused" ? "resume" : "pause")}
-            />
-          )}
-        </div>
-      </Link>
-      {node.reports && node.reports.length > 0 && (
-        <div className="border-l border-border/50 ml-4">
-          {node.reports.map((child) => (
-            <OrgTreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              agentMap={agentMap}
-              liveRunByAgent={liveRunByAgent}
-              tab={tab}
-              pendingAgentIds={pendingAgentIds}
-              onPauseResume={onPauseResume}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LiveRunIndicator({
-  agentRef,
-  runId,
-  liveCount,
-}: {
-  agentRef: string;
-  runId: string;
-  liveCount: number;
-}) {
-  return (
-    <Link
-      to={`/agents/${agentRef}/runs/${runId}`}
-      className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-500/10 hover:bg-blue-500/20 transition-colors no-underline"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <span className="relative flex h-2 w-2">
-        <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-        <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-      </span>
-      <span className="text-[11px] font-medium text-blue-600 dark:text-blue-400">
-        Live{liveCount > 1 ? ` (${liveCount})` : ""}
-      </span>
-    </Link>
   );
 }
