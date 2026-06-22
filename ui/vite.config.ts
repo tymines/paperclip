@@ -27,11 +27,12 @@ export default defineConfig(({ mode }) => ({
     // Allow the Cloudflare-tunnelled host (paperclip.augiport.com) so Tyler can
     // open the dev UI from his phone. The tunnel is already access-gated, so the
     // Vite host check adds no security here — keep localhost too for local dev.
-    allowedHosts: ["paperclip.augiport.com", "localhost", "127.0.0.1"],
+    allowedHosts: ["paperclip.augiport.com", "localhost", "127.0.0.1", ".internal"],
     watch: createUiDevWatchOptions(process.cwd()),
     proxy: {
       "/api": {
-        target: "http://localhost:3100",
+        target: process.env.PP_API_TARGET || "http://localhost:3100",
+        changeOrigin: true,
         ws: true,
       },
     },
