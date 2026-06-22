@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@paperclipai/db": ["../packages/db/src/index.ts"],
+      "@paperclipai/db/*": ["../packages/db/src/*"]
+    }
+  },
+  "include": ["src/routes/app-dev.ts", "src/services/app-dev"]
+}
