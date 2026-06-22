@@ -20,9 +20,9 @@ export function VoiceMemos() {
           Voice Memos
         </h1>
         <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-          Drop voice memos here and Jarvis will transcribe, summarize, and
+          Drop voice memos here and the War Room will transcribe, summarize, and
           route them into the right room or issue. Coming soon — this
-          inbox is a Phase&nbsp;2 deliverable of the Jarvis state-of-the-art
+          inbox is a Phase&nbsp;2 deliverable of the War Room state-of-the-art
           research stream.
         </p>
       </header>
