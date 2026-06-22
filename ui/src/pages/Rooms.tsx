@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
 import { MessageSquare, Plus, Users, Zap, Coffee } from "lucide-react";
@@ -10,7 +10,6 @@ import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -27,8 +26,50 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import type { Room } from "@paperclipai/shared";
+
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked)                               */
+/* Applied locally to the Rooms surface so the redesign is self-contained and */
+/* does not mutate global theme variables used by other pages. Matches the    */
+/* Home / Costs / Fleet builds.                                               */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  critical: "#FF5B5B",
+} as const;
+
+const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
+
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
+
+function useMonoFont() {
+  useEffect(() => {
+    const id = "ds-plex-mono";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap";
+    document.head.appendChild(link);
+  }, []);
+}
 
 const ROOM_TYPE_ICONS: Record<string, typeof MessageSquare> = {
   collaboration: Users,
@@ -44,41 +85,67 @@ const ROOM_TYPE_LABELS: Record<string, string> = {
 
 function RoomCard({ room, onClick }: { room: Room; onClick: () => void }) {
   const Icon = ROOM_TYPE_ICONS[room.type] ?? MessageSquare;
+  const isActive = room.status === "active";
 
   return (
-    <Card
-      className="cursor-pointer transition-colors hover:bg-accent/50"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      style={{ ...surfaceCard, borderRadius: 20 }}
+      className="group cursor-pointer p-5 transition-colors hover:brightness-110 focus:outline-none focus-visible:ring-2"
     >
-      <CardContent className="p-4">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10">
-            <Icon className="h-4 w-4 text-primary" />
+      <div className="flex items-start gap-3">
+        <div
+          className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+          style={{ background: `${DS.primary}1A`, border: `1px solid ${DS.border2}` }}
+        >
+          <Icon className="h-4 w-4" style={{ color: DS.primary }} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-sm font-semibold" style={{ color: DS.text }}>
+              {room.name}
+            </h3>
+            <span
+              className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+              style={{
+                background: isActive ? `${DS.success}1F` : `${DS.textFaint}1F`,
+                color: isActive ? DS.success : DS.textFaint,
+              }}
+            >
+              {room.status}
+            </span>
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="truncate text-sm font-medium">{room.name}</h3>
-              <Badge variant={room.status === "active" ? "default" : "secondary"} className="text-xs">
-                {room.status}
-              </Badge>
-            </div>
-            {room.description && (
-              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                {room.description}
-              </p>
-            )}
-            <div className="mt-2 flex items-center gap-2">
-              <Badge variant="outline" className="text-xs">
-                {ROOM_TYPE_LABELS[room.type] ?? room.type}
-              </Badge>
-              <span className="text-xs text-muted-foreground">
-                Created {new Date(room.createdAt).toLocaleDateString()}
-              </span>
-            </div>
+          {room.description && (
+            <p className="mt-1 line-clamp-2 text-xs" style={{ color: DS.textMuted }}>
+              {room.description}
+            </p>
+          )}
+          <div className="mt-3 flex items-center gap-2">
+            <span
+              className="rounded-md px-2 py-0.5 text-[11px] font-medium"
+              style={{
+                background: DS.surface3,
+                border: `1px solid ${DS.border2}`,
+                color: DS.textMuted,
+              }}
+            >
+              {ROOM_TYPE_LABELS[room.type] ?? room.type}
+            </span>
+            <span className="text-[11px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
+              Created {new Date(room.createdAt).toLocaleDateString()}
+            </span>
           </div>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -91,6 +158,8 @@ export function Rooms() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [draft, setDraft] = useState({ name: "", description: "", type: "collaboration" });
+
+  useMonoFont();
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Rooms" }]);
@@ -135,8 +204,30 @@ export function Rooms() {
   }
 
   return (
-    <div className="space-y-4">
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
+    <div
+      className="flex min-h-full flex-col gap-5 p-8"
+      style={{ background: DS.canvas }}
+      data-pp-page-v2="rooms"
+    >
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
+            Rooms
+          </h1>
+          <p className="text-[14px]" style={{ color: DS.textMuted }}>
+            Shared spaces where your agents collaborate.
+          </p>
+        </div>
+        {rooms && rooms.length > 0 && (
+          <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            New Room
+          </Button>
+        )}
+      </div>
+
+      {error && <p className="text-sm" style={{ color: DS.critical }}>{error.message}</p>}
 
       {rooms && rooms.length === 0 && (
         <EmptyState
@@ -148,23 +239,15 @@ export function Rooms() {
       )}
 
       {rooms && rooms.length > 0 && (
-        <>
-          <div className="flex items-center justify-start">
-            <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-              New Room
-            </Button>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {rooms.map((room) => (
-              <RoomCard
-                key={room.id}
-                room={room}
-                onClick={() => navigate(`/rooms/${room.id}`)}
-              />
-            ))}
-          </div>
-        </>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {rooms.map((room) => (
+            <RoomCard
+              key={room.id}
+              room={room}
+              onClick={() => navigate(`/rooms/${room.id}`)}
+            />
+          ))}
+        </div>
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

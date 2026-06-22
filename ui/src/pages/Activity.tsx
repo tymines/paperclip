@@ -1,19 +1,16 @@
 import {
-  Suspense,
-  lazy,
   useDeferredValue,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { ActivityEvent, Agent } from "@paperclipai/shared";
 import { activityApi } from "../api/activity";
 import { accessApi } from "../api/access";
 import { agentsApi } from "../api/agents";
-import { costsApi } from "../api/costs";
-import { dashboardApi } from "../api/dashboard";
 import { buildCompanyUserProfileMap } from "../lib/company-members";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -30,11 +27,37 @@ import {
 } from "@/components/ui/select";
 import { History } from "lucide-react";
 
-// Lazy: ActivityCharts is ~9 KB of SVG-rendering code that isn't needed
-// for first paint. Tyler was seeing a 12.8s black screen on mobile while
-// the chart chunk + activity rows all hydrated synchronously. Splitting
-// it out lets the page shell + filter chip render immediately.
-const ActivityChartsSection = lazy(() => import("../components/ActivityChartsSection"));
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked)                               */
+/* Applied locally to the Activity feed so the redesign is self-contained and */
+/* does not mutate global theme variables used by other pages. Matches the    */
+/* Home / Costs / Fleet builds.                                               */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  warning: "#F4B940",
+  critical: "#FF5B5B",
+  automation: "#A56EFF",
+  analytics: "#31D9FF",
+} as const;
+
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
 
 const ACTIVITY_PAGE_LIMIT = 200;
 const ACTIVITY_INITIAL_ROWS = 8;
@@ -73,34 +96,6 @@ export function Activity() {
     queryKey: [...queryKeys.activity(selectedCompanyId!), { limit: ACTIVITY_PAGE_LIMIT }],
     queryFn: () => activityApi.list(selectedCompanyId!, { limit: ACTIVITY_PAGE_LIMIT }),
     enabled: !!selectedCompanyId,
-  });
-
-  // Activity needs spend visibility but doesn't own its own time-series —
-  // the dashboard summary already carries 14 days of per-day cost rolled up
-  // from cost_events, so we reuse it for the spend chart.
-  // staleTime: Infinity + placeholderData keep cached data on-screen so the
-  // chart doesn't block first paint or flash a spinner on re-navigation.
-  const { data: dashboard } = useQuery({
-    queryKey: queryKeys.dashboard(selectedCompanyId!),
-    queryFn: () => dashboardApi.summary(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-    staleTime: Infinity,
-    placeholderData: (prev) => prev,
-  });
-
-  // Per-agent spend rollup for the same window. Default range covers the last
-  // 30 days so the breakdown contextually matches the activity feed window.
-  const costAgentRangeFrom = useMemo(() => {
-    const d = new Date();
-    d.setUTCDate(d.getUTCDate() - 30);
-    return d.toISOString();
-  }, []);
-  const { data: costByAgent } = useQuery({
-    queryKey: [...queryKeys.dashboard(selectedCompanyId!), "activity", "cost-by-agent", costAgentRangeFrom],
-    queryFn: () => costsApi.byAgent(selectedCompanyId!, costAgentRangeFrom),
-    enabled: !!selectedCompanyId,
-    staleTime: Infinity,
-    placeholderData: (prev) => prev,
   });
 
   const { data: agents } = useQuery({
@@ -145,15 +140,9 @@ export function Activity() {
     return map;
   }, [data]);
 
-  const topCostAgents = useMemo(() => {
-    return [...(costByAgent ?? [])]
-      .filter((row) => (row.costCents ?? 0) > 0 || (row.inputTokens ?? 0) + (row.outputTokens ?? 0) > 0)
-      .slice(0, 10);
-  }, [costByAgent]);
-
   // useDeferredValue keeps the page interactive while React diffs a long
   // activity list. Hoisted above the early-return so hook order stays
-  // stable (same reason topCostAgents is hoisted — see commit fef69d1c).
+  // stable (see commit fef69d1c).
   const deferredData = useDeferredValue(data);
 
   if (!selectedCompanyId) {
@@ -170,17 +159,31 @@ export function Activity() {
     : [];
 
   return (
-    <div className="space-y-4">
-      <Suspense fallback={<ChartSectionSkeleton />}>
-        <ActivityChartsSection
-          dashboard={dashboard}
-          topCostAgents={topCostAgents}
-        />
-      </Suspense>
+    <div
+      className="flex min-h-full flex-col gap-5 p-8"
+      style={{ background: DS.canvas }}
+      data-pp-page-v2="activity-feed"
+    >
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
+            Activity
+          </h1>
+          <p className="text-[14px]" style={{ color: DS.textMuted }}>
+            Chronological event feed across your fleet.
+          </p>
+        </div>
 
-      <div className="flex items-center justify-end">
         <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger className="w-[140px] h-8 text-xs">
+          <SelectTrigger
+            className="w-[160px] h-9 text-xs"
+            style={{
+              background: DS.surface3,
+              border: `1px solid ${DS.border2}`,
+              color: DS.text,
+            }}
+          >
             <SelectValue placeholder="Filter by type" />
           </SelectTrigger>
           <SelectContent>
@@ -194,7 +197,11 @@ export function Activity() {
         </Select>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
+      {error && (
+        <p className="text-sm" style={{ color: DS.critical }}>
+          {error.message}
+        </p>
+      )}
 
       {isLoading && !filtered ? (
         <ActivityRowsSkeleton />
@@ -213,20 +220,17 @@ export function Activity() {
   );
 }
 
-function ChartSectionSkeleton() {
-  return (
-    <div className="grid gap-4 md:grid-cols-2">
-      <Skeleton className="h-44 w-full rounded-lg border border-border" />
-      <Skeleton className="h-44 w-full rounded-lg border border-border" />
-    </div>
-  );
-}
-
 function ActivityRowsSkeleton() {
   return (
-    <div className="border border-border divide-y divide-border" aria-busy="true">
+    <div style={surfaceCard} className="overflow-hidden" aria-busy="true">
       {Array.from({ length: ACTIVITY_INITIAL_ROWS }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-4 py-3">
+        <div
+          key={i}
+          className="flex items-center gap-3 px-4 py-3"
+          style={{
+            borderBottom: i === ACTIVITY_INITIAL_ROWS - 1 ? "none" : `1px solid ${DS.border}`,
+          }}
+        >
           <Skeleton className="h-7 w-7 rounded-full" />
           <div className="flex-1 space-y-1.5">
             <Skeleton className="h-3 w-3/5" />
@@ -281,19 +285,32 @@ function ProgressiveActivityRows(props: ProgressiveActivityRowsProps) {
   const hiddenCount = revealAll ? 0 : Math.max(0, events.length - ACTIVITY_INITIAL_ROWS);
 
   return (
-    <div className="border border-border divide-y divide-border">
-      {visible.map((event) => (
-        <ActivityRow
+    <div style={surfaceCard} className="overflow-hidden">
+      {visible.map((event, idx) => (
+        <div
           key={event.id}
-          event={event}
-          agentMap={props.agentMap}
-          userProfileMap={props.userProfileMap}
-          entityNameMap={props.entityNameMap}
-          entityTitleMap={props.entityTitleMap}
-        />
+          style={{
+            borderBottom:
+              idx === visible.length - 1 && hiddenCount === 0
+                ? "none"
+                : `1px solid ${DS.border}`,
+          }}
+        >
+          <ActivityRow
+            event={event}
+            agentMap={props.agentMap}
+            userProfileMap={props.userProfileMap}
+            entityNameMap={props.entityNameMap}
+            entityTitleMap={props.entityTitleMap}
+          />
+        </div>
       ))}
       {hiddenCount > 0 ? (
-        <div ref={sentinelRef} className="px-4 py-3 text-center text-xs text-muted-foreground">
+        <div
+          ref={sentinelRef}
+          className="px-4 py-3 text-center text-xs"
+          style={{ color: DS.textFaint }}
+        >
           Loading {hiddenCount} more…
         </div>
       ) : null}
