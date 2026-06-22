@@ -26,6 +26,7 @@ import {
   Palette,
   ImageIcon,
   Drama,
+  Paperclip,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -44,7 +45,6 @@ import { socialApi } from "../api/social";
 import { Button } from "@/components/ui/button";
 import { PluginSlotOutlet } from "@/plugins/slots";
 import { PluginLauncherOutlet } from "@/plugins/launchers";
-import { SidebarCompanyMenu } from "./SidebarCompanyMenu";
 
 export function Sidebar() {
   const { openNewIssue } = useDialogActions();
@@ -89,7 +89,19 @@ export function Sidebar() {
         className="flex items-center gap-1 px-3 h-12 shrink-0"
         data-pp-sidebar-top={uiV2 ? "true" : undefined}
       >
-        <SidebarCompanyMenu />
+        {/* Paperclip wordmark — replaces the workspace/company switcher block
+            ("Acme Corp / Pro plan") per the approved Home redesign. */}
+        <NavLink
+          to="/home"
+          className="flex min-w-0 flex-1 items-center gap-2 px-1 no-underline"
+          aria-label="Paperclip home"
+          data-pp-sidebar-wordmark="true"
+        >
+          <Paperclip className="h-5 w-5 shrink-0 text-primary" />
+          <span className="truncate text-sm font-bold uppercase tracking-wider text-foreground">
+            Paperclip
+          </span>
+        </NavLink>
         <Button
           asChild
           variant="ghost"

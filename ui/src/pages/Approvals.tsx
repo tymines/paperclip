@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useNavigate, useLocation } from "@/lib/router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { approvalsApi } from "../api/approvals";
@@ -6,7 +6,6 @@ import { agentsApi } from "../api/agents";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
-import { cn } from "../lib/utils";
 import { PageTabBar } from "../components/PageTabBar";
 import { Tabs } from "@/components/ui/tabs";
 import { ShieldCheck } from "lucide-react";
@@ -14,6 +13,36 @@ import { ApprovalCard } from "../components/ApprovalCard";
 import { PageSkeleton } from "../components/PageSkeleton";
 
 type StatusFilter = "pending" | "all";
+
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked)                               */
+/* Applied locally to the Approvals surface so the redesign is self-contained */
+/* and does not mutate global theme variables used by other pages. Matches    */
+/* the Home / Costs / Fleet builds.                                           */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  warning: "#F4B940",
+  critical: "#FF5B5B",
+} as const;
+
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
 
 export function Approvals() {
   const { selectedCompanyId } = useCompany();
@@ -75,7 +104,7 @@ export function Approvals() {
   ).length;
 
   if (!selectedCompanyId) {
-    return <p className="text-sm text-muted-foreground">Select a company first.</p>;
+    return <p className="text-sm" style={{ color: DS.textMuted }}>Select a company first.</p>;
   }
 
   if (isLoading) {
@@ -83,15 +112,29 @@ export function Approvals() {
   }
 
   return (
-    <div className="space-y-4">
+    <div
+      className="flex min-h-full flex-col gap-5 p-8"
+      style={{ background: DS.canvas }}
+      data-pp-page-v2="approvals"
+    >
+      {/* Page header */}
+      <div>
+        <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
+          Approvals
+        </h1>
+        <p className="text-[14px]" style={{ color: DS.textMuted }}>
+          Build → Review → Security → You. Review and resolve pending requests.
+        </p>
+      </div>
+
       <div className="flex items-center justify-between">
         <Tabs value={statusFilter} onValueChange={(v) => navigate(`/approvals/${v}`)}>
           <PageTabBar items={[
             { value: "pending", label: <>Pending{pendingCount > 0 && (
-              <span className={cn(
-                "ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium",
-                "bg-yellow-500/20 text-yellow-500"
-              )}>
+              <span
+                className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                style={{ background: `${DS.warning}22`, color: DS.warning }}
+              >
                 {pendingCount}
               </span>
             )}</> },
@@ -100,13 +143,16 @@ export function Approvals() {
         </Tabs>
       </div>
 
-      {error && <p className="text-sm text-destructive">{error.message}</p>}
-      {actionError && <p className="text-sm text-destructive">{actionError}</p>}
+      {error && <p className="text-sm" style={{ color: DS.critical }}>{error.message}</p>}
+      {actionError && <p className="text-sm" style={{ color: DS.critical }}>{actionError}</p>}
 
       {filtered.length === 0 && (
-        <div className="flex flex-col items-center justify-center py-16 text-center">
-          <ShieldCheck className="h-8 w-8 text-muted-foreground/30 mb-3" />
-          <p className="text-sm text-muted-foreground">
+        <div
+          style={surfaceCard}
+          className="flex flex-col items-center justify-center py-16 text-center"
+        >
+          <ShieldCheck className="h-8 w-8 mb-3" style={{ color: DS.textFaint }} />
+          <p className="text-sm" style={{ color: DS.textMuted }}>
             {statusFilter === "pending" ? "No pending approvals." : "No approvals yet."}
           </p>
         </div>
