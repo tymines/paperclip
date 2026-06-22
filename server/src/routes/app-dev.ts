@@ -373,7 +373,7 @@ export function appDevRoutes(db: Db) {
     send("meta", { model: DESIGN_AGENT_MODEL, conceptImage: conceptImageStatus() });
 
     const controller = new AbortController();
-    req.on("close", () => controller.abort());
+    res.on("close", () => { if (!res.writableEnded) controller.abort(); });
 
     try {
       if (!prompt) {
