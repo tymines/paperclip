@@ -65,6 +65,40 @@ function cleanTitle(title: string | null): string {
 export function appDevRoutes(db: Db) {
   const router = Router();
 
+  // The App Dev design service is wired to the fleet's design agent: the agent
+  // flagged metadata.appDevDesignAgent (falling back to role "designer"). Its
+  // configured Gemini models + soul drive design-chat reasoning and concept
+  // image generation. Falls back to built-in defaults if no agent is found.
+  async function resolveDesignAgent(companyId: string) {
+    const rows = await db
+      .select({
+        id: agentsTable.id,
+        name: agentsTable.name,
+        role: agentsTable.role,
+        status: agentsTable.status,
+        runtimeConfig: agentsTable.runtimeConfig,
+        metadata: agentsTable.metadata,
+      })
+      .from(agentsTable)
+      .where(eq(agentsTable.companyId, companyId));
+    const live = rows.filter((a) => a.status !== "terminated");
+    const pick =
+      live.find((a) => (a.metadata as Record<string, unknown> | null)?.appDevDesignAgent === true) ??
+      live.find((a) => a.role === "designer") ??
+      null;
+    if (!pick) return null;
+    const rc = (pick.runtimeConfig as Record<string, unknown> | null) ?? {};
+    const md = (pick.metadata as Record<string, unknown> | null) ?? {};
+    const asStr = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+    return {
+      id: pick.id,
+      name: pick.name,
+      model: asStr(rc.model),
+      imageModel: asStr(rc.imageModel),
+      soul: asStr(md.soul),
+    };
+  }
+
   /**
    * Ensure the app_dev_apps registry reflects reality for a company:
    *  - a cockpit row (MissionControl) always exists, and
@@ -370,7 +404,12 @@ export function appDevRoutes(db: Db) {
     };
     res.write(":ok\n\n");
 
-    send("meta", { model: DESIGN_AGENT_MODEL, conceptImage: conceptImageStatus() });
+    const designAgent = await resolveDesignAgent(companyId);
+    send("meta", {
+      model: designAgent?.model ?? DESIGN_AGENT_MODEL,
+      agent: designAgent ? { id: designAgent.id, name: designAgent.name } : null,
+      conceptImage: conceptImageStatus(),
+    });
 
     const controller = new AbortController();
     res.on("close", () => { if (!res.writableEnded) controller.abort(); });
@@ -392,13 +431,17 @@ export function appDevRoutes(db: Db) {
       for await (const delta of streamDesignReply({
         appName,
         prompt,
+        model: designAgent?.model ?? undefined,
+        systemPrompt: designAgent?.soul ?? undefined,
         signal: controller.signal,
       })) {
         send("delta", { text: delta });
       }
       // Concept-image generation — Gemini 3.1 Flash Image.
       if (wantsImage) {
-        const generator = resolveConceptImageGenerator();
+        const generator = resolveConceptImageGenerator(process.env, {
+          model: designAgent?.imageModel ?? undefined,
+        });
         if (!generator) {
           // Wired, but the Gemini key isn't set at runtime.
           send("image_needs_key", { reason: conceptImageStatus().reason });

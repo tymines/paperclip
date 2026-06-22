@@ -60,13 +60,14 @@ type FetchImpl = typeof fetch;
  */
 export class GeminiFlashImageGenerator implements ConceptImageGenerator {
   readonly provider = "gemini_flash_image" as const;
-  readonly model = GEMINI_IMAGE_MODEL;
+  readonly model: string;
   private key: string;
   private fetchImpl: FetchImpl;
 
-  constructor(key: string, opts: { fetchImpl?: FetchImpl } = {}) {
+  constructor(key: string, opts: { fetchImpl?: FetchImpl; model?: string } = {}) {
     this.key = key;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.model = opts.model?.trim() || GEMINI_IMAGE_MODEL;
   }
 
   async generate(req: ConceptImageRequest): Promise<ConceptImageResult> {
@@ -117,7 +118,7 @@ export class GeminiFlashImageGenerator implements ConceptImageGenerator {
  */
 export function resolveConceptImageGenerator(
   env: NodeJS.ProcessEnv = process.env,
-  opts: { fetchImpl?: FetchImpl } = {},
+  opts: { fetchImpl?: FetchImpl; model?: string } = {},
 ): ConceptImageGenerator | null {
   const key = geminiKey(env);
   if (!key) return null;

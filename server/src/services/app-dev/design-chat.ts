@@ -54,13 +54,20 @@ export async function* streamDesignReply(opts: {
   history?: DesignChatTurn[];
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  /** Override model — defaults to the design agent's configured Gemini model. */
+  model?: string;
+  /** Override system prompt — the design agent's soul / job description. */
+  systemPrompt?: string;
 }): AsyncGenerator<string, void, unknown> {
   const env = opts.env ?? process.env;
   const key = geminiApiKey(env);
   if (!key) throw new DesignModelUnconfiguredError();
 
+  const resolvedModel = opts.model?.trim() || DESIGN_AGENT_MODEL;
+  const resolvedSystemPrompt = opts.systemPrompt?.trim() || systemPrompt(opts.appName);
+
   const messages = [
-    { role: "system", content: systemPrompt(opts.appName) },
+    { role: "system", content: resolvedSystemPrompt },
     ...(opts.history ?? []).map((t) => ({ role: t.role, content: t.content })),
     { role: "user", content: opts.prompt },
   ];
@@ -72,7 +79,7 @@ export async function* streamDesignReply(opts: {
       Authorization: `Bearer ${key}`,
     },
     body: JSON.stringify({
-      model: DESIGN_AGENT_MODEL,
+      model: resolvedModel,
       stream: true,
       temperature: 0.6,
       messages,
