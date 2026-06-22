@@ -1,17 +1,34 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   BudgetPolicySummary,
+  CostByAgent,
   CostByAgentModel,
   CostByBiller,
   CostByProviderModel,
+  CostWatcherPayload,
   CostWindowSpendRow,
   FinanceEvent,
   QuotaWindow,
 } from "@paperclipai/shared";
-import { ArrowDownLeft, ArrowUpRight, ChevronDown, ChevronRight, Coins, DollarSign, ReceiptText } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowDownLeft,
+  ArrowUpRight,
+  BellRing,
+  ChevronDown,
+  ChevronRight,
+  Coins,
+  DollarSign,
+  Download,
+  Info,
+  ReceiptText,
+  TrendingUp,
+  Users,
+} from "lucide-react";
 import { budgetsApi } from "../api/budgets";
 import { costsApi } from "../api/costs";
+import { costWatcherApi } from "../api/costWatcher";
 import { BillerSpendCard } from "../components/BillerSpendCard";
 import { BudgetIncidentCard } from "../components/BudgetIncidentCard";
 import { BudgetPolicyCard } from "../components/BudgetPolicyCard";
@@ -36,6 +53,190 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const NO_COMPANY = "__none__";
+
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked)                               */
+/* Applied locally to the Costs surface so the redesign is self-contained and */
+/* does not mutate global theme variables used by other pages. Matches the    */
+/* Home / War Room / Fleet builds.                                            */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  warning: "#F4B940",
+  critical: "#FF5B5B",
+  automation: "#A56EFF",
+  analytics: "#31D9FF",
+} as const;
+
+// IBM Plex Mono for all numerals (design system spec). Injected once.
+const MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
+function useMonoFont() {
+  useEffect(() => {
+    const id = "ds-plex-mono";
+    if (document.getElementById(id)) return;
+    const link = document.createElement("link");
+    link.id = id;
+    link.rel = "stylesheet";
+    link.href = "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap";
+    document.head.appendChild(link);
+  }, []);
+}
+
+// Decorative slice/agent hues (styling only — not data).
+const SLICE_HUES = [
+  DS.primary,
+  DS.automation,
+  DS.success,
+  DS.analytics,
+  DS.warning,
+  "#7C5CFF",
+  "#22B8CF",
+  DS.critical,
+];
+
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
+
+function usd(value: number): string {
+  const abs = Math.abs(value);
+  return `${value < 0 ? "-" : ""}$${abs.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: DS.textFaint }}>
+      {children}
+    </span>
+  );
+}
+
+/* Tiny inline sparkline (area) from a numeric series. */
+function Sparkline({ values, color, width = 120, height = 34 }: { values: number[]; color: string; width?: number; height?: number }) {
+  if (values.length < 2) return null;
+  const max = Math.max(...values, 0.0000001);
+  const step = width / (values.length - 1);
+  const pts = values.map((v, i) => [i * step, height - (v / max) * (height - 4) - 2] as const);
+  const line = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const area = `${line} L${width},${height} L0,${height} Z`;
+  const gid = `spk-${color.replace("#", "")}`;
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.28} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* Daily spend bar chart. days/values aligned by index. */
+function DailyBars({ days, values }: { days: string[]; values: number[] }) {
+  const max = Math.max(...values, 0.0000001);
+  const hasData = values.some((v) => v > 0);
+  const H = 150;
+  const labelIdx = days.length > 1 ? [0, Math.floor(days.length / 2), days.length - 1] : [0];
+  const fmtDay = (d: string) => {
+    const dt = new Date(`${d}T00:00:00Z`);
+    return dt.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  };
+  return (
+    <div>
+      <div className="flex items-end gap-[3px]" style={{ height: H }}>
+        {values.map((v, i) => {
+          const h = hasData ? Math.max((v / max) * (H - 8), v > 0 ? 2 : 0) : 0;
+          return (
+            <div key={i} className="group relative flex-1" style={{ height: H, display: "flex", alignItems: "flex-end" }}>
+              <div
+                className="w-full rounded-t-[2px]"
+                style={{
+                  height: h,
+                  background: `linear-gradient(180deg, ${DS.primary} 0%, ${DS.primary}99 100%)`,
+                  minHeight: v > 0 ? 2 : 0,
+                }}
+                title={`${fmtDay(days[i] ?? "")}: ${usd(v)}`}
+              />
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2 flex justify-between" style={{ color: DS.textFaint }}>
+        {labelIdx.map((idx) => (
+          <span key={idx} className="text-[10px]" style={{ fontFamily: MONO }}>
+            {fmtDay(days[idx] ?? "")}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* SVG donut from agent slices. */
+function AgentDonut({ slices, total }: { slices: { name: string; value: number; color: string }[]; total: number }) {
+  const size = 168;
+  const stroke = 22;
+  const r = (size - stroke) / 2;
+  const c = 2 * Math.PI * r;
+  const sum = slices.reduce((s, x) => s + x.value, 0) || 1;
+  let offset = 0;
+  return (
+    <div className="flex items-center justify-center">
+      <div className="relative" style={{ width: size, height: size }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ transform: "rotate(-90deg)" }}>
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={DS.surface3} strokeWidth={stroke} />
+          {slices.map((s, i) => {
+            const frac = s.value / sum;
+            const dash = frac * c;
+            const el = (
+              <circle
+                key={i}
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="none"
+                stroke={s.color}
+                strokeWidth={stroke}
+                strokeDasharray={`${dash} ${c - dash}`}
+                strokeDashoffset={-offset}
+              />
+            );
+            offset += dash;
+            return el;
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-[10px] uppercase tracking-[0.1em]" style={{ color: DS.textFaint }}>
+            Total spend
+          </span>
+          <span className="text-[22px] font-semibold tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+            {formatCents(total)}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function currentWeekRange(): { from: string; to: string } {
   const now = new Date();
@@ -263,6 +464,16 @@ export function Costs() {
       return { summary, byBiller, byKind, events };
     },
     enabled: !!selectedCompanyId && customReady,
+  });
+
+  // Cost Watcher payload — folds the auto-pause/alerts + daily timeline +
+  // burn-rate surface into the consolidated Costs page. Read-only aggregate.
+  const { data: watcherData } = useQuery({
+    queryKey: ["cost-watcher", companyId],
+    queryFn: () => costWatcherApi.get(companyId),
+    enabled: !!selectedCompanyId,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
@@ -536,6 +747,66 @@ export function Costs() {
     inferenceTokenTotal === 0 &&
     (spendData.byAgent?.length ?? 0) === 0;
 
+  useMonoFont();
+
+  // Daily spend series for the spend-over-time chart + sparklines, derived
+  // from the Cost Watcher timeline (sum across agent series per day).
+  const dailyTotals = useMemo(() => {
+    const w = watcherData as CostWatcherPayload | undefined;
+    const days = w?.timeline.days ?? [];
+    const totals = days.map((_, i) =>
+      (w?.timeline.byAgent ?? []).reduce((sum, s) => sum + (s.values[i] ?? 0), 0),
+    );
+    return { days, totals };
+  }, [watcherData]);
+
+  // Spend-by-agent donut slices, derived from real by-agent spend.
+  const agentSlices = useMemo(() => {
+    const rows = [...((spendData?.byAgent ?? []) as CostByAgent[])].sort((a, b) => b.costCents - a.costCents);
+    return rows.slice(0, 7).map((r, i) => ({
+      name: r.agentName ?? r.agentId,
+      value: r.costCents,
+      color: SLICE_HUES[i % SLICE_HUES.length],
+    }));
+  }, [spendData?.byAgent]);
+
+  // Inference ledger rows — finest real granularity is agent × model.
+  const inferenceLedger = useMemo(() => {
+    return [...((spendData?.byAgentModel ?? []) as CostByAgentModel[])]
+      .sort((a, b) => b.costCents - a.costCents)
+      .slice(0, 7);
+  }, [spendData?.byAgentModel]);
+
+  // Budget alerts — merge real Cost Watcher alerts + active budget incidents.
+  const watcherAlerts = (watcherData as CostWatcherPayload | undefined)?.alerts ?? [];
+  const watcherTotals = (watcherData as CostWatcherPayload | undefined)?.totals;
+
+  function exportInferenceCsv() {
+    const rows = (spendData?.byAgentModel ?? []) as CostByAgentModel[];
+    const header = ["agent", "provider", "model", "billing_type", "input_tokens", "cached_input_tokens", "output_tokens", "cost_usd"];
+    const lines = rows.map((r) =>
+      [
+        r.agentName ?? r.agentId,
+        r.provider,
+        r.model,
+        r.billingType,
+        r.inputTokens,
+        r.cachedInputTokens,
+        r.outputTokens,
+        (r.costCents / 100).toFixed(4),
+      ]
+        .map((v) => `"${String(v).replace(/"/g, '""')}"`)
+        .join(","),
+    );
+    const blob = new Blob([[header.join(","), ...lines].join("\n")], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `inference-ledger-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const topFinanceEvents = (financeData?.events ?? []) as FinanceEvent[];
   const budgetPolicies = budgetData?.policies ?? [];
   const activeBudgetIncidents = budgetData?.activeIncidents ?? [];
@@ -553,45 +824,71 @@ export function Costs() {
   const showOverviewLoading = (spendLoading || financeLoading) && customReady;
   const overviewError = spendError ?? financeError;
 
+  const budgetCents = spendData?.summary.budgetCents ?? 0;
+  const hasBudgetCap = budgetCents > 0;
+  const spendCents = spendData?.summary.spendCents ?? 0;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" style={{ color: DS.text }}>
       <div className="space-y-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
-                <h1 className="text-3xl font-semibold tracking-tight">Costs</h1>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                  Inference spend, platform fees, credits, and live quota windows.
+                <h1 className="text-3xl font-semibold tracking-tight" style={{ color: DS.text }}>Costs</h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6" style={{ color: DS.textMuted }}>
+                  Track and control spend across your AI agent fleet.
                 </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {PRESET_KEYS.map((key) => (
-                <Button
-                  key={key}
-                  variant={preset === key ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setPreset(key)}
-                >
-                  {PRESET_LABELS[key]}
-                </Button>
-              ))}
+              <div
+                className="flex flex-wrap items-center gap-1 rounded-[12px] p-1"
+                style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
+              >
+                {PRESET_KEYS.map((key) => {
+                  const active = preset === key;
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setPreset(key)}
+                      className="rounded-[8px] px-3 py-1.5 text-[13px] font-medium transition-colors"
+                      style={{
+                        background: active ? DS.primary : "transparent",
+                        color: active ? "#fff" : DS.textMuted,
+                      }}
+                    >
+                      {PRESET_LABELS[key]}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                onClick={exportInferenceCsv}
+                className="flex items-center gap-1.5 rounded-[10px] px-3 py-2 text-[13px] font-medium transition-colors"
+                style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.textMuted }}
+                title="Export the inference ledger as CSV"
+              >
+                <Download className="h-3.5 w-3.5" />
+                Export
+              </button>
             </div>
           </div>
 
           {preset === "custom" ? (
-            <div className="flex flex-wrap items-center gap-2 border border-border p-3">
+            <div className="flex flex-wrap items-center gap-2 rounded-[12px] p-3" style={{ border: `1px solid ${DS.border}`, background: DS.surface }}>
               <input
                 type="date"
                 value={customFrom}
                 onChange={(event) => setCustomFrom(event.target.value)}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                className="h-9 rounded-md px-3 text-sm"
+                style={{ border: `1px solid ${DS.border2}`, background: DS.surface2, color: DS.text }}
               />
-              <span className="text-sm text-muted-foreground">to</span>
+              <span className="text-sm" style={{ color: DS.textMuted }}>to</span>
               <input
                 type="date"
                 value={customTo}
                 onChange={(event) => setCustomTo(event.target.value)}
-                className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                className="h-9 rounded-md px-3 text-sm"
+                style={{ border: `1px solid ${DS.border2}`, background: DS.surface2, color: DS.text }}
               />
             </div>
           ) : null}
@@ -613,41 +910,106 @@ export function Costs() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 lg:grid-cols-4">
-            <MetricTile
-              label="Inference spend"
-              value={formatCents(spendData?.summary.spendCents ?? 0)}
-              subtitle={`${formatTokens(inferenceTokenTotal)} tokens across request-scoped events`}
-              icon={DollarSign}
-            />
-            <MetricTile
-              label="Budget"
-              value={activeBudgetIncidents.length > 0 ? String(activeBudgetIncidents.length) : (
-                spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                  ? `${spendData.summary.utilizationPercent}%`
-                  : "Open"
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            {/* Inference spend — with daily sparkline */}
+            <div style={surfaceCard} className="flex flex-col gap-2 p-5">
+              <div className="flex items-center justify-between">
+                <SectionLabel>Inference spend</SectionLabel>
+                <span className="flex h-7 w-7 items-center justify-center rounded-[8px]" style={{ background: `${DS.primary}1F` }}>
+                  <DollarSign className="h-3.5 w-3.5" style={{ color: DS.primary }} />
+                </span>
+              </div>
+              <div className="flex items-end justify-between gap-2">
+                <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                  {formatCents(spendCents)}
+                </span>
+                <div className="opacity-90">
+                  <Sparkline values={dailyTotals.totals.length >= 2 ? dailyTotals.totals : [0, 0]} color={DS.primary} />
+                </div>
+              </div>
+              <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                {formatTokens(inferenceTokenTotal)} tokens
+              </span>
+            </div>
+
+            {/* Budget — honest: no fake cap when company budget is unset */}
+            <div style={surfaceCard} className="flex flex-col gap-2 p-5">
+              <div className="flex items-center justify-between">
+                <SectionLabel>Budget</SectionLabel>
+                <span className="flex h-7 w-7 items-center justify-center rounded-[8px]" style={{ background: `${DS.warning}1F` }}>
+                  <Coins className="h-3.5 w-3.5" style={{ color: DS.warning }} />
+                </span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                  {formatCents(spendCents)}
+                </span>
+                {hasBudgetCap ? (
+                  <span className="text-[13px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
+                    of {formatCents(budgetCents)} / mo
+                  </span>
+                ) : null}
+              </div>
+              {hasBudgetCap ? (
+                <>
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full" style={{ background: DS.surface3 }}>
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min(100, spendData?.summary.utilizationPercent ?? 0)}%`,
+                        background:
+                          (spendData?.summary.utilizationPercent ?? 0) > 90
+                            ? DS.critical
+                            : (spendData?.summary.utilizationPercent ?? 0) > 70
+                              ? DS.warning
+                              : DS.success,
+                      }}
+                    />
+                  </div>
+                  <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                    {formatCents(Math.max(0, budgetCents - spendCents))} remaining
+                  </span>
+                </>
+              ) : (
+                <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                  No monthly cap configured
+                </span>
               )}
-              subtitle={
-                activeBudgetIncidents.length > 0
-                  ? `${budgetData?.pausedAgentCount ?? 0} agents paused · ${budgetData?.pausedProjectCount ?? 0} projects paused`
-                  : spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                    ? `${formatCents(spendData.summary.spendCents)} of ${formatCents(spendData.summary.budgetCents)}`
-                    : "No monthly cap configured"
-              }
-              icon={Coins}
-            />
-            <MetricTile
-              label="Finance net"
-              value={formatCents(financeData?.summary.netCents ?? 0)}
-              subtitle={`${formatCents(financeData?.summary.debitCents ?? 0)} debits · ${formatCents(financeData?.summary.creditCents ?? 0)} credits`}
-              icon={ReceiptText}
-            />
-            <MetricTile
-              label="Finance events"
-              value={String(financeData?.summary.eventCount ?? 0)}
-              subtitle={`${formatCents(financeData?.summary.estimatedDebitCents ?? 0)} estimated in range`}
-              icon={ArrowUpRight}
-            />
+            </div>
+
+            {/* Finance net */}
+            <div style={surfaceCard} className="flex flex-col gap-2 p-5">
+              <div className="flex items-center justify-between">
+                <SectionLabel>Finance net</SectionLabel>
+                <span className="flex h-7 w-7 items-center justify-center rounded-[8px]" style={{ background: `${DS.success}1F` }}>
+                  <ReceiptText className="h-3.5 w-3.5" style={{ color: DS.success }} />
+                </span>
+              </div>
+              <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                {formatCents(financeData?.summary.netCents ?? 0)}
+              </span>
+              <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                Net after credits &amp; adjustments
+              </span>
+            </div>
+
+            {/* Finance events */}
+            <div style={surfaceCard} className="flex flex-col gap-2 p-5">
+              <div className="flex items-center justify-between">
+                <SectionLabel>Finance events</SectionLabel>
+                <span className="flex h-7 w-7 items-center justify-center rounded-[8px]" style={{ background: `${DS.automation}1F` }}>
+                  <ArrowUpRight className="h-3.5 w-3.5" style={{ color: DS.automation }} />
+                </span>
+              </div>
+              <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                {String(financeData?.summary.eventCount ?? 0)}
+              </span>
+              <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                {(financeData?.summary.eventCount ?? 0) === 0
+                  ? "No events this period"
+                  : `${formatCents(financeData?.summary.estimatedDebitCents ?? 0)} estimated in range`}
+              </span>
+            </div>
           </div>
       </div>
 
@@ -662,205 +1024,302 @@ export function Costs() {
           </TabsList>
         </div>
 
-        <TabsContent value="overview" className="mt-4 space-y-4">
+        <TabsContent value="overview" className="mt-4 space-y-5">
           {showCustomPrompt ? (
-            <p className="text-sm text-muted-foreground">Select a start and end date to load data.</p>
+            <p className="text-sm" style={{ color: DS.textMuted }}>Select a start and end date to load data.</p>
           ) : showOverviewLoading ? (
             <PageSkeleton variant="costs" />
           ) : overviewError ? (
-            <p className="text-sm text-destructive">{(overviewError as Error).message}</p>
+            <p className="text-sm" style={{ color: DS.critical }}>{(overviewError as Error).message}</p>
           ) : (
             <>
-              {activeBudgetIncidents.length > 0 ? (
-                <div className="grid gap-4 xl:grid-cols-2">
-                  {activeBudgetIncidents.slice(0, 2).map((incident) => (
-                    <BudgetIncidentCard
-                      key={incident.id}
-                      incident={incident}
-                      isMutating={incidentMutation.isPending}
-                      onKeepPaused={() => incidentMutation.mutate({ incidentId: incident.id, action: "keep_paused" })}
-                      onRaiseAndResume={(amount) =>
-                        incidentMutation.mutate({
-                          incidentId: incident.id,
-                          action: "raise_budget_and_resume",
-                          amount,
-                        })}
-                    />
-                  ))}
+              {/* Row 1: spend-over-time · spend-by-agent · budget status + alerts */}
+              <div className="grid gap-5 lg:grid-cols-[1.45fr_0.95fr_1.05fr]">
+                {/* Spend over time */}
+                <div style={surfaceCard} className="flex flex-col p-5">
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4" style={{ color: DS.primary }} />
+                      <SectionLabel>Spend over time</SectionLabel>
+                    </div>
+                    <span className="text-[11px]" style={{ color: DS.textFaint }}>
+                      Last {dailyTotals.days.length || 30} days · daily inference
+                    </span>
+                  </div>
+                  {dailyTotals.days.length === 0 ? (
+                    <div className="flex h-[150px] items-center justify-center text-[13px]" style={{ color: DS.textFaint }}>
+                      No daily spend recorded yet.
+                    </div>
+                  ) : (
+                    <DailyBars days={dailyTotals.days} values={dailyTotals.totals} />
+                  )}
                 </div>
-              ) : null}
 
-              <div className="grid gap-4 xl:grid-cols-[1.3fr,1fr]">
-                <Card>
-                  <CardHeader className="px-5 pt-5 pb-2">
-                    <CardTitle className="text-base">Inference ledger</CardTitle>
-                    <CardDescription>
-                      Request-scoped inference spend for the selected period.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4 px-5 pb-5 pt-2">
-                    <div className="flex flex-wrap items-end justify-between gap-3">
+                {/* Spend by agent */}
+                <div style={surfaceCard} className="flex flex-col p-5">
+                  <div className="mb-3 flex items-center justify-between">
+                    <SectionLabel>Spend by agent</SectionLabel>
+                  </div>
+                  {agentSlices.length === 0 ? (
+                    <div className="flex flex-1 items-center justify-center text-[13px]" style={{ color: DS.textFaint }}>
+                      No agent spend yet.
+                    </div>
+                  ) : (
+                    <>
+                      <AgentDonut slices={agentSlices} total={spendCents} />
+                      <div className="mt-4 space-y-1.5">
+                        {agentSlices.slice(0, 4).map((s) => {
+                          const pct = spendCents > 0 ? (s.value / spendCents) * 100 : 0;
+                          return (
+                            <div key={s.name} className="flex items-center justify-between gap-2 text-[12px]">
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.color }} />
+                                <span className="truncate" style={{ color: DS.textMuted }}>{s.name}</span>
+                              </span>
+                              <span className="flex items-center gap-2 tabular-nums" style={{ fontFamily: MONO }}>
+                                <span style={{ color: DS.text }}>{formatCents(s.value)}</span>
+                                <span style={{ color: DS.textFaint }}>{pct.toFixed(pct < 10 ? 1 : 0)}%</span>
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <button
+                        onClick={() => setMainTab("billers")}
+                        className="mt-3 self-start text-[12px] font-medium hover:underline"
+                        style={{ color: DS.primary }}
+                      >
+                        View all agents →
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* Right column: budget status + budget alerts */}
+                <div className="flex flex-col gap-5">
+                  {/* Budget status / burn rate */}
+                  <div style={surfaceCard} className="flex flex-col gap-3 p-5">
+                    <div className="flex items-center justify-between">
+                      <SectionLabel>Budget status</SectionLabel>
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={
+                          hasBudgetCap
+                            ? { background: `${DS.success}1F`, color: DS.success }
+                            : { background: `${DS.textFaint}22`, color: DS.textMuted }
+                        }
+                      >
+                        {hasBudgetCap ? "Capped" : "Open · no cap"}
+                      </span>
+                    </div>
+                    <div className="flex items-end justify-between gap-2">
                       <div>
-                        <div className="text-3xl font-semibold tabular-nums">
-                          {formatCents(spendData?.summary.spendCents ?? 0)}
+                        <div className="text-[26px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                          {watcherTotals ? usd(watcherTotals.monthToDateUsd) : formatCents(spendCents)}
                         </div>
-                        <div className="mt-1 text-sm text-muted-foreground">
-                          {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0
-                            ? `Budget ${formatCents(spendData.summary.budgetCents)}`
-                            : "Unlimited budget"}
+                        <div className="mt-1 text-[12px]" style={{ color: DS.textMuted }}>
+                          this month
+                          {watcherTotals && watcherTotals.burnRatePerDayUsd > 0
+                            ? ` · ${usd(watcherTotals.burnRatePerDayUsd)}/day burn`
+                            : ""}
                         </div>
                       </div>
-                      <div className="border border-border px-4 py-3 text-right">
-                        <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">usage</div>
-                        <div className="mt-1 text-lg font-medium tabular-nums">
-                          {formatTokens(inferenceTokenTotal)}
-                        </div>
+                      <div className="opacity-90">
+                        <Sparkline values={dailyTotals.totals.length >= 2 ? dailyTotals.totals : [0, 0]} color={DS.success} />
                       </div>
                     </div>
-                    {spendData?.summary.budgetCents && spendData.summary.budgetCents > 0 ? (
-                      <div className="space-y-2">
-                        <div className="h-2 overflow-hidden bg-muted">
-                          <div
-                            className={cn(
-                              "h-full transition-[width,background-color] duration-150",
-                              spendData.summary.utilizationPercent > 90
-                                ? "bg-red-400"
-                                : spendData.summary.utilizationPercent > 70
-                                  ? "bg-yellow-400"
-                                  : "bg-emerald-400",
-                            )}
-                            style={{ width: `${Math.min(100, spendData.summary.utilizationPercent)}%` }}
-                          />
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {spendData.summary.utilizationPercent}% of monthly budget consumed in this range.
-                        </div>
+                    <div className="text-[12px]" style={{ color: DS.textFaint }}>
+                      {hasBudgetCap
+                        ? `${spendData?.summary.utilizationPercent ?? 0}% of monthly cap used`
+                        : watcherTotals && watcherTotals.projectedMonthlyUsd > 0
+                          ? `Projected ${usd(watcherTotals.projectedMonthlyUsd)}/mo · set a cap to track utilization`
+                          : "Set a monthly cap to track utilization and arm alerts"}
+                    </div>
+                  </div>
+
+                  {/* Budget alerts (Cost Watcher folded in) */}
+                  <div style={surfaceCard} className="flex flex-1 flex-col p-5">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <BellRing className="h-4 w-4" style={{ color: DS.warning }} />
+                        <SectionLabel>Budget alerts</SectionLabel>
                       </div>
-                    ) : null}
-                  </CardContent>
-                </Card>
-
-                <FinanceSummaryCard
-                  debitCents={financeData?.summary.debitCents ?? 0}
-                  creditCents={financeData?.summary.creditCents ?? 0}
-                  netCents={financeData?.summary.netCents ?? 0}
-                  estimatedDebitCents={financeData?.summary.estimatedDebitCents ?? 0}
-                  eventCount={financeData?.summary.eventCount ?? 0}
-                />
-              </div>
-
-              <div className="grid gap-4 xl:grid-cols-[1.25fr,0.95fr]">
-                <Card>
-                  <CardHeader className="px-5 pt-5 pb-2">
-                    <CardTitle className="text-base">By agent</CardTitle>
-                    <CardDescription>What each agent consumed in the selected period.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-2 px-5 pb-5 pt-2">
-                    {(spendData?.byAgent.length ?? 0) === 0 ? (
-                      <p className="text-sm text-muted-foreground">No cost events yet.</p>
+                      <button
+                        onClick={() => setMainTab("budgets")}
+                        className="text-[12px] font-medium hover:underline"
+                        style={{ color: DS.primary }}
+                      >
+                        View all
+                      </button>
+                    </div>
+                    {activeBudgetIncidents.length === 0 && watcherAlerts.length === 0 ? (
+                      <div className="flex flex-1 flex-col items-center justify-center gap-1 py-4 text-center">
+                        <span className="text-[13px] font-medium" style={{ color: DS.textMuted }}>
+                          No active alerts
+                        </span>
+                        <span className="text-[12px]" style={{ color: DS.textFaint }}>
+                          Spend is within limits. Set a monthly cap to enable threshold &amp; auto-pause alerts.
+                        </span>
+                      </div>
                     ) : (
-                      spendData?.byAgent.map((row) => {
-                        const modelRows = agentModelRows.get(row.agentId) ?? [];
-                        const isExpanded = expandedAgents.has(row.agentId);
-                        const hasBreakdown = modelRows.length > 0;
-                        return (
-                          <div key={row.agentId} className="border border-border px-4 py-3">
-                            <div
-                              className={cn("flex items-start justify-between gap-3", hasBreakdown ? "cursor-pointer select-none" : "")}
-                              onClick={() => hasBreakdown && toggleAgent(row.agentId)}
-                            >
-                              <div className="flex min-w-0 items-center gap-2">
-                                {hasBreakdown ? (
-                                  isExpanded
-                                    ? <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                    : <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                ) : (
-                                  <span className="h-3 w-3 shrink-0" />
-                                )}
-                                <Identity name={row.agentName ?? row.agentId} size="sm" />
-                                {row.agentStatus === "terminated" ? <StatusBadge status="terminated" /> : null}
+                      <div className="space-y-2.5">
+                        {activeBudgetIncidents.slice(0, 2).map((incident) => (
+                          <div key={incident.id} className="flex items-start gap-2.5">
+                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" style={{ color: DS.critical }} />
+                            <div className="min-w-0">
+                              <div className="text-[13px] font-medium" style={{ color: DS.text }}>
+                                Budget incident — {incident.scopeType} paused
                               </div>
-                              <div className="text-right text-sm tabular-nums">
-                                <div className="font-medium">{formatCents(row.costCents)}</div>
-                                <div className="text-xs text-muted-foreground">
-                                  in {formatTokens(row.inputTokens + row.cachedInputTokens)} · out {formatTokens(row.outputTokens)}
-                                </div>
-                                {(row.apiRunCount > 0 || row.subscriptionRunCount > 0) ? (
-                                  <div className="text-xs text-muted-foreground">
-                                    {row.apiRunCount > 0 ? `${row.apiRunCount} api` : "0 api"}
-                                    {" · "}
-                                    {row.subscriptionRunCount > 0
-                                      ? `${row.subscriptionRunCount} subscription`
-                                      : "0 subscription"}
-                                  </div>
-                                ) : null}
+                              <div className="truncate text-[12px]" style={{ color: DS.textMuted }}>
+                                {incident.scopeName ?? incident.scopeId} exceeded its budget and was auto-paused.
                               </div>
                             </div>
-
-                            {isExpanded && modelRows.length > 0 ? (
-                              <div className="mt-3 space-y-2 border-l border-border pl-4">
-                                {modelRows.map((modelRow) => {
-                                  const sharePct = row.costCents > 0 ? Math.round((modelRow.costCents / row.costCents) * 100) : 0;
-                                  return (
-                                    <div
-                                      key={`${modelRow.provider}:${modelRow.model}:${modelRow.billingType}`}
-                                      className="flex items-start justify-between gap-3 text-xs"
-                                    >
-                                      <div className="min-w-0">
-                                        <div className="truncate font-medium text-foreground">
-                                          {providerDisplayName(modelRow.provider)}
-                                          <span className="mx-1 text-border">/</span>
-                                          <span className="font-mono">{modelRow.model}</span>
-                                        </div>
-                                        <div className="truncate text-muted-foreground">
-                                          {providerDisplayName(modelRow.biller)} · {billingTypeDisplayName(modelRow.billingType)}
-                                        </div>
-                                      </div>
-                                      <div className="text-right tabular-nums">
-                                        <div className="font-medium">
-                                          {formatCents(modelRow.costCents)}
-                                          <span className="ml-1 font-normal text-muted-foreground">({sharePct}%)</span>
-                                        </div>
-                                        <div className="text-muted-foreground">
-                                          {formatTokens(modelRow.inputTokens + modelRow.cachedInputTokens + modelRow.outputTokens)} tok
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })}
+                          </div>
+                        ))}
+                        {watcherAlerts.slice(0, 4).map((alert) => (
+                          <div key={alert.id} className="flex items-start gap-2.5">
+                            <AlertTriangle
+                              className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                              style={{ color: alert.severity === "error" ? DS.critical : DS.warning }}
+                            />
+                            <div className="min-w-0">
+                              <div className="text-[13px] font-medium" style={{ color: DS.text }}>
+                                {alert.title}
                               </div>
-                            ) : null}
+                              <div className="truncate text-[12px]" style={{ color: DS.textMuted }}>
+                                {alert.body}
+                              </div>
+                            </div>
                           </div>
-                        );
-                      })
+                        ))}
+                      </div>
                     )}
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
+              </div>
 
-                <div className="space-y-4">
-                  <Card>
-                    <CardHeader className="px-5 pt-5 pb-2">
-                      <CardTitle className="text-base">By project</CardTitle>
-                      <CardDescription>Run costs attributed through project-linked {issueNoun.plural}.</CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-2 px-5 pb-5 pt-2">
-                      {(spendData?.byProject.length ?? 0) === 0 ? (
-                        <p className="text-sm text-muted-foreground">No project-attributed run costs yet.</p>
-                      ) : (
-                        spendData?.byProject.map((row, index) => (
-                          <div
-                            key={row.projectId ?? `unattributed-${index}`}
-                            className="flex items-center justify-between gap-3 border border-border px-3 py-2 text-sm"
-                          >
-                            <span className="truncate">{row.projectName ?? row.projectId ?? "Unattributed"}</span>
-                            <span className="font-medium tabular-nums">{formatCents(row.costCents)}</span>
-                          </div>
-                        ))
-                      )}
-                    </CardContent>
-                  </Card>
+              {/* Row 2: inference ledger + finance ledger tables */}
+              <div className="grid gap-5 lg:grid-cols-2">
+                {/* Inference ledger */}
+                <div style={surfaceCard} className="flex flex-col p-5">
+                  <div className="mb-3 flex items-center justify-between">
+                    <SectionLabel>Inference ledger (request-scoped)</SectionLabel>
+                    <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>
+                      {formatCents(spendCents)}
+                    </span>
+                  </div>
+                  {inferenceLedger.length === 0 ? (
+                    <p className="py-6 text-center text-[13px]" style={{ color: DS.textFaint }}>No inference spend in this period.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="text-[10px] uppercase tracking-[0.1em]" style={{ color: DS.textFaint }}>
+                            <th className="pb-2 pr-3 font-medium">Agent</th>
+                            <th className="pb-2 pr-3 font-medium">Provider</th>
+                            <th className="pb-2 pr-3 font-medium">Model</th>
+                            <th className="pb-2 pr-3 text-right font-medium">Tokens</th>
+                            <th className="pb-2 text-right font-medium">Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {inferenceLedger.map((r, i) => (
+                            <tr key={`${r.agentId}:${r.provider}:${r.model}:${i}`} style={{ borderTop: `1px solid ${DS.border}` }}>
+                              <td className="py-2 pr-3 text-[13px]" style={{ color: DS.text }}>
+                                <span className="block max-w-[110px] truncate">{r.agentName ?? r.agentId}</span>
+                              </td>
+                              <td className="py-2 pr-3 text-[12px]" style={{ color: DS.textFaint }}>
+                                <span className="block max-w-[90px] truncate">{providerDisplayName(r.provider)}</span>
+                              </td>
+                              <td className="py-2 pr-3 text-[12px]" style={{ color: DS.textMuted, fontFamily: MONO }}>
+                                <span className="block max-w-[130px] truncate">{r.model}</span>
+                              </td>
+                              <td className="py-2 pr-3 text-right text-[12px] tabular-nums" style={{ color: DS.textMuted, fontFamily: MONO }}>
+                                {formatTokens(r.inputTokens + r.cachedInputTokens + r.outputTokens)}
+                              </td>
+                              <td className="py-2 text-right text-[13px] tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
+                                {formatCents(r.costCents)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setMainTab("providers")}
+                    className="mt-3 self-start text-[12px] font-medium hover:underline"
+                    style={{ color: DS.primary }}
+                  >
+                    View full inference ledger →
+                  </button>
+                </div>
 
-                  <FinanceTimelineCard rows={topFinanceEvents.slice(0, 6)} emptyMessage="No finance events yet. Add account-level charges once biller invoices or credits land." />
+                {/* Finance ledger */}
+                <div style={surfaceCard} className="flex flex-col p-5">
+                  <div className="mb-3 flex items-center justify-between">
+                    <SectionLabel>Finance ledger (account-level)</SectionLabel>
+                    <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>
+                      {formatCents(financeData?.summary.netCents ?? 0)}
+                    </span>
+                  </div>
+                  {topFinanceEvents.length === 0 ? (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-1 py-6 text-center">
+                      <span className="text-[13px]" style={{ color: DS.textMuted }}>No finance events this period.</span>
+                      <span className="text-[12px]" style={{ color: DS.textFaint }}>
+                        Account-level charges appear here once biller invoices or credits land.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left">
+                        <thead>
+                          <tr className="text-[10px] uppercase tracking-[0.1em]" style={{ color: DS.textFaint }}>
+                            <th className="pb-2 pr-3 font-medium">Date</th>
+                            <th className="pb-2 pr-3 font-medium">Biller</th>
+                            <th className="pb-2 pr-3 font-medium">Description</th>
+                            <th className="pb-2 pr-3 text-right font-medium">Charge</th>
+                            <th className="pb-2 text-right font-medium">Net</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {topFinanceEvents.slice(0, 7).map((e) => {
+                            const isCredit = e.direction === "credit";
+                            const amt = e.amountCents;
+                            return (
+                              <tr key={e.id} style={{ borderTop: `1px solid ${DS.border}` }}>
+                                <td className="py-2 pr-3 text-[12px] tabular-nums" style={{ color: DS.textMuted, fontFamily: MONO }}>
+                                  {new Date(e.occurredAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                </td>
+                                <td className="py-2 pr-3 text-[13px]" style={{ color: DS.text }}>
+                                  <span className="block max-w-[110px] truncate">{providerDisplayName(e.biller)}</span>
+                                </td>
+                                <td className="py-2 pr-3 text-[12px]" style={{ color: DS.textFaint }}>
+                                  <span className="block max-w-[120px] truncate">{e.description ?? e.eventKind}</span>
+                                </td>
+                                <td className="py-2 pr-3 text-right text-[12px] tabular-nums" style={{ color: DS.textMuted, fontFamily: MONO }}>
+                                  {isCredit ? "—" : formatCents(amt)}
+                                </td>
+                                <td
+                                  className="py-2 text-right text-[13px] tabular-nums"
+                                  style={{ color: isCredit ? DS.success : DS.text, fontFamily: MONO }}
+                                >
+                                  {isCredit ? `-${formatCents(amt)}` : formatCents(amt)}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <button
+                    onClick={() => setMainTab("finance")}
+                    className="mt-3 self-start text-[12px] font-medium hover:underline"
+                    style={{ color: DS.primary }}
+                  >
+                    View full finance ledger →
+                  </button>
                 </div>
               </div>
             </>
