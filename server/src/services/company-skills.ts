@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { and, asc, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { companies, companySkills } from "@paperclipai/db";
-import { readPaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
+import { readPaperclipSkillSyncPreference, writePaperclipSkillSyncPreference } from "@paperclipai/adapter-utils/server-utils";
 import type { PaperclipSkillEntry } from "@paperclipai/adapter-utils/server-utils";
 import type {
   CompanySkill,
@@ -1861,19 +1861,21 @@ export function companySkillService(db: Db) {
     const adapterConfig = (agent.adapterConfig && isPlainRecord(agent.adapterConfig)
       ? { ...(agent.adapterConfig as Record<string, unknown>) }
       : {});
-    const existingRaw = adapterConfig.desiredSkills;
-    const desiredKeys = new Set<string>(
-      Array.isArray(existingRaw)
-        ? existingRaw.filter((value): value is string => typeof value === "string")
-        : [],
-    );
+    // Grants are persisted under adapterConfig.paperclipSkillSync.desiredSkills —
+    // the single source of truth that the catalog/usage read paths
+    // (readPaperclipSkillSyncPreference) and the runtime materializer
+    // (resolvePaperclipDesiredSkillNames) both consume. The previous code wrote a
+    // bare top-level `desiredSkills` field, which no read path ever consulted, so
+    // every UI grant silently vanished and skills stayed stuck at "0/N agents".
+    const preference = readPaperclipSkillSyncPreference(adapterConfig);
+    const desiredKeys = new Set<string>(preference.desiredSkills);
     if (granted) {
       desiredKeys.add(skill.key);
     } else {
       desiredKeys.delete(skill.key);
     }
-    adapterConfig.desiredSkills = Array.from(desiredKeys);
-    await agents.update(agentId, { adapterConfig });
+    const nextConfig = writePaperclipSkillSyncPreference(adapterConfig, Array.from(desiredKeys));
+    await agents.update(agentId, { adapterConfig: nextConfig });
 
     return {
       agentId: agent.id,
