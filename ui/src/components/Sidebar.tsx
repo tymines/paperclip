@@ -6,7 +6,6 @@ import {
   History,
   Search,
   SquarePen,
-  Network,
   Share2,
   Boxes,
   Repeat,
@@ -18,13 +17,13 @@ import {
   Hexagon,
   Bot,
   MoreHorizontal,
-  Gauge,
   Sparkles,
   Mic,
   Palette,
   ImageIcon,
   Drama,
   Paperclip,
+  AppWindow,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -220,11 +219,10 @@ function SidebarLegacy({
 
       <SidebarSection label="Company">
         <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
-        <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-        <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/personas" label="Personas" icon={Drama} />
@@ -294,6 +292,7 @@ function SidebarV1({
 
       <SidebarSection label="More">
         <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
         <SidebarNavItem to="/goals" label="Goals" icon={Target} />
@@ -306,10 +305,8 @@ function SidebarV1({
         />
         <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
-        <SidebarNavItem to="/org" label="Org" icon={Network} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
-        <SidebarNavItem to="/cost-watcher" label="Cost Watcher" icon={Gauge} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
         <SidebarNavItem to="/personas" label="Personas" icon={Drama} />
