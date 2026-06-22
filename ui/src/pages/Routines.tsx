@@ -487,10 +487,13 @@ export function Routines() {
   }
 
   return (
-    <div className="space-y-6">
+    <div
+      className="flex flex-col gap-6 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      data-pp-page-v2="routines"
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
             Routines
           </h1>
           <p className="text-sm text-muted-foreground">
@@ -516,7 +519,7 @@ export function Routines() {
         <TabsContent value="routines" className="space-y-4">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm text-muted-foreground">
-              {(routines ?? []).length} routine{(routines ?? []).length === 1 ? "" : "s"}
+              <span className="font-mono tabular-nums text-foreground/80">{(routines ?? []).length}</span> routine{(routines ?? []).length === 1 ? "" : "s"}
             </p>
             <div className="flex items-center gap-1">
               <Popover>
@@ -881,7 +884,7 @@ export function Routines() {
               />
             </div>
           ) : (
-            <div className="rounded-lg border border-border">
+            <div className="overflow-hidden rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 shadow-sm">
               {routineGroups.map((group) => (
                 <Collapsible
                   key={group.key}
@@ -895,14 +898,14 @@ export function Routines() {
                   }}
                 >
                   {group.label ? (
-                    <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                    <div className="flex items-center gap-2 border-b border-border/60 bg-card/40 px-3 py-2">
                       <CollapsibleTrigger className="flex items-center gap-1.5">
                         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform [[data-state=open]>&]:rotate-90" />
-                        <span className="text-sm font-semibold uppercase tracking-wide">
+                        <span className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">
                           {group.label}
                         </span>
                       </CollapsibleTrigger>
-                      <span className="text-xs text-muted-foreground">
+                      <span className="font-mono tabular-nums text-xs text-muted-foreground">
                         {group.items.length}
                       </span>
                     </div>

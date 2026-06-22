@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { Mic } from "lucide-react";
-import { EmptyState } from "../components/EmptyState";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
 export function VoiceMemos() {
@@ -11,9 +10,13 @@ export function VoiceMemos() {
   }, [setBreadcrumbs]);
 
   return (
-    <div className="space-y-6" data-pp-page="voice-memos">
+    <div
+      className="flex flex-col gap-6 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      data-pp-page="voice-memos"
+      data-pp-page-v2="voice-memos"
+    >
       <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight lg:text-3xl">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground lg:text-3xl">
           Voice Memos
         </h1>
         <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -23,10 +26,20 @@ export function VoiceMemos() {
           research stream.
         </p>
       </header>
-      <EmptyState
-        icon={Mic}
-        message="Coming soon — drop voice memos here once the Phase 2 inbox ships."
-      />
+      <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-6 py-16 text-center shadow-sm">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-background/60">
+          <Mic className="h-6 w-6 text-muted-foreground/60" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-medium text-foreground">No voice memos yet</p>
+          <p className="max-w-sm text-sm text-muted-foreground">
+            Coming soon — drop voice memos here once the Phase&nbsp;2 inbox ships.
+          </p>
+        </div>
+        <span className="rounded-full border border-[#F4B940]/30 bg-[#F4B940]/[0.08] px-3 py-1 text-[11px] font-medium uppercase tracking-widest text-[#F4B940]">
+          Phase 2 · Coming soon
+        </span>
+      </div>
     </div>
   );
 }
