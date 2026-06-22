@@ -1,4 +1,5 @@
 import { useEffect, useMemo } from "react";
+import { Boxes } from "lucide-react";
 import { Link, Navigate } from "@/lib/router";
 import { useQuery } from "@tanstack/react-query";
 import type { ExecutionWorkspace, Issue, Project } from "@paperclipai/shared";
@@ -119,13 +120,29 @@ export function Workspaces() {
   if (error) return <p className="text-sm text-destructive">{error.message}</p>;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold">Workspaces</h2>
+    <div
+      className="flex flex-col gap-6 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      data-pp-page-v2="workspaces"
+    >
+      <div className="flex flex-col gap-1">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground">Workspaces</h1>
+        <p className="text-sm text-muted-foreground">
+          Isolated execution environments materialized per project.
+        </p>
       </div>
 
       {groups.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No workspace activity yet.</p>
+        <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-border/60 bg-gradient-to-br from-card to-card/40 px-6 py-16 text-center shadow-sm">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-background/60">
+            <Boxes className="h-6 w-6 text-muted-foreground/60" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-medium text-foreground">No workspaces yet</p>
+            <p className="max-w-sm text-sm text-muted-foreground">
+              No workspace activity yet. Isolated environments appear here once a project spins one up.
+            </p>
+          </div>
+        </div>
       ) : (
         <div className="space-y-8">
           {groups.map((group) => (
@@ -134,7 +151,7 @@ export function Workspaces() {
                 <div className="min-w-0">
                   <Link
                     to={`/projects/${group.projectRef}/workspaces`}
-                    className="text-base font-semibold hover:underline"
+                    className="text-base font-semibold text-foreground transition-colors hover:text-primary hover:underline"
                   >
                     {group.project.name}
                   </Link>
@@ -144,8 +161,8 @@ export function Workspaces() {
                     </p>
                   ) : null}
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  {group.summaries.length} workspace{group.summaries.length === 1 ? "" : "s"}
+                <span className="text-[11px] uppercase tracking-widest text-muted-foreground">
+                  <span className="font-mono tabular-nums text-foreground/80">{group.summaries.length}</span> workspace{group.summaries.length === 1 ? "" : "s"}
                 </span>
               </div>
               <ProjectWorkspacesContent
