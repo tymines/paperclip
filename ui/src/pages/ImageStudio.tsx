@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   imageStudioApi,
@@ -7,283 +14,717 @@ import {
   type LoraTrainingJob,
   type PersonaGeneration,
   type GenerationSource,
-  type PromptTemplate,
   type GenerationJob,
 } from "../api/imageStudio";
 import { useCompany } from "../context/CompanyContext";
 import { useSearchParams } from "@/lib/router";
+import { relativeTime } from "../lib/utils";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
-import {
-  Loader2,
   Plus,
-  Train,
-  ImageIcon,
-  Bot,
   Sparkles,
-  Server,
-  TriangleAlert,
-  Cloud,
-  CheckCircle2,
-  XCircle,
-  Trash2,
-  ArrowDownUp,
   Wand2,
-  Zap,
-  Send,
-  Save,
-  X,
-  Tag,
-  BookMarked,
-  ChevronUp,
+  ImageIcon,
+  Video,
+  Loader2,
+  CheckCircle2,
+  Cloud,
+  Filter,
+  LayoutGrid,
+  List as ListIcon,
+  Play,
+  ExternalLink,
+  ChevronDown,
+  Settings as SettingsIcon,
+  User,
+  BookOpen,
+  Sliders,
+  Server,
+  Trash2,
+  Star,
+  Tag as TagIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PersonaWorkbench } from "@/components/image-studio/PersonaWorkbench";
-import { ExternalProviderQuickGenerate } from "@/components/image-studio/ExternalProviderQuickGenerate";
+import {
+  PersonaWorkbench,
+  personaRating,
+} from "@/components/image-studio/PersonaWorkbench";
 import { TrainPersonaModal } from "@/components/image-studio/TrainPersonaModal";
+import { findModel, DEFAULT_MODEL_ID } from "@/components/image-studio/models";
 
-// ─── Local helpers ──────────────────────────────────────────────────────────
+/* -------------------------------------------------------------------------- */
+/* Paperclip Design System v1.0 tokens (locked)                               */
+/* Applied locally to AI Influencer Studio so the redesign is self-contained  */
+/* and matches the Home / War Room / Fleet builds without mutating the global */
+/* theme used by other pages.                                                 */
+/* -------------------------------------------------------------------------- */
+const DS = {
+  canvas: "#06090F",
+  surface: "#0D131D",
+  surface2: "#111926",
+  surface3: "#172131",
+  border: "#1C2635",
+  border2: "#263246",
+  border3: "#314158",
+  text: "#F5F8FF",
+  textMuted: "#A3B0C2",
+  textFaint: "#68758A",
+  primary: "#3B82FF",
+  success: "#2FE38A",
+  warning: "#F4B940",
+  critical: "#FF5B5B",
+  automation: "#A56EFF",
+  analytics: "#31D9FF",
+} as const;
 
-function statusBadge(provider: ImageProvider) {
-  const { status, statusDetail } = provider;
-  if (!status) return null;
+const surfaceCard: CSSProperties = {
+  background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 20,
+  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+};
 
-  if (status === "ready") {
-    return (
-      <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-        ready
-      </Badge>
-    );
-  }
-  if (status === "training") {
-    return (
-      <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-        {statusDetail ?? "training..."}
-      </Badge>
-    );
-  }
-  if (status === "needs_photos") {
-    return (
-      <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200">
-        <TriangleAlert className="mr-1 h-3 w-3" />
-        {statusDetail ?? "needs photos"}
-      </Badge>
-    );
-  }
+const innerCard: CSSProperties = {
+  background: DS.surface3,
+  border: `1px solid ${DS.border}`,
+  borderRadius: 16,
+};
 
-  return <Badge variant="secondary">{status}</Badge>;
-}
+const FONT_MONO = "'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace";
 
-/** Status pill derived from the persona's most recent training job. */
-function trainingPill(job: LoraTrainingJob | undefined) {
-  if (!job) return null;
-  switch (job.status) {
-    case "ready":
-      return (
-        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-          <CheckCircle2 className="mr-1 h-3 w-3" />
-          ready
-        </Badge>
-      );
-    case "failed":
-      return (
-        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
-          <XCircle className="mr-1 h-3 w-3" />
-          failed
-        </Badge>
-      );
-    case "training":
-      return (
-        <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
-          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-          training {job.progress}%
-        </Badge>
-      );
-    case "downloading":
-      return (
-        <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
-          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-          installing
-        </Badge>
-      );
-    default:
-      // pending | uploading
-      return (
-        <Badge variant="outline" className="bg-slate-50 text-slate-700 border-slate-200">
-          <Cloud className="mr-1 h-3 w-3" />
-          queued
-        </Badge>
-      );
-  }
-}
-
-function providerIcon(type: string, _name: string) {
-  if (type === "local_lora") return <Train className="h-5 w-5 text-indigo-500" />;
-  return <Sparkles className="h-5 w-5 text-blue-500" />;
-}
-
-// ─── Persona gallery ──────────────────────────────────────────────────────────
-
-type GalleryFilter = "all" | "test" | "production";
-
-function formatGenDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-/** Full-size viewer for a single generation, with prune + reference actions. */
-function GenerationModal({
-  generation,
-  onOpenChange,
-  onDelete,
-  deleting,
-}: {
-  generation: PersonaGeneration | null;
-  onOpenChange: (open: boolean) => void;
-  onDelete: (id: string) => void;
-  deleting: boolean;
-}) {
-  const g = generation;
+function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <Dialog open={!!g} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
-        {g && (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-base">
-                <ImageIcon className="h-4 w-4 text-indigo-500" />
-                Generation
-                <Badge variant="secondary" className="ml-1 capitalize">
-                  {g.source}
-                </Badge>
-                {g.contentRating === "explicit" && (
-                  <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
-                    NSFW
-                  </Badge>
-                )}
-              </DialogTitle>
-            </DialogHeader>
-
-            <div className="space-y-3">
-              <div className="overflow-hidden rounded-lg border border-border bg-muted">
-                <img
-                  src={uploadUrl(g.imagePath)}
-                  alt={g.prompt ?? "generation"}
-                  className="mx-auto max-h-[55vh] w-auto object-contain"
-                />
-              </div>
-
-              {g.prompt && (
-                <p className="rounded-md bg-muted/50 p-2 text-xs leading-relaxed text-muted-foreground">
-                  {g.prompt}
-                </p>
-              )}
-
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-4">
-                <div>
-                  <p className="text-muted-foreground">Model</p>
-                  <p className="font-medium">{g.model ?? "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">LoRA strength</p>
-                  <p className="font-medium">{g.loraStrength ?? "—"}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Generated</p>
-                  <p className="font-medium">{formatGenDate(g.createdAt)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground">Cost</p>
-                  <p className="font-medium">
-                    {g.costUsd ? `$${parseFloat(g.costUsd).toFixed(2)}` : "—"}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <DialogFooter className="gap-2 sm:justify-between">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onDelete(g.id)}
-                disabled={deleting}
-                className="text-red-600 hover:text-red-700"
-              >
-                {deleting ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                Delete
-              </Button>
-              {/* Stub — wiring lands with the inference path. */}
-              <Button variant="secondary" size="sm" disabled title="Coming soon">
-                <Wand2 className="mr-1.5 h-3.5 w-3.5" />
-                Use as reference
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
+    <span
+      className="text-[13px] font-semibold uppercase tracking-[0.12em]"
+      style={{ color: DS.textMuted }}
+    >
+      {children}
+    </span>
   );
 }
 
-/** A persona's gallery: filter chips, sort toggle, 3-col thumbnail grid. */
-function PersonaGallery({ persona }: { persona: ImageProvider }) {
+/* -------------------------------------------------------------------------- */
+/* Persona status helpers (derived from REAL provider + training-job data)    */
+/* -------------------------------------------------------------------------- */
+type PersonaStatus = {
+  label: string;
+  color: string;
+  /** 0–100 when training, else null */
+  progress: number | null;
+  ready: boolean;
+};
+
+function personaStatus(
+  persona: ImageProvider,
+  job: LoraTrainingJob | undefined,
+): PersonaStatus {
+  // Training-job status takes precedence (it's the live signal).
+  if (job) {
+    switch (job.status) {
+      case "ready":
+        return { label: "Ready", color: DS.success, progress: null, ready: true };
+      case "training":
+        return {
+          label: `Training ${job.progress}%`,
+          color: DS.warning,
+          progress: job.progress,
+          ready: false,
+        };
+      case "downloading":
+        return { label: "Installing", color: DS.analytics, progress: job.progress, ready: false };
+      case "failed":
+        return { label: "Failed", color: DS.critical, progress: null, ready: false };
+      default:
+        return { label: "Queued", color: DS.textFaint, progress: null, ready: false };
+    }
+  }
+  if (persona.status === "ready")
+    return { label: "Ready", color: DS.success, progress: null, ready: true };
+  if (persona.status === "training")
+    return { label: "Training", color: DS.warning, progress: null, ready: false };
+  if (persona.status === "needs_photos")
+    return { label: "Needs photos", color: DS.warning, progress: null, ready: false };
+  return { label: "Planned", color: DS.textFaint, progress: null, ready: false };
+}
+
+/** Real content-rating tag, derived from persona attributes (sfw / explicit). */
+function RatingTag({ persona }: { persona: ImageProvider }) {
+  const rating = personaRating(persona);
+  const explicit = rating === "explicit";
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+      style={{
+        color: explicit ? DS.critical : DS.success,
+        background: explicit ? "rgba(255,91,91,0.10)" : "rgba(47,227,138,0.10)",
+        border: `1px solid ${explicit ? "rgba(255,91,91,0.25)" : "rgba(47,227,138,0.25)"}`,
+      }}
+    >
+      <TagIcon className="h-2.5 w-2.5" />
+      {explicit ? "18+" : "SFW"}
+    </span>
+  );
+}
+
+function personaInitial(p: ImageProvider): string {
+  return (p.name ?? "?").trim().charAt(0).toUpperCase();
+}
+
+function PersonaAvatar({
+  persona,
+  size = 40,
+}: {
+  persona: ImageProvider;
+  size?: number;
+}) {
+  const src = persona.avatarPath ? uploadUrl(persona.avatarPath) : null;
+  return (
+    <span
+      className="flex shrink-0 items-center justify-center overflow-hidden rounded-full font-semibold"
+      style={{
+        height: size,
+        width: size,
+        background: DS.surface,
+        color: DS.text,
+        border: `1px solid ${DS.border2}`,
+        fontSize: size * 0.4,
+      }}
+    >
+      {src ? (
+        <img src={src} alt={persona.name} className="h-full w-full object-cover" />
+      ) : (
+        personaInitial(persona)
+      )}
+    </span>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Trained Personas row                                                       */
+/* -------------------------------------------------------------------------- */
+function NewPersonaCard({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-[150px] shrink-0 flex-col items-center justify-center gap-2 rounded-[16px] transition-colors hover:brightness-110"
+      style={{ border: `1px dashed ${DS.border3}`, color: DS.textFaint, minHeight: 188 }}
+      data-testid="new-persona"
+    >
+      <span
+        className="flex h-11 w-11 items-center justify-center rounded-full"
+        style={{ background: DS.surface3, border: `1px solid ${DS.border2}` }}
+      >
+        <Plus className="h-5 w-5" style={{ color: DS.primary }} />
+      </span>
+      <span className="text-[13px] font-semibold" style={{ color: DS.text }}>
+        New Persona
+      </span>
+      <span className="text-[11px]" style={{ color: DS.textFaint }}>
+        Create new character
+      </span>
+    </button>
+  );
+}
+
+function PersonaRowCard({
+  persona,
+  status,
+  selected,
+  onOpen,
+  onTrain,
+}: {
+  persona: ImageProvider;
+  status: PersonaStatus;
+  selected: boolean;
+  onOpen: () => void;
+  onTrain: () => void;
+}) {
+  const avatar = persona.avatarPath ? uploadUrl(persona.avatarPath) : null;
+  return (
+    <div
+      className="relative flex w-[170px] shrink-0 flex-col overflow-hidden rounded-[16px] transition-all"
+      style={{
+        background: DS.surface3,
+        border: `1px solid ${selected ? DS.primary : DS.border}`,
+        boxShadow: selected ? `0 0 0 1px ${DS.primary}, 0 8px 24px -16px rgba(59,130,255,0.6)` : undefined,
+      }}
+      data-testid={`persona-card-${persona.id}`}
+    >
+      {/* Portrait */}
+      <div className="relative h-[108px] w-full overflow-hidden" style={{ background: DS.surface }}>
+        {avatar ? (
+          <img src={avatar} alt={persona.name} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-2xl font-bold" style={{ color: DS.textFaint }}>
+            {personaInitial(persona)}
+          </div>
+        )}
+        <div
+          className="absolute inset-x-0 bottom-0 h-12"
+          style={{ background: "linear-gradient(180deg, transparent, rgba(6,9,15,0.85))" }}
+        />
+      </div>
+
+      {/* Info */}
+      <div className="flex flex-1 flex-col gap-1.5 p-2.5">
+        <div className="flex items-center justify-between gap-1">
+          <span className="truncate text-[13px] font-semibold" style={{ color: DS.text }}>
+            {persona.name}
+          </span>
+          <span
+            className="h-2 w-2 shrink-0 rounded-full"
+            style={{ background: status.color }}
+            title={status.label}
+          />
+        </div>
+        <span className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
+          <Sparkles className="h-2.5 w-2.5" />
+          Flux + LoRA
+        </span>
+        <div className="flex items-center justify-between gap-1">
+          <span className="text-[10px] font-medium" style={{ color: status.color }}>
+            {status.label}
+          </span>
+          <RatingTag persona={persona} />
+        </div>
+
+        {status.progress != null ? (
+          <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: DS.surface }}>
+            <div
+              className="h-full rounded-full transition-all"
+              style={{ width: `${status.progress}%`, background: status.color }}
+            />
+          </div>
+        ) : status.ready ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="mt-0.5 w-full rounded-lg py-1.5 text-[11px] font-semibold transition-colors"
+            style={
+              selected
+                ? { background: DS.primary, color: "#04122E" }
+                : { background: DS.surface, color: DS.text, border: `1px solid ${DS.border2}` }
+            }
+            data-testid={`open-studio-${persona.id}`}
+          >
+            Open Studio
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={onTrain}
+            className="mt-0.5 flex w-full items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors"
+            style={{ background: DS.surface, color: DS.text, border: `1px solid ${DS.border2}` }}
+            data-testid={`train-${persona.id}`}
+          >
+            <Cloud className="h-3 w-3" />
+            Train
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Generate Content panel (Image = REAL · Video = NEEDS-ENDPOINT, flagged)    */
+/* -------------------------------------------------------------------------- */
+const DIMENSIONS = [
+  { label: "896 × 1152 — Portrait (3:4)", ar: "3:4" },
+  { label: "1024 × 1024 — Square (1:1)", ar: "1:1" },
+  { label: "1152 × 896 — Landscape (4:3)", ar: "4:3" },
+  { label: "1080 × 1920 — Vertical (9:16)", ar: "9:16" },
+  { label: "1920 × 1080 — Wide (16:9)", ar: "16:9" },
+] as const;
+
+const COUNTS = [1, 2, 4, 8] as const;
+
+/** Compact, DS-styled batch progress. Polls the SAME batch endpoint the legacy
+ *  page used, and streams finished images into the gallery as they land. */
+function BatchProgress({
+  personaId,
+  batchId,
+  onClear,
+}: {
+  personaId: string;
+  batchId: string;
+  onClear: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const lastSucceeded = useRef(-1);
+  const batchQ = useQuery({
+    queryKey: ["image-studio", "batch", personaId, batchId],
+    queryFn: () => imageStudioApi.getBatch(personaId, batchId),
+    refetchInterval: (query) => {
+      const jobs = query.state.data?.jobs ?? [];
+      const active = jobs.some((j) => j.status !== "succeeded" && j.status !== "failed");
+      return active || jobs.length === 0 ? 5_000 : false;
+    },
+  });
+  const jobs: GenerationJob[] = batchQ.data?.jobs ?? [];
+  const total = jobs.length;
+  const succeeded = jobs.filter((j) => j.status === "succeeded").length;
+  const failed = jobs.filter((j) => j.status === "failed").length;
+  const inFlight = total - succeeded - failed;
+  const done = total > 0 && inFlight === 0;
+
+  useEffect(() => {
+    if (succeeded !== lastSucceeded.current) {
+      lastSucceeded.current = succeeded;
+      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", personaId] });
+    }
+  }, [succeeded, personaId, queryClient]);
+
+  return (
+    <div
+      className="mt-3 flex items-center justify-between gap-2 rounded-xl px-3 py-2"
+      style={{ background: "rgba(59,130,255,0.08)", border: `1px solid rgba(59,130,255,0.25)` }}
+      data-testid="batch-progress"
+    >
+      <div className="flex items-center gap-2 text-[12px]">
+        {done ? (
+          <CheckCircle2 className="h-3.5 w-3.5" style={{ color: DS.success }} />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: DS.primary }} />
+        )}
+        <span className="font-medium" style={{ color: DS.text }}>
+          {done ? "Generated" : "Generating"} {succeeded}/{total || "…"}
+        </span>
+        {failed > 0 && (
+          <span style={{ color: DS.critical }}>· {failed} failed</span>
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onClear}
+        className="text-[11px] font-medium"
+        style={{ color: DS.textMuted }}
+      >
+        {done ? "Dismiss" : "Hide"}
+      </button>
+    </div>
+  );
+}
+
+function GenerateContentPanel({ persona }: { persona: ImageProvider }) {
+  const queryClient = useQueryClient();
+  const [mode, setMode] = useState<"image" | "video">("image");
+  const [prompt, setPrompt] = useState("");
+  const [loraStrength, setLoraStrength] = useState(0.8);
+  const [aspect, setAspect] = useState<string>("3:4");
+  const [count, setCount] = useState<number>(2);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const rating = personaRating(persona);
+
+  const generateMut = useMutation({
+    mutationFn: () => {
+      const model = findModel(DEFAULT_MODEL_ID);
+      return imageStudioApi.generateBatch(persona.id, {
+        prompt_text: prompt.trim(),
+        lora_scale: loraStrength,
+        aspect_ratio: aspect,
+        count,
+        content_rating: rating,
+        provider_host: model.provider,
+        model: model.nativeModel,
+      });
+    },
+    onSuccess: (res) => {
+      setBatchId(res.batch_id);
+      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", persona.id] });
+    },
+  });
+
+  const labelCls = "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.1em]";
+
+  return (
+    <div className="flex flex-col gap-4">
+      <SectionLabel>Generate Content</SectionLabel>
+
+      {/* Image / Video toggle */}
+      <div
+        className="grid grid-cols-2 gap-1 rounded-xl p-1"
+        style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
+        data-testid="mode-toggle"
+      >
+        {(["image", "video"] as const).map((m) => {
+          const active = mode === m;
+          const Icon = m === "image" ? ImageIcon : Video;
+          return (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              data-testid={`mode-${m}`}
+              className="flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-semibold capitalize transition-colors"
+              style={
+                active
+                  ? { background: DS.primary, color: "#04122E" }
+                  : { color: DS.textMuted }
+              }
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {m}
+            </button>
+          );
+        })}
+      </div>
+
+      {mode === "video" ? (
+        <div
+          className="flex flex-col gap-3 rounded-xl p-4"
+          style={{ background: DS.surface, border: `1px dashed ${DS.border3}` }}
+        >
+          <span
+            className="inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide"
+            style={{ color: DS.warning, background: "rgba(244,185,64,0.10)", border: `1px solid rgba(244,185,64,0.3)` }}
+          >
+            <Server className="h-3 w-3" />
+            Needs endpoint — not wired yet
+          </span>
+          <p className="text-[12px] leading-relaxed" style={{ color: DS.textMuted }}>
+            Video generation for personas is planned. The controls below preview the
+            intended UI but no generation endpoint is connected — nothing is submitted.
+          </p>
+          <textarea
+            disabled
+            rows={3}
+            placeholder="Describe the motion, camera move, and scene…"
+            className="w-full resize-none rounded-lg p-2.5 text-[13px]"
+            style={{ background: DS.surface2, border: `1px solid ${DS.border}`, color: DS.textFaint }}
+          />
+          <button
+            type="button"
+            disabled
+            className="flex items-center justify-center gap-2 rounded-lg py-2.5 text-[13px] font-semibold opacity-50"
+            style={{ background: DS.surface2, color: DS.textMuted, border: `1px solid ${DS.border}`, cursor: "not-allowed" }}
+          >
+            <Video className="h-4 w-4" />
+            Generate video (disabled)
+          </button>
+        </div>
+      ) : (
+        <>
+          {/* Prompt */}
+          <div>
+            <label className={labelCls} style={{ color: DS.textFaint }}>
+              Prompt
+            </label>
+            <div className="relative">
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value.slice(0, 1000))}
+                rows={4}
+                placeholder="Describe the scene, pose, lighting, mood, outfit…"
+                className="w-full resize-none rounded-lg p-2.5 pr-2.5 text-[13px] focus:outline-none"
+                style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
+                data-testid="prompt-input"
+              />
+              <div className="mt-1.5 flex items-center justify-between">
+                <button
+                  type="button"
+                  disabled
+                  title="Prompt enhancement — coming soon"
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium opacity-60"
+                  style={{ color: DS.textMuted, border: `1px solid ${DS.border}`, cursor: "not-allowed" }}
+                >
+                  <Wand2 className="h-3 w-3" />
+                  Enhance prompt
+                </button>
+                <span className="text-[10px]" style={{ color: DS.textFaint, fontFamily: FONT_MONO }}>
+                  {prompt.length} / 1000
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Settings */}
+          <div className="flex flex-col gap-4">
+            <SectionLabel>Settings</SectionLabel>
+
+            {/* LoRA strength */}
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                  LoRA Strength
+                </span>
+                <span className="text-[12px] font-semibold" style={{ color: DS.text, fontFamily: FONT_MONO }}>
+                  {loraStrength.toFixed(2)}
+                </span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={1.2}
+                step={0.05}
+                value={loraStrength}
+                onChange={(e) => setLoraStrength(Number(e.target.value))}
+                className="w-full"
+                style={{ accentColor: DS.primary }}
+                data-testid="lora-strength"
+              />
+            </div>
+
+            {/* Dimensions */}
+            <div>
+              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
+                Dimensions
+              </span>
+              <div className="relative">
+                <select
+                  value={aspect}
+                  onChange={(e) => setAspect(e.target.value)}
+                  className="w-full appearance-none rounded-lg px-3 py-2 text-[13px] focus:outline-none"
+                  style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
+                  data-testid="dimensions"
+                >
+                  {DIMENSIONS.map((d) => (
+                    <option key={d.ar} value={d.ar} style={{ background: DS.surface2 }}>
+                      {d.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown
+                  className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2"
+                  style={{ color: DS.textFaint }}
+                />
+              </div>
+            </div>
+
+            {/* Count */}
+            <div>
+              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
+                Count
+              </span>
+              <div className="grid grid-cols-4 gap-1.5">
+                {COUNTS.map((c) => {
+                  const active = count === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setCount(c)}
+                      data-testid={`count-${c}`}
+                      className="rounded-lg py-1.5 text-[13px] font-semibold transition-colors"
+                      style={
+                        active
+                          ? { background: DS.primary, color: "#04122E" }
+                          : { background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }
+                      }
+                    >
+                      {c}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Advanced studio — preserves the full existing workbench
+                (structured controls, PhotoShoot, Undresser, template Library). */}
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen((v) => !v)}
+              className="flex items-center justify-between rounded-lg px-3 py-2 text-[12px] font-medium transition-colors"
+              style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.textMuted }}
+              data-testid="advanced-toggle"
+            >
+              <span className="flex items-center gap-1.5">
+                <Sliders className="h-3.5 w-3.5" />
+                Advanced studio — structured controls, PhotoShoot, templates
+              </span>
+              <ChevronDown className={cn("h-4 w-4 transition-transform", advancedOpen && "rotate-180")} />
+            </button>
+          </div>
+
+          {/* Generate */}
+          <button
+            type="button"
+            onClick={() => generateMut.mutate()}
+            disabled={generateMut.isPending || !prompt.trim()}
+            className="flex items-center justify-center gap-2 rounded-xl py-3 text-[14px] font-semibold transition-colors disabled:opacity-50"
+            style={{ background: DS.primary, color: "#04122E" }}
+            data-testid="generate-submit"
+          >
+            {generateMut.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            Generate
+          </button>
+          {generateMut.isError && (
+            <p className="text-[12px]" style={{ color: DS.critical }}>
+              {(generateMut.error as Error)?.message ?? "Failed to start generation."}
+            </p>
+          )}
+
+          {batchId && (
+            <BatchProgress
+              personaId={persona.id}
+              batchId={batchId}
+              onClear={() => setBatchId(null)}
+            />
+          )}
+
+          {advancedOpen && (
+            <div
+              className="rounded-xl"
+              style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
+              data-testid="advanced-workbench"
+            >
+              <PersonaWorkbench persona={persona} onBatchStarted={(id) => setBatchId(id)} />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Content Gallery (wired to the EXISTING per-persona generations endpoint)   */
+/* -------------------------------------------------------------------------- */
+type GalleryFilter = "all" | "test" | "production";
+
+function isVideo(g: PersonaGeneration): boolean {
+  const meta = g.generationMetadata as Record<string, unknown> | null;
+  const kind = meta?.["kind"] ?? meta?.["type"] ?? meta?.["media_type"];
+  if (typeof kind === "string" && /video/i.test(kind)) return true;
+  return /\.(mp4|webm|mov)$/i.test(g.imagePath ?? "");
+}
+
+function ContentGallery({ persona }: { persona: ImageProvider }) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<GalleryFilter>("all");
   const [newestFirst, setNewestFirst] = useState(true);
+  const [view, setView] = useState<"grid" | "list">("grid");
+  const [limit, setLimit] = useState(40);
   const [selected, setSelected] = useState<PersonaGeneration | null>(null);
 
   const genQ = useQuery({
     queryKey: ["image-studio", "generations", persona.id],
-    queryFn: () => imageStudioApi.listGenerations(persona.id, { limit: 60 }),
+    queryFn: () => imageStudioApi.listGenerations(persona.id, { limit: 120 }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => imageStudioApi.deleteGeneration(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: ["image-studio", "generations", persona.id],
-      });
+      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", persona.id] });
       setSelected(null);
     },
   });
 
   const generations = genQ.data?.generations ?? [];
+  const counts = useMemo(() => {
+    let test = 0;
+    let prod = 0;
+    for (const g of generations) {
+      if (g.source === "production") prod++;
+      else test++;
+    }
+    return { all: generations.length, test, production: prod };
+  }, [generations]);
 
   const visible = useMemo(() => {
     const rows =
@@ -292,485 +733,523 @@ function PersonaGallery({ persona }: { persona: ImageProvider }) {
       const delta = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       return newestFirst ? delta : -delta;
     });
-    return sorted;
-  }, [generations, filter, newestFirst]);
+    return sorted.slice(0, limit);
+  }, [generations, filter, newestFirst, limit]);
 
-  const chip = (value: GalleryFilter, label: string) => (
-    <button
-      key={value}
-      type="button"
-      onClick={() => setFilter(value)}
-      className={
-        "rounded-full px-2.5 py-0.5 text-xs font-medium transition-colors " +
-        (filter === value
-          ? "bg-indigo-100 text-indigo-700"
-          : "bg-muted text-muted-foreground hover:bg-muted/70")
-      }
-    >
-      {label}
-    </button>
-  );
+  const total = filter === "all" ? counts.all : counts[filter];
+
+  const chip = (value: GalleryFilter, label: string, n: number) => {
+    const active = filter === value;
+    return (
+      <button
+        key={value}
+        type="button"
+        onClick={() => setFilter(value)}
+        data-testid={`filter-${value}`}
+        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors"
+        style={
+          active
+            ? { background: DS.primary, color: "#04122E" }
+            : { background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }
+        }
+      >
+        {label}
+        <span
+          className="rounded px-1 text-[10px]"
+          style={{
+            background: active ? "rgba(4,18,46,0.15)" : DS.surface3,
+            color: active ? "#04122E" : DS.textFaint,
+            fontFamily: FONT_MONO,
+          }}
+        >
+          {n}
+        </span>
+      </button>
+    );
+  };
 
   return (
-    <div className="mt-3 border-t border-border pt-3">
-      <div className="mb-2 flex items-center justify-between">
+    <div className="flex h-full flex-col">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <SectionLabel>Content Gallery</SectionLabel>
         <div className="flex items-center gap-1.5">
-          <ImageIcon className="h-3.5 w-3.5 text-muted-foreground" />
-          <span className="text-xs font-medium text-muted-foreground">Gallery</span>
-          <div className="ml-1 flex items-center gap-1">
-            {chip("all", "All")}
-            {chip("test", "Test")}
-            {chip("production", "Production")}
+          <button
+            type="button"
+            onClick={() => setNewestFirst((v) => !v)}
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px]"
+            style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
+          >
+            {newestFirst ? "Newest" : "Oldest"}
+            <ChevronDown className="h-3 w-3" />
+          </button>
+          <button
+            type="button"
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px]"
+            style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
+          >
+            <Filter className="h-3 w-3" />
+            Filter
+          </button>
+          <div className="flex overflow-hidden rounded-lg" style={{ border: `1px solid ${DS.border}` }}>
+            {(["grid", "list"] as const).map((v) => {
+              const active = view === v;
+              const Icon = v === "grid" ? LayoutGrid : ListIcon;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setView(v)}
+                  className="px-2 py-1.5"
+                  style={{ background: active ? DS.primary : DS.surface, color: active ? "#04122E" : DS.textMuted }}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Filter chips */}
+      <div className="mb-3 flex items-center gap-1.5">
+        {chip("all", "All", counts.all)}
+        {chip("test", "Test", counts.test)}
+        {chip("production", "Production", counts.production)}
+      </div>
+
+      {genQ.isLoading ? (
+        <div className="flex items-center gap-2 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Loading gallery…
+        </div>
+      ) : visible.length === 0 ? (
+        <div
+          className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl py-16 text-center"
+          style={{ border: `1px dashed ${DS.border3}` }}
+        >
+          <ImageIcon className="h-7 w-7" style={{ color: DS.textFaint }} />
+          <p className="text-[13px]" style={{ color: DS.textMuted }}>
+            No generations yet
+          </p>
+          <p className="text-[11px]" style={{ color: DS.textFaint }}>
+            Hit Generate to populate this persona's gallery.
+          </p>
+        </div>
+      ) : (
+        <div
+          className={cn(
+            view === "grid"
+              ? "grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+              : "flex flex-col gap-2",
+          )}
+        >
+          {visible.map((g) => {
+            const video = isVideo(g);
+            const prod = g.source === "production";
+            return (
+              <button
+                key={g.id}
+                type="button"
+                onClick={() => setSelected(g)}
+                className="group relative overflow-hidden rounded-[14px]"
+                style={{
+                  border: `1px solid ${DS.border}`,
+                  background: DS.surface,
+                  aspectRatio: view === "grid" ? "3 / 4" : undefined,
+                }}
+                title={g.prompt ?? undefined}
+              >
+                <img
+                  src={uploadUrl(g.thumbnailPath ?? g.imagePath)}
+                  alt={g.prompt ?? "generation"}
+                  loading="lazy"
+                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  style={view === "list" ? { height: 64, width: 64, borderRadius: 12 } : undefined}
+                />
+                {/* tag */}
+                <span
+                  className="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
+                  style={{
+                    background: prod ? "rgba(47,227,138,0.85)" : "rgba(6,9,15,0.7)",
+                    color: prod ? "#04210F" : DS.text,
+                  }}
+                >
+                  {prod ? "Prod" : "Test"}
+                </span>
+                {/* gradient + time */}
+                <div
+                  className="absolute inset-x-0 bottom-0 flex items-end justify-between p-1.5"
+                  style={{ background: "linear-gradient(0deg, rgba(6,9,15,0.85), transparent)" }}
+                >
+                  <span className="text-[10px]" style={{ color: DS.textMuted }}>
+                    {relativeTime(g.createdAt)}
+                  </span>
+                </div>
+                {video && (
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <span
+                      className="flex h-9 w-9 items-center justify-center rounded-full"
+                      style={{ background: "rgba(6,9,15,0.6)", border: `1px solid ${DS.border2}` }}
+                    >
+                      <Play className="h-4 w-4" style={{ color: DS.text }} fill={DS.text} />
+                    </span>
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {!genQ.isLoading && visible.length < total && (
+        <div className="mt-4 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setLimit((l) => l + 40)}
+            className="rounded-lg px-4 py-2 text-[12px] font-medium"
+            style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
+          >
+            Load more
+          </button>
+        </div>
+      )}
+
+      {/* Lightweight viewer */}
+      {selected && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-6"
+          style={{ background: "rgba(6,9,15,0.8)" }}
+          onClick={() => setSelected(null)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl"
+            style={surfaceCard}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ background: DS.surface }}>
+              <img
+                src={uploadUrl(selected.imagePath)}
+                alt={selected.prompt ?? "generation"}
+                className="mx-auto max-h-[55vh] w-auto object-contain"
+              />
+            </div>
+            <div className="flex flex-col gap-3 p-4">
+              {selected.prompt && (
+                <p className="text-[12px] leading-relaxed" style={{ color: DS.textMuted }}>
+                  {selected.prompt}
+                </p>
+              )}
+              <div className="grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-4">
+                <Meta label="Source" value={selected.source} />
+                <Meta label="Model" value={selected.model ?? "—"} />
+                <Meta label="LoRA" value={selected.loraStrength ?? "—"} />
+                <Meta
+                  label="Cost"
+                  value={selected.costUsd ? `$${parseFloat(selected.costUsd).toFixed(2)}` : "—"}
+                />
+              </div>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => deleteMut.mutate(selected.id)}
+                  disabled={deleteMut.isPending}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium"
+                  style={{ color: DS.critical, border: `1px solid rgba(255,91,91,0.3)` }}
+                >
+                  {deleteMut.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3.5 w-3.5" />
+                  )}
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p style={{ color: DS.textFaint }}>{label}</p>
+      <p className="font-medium capitalize" style={{ color: DS.text }}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Profile / Knowledge / Settings tabs (real persona data via updatePersona)  */
+/* -------------------------------------------------------------------------- */
+function ProfileTab({ persona }: { persona: ImageProvider }) {
+  const queryClient = useQueryClient();
+  const [bio, setBio] = useState(persona.bio ?? "");
+  const saveMut = useMutation({
+    mutationFn: () => imageStudioApi.updatePersona(persona.id, { bio }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] }),
+  });
+  useEffect(() => setBio(persona.bio ?? ""), [persona.id, persona.bio]);
+
+  return (
+    <div className="max-w-2xl space-y-5 p-6">
+      <div className="flex items-center gap-4">
+        <PersonaAvatar persona={persona} size={64} />
+        <div>
+          <div className="text-[18px] font-semibold" style={{ color: DS.text }}>
+            {persona.name}
+          </div>
+          <div className="flex items-center gap-2 text-[12px]" style={{ color: DS.textFaint }}>
+            <Sparkles className="h-3 w-3" /> Flux + LoRA · <RatingTag persona={persona} />
+          </div>
+        </div>
+      </div>
+      <div>
+        <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.1em]" style={{ color: DS.textFaint }}>
+          Bio
+        </span>
+        <textarea
+          value={bio}
+          onChange={(e) => setBio(e.target.value)}
+          rows={5}
+          placeholder="Persona bio, personality, and backstory…"
+          className="w-full resize-none rounded-lg p-3 text-[13px] focus:outline-none"
+          style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
+        />
+      </div>
+      <button
+        type="button"
+        onClick={() => saveMut.mutate()}
+        disabled={saveMut.isPending}
+        className="rounded-lg px-4 py-2 text-[13px] font-semibold"
+        style={{ background: DS.primary, color: "#04122E" }}
+      >
+        {saveMut.isPending ? "Saving…" : "Save profile"}
+      </button>
+    </div>
+  );
+}
+
+function KnowledgeTab({ persona }: { persona: ImageProvider }) {
+  const attrs = (persona.attributes ?? {}) as Record<string, unknown>;
+  const entries = Object.entries(attrs);
+  return (
+    <div className="max-w-2xl space-y-4 p-6">
+      <p className="text-[13px]" style={{ color: DS.textMuted }}>
+        The trained knowledge backing this persona's model — trigger word and the
+        structured attributes baked into its prompts.
+      </p>
+      <div className="rounded-xl p-4" style={innerCard}>
+        <div className="mb-3 flex items-center gap-2 text-[12px] font-semibold" style={{ color: DS.text }}>
+          <BookOpen className="h-4 w-4" style={{ color: DS.analytics }} />
+          Persona attributes
+        </div>
+        {entries.length === 0 ? (
+          <p className="text-[12px]" style={{ color: DS.textFaint }}>
+            No structured attributes recorded for this persona yet.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {entries.map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: DS.surface }}>
+                <span className="text-[12px]" style={{ color: DS.textFaint }}>
+                  {k.replace(/_/g, " ")}
+                </span>
+                <span className="text-[12px] font-medium" style={{ color: DS.text, fontFamily: FONT_MONO }}>
+                  {String(v)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SettingsTab({
+  persona,
+  companyId,
+}: {
+  persona: ImageProvider;
+  companyId: string;
+}) {
+  const queryClient = useQueryClient();
+  const favMut = useMutation({
+    mutationFn: (fav: boolean) => imageStudioApi.updatePersona(persona.id, { is_favorite: fav }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] }),
+  });
+  return (
+    <div className="max-w-2xl space-y-4 p-6">
+      <div className="flex items-center justify-between rounded-xl p-4" style={innerCard}>
+        <div className="flex items-center gap-2">
+          <Server className="h-4 w-4" style={{ color: DS.automation }} />
+          <div>
+            <div className="text-[13px] font-medium" style={{ color: DS.text }}>
+              Local generation backend
+            </div>
+            <div className="text-[11px]" style={{ color: DS.textFaint, fontFamily: FONT_MONO }}>
+              ComfyUI :18801 · model {persona.model ?? "Flux + LoRA"}
+            </div>
+          </div>
+        </div>
+        <span className="text-[11px]" style={{ color: DS.success }}>
+          Configured
+        </span>
+      </div>
+
+      <div className="flex items-center justify-between rounded-xl p-4" style={innerCard}>
+        <div className="flex items-center gap-2">
+          <Star className="h-4 w-4" style={{ color: DS.warning }} />
+          <div className="text-[13px] font-medium" style={{ color: DS.text }}>
+            Favorite persona
           </div>
         </div>
         <button
           type="button"
-          onClick={() => setNewestFirst((v) => !v)}
-          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          title="Toggle sort order"
+          onClick={() => favMut.mutate(!persona.isFavorite)}
+          className="rounded-lg px-3 py-1.5 text-[12px] font-semibold"
+          style={
+            persona.isFavorite
+              ? { background: DS.primary, color: "#04122E" }
+              : { background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }
+          }
         >
-          <ArrowDownUp className="h-3 w-3" />
-          {newestFirst ? "Newest first" : "Oldest first"}
+          {persona.isFavorite ? "Favorited" : "Mark favorite"}
         </button>
       </div>
 
-      {genQ.isLoading ? (
-        <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading gallery…
-        </div>
-      ) : visible.length === 0 ? (
-        <div className="flex flex-col items-center gap-1 rounded-md border border-dashed border-border py-6 text-center">
-          <ImageIcon className="h-6 w-6 text-muted-foreground/40" />
-          <p className="text-xs text-muted-foreground">
-            No generations yet — hit 'Train' or 'Generate' to populate
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-3 gap-1.5">
-          {visible.map((g) => (
-            <button
-              key={g.id}
-              type="button"
-              onClick={() => setSelected(g)}
-              className="group relative aspect-square overflow-hidden rounded-md border border-border bg-muted focus:outline-none focus:ring-2 focus:ring-indigo-400"
-              title={g.prompt ?? undefined}
-            >
-              <img
-                src={uploadUrl(g.thumbnailPath ?? g.imagePath)}
-                alt={g.prompt ?? "generation"}
-                loading="lazy"
-                className="h-full w-full object-cover transition-transform group-hover:scale-105"
-              />
-              {g.source === "production" && (
-                <span className="absolute right-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[9px] font-medium text-white">
-                  prod
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <GenerationModal
-        generation={selected}
-        onOpenChange={(o) => !o && setSelected(null)}
-        onDelete={(id) => deleteMut.mutate(id)}
-        deleting={deleteMut.isPending}
-      />
+      <p className="text-[11px]" style={{ color: DS.textFaint }}>
+        Company {companyId} · persona id {persona.id}
+      </p>
     </div>
   );
 }
 
-// (Legacy modals removed — Generate + PhotoShoot now live inline via PersonaWorkbench.)
+/* -------------------------------------------------------------------------- */
+/* Selected persona workspace                                                 */
+/* -------------------------------------------------------------------------- */
+const WORKSPACE_TABS = [
+  { key: "studio", label: "Studio", icon: Wand2 },
+  { key: "profile", label: "Profile", icon: User },
+  { key: "knowledge", label: "Knowledge", icon: BookOpen },
+  { key: "settings", label: "Settings", icon: SettingsIcon },
+] as const;
+type WorkspaceTab = (typeof WORKSPACE_TABS)[number]["key"];
 
-/** Live batch status row shown under a persona card while a batch is firing. */
-function BatchProgressRow({
+function PersonaWorkspace({
   persona,
-  batchId,
-  onClear,
-}: {
-  persona: ImageProvider;
-  batchId: string;
-  onClear: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const lastSucceeded = useRef(-1);
-
-  const batchQ = useQuery({
-    queryKey: ["image-studio", "batch", persona.id, batchId],
-    queryFn: () => imageStudioApi.getBatch(persona.id, batchId),
-    refetchInterval: (query) => {
-      const jobs = query.state.data?.jobs ?? [];
-      const active = jobs.some((j) => j.status !== "succeeded" && j.status !== "failed");
-      return active || jobs.length === 0 ? 5_000 : false;
-    },
-  });
-
-  const jobs: GenerationJob[] = batchQ.data?.jobs ?? [];
-  const total = jobs.length;
-  const succeeded = jobs.filter((j) => j.status === "succeeded").length;
-  const failed = jobs.filter((j) => j.status === "failed").length;
-  const inFlight = total - succeeded - failed;
-  const done = total > 0 && inFlight === 0;
-
-  // Stream finished images into the gallery as soon as they land.
-  useEffect(() => {
-    if (succeeded !== lastSucceeded.current) {
-      lastSucceeded.current = succeeded;
-      queryClient.invalidateQueries({ queryKey: ["image-studio", "generations", persona.id] });
-    }
-  }, [succeeded, persona.id, queryClient]);
-
-  return (
-    <div
-      className="mt-3 flex items-center justify-between gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2"
-      data-testid="batch-progress-row"
-    >
-      <div className="flex items-center gap-2 text-xs">
-        {done ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
-        ) : (
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" />
-        )}
-        <span className="font-medium text-indigo-900">
-          {done ? "Generated" : "Generating"} {succeeded}/{total || "…"}
-        </span>
-        <span className="text-indigo-700/80">
-          — {succeeded} succeeded{failed > 0 ? `, ${failed} failed` : ""}
-          {inFlight > 0 ? `, ${inFlight} in flight` : ""}
-        </span>
-      </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 px-2 text-xs text-indigo-700 hover:text-indigo-900"
-        onClick={onClear}
-      >
-        {done ? "Dismiss" : "Cancel"}
-      </Button>
-    </div>
-  );
-}
-
-/** A single Trained Persona card: status, Generate/Train actions, batch row, gallery. */
-function PersonaCard({
-  persona,
-  job,
-  canTrain,
-  onTrain,
-  autoOpen = false,
-}: {
-  persona: ImageProvider;
-  job: LoraTrainingJob | undefined;
-  canTrain: boolean;
-  onTrain: () => void;
-  /** Landed here via an ?tab= deep-link — open the studio and own the URL tab. */
-  autoOpen?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(autoOpen);
-  const [mounted, setMounted] = useState(autoOpen);
-  const [activeBatchId, setActiveBatchId] = useState<string | null>(null);
-  const pill = trainingPill(job);
-
-  function toggleExpand() {
-    setMounted(true);
-    setExpanded((e) => !e);
-  }
-
-  return (
-    <Card className={cn("overflow-hidden transition-all", expanded && "sm:col-span-2 ring-1 ring-indigo-400/40")}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            {providerIcon("local_lora", persona.name)}
-            <CardTitle className="text-sm">{persona.name}</CardTitle>
-          </div>
-          {pill ?? statusBadge(persona)}
-        </div>
-        {persona.model && <CardDescription className="text-xs">{persona.model}</CardDescription>}
-      </CardHeader>
-      <CardContent className="pb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Server className="h-3 w-3" />
-              ComfyUI :18801
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={toggleExpand} data-testid="generate-open">
-              {expanded ? (
-                <>
-                  <ChevronUp className="mr-1.5 h-3.5 w-3.5" />
-                  Hide studio
-                </>
-              ) : (
-                <>
-                  <Zap className="mr-1.5 h-3.5 w-3.5" />
-                  Open studio
-                </>
-              )}
-            </Button>
-            <Button size="sm" variant="outline" onClick={onTrain} disabled={!canTrain}>
-              <Cloud className="mr-1.5 h-3.5 w-3.5" />
-              Train
-            </Button>
-          </div>
-        </div>
-        {job?.status === "failed" && job.errorMessage && (
-          <p className="mt-2 text-xs text-red-600">{job.errorMessage}</p>
-        )}
-        {job?.status === "ready" && job.outputLoraPath && (
-          <p className="mt-2 truncate text-xs text-green-700" title={job.outputLoraPath}>
-            Installed: {job.outputLoraPath}
-          </p>
-        )}
-        {!job && persona.statusDetail && persona.status !== "ready" && persona.status !== "training" && (
-          <p className="mt-2 text-xs text-amber-600">{persona.statusDetail}</p>
-        )}
-
-        {/* Inline workbench — expands downward (no modal/overlay). */}
-        <div
-          className={cn(
-            "grid transition-[grid-template-rows] duration-300 ease-out",
-            expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-          )}
-        >
-          <div className="overflow-hidden">
-            {mounted && (
-              <PersonaWorkbench
-                persona={persona}
-                onBatchStarted={(batchId) => setActiveBatchId(batchId)}
-                syncTabToUrl={autoOpen}
-              />
-            )}
-          </div>
-        </div>
-
-        {activeBatchId && (
-          <BatchProgressRow
-            persona={persona}
-            batchId={activeBatchId}
-            onClear={() => setActiveBatchId(null)}
-          />
-        )}
-
-        <PersonaGallery persona={persona} />
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Section A: Trained Personas ─────────────────────────────────────────────
-
-function TrainedPersonasSection({
-  providers,
-  loading,
+  status,
   companyId,
-  jobsByPersona,
 }: {
-  providers: ImageProvider[];
-  loading: boolean;
+  persona: ImageProvider;
+  status: PersonaStatus;
   companyId: string;
-  jobsByPersona: Map<string, LoraTrainingJob>;
 }) {
-  const personas = useMemo(() => providers.filter((p) => p.type === "local_lora"), [providers]);
-  const trainers = useMemo(
-    () => providers.filter((p) => p.trainingCapable),
-    [providers],
-  );
-  const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
-  // Deep-links auto-open a persona's studio:
-  //   ?persona=<id>&tab=<tab>  — open that specific persona (Personas quick actions)
-  //   ?tab=<tab>               — legacy /tools/* redirect: open the first persona
-  const [searchParams] = useSearchParams();
-  const deepLinkTab = searchParams.get("tab");
-  const deepLinkPersona = searchParams.get("persona");
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading personas...
-      </div>
-    );
-  }
+  const [tab, setTab] = useState<WorkspaceTab>("studio");
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">Trained Personas</h2>
-          <p className="text-sm text-muted-foreground">Flux + LoRA models trained on specific subjects</p>
-        </div>
-        <Button variant="outline" size="sm">
-          <Plus className="mr-1.5 h-4 w-4" />
-          New Persona
-        </Button>
-      </div>
-
-      {personas.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-8 text-center">
-            <Train className="h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">No trained personas yet.</p>
-            <p className="text-xs text-muted-foreground/60">
-              Train a Flux + LoRA model to generate consistent characters.
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {personas.map((p, i) => (
-            <PersonaCard
-              key={p.id}
-              persona={p}
-              job={jobsByPersona.get(p.id)}
-              canTrain={trainers.length > 0}
-              onTrain={() => setTrainingPersona(p)}
-              autoOpen={deepLinkPersona ? p.id === deepLinkPersona : i === 0 && !!deepLinkTab}
-            />
-          ))}
-        </div>
-      )}
-
-      {trainingPersona && (
-        <TrainPersonaModal
-          open={!!trainingPersona}
-          onOpenChange={(o) => !o && setTrainingPersona(null)}
-          companyId={companyId}
-          persona={trainingPersona}
-          trainers={trainers}
-        />
-      )}
-    </div>
-  );
-}
-
-// ─── Section B: General Image Gen ─────────────────────────────────────────────
-
-const EXTERNAL_PROVIDER_LABELS: Record<string, string> = {
-  "Nano Banana": "Gemini 2.5 Flash Image",
-  "OpenAI": "gpt-image-2",
-  "BFL Flux": "Replicate",
-  "Recraft v3": "Recraft",
-  "Ideogram v2": "Ideogram",
-  "Replicate": "ostris/flux-dev-lora-trainer",
-};
-
-function externalProviderDescription(name: string): string {
-  return EXTERNAL_PROVIDER_LABELS[name] ?? name;
-}
-
-/** External provider card — click "Quick Generate" to expand an inline generate
- *  panel (prompt + params + Browse templates), replacing the dead display card. */
-function ExternalProviderCard({
-  provider,
-  personas,
-}: {
-  provider: ImageProvider;
-  personas: ImageProvider[];
-}) {
-  const [open, setOpen] = useState(false);
-  const label = externalProviderDescription(provider.name);
-  const costLabel =
-    provider.costPerUnit && provider.costPerUnit !== "0"
-      ? provider.trainingCapable
-        ? `$${parseFloat(provider.costPerUnit).toFixed(2)}/run`
-        : `$${parseFloat(provider.costPerUnit).toFixed(4)}/img`
-      : null;
-
-  return (
-    <Card className={cn("overflow-hidden", open && "sm:col-span-2 ring-1 ring-indigo-400/40")}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-2">
-            {providerIcon("external_api", provider.name)}
-            <div>
-              <CardTitle className="text-sm">{provider.name}</CardTitle>
-              <CardDescription className="text-xs">{label}</CardDescription>
+    <section style={surfaceCard} className="overflow-hidden">
+      {/* Workspace header */}
+      <div
+        className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
+        style={{ borderBottom: `1px solid ${DS.border}` }}
+      >
+        <div className="flex items-center gap-3">
+          <PersonaAvatar persona={persona} size={44} />
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[17px] font-semibold" style={{ color: DS.text }}>
+                {persona.name}
+              </span>
+              <span className="h-2 w-2 rounded-full" style={{ background: status.color }} />
+              <span className="text-[12px] font-medium" style={{ color: status.color }}>
+                {status.label}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-[11px]" style={{ color: DS.textFaint }}>
+              <Sparkles className="h-3 w-3" /> Flux + LoRA
+              <RatingTag persona={persona} />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {provider.trainingCapable && (
-              <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">trainer</Badge>
-            )}
-            {costLabel && <span className="text-xs text-muted-foreground">{costLabel}</span>}
+        </div>
+
+        <button
+          type="button"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium"
+          style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          View Public Profile
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1 px-5 pt-3" style={{ borderBottom: `1px solid ${DS.border}` }}>
+        {WORKSPACE_TABS.map(({ key, label, icon: Icon }) => {
+          const active = tab === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTab(key)}
+              data-testid={`ws-tab-${key}`}
+              className="flex items-center gap-1.5 px-3 pb-3 text-[13px] font-medium transition-colors"
+              style={{
+                color: active ? DS.text : DS.textMuted,
+                borderBottom: `2px solid ${active ? DS.primary : "transparent"}`,
+                marginBottom: -1,
+              }}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Body */}
+      {tab === "studio" ? (
+        <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-[380px_minmax(0,1fr)]">
+          <div
+            className="rounded-xl p-4"
+            style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+          >
+            <GenerateContentPanel persona={persona} />
+          </div>
+          <div
+            className="rounded-xl p-4"
+            style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+          >
+            <ContentGallery persona={persona} />
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="pb-4">
-        <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Bot className="h-3 w-3" />
-            {provider.model ?? label}
-          </span>
-          {!provider.trainingCapable && (
-            <Button size="sm" variant="outline" onClick={() => setOpen((o) => !o)} data-testid={`external-open-${provider.id}`}>
-              {open ? <ChevronUp className="mr-1.5 h-3.5 w-3.5" /> : <Zap className="mr-1.5 h-3.5 w-3.5" />}
-              {open ? "Hide" : "Quick Generate"}
-            </Button>
-          )}
-        </div>
-        {open && <ExternalProviderQuickGenerate provider={provider} personas={personas} />}
-      </CardContent>
-    </Card>
-  );
-}
-
-function GeneralImageGenSection({ providers, loading }: { providers: ImageProvider[]; loading: boolean }) {
-  const external = useMemo(() => providers.filter((p) => p.type === "external_api"), [providers]);
-  const personas = useMemo(() => providers.filter((p) => p.type === "local_lora"), [providers]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading providers...
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold">General Image Gen</h2>
-          <p className="text-sm text-muted-foreground">External API providers for image generation</p>
-        </div>
-        <Button variant="outline" size="sm">
-          <Plus className="mr-1.5 h-4 w-4" />
-          Add Provider
-        </Button>
-      </div>
-
-      {external.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-8 text-center">
-            <ImageIcon className="h-8 w-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">No external providers configured.</p>
-            <p className="text-xs text-muted-foreground/60">
-              Add API providers like OpenAI, Replicate, or Gemini.
-            </p>
-          </CardContent>
-        </Card>
+      ) : tab === "profile" ? (
+        <ProfileTab persona={persona} />
+      ) : tab === "knowledge" ? (
+        <KnowledgeTab persona={persona} />
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {external.map((p) => (
-            <ExternalProviderCard key={p.id} provider={p} personas={personas} />
-          ))}
-        </div>
+        <SettingsTab persona={persona} companyId={companyId} />
       )}
-    </div>
+    </section>
   );
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
-
+/* -------------------------------------------------------------------------- */
+/* Page                                                                       */
+/* -------------------------------------------------------------------------- */
 export function ImageStudio() {
   const { selectedCompanyId } = useCompany();
   const companyId = selectedCompanyId ?? null;
+  const [searchParams] = useSearchParams();
+  const deepLinkPersona = searchParams.get("persona");
+
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
 
   const providersQ = useQuery({
     queryKey: ["image-studio", "providers", companyId],
@@ -783,20 +1262,23 @@ export function ImageStudio() {
     queryKey: ["image-studio", "training", companyId],
     queryFn: () => imageStudioApi.listTrainingJobs(companyId!),
     enabled: !!companyId,
-    // Poll while any job is mid-flight so the status pill stays live.
     refetchInterval: (query) => {
       const jobs = query.state.data?.jobs ?? [];
-      const active = jobs.some(
-        (j) => j.status !== "ready" && j.status !== "failed",
-      );
+      const active = jobs.some((j) => j.status !== "ready" && j.status !== "failed");
       return active ? 8_000 : false;
     },
   });
 
   const providers = providersQ.data?.providers ?? [];
-  const loading = providersQ.isLoading;
+  const personas = useMemo(
+    () =>
+      providers
+        .filter((p) => p.type === "local_lora")
+        .sort((a, b) => a.sortOrder - b.sortOrder),
+    [providers],
+  );
+  const trainers = useMemo(() => providers.filter((p) => p.trainingCapable), [providers]);
 
-  // Latest job per persona (jobs come back newest-first).
   const jobsByPersona = useMemo(() => {
     const map = new Map<string, LoraTrainingJob>();
     for (const job of jobsQ.data?.jobs ?? []) {
@@ -805,46 +1287,92 @@ export function ImageStudio() {
     return map;
   }, [jobsQ.data]);
 
+  // Default selection: deep-link → first ready → first persona.
+  useEffect(() => {
+    if (activeId && personas.some((p) => p.id === activeId)) return;
+    if (personas.length === 0) return;
+    if (deepLinkPersona && personas.some((p) => p.id === deepLinkPersona)) {
+      setActiveId(deepLinkPersona);
+      return;
+    }
+    const ready = personas.find(
+      (p) => personaStatus(p, jobsByPersona.get(p.id)).ready,
+    );
+    setActiveId((ready ?? personas[0]).id);
+  }, [personas, deepLinkPersona, activeId, jobsByPersona]);
+
+  const activePersona = personas.find((p) => p.id === activeId) ?? null;
+
   return (
-    <div className="mx-auto max-w-4xl px-4 py-6 sm:px-6 lg:px-8">
-      {/* Page header */}
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight">Image Studio</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Generate images with local LoRA personas or external API providers
+    <div
+      className="flex min-h-full flex-col gap-5 p-8"
+      style={{ background: DS.canvas }}
+      data-pp-page-v2="ai-influencer-studio"
+    >
+      {/* Header */}
+      <div>
+        <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
+          AI Influencer Studio
+        </h1>
+        <p className="text-[14px]" style={{ color: DS.textMuted }}>
+          Create and run AI personas. Generate images and video for social content.
         </p>
       </div>
 
-      <div className="space-y-10">
-        {/* Horizontal divider with label */}
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center" aria-hidden="true">
-            <div className="w-full border-t border-border" />
-          </div>
+      {/* Trained Personas row */}
+      <section style={surfaceCard} className="p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <SectionLabel>Trained Personas</SectionLabel>
+          <span className="text-[12px] font-medium" style={{ color: DS.textFaint }}>
+            · {personas.length} personas · Flux + LoRA
+          </span>
         </div>
 
-        <TrainedPersonasSection
-          providers={providers}
-          loading={loading}
+        {providersQ.isLoading ? (
+          <div className="flex items-center gap-2 py-6 text-[13px]" style={{ color: DS.textMuted }}>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading personas…
+          </div>
+        ) : (
+          <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-auto-hide">
+            <NewPersonaCard onClick={() => { /* New Persona wizard — existing flow */ }} />
+            {personas.map((p) => (
+              <PersonaRowCard
+                key={p.id}
+                persona={p}
+                status={personaStatus(p, jobsByPersona.get(p.id))}
+                selected={p.id === activeId}
+                onOpen={() => setActiveId(p.id)}
+                onTrain={() => setTrainingPersona(p)}
+              />
+            ))}
+            {personas.length === 0 && (
+              <div className="flex items-center text-[13px]" style={{ color: DS.textFaint }}>
+                No trained personas yet — train a Flux + LoRA model to get started.
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      {/* Selected persona workspace */}
+      {activePersona && (
+        <PersonaWorkspace
+          persona={activePersona}
+          status={personaStatus(activePersona, jobsByPersona.get(activePersona.id))}
           companyId={companyId ?? ""}
-          jobsByPersona={jobsByPersona}
         />
+      )}
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center" aria-hidden="true">
-            <div className="w-full border-t border-border" />
-          </div>
-        </div>
-
-        <GeneralImageGenSection providers={providers} loading={loading} />
-      </div>
-
-      {/* Quiet status bar */}
-      <div className="mt-10 border-t border-border pt-4">
-        <p className="text-xs text-muted-foreground/60">
-          Generation runs locally on ComfyUI :18801 · Cloud training via Replicate (~$3/run) · Selected provider costs apply for external APIs
-        </p>
-      </div>
+      {trainingPersona && (
+        <TrainPersonaModal
+          open={!!trainingPersona}
+          onOpenChange={(o) => !o && setTrainingPersona(null)}
+          companyId={companyId ?? ""}
+          persona={trainingPersona}
+          trainers={trainers}
+        />
+      )}
     </div>
   );
 }
