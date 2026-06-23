@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import {
   ArrowUpRight,
+  ChevronRight,
   CircleDot,
   GitBranch,
   Inbox,
@@ -63,30 +64,81 @@ function relativeTime(iso: string | null | undefined): string {
   return `${days}d ago`;
 }
 
-/** Resolve the directing leader (Ares/COO) from the real roster.
- *  NOTE: the live roster carries roles ("coo", "orchestrator") that are not in
- *  the typed AgentRole union yet, so we compare on the string value. */
-function resolveLeader(agents: Agent[]): Agent | null {
-  const coo = agents.find((a) => String(a.role) === "coo");
-  if (coo) return coo;
-  const flagged = agents.find(
-    (a) => (a.metadata as Record<string, unknown> | null)?.distributor === true,
-  );
-  if (flagged) return flagged;
-  // Fall back to the agent the most teammates report to.
-  const counts = new Map<string, number>();
-  for (const a of agents) {
-    if (a.reportsTo) counts.set(a.reportsTo, (counts.get(a.reportsTo) ?? 0) + 1);
-  }
-  let bestId: string | null = null;
-  let best = 0;
-  for (const [id, n] of counts) {
-    if (n > best) {
-      best = n;
-      bestId = id;
+interface Leadership {
+  /** Root leader / Chief of Staff — Hermes. */
+  leader: Agent | null;
+  /** Plan critic between leader and distributor — Brainstorm. */
+  critic: Agent | null;
+  /** COO / execution distributor that fans tasks to workers — Ares. */
+  distributor: Agent | null;
+  /** The worker execution layer (distributor's direct reports). */
+  workers: Agent[];
+}
+
+/**
+ * Resolve the leadership chain from the real roster, rooted at the leader.
+ *
+ * Correct chain (Tyler): Hermes (leader / Chief of Staff) → Brainstorm (plan
+ * critic) → Ares (COO / execution distributor) → workers. Node data is all real
+ * (names/roles/status from `agents`); the chain is rooted by walking the real
+ * `reportsTo` graph UP from the COO to its top ancestor.
+ *
+ * NOTE: the live roster carries roles ("coo", "orchestrator", "strategist") that
+ * are not in the typed AgentRole union yet, so we compare on the string value.
+ */
+function resolveLeadership(agents: Agent[]): Leadership {
+  const byId = new Map(agents.map((a) => [a.id, a]));
+
+  // Distributor = the COO (Ares); fall back to a metadata flag, then to the
+  // agent the most teammates report to.
+  let distributor =
+    agents.find((a) => String(a.role) === "coo") ??
+    agents.find(
+      (a) => (a.metadata as Record<string, unknown> | null)?.distributor === true,
+    ) ??
+    null;
+  if (!distributor) {
+    const counts = new Map<string, number>();
+    for (const a of agents) {
+      if (a.reportsTo) counts.set(a.reportsTo, (counts.get(a.reportsTo) ?? 0) + 1);
     }
+    let bestId: string | null = null;
+    let best = 0;
+    for (const [id, n] of counts) {
+      if (n > best) {
+        best = n;
+        bestId = id;
+      }
+    }
+    distributor = bestId ? byId.get(bestId) ?? null : null;
   }
-  return bestId ? agents.find((a) => a.id === bestId) ?? null : null;
+
+  // Leader = root ancestor of the distributor via real reportsTo (Hermes).
+  let leader: Agent | null = distributor;
+  const seen = new Set<string>();
+  while (leader?.reportsTo && byId.has(leader.reportsTo) && !seen.has(leader.id)) {
+    seen.add(leader.id);
+    leader = byId.get(leader.reportsTo) ?? leader;
+  }
+  // Prefer an explicit orchestrator root if one exists and the walk didn't reach it.
+  const orchestrator = agents.find((a) => String(a.role) === "orchestrator");
+  if (orchestrator && (!leader || leader.id === distributor?.id)) {
+    leader = orchestrator;
+  }
+
+  // Critic = a strategist among the leader's direct reports (Brainstorm).
+  const critic =
+    leader != null
+      ? agents.find(
+          (a) => a.reportsTo === leader!.id && String(a.role) === "strategist",
+        ) ?? null
+      : null;
+
+  const workers = distributor
+    ? agents.filter((a) => a.reportsTo === distributor!.id)
+    : [];
+
+  return { leader, critic, distributor, workers };
 }
 
 function Chip({
@@ -147,11 +199,11 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
     [delegationsQuery.data],
   );
 
-  const leader = useMemo(() => resolveLeader(agents), [agents]);
-  const team = useMemo(
-    () => (leader ? agents.filter((a) => a.reportsTo === leader.id) : []),
-    [agents, leader],
+  const { leader, critic, distributor, workers } = useMemo(
+    () => resolveLeadership(agents),
+    [agents],
   );
+  const team = workers;
 
   // Match a delegation's peer-id (e.g. "codex") to a roster agent by name.
   const agentByName = useMemo(() => {
@@ -183,8 +235,8 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
     <div className="px-8 py-6" style={{ color: DS.text }}>
       <style>{`@keyframes tm-ping{75%,100%{transform:scale(2.4);opacity:0}}`}</style>
 
-      {/* Leader header */}
-      <div className="mb-5 flex flex-wrap items-center gap-3">
+      {/* Leader header — rooted at Hermes (Chief of Staff / leader). */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <span
           className="flex h-9 w-9 items-center justify-center rounded-full"
           style={{ background: DS.primary }}
@@ -195,13 +247,13 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
           <div className="flex items-center gap-2 text-[15px] font-semibold">
             {leader ? leader.name : "Leader"}
             <span className="text-[12px] font-normal" style={{ color: DS.textFaint }}>
-              {leader?.title ?? "Distributor"}
+              {leader?.title ?? "Chief of Staff"}
             </span>
           </div>
           <div className="text-[12px]" style={{ color: DS.textMuted }}>
             {leader
-              ? `Directs ${team.length} teammate${team.length === 1 ? "" : "s"} — assigns work, collects results, integrates.`
-              : "No COO/distributor resolved for this company yet."}
+              ? `Leader — plans and approves, then directs work down through ${distributor?.name ?? "the COO"} to ${team.length} worker${team.length === 1 ? "" : "s"}.`
+              : "No leader resolved for this company yet."}
           </div>
         </div>
         <span
@@ -213,6 +265,14 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
           Live · read-only
         </span>
       </div>
+
+      {/* Leadership chain — Hermes → Brainstorm → Ares → workers (real reportsTo). */}
+      <LeadershipChain
+        leader={leader}
+        critic={critic}
+        distributor={distributor}
+        workerCount={team.length}
+      />
 
       {hasError ? (
         <div
@@ -283,7 +343,7 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
             </div>
             <DirectedMessages
               row={selected}
-              leaderName={leader?.name ?? "Leader"}
+              leaderName={distributor?.name ?? leader?.name ?? "Leader"}
               workerName={
                 selected ? agentByName.get(selected.agent.toLowerCase())?.name ?? selected.agent : null
               }
@@ -295,7 +355,7 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
         <div className="flex flex-col gap-5">
           <div>
             <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide" style={{ color: DS.textFaint }}>
-              Team — reports to {leader?.name ?? "leader"}
+              Workers — report to {distributor?.name ?? "the COO"}
             </div>
             <div style={surfaceCard} className="flex flex-col divide-y" >
               {team.length === 0 ? (
@@ -346,6 +406,111 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ChainNode({
+  agent,
+  roleLabel,
+  emphasis,
+}: {
+  agent: Agent | null;
+  roleLabel: string;
+  emphasis?: boolean;
+}) {
+  if (!agent) {
+    return (
+      <div
+        className="rounded-[12px] px-3 py-2"
+        style={{ border: `1px dashed ${DS.border2}`, color: DS.textFaint }}
+      >
+        <div className="text-[12px] font-medium">{roleLabel}</div>
+        <div className="text-[10px]">not resolved</div>
+      </div>
+    );
+  }
+  const tone = AGENT_STATUS_TONE[agent.status] ?? "muted";
+  return (
+    <div
+      className="min-w-0 rounded-[12px] px-3 py-2"
+      style={{
+        ...surfaceCard,
+        borderRadius: 12,
+        outline: emphasis ? `1px solid ${DS.primary}66` : "none",
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <StatusDot tone={tone} pulse={agent.status === "running"} />
+        <span className="truncate text-[13px] font-semibold" style={{ color: DS.text }}>
+          {agent.name}
+        </span>
+      </div>
+      <div className="mt-0.5 truncate text-[10px] uppercase tracking-wide" style={{ color: DS.textFaint }}>
+        {roleLabel}
+      </div>
+    </div>
+  );
+}
+
+function ChainArrow() {
+  return (
+    <ChevronRight
+      className="h-4 w-4 shrink-0 self-center"
+      style={{ color: DS.textFaint }}
+      aria-hidden
+    />
+  );
+}
+
+/** Hermes → Brainstorm → Ares → workers, rooted at the real leader. */
+function LeadershipChain({
+  leader,
+  critic,
+  distributor,
+  workerCount,
+}: {
+  leader: Agent | null;
+  critic: Agent | null;
+  distributor: Agent | null;
+  workerCount: number;
+}) {
+  return (
+    <div className="mb-6">
+      <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide" style={{ color: DS.textFaint }}>
+        Leadership chain
+      </div>
+      <div className="flex flex-wrap items-stretch gap-2">
+        <ChainNode agent={leader} roleLabel="Leader · Chief of Staff" emphasis />
+        <ChainArrow />
+        {critic ? (
+          <>
+            <ChainNode agent={critic} roleLabel="Plan critic" />
+            <ChainArrow />
+          </>
+        ) : null}
+        <ChainNode agent={distributor} roleLabel="COO · execution distributor" />
+        <ChainArrow />
+        <div
+          className="flex min-w-0 items-center rounded-[12px] px-3 py-2"
+          style={{ border: `1px solid ${DS.border2}`, background: DS.surface2 }}
+        >
+          <Users className="mr-2 h-4 w-4" style={{ color: DS.textMuted }} />
+          <div>
+            <div className="text-[13px] font-semibold" style={{ color: DS.text }}>
+              {workerCount} worker{workerCount === 1 ? "" : "s"}
+            </div>
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: DS.textFaint }}>
+              Execution layer
+            </div>
+          </div>
+        </div>
+      </div>
+      <div className="mt-1.5 text-[11px]" style={{ color: DS.textFaint }}>
+        Rooted on real <code style={{ fontFamily: MONO }}>reportsTo</code>:{" "}
+        {leader?.name ?? "leader"} directs the fleet;{" "}
+        {distributor?.name ?? "the COO"} fans tasks out to workers.
       </div>
     </div>
   );

@@ -80,8 +80,11 @@ columns confirmed present).
 
 A **"Team Mode"** tab in the War Room header (next to "Conversation"). Renders:
 
-- **Leader card** — Ares (resolved by `role==='coo'`, then `metadata.distributor`,
-  then most-reported-to), with its real title and live "directs N teammates".
+- **Leader card + leadership chain** — rooted at **Hermes** (the leader / Chief
+  of Staff), resolved by walking the real `reportsTo` graph UP from the COO to its
+  top ancestor. The chain renders **Hermes (leader) → Brainstorm (plan critic) →
+  Ares (COO / execution distributor) → workers**, every node sourced from real
+  `agents` data. Honest empty states for any unresolved tier.
 - **Task board** — four real status columns (Queued / In progress / Completed /
   Failed) from `GET …/jarvis/delegations` (polled 30s). Each card shows the
   worker, the directed task, the typed worker-status chip, and timing. Honest
