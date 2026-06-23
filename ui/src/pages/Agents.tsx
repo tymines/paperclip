@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent, type AgentDetail, type HeartbeatRun } from "@paperclipai/shared";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { AcpCapabilitiesPanel } from "../components/AcpCapabilitiesPanel";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -1088,6 +1089,10 @@ export function Agents() {
         <FilterPill label="Paused" count={counts.paused} dot={DS.warning} active={tab === "paused"} onClick={() => navigate("/agents/paused")} />
         <FilterPill label="Error" count={counts.error} dot={DS.critical} active={tab === "error"} onClick={() => navigate("/agents/error")} />
       </div>
+
+      {/* ACP phase-2 transport POC — agent self-described capabilities (read-only).
+          Runs alongside the existing Hermes<->Ares bridge; no cutover. */}
+      <AcpCapabilitiesPanel agentId="main" label="OpenClaw Agent" />
 
       {error && <p className="text-[13px]" style={{ color: DS.critical }}>{error.message}</p>}
 

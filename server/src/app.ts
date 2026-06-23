@@ -1,3 +1,4 @@
+import { createAcpRouter } from "./acp/acp-router.js";
 import express, { Router, type Request as ExpressRequest } from "express";
 import path from "node:path";
 import fs from "node:fs";
@@ -433,6 +434,12 @@ export async function createApp(
     });
   }
 
+  // ACP phase-2 transport POC (read-only, additive). Mounts the same router the
+  // sidecar uses. Inert unless PAPERCLIP_ACP_POC=1 so default behaviour and the
+  // existing Hermes<->Ares bridge are completely unaffected.
+  if (process.env.PAPERCLIP_ACP_POC === "1") {
+    app.use("/api", createAcpRouter());
+  }
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });
