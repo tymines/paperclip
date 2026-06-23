@@ -36,6 +36,24 @@ export const jarvisDelegations = pgTable(
     result: text("result"),
     /** Free-form payload — bridge messageId, urgency, depth, cwd, error detail, etc. */
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),
+    /**
+     * Typed worker-status contract (ADDITIVE — Team Mode). Nullable; existing
+     * rows are unaffected. Distinct from `status` (the queued/running/completed/
+     * failed transport lifecycle): this is the worker's *self-reported verdict*
+     * from the deer-flow sub-agent contract —
+     *   DONE | DONE_WITH_CONCERNS | NEEDS_CONTEXT | BLOCKED | FAILED
+     * (ref: ~/.openclaw agent-rooms-v1/orchestration.md §2). Lets the board show
+     * a real status instead of parsing prose. NULL until the worker reports one.
+     */
+    workerStatus: text("worker_status"),
+    /**
+     * Groups a single leader-directed fan-out of assignments into one batch
+     * (ADDITIVE — Team Mode). Nullable; flat/legacy delegations leave it NULL.
+     * One Hermes plan → one teamRunId across its worker subtasks, so the board
+     * can render the batch as a unit. (Complementary to, and intentionally
+     * distinct from, the proposed Ares `aresDispatchId` consolidation column.)
+     */
+    teamRunId: uuid("team_run_id"),
     /** Identity actor (user or agent) that triggered the delegation. */
     requestedByActorId: text("requested_by_actor_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -48,5 +66,6 @@ export const jarvisDelegations = pgTable(
     ),
     statusIdx: index("jarvis_delegations_status_idx").on(table.status),
     conversationIdx: index("jarvis_delegations_conversation_idx").on(table.conversationId),
+    teamRunIdx: index("jarvis_delegations_team_run_idx").on(table.teamRunId),
   }),
 );

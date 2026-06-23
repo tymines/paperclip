@@ -23,6 +23,7 @@ import {
   SquarePen,
 } from "lucide-react";
 import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
+import TeamModeBoard from "./TeamModeBoard";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useDialogActions } from "@/context/DialogContext";
@@ -277,6 +278,8 @@ export function JarvisPage() {
   const [listening, setListening] = useState(false);
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const recognitionRef = useRef<unknown>(null);
+  // War Room view: the conversation cockpit vs the read-only Team Mode board.
+  const [view, setView] = useState<"chat" | "team">("chat");
 
   useEffect(() => {
     setBreadcrumbs([{ label: "War Room" }]);
@@ -465,6 +468,36 @@ export function JarvisPage() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
+          {/* View switch: Conversation cockpit ↔ read-only Team Mode board */}
+          <div
+            className="flex items-center rounded-full p-0.5"
+            style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}
+            role="tablist"
+            aria-label="War Room view"
+          >
+            {([
+              { id: "chat", label: "Conversation" },
+              { id: "team", label: "Team Mode" },
+            ] as const).map((t) => {
+              const active = view === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setView(t.id)}
+                  className="rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+                  style={{
+                    background: active ? DS.primary : "transparent",
+                    color: active ? "#fff" : DS.textMuted,
+                  }}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
           {isDemo ? (
             <span
               className="rounded-full px-3 py-1 text-[11px] font-medium"
@@ -497,6 +530,18 @@ export function JarvisPage() {
         </div>
       </header>
 
+      {view === "team" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Team Mode board">
+          {selectedCompanyId ? (
+            <TeamModeBoard companyId={selectedCompanyId} />
+          ) : (
+            <div className="px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+              Select a company to see its team.
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* Conversation thread (full width) */}
       <div
         ref={threadRef}
@@ -602,6 +647,8 @@ export function JarvisPage() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }

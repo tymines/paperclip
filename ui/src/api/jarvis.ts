@@ -63,6 +63,14 @@ export interface JarvisDelegationRow {
   requestedByActorId: string | null;
   createdAt: string;
   completedAt: string | null;
+  /**
+   * Typed worker-status verdict (additive, migration 0131). Null until the
+   * worker reports one via the deer-flow sub-agent contract. See
+   * ui/src/lib/team-mode-contract.ts.
+   */
+  workerStatus?: string | null;
+  /** Groups a leader-directed fan-out batch (additive, migration 0131). */
+  teamRunId?: string | null;
 }
 
 export interface JarvisDelegationsResponse {
