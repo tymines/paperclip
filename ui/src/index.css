@@ -1772,3 +1772,75 @@ span.paperclip-project-mention-chip {
 [class*="_toolbarNodeKindSelectContainer_"] {
   z-index: 81 !important;
 }
+
+/* ============================================================================
+   DESIGN SYSTEM v1.0 — RE-LOCK  (branch: paperclip-design-polish-20260623)
+   Owner: shared theme + Home + Fleet.
+   Re-locks the drifted v2 palette to the canonical spec and raises polish per
+   UI/UX Pro Max: canonical canvas #06090F, SOLID surfaces #0D131D / #111926,
+   a single restrained blue accent #3B82FF for active/CTA only, calmer canvas
+   glow, stronger surface separation. Appended last so it wins the cascade;
+   fully additive and revertible (delete this block to restore prior look).
+   ============================================================================ */
+:root[data-ui-v2="true"] {
+  /* canonical accent scale */
+  --pp-accent: #3B82FF;
+  --pp-accent-strong: #2f6fe0;
+  --pp-accent-soft: rgba(59, 130, 255, 0.14);
+  --pp-accent-line: rgba(59, 130, 255, 0.42);
+
+  /* canvas + solid surfaces (per locked spec) */
+  --pp-v2-bg: #06090F;
+  --pp-v2-bg-2: #0A0F18;
+  --pp-v2-panel: #0D131D;
+  --pp-v2-panel-solid: #0D131D;
+  --pp-v2-panel-strong: #111926;
+  --pp-v2-line: rgba(255, 255, 255, 0.07);
+  --pp-v2-line-strong: rgba(255, 255, 255, 0.12);
+  --pp-v2-shadow-card: 0 14px 40px rgba(0, 0, 0, 0.28);
+
+  /* shadcn token remap so every utility inherits the re-locked palette */
+  --background: #06090F;
+  --card: #0D131D;
+  --card-foreground: #f4f4f5;
+  --popover: #111926;
+  --primary: #3B82FF;
+  --primary-foreground: #ffffff;
+  --accent: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.07);
+  --input: rgba(255, 255, 255, 0.10);
+  --ring: rgba(59, 130, 255, 0.55);
+  --sidebar: #080C13;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+}
+
+/* Restrained canvas glow — one cool wash replaces the purple/teal/green stack. */
+:root[data-ui-v2="true"] body {
+  background:
+    radial-gradient(circle at 16% -10%, rgba(59, 130, 255, 0.10), transparent 40rem),
+    radial-gradient(circle at 95% -2%, rgba(59, 130, 255, 0.05), transparent 32rem),
+    var(--pp-v2-bg);
+}
+
+/* Active nav: blue tint + left indicator bar (blue for active, per spec). */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active {
+  color: #ffffff;
+  background: var(--pp-accent-soft);
+  border-color: var(--pp-accent-line);
+  box-shadow: inset 2px 0 0 var(--pp-accent), inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active svg {
+  color: #93b4ff;
+}
+
+/* Primary sidebar CTA (New Task): solid blue pill (blue for CTA, per spec). */
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] {
+  color: #ffffff;
+  background: var(--pp-accent);
+  box-shadow: 0 10px 26px rgba(59, 130, 255, 0.22);
+}
+:root[data-ui-v2="true"] [data-pp-new-issue="true"]:hover {
+  color: #ffffff;
+  background: var(--pp-accent-strong);
+}
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] svg { color: #ffffff; }

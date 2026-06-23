@@ -81,7 +81,7 @@ const surfaceCard: CSSProperties = {
   background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
   border: `1px solid ${DS.border}`,
   borderRadius: 16,
-  boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+  boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 20px 48px -28px rgba(0,0,0,0.95)",
 };
 
 type FilterTab = "all" | "active" | "paused" | "error";
@@ -226,10 +226,13 @@ function UtilizationCost({ agent }: { agent: Agent }) {
         {formatUsd(spent)}
         <span style={{ color: DS.textFaint }}> / {budget > 0 ? formatUsd(budget) : "—"}</span>
       </div>
-      <div className="h-1 w-full overflow-hidden rounded-full" style={{ background: DS.border }}>
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full"
+        style={{ background: DS.surface3, boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.03)" }}
+      >
         <div
-          className="h-full rounded-full"
-          style={{ width: `${Math.max(budget > 0 ? 2 : 0, pct)}%`, background: barColor }}
+          className="h-full rounded-full transition-[width] duration-500"
+          style={{ width: `${Math.max(budget > 0 ? 2 : 0, pct)}%`, background: barColor, boxShadow: `0 0 8px ${barColor}66` }}
         />
       </div>
     </div>
@@ -352,7 +355,7 @@ function ColumnHeader() {
               "text-[10px] font-semibold uppercase tracking-[0.12em]",
               i >= 4 && i <= 5 ? "text-right" : "",
             )}
-            style={{ color: DS.textFaint }}
+            style={{ color: DS.textMuted }}
           >
             {h}
           </span>
