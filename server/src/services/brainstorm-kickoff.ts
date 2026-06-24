@@ -11,8 +11,8 @@
  *      Ares later — that handoff is a deliberate follow-up, not wired here).
  *
  * Model lanes (REAL — no canned/faked turns):
- *   - Hermes (planner)   = BRAINSTORM_HERMES_MODEL  (default = the live in-app
- *                          Hermes brain lane, JARVIS_BRAIN_MODEL / augivector-auto)
+ *   - Hermes (planner)   = BRAINSTORM_HERMES_MODEL  (default = augivector-research,
+ *                          the litellm Kimi K2.6 lane — real Hermes is Kimi K2.6)
  *   - Brainstorm (critic)= BRAINSTORM_CRITIC_MODEL   (default = augivector-glm,
  *                          the GLM-5.2 deep-reasoning lane Atlas uses)
  * Both are real chat-completions calls through the AugiVector gateway proxy
@@ -20,7 +20,8 @@
  * BRAINSTORM_HERMES_MODEL at a Kimi gateway lane to swap Hermes onto Kimi.
  *
  * Additive & non-destructive: OpenViking / QMD / memory-core untouched. The
- * loop is bounded by BRAINSTORM_MAX_ROUNDS and by the room's existing
+ * loop is bounded by BRAINSTORM_MAX_ROUNDS, a wall-clock backstop
+ * (BRAINSTORM_MAX_WALL_MS, ~10 min default), and the room's existing
  * ROOM_MESSAGE_HARD_CAP, so it cannot run away.
  */
 import type { Db } from "@paperclipai/db";
@@ -36,9 +37,22 @@ const PROXY_URL =
 const PROXY_TOKEN = process.env.AUGIVECTOR_TOKEN ?? "local";
 const HERMES_MODEL =
   process.env.BRAINSTORM_HERMES_MODEL ??
-  process.env.JARVIS_BRAIN_MODEL ??
-  "augivector-auto";
+  // Real Hermes is Kimi K2.6. augivector-research is the litellm Kimi lane
+  // (augivector-research -> openai/kimi-k2.6). The previous augivector-auto
+  // default routed Hermes to DeepSeek, so the loop's "Hermes" was not Kimi.
+  "augivector-research";
 const CRITIC_MODEL = process.env.BRAINSTORM_CRITIC_MODEL ?? "augivector-glm";
+
+// Per-lane sampling temperature. Kimi K2.6 (the Hermes lane) only accepts
+// temperature = 1 — the proxy rejects any other value for that lane with a 400 —
+// so default Hermes to 1. The GLM critic keeps a lower temperature for tighter,
+// more deterministic critiques. Both are env-overridable.
+function parseTemp(v: string | undefined, def: number): number {
+  const n = Number.parseFloat(String(v ?? ""));
+  return Number.isFinite(n) ? n : def;
+}
+const HERMES_TEMPERATURE = parseTemp(process.env.BRAINSTORM_HERMES_TEMPERATURE, 1);
+const CRITIC_TEMPERATURE = parseTemp(process.env.BRAINSTORM_CRITIC_TEMPERATURE, 0.5);
 
 function clampInt(v: string | undefined, def: number, lo: number, hi: number): number {
   const n = Number.parseInt(String(v ?? ""), 10);
@@ -46,8 +60,12 @@ function clampInt(v: string | undefined, def: number, lo: number, hi: number): n
   return Math.min(Math.max(n, lo), hi);
 }
 // Bounded: each "round" is one Brainstorm critique + one Hermes revision.
-const MAX_ROUNDS = clampInt(process.env.BRAINSTORM_MAX_ROUNDS, 3, 1, 6);
+const MAX_ROUNDS = clampInt(process.env.BRAINSTORM_MAX_ROUNDS, 8, 1, 16);
 const TURN_TIMEOUT_MS = clampInt(process.env.BRAINSTORM_TURN_TIMEOUT_MS, 60_000, 10_000, 180_000);
+// Wall-clock backstop (~10 min default): even with the higher round cap, a loop
+// where the two sides keep disagreeing still can't run away. The room's
+// ROOM_MESSAGE_HARD_CAP remains a second, independent backstop.
+const MAX_WALL_MS = clampInt(process.env.BRAINSTORM_MAX_WALL_MS, 600_000, 60_000, 3_600_000);
 
 // --- Convergence signal ------------------------------------------------------
 // Either speaker may end the loop by emitting the AGREED marker on its own line.
@@ -62,7 +80,12 @@ export interface ChatMsg {
   content: string;
 }
 
-async function chat(model: string, messages: ChatMsg[], maxTokens = 1100): Promise<string> {
+async function chat(
+  model: string,
+  messages: ChatMsg[],
+  maxTokens = 1100,
+  temperature = 0.5,
+): Promise<string> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TURN_TIMEOUT_MS);
   try {
@@ -76,7 +99,7 @@ async function chat(model: string, messages: ChatMsg[], maxTokens = 1100): Promi
         model,
         messages,
         max_tokens: maxTokens,
-        temperature: 0.5,
+        temperature,
       }),
       signal: ctrl.signal,
     });
@@ -185,7 +208,7 @@ export async function distillBrief(
 
   let raw = "";
   try {
-    raw = await chat(HERMES_MODEL, messages, 600);
+    raw = await chat(HERMES_MODEL, messages, 600, HERMES_TEMPERATURE);
   } catch (err) {
     logger.warn({ err }, "brainstorm-kickoff: distillBrief lane failed; using seed fallback");
   }
@@ -287,6 +310,7 @@ async function runLoop(
   const svc = roomService(db);
   const history: Exchange[] = [];
   let converged = false;
+  const deadline = Date.now() + MAX_WALL_MS;
 
   try {
     // Hermes drafts the first plan from the brief so Brainstorm always has a
@@ -295,18 +319,20 @@ async function runLoop(
       HERMES_MODEL,
       toChatHistory(HERMES_SYS, "hermes", brief, history),
       1200,
+      HERMES_TEMPERATURE,
     );
     const draftText = draft || "(no response from the Hermes lane)";
     history.push({ speaker: "hermes", text: draftText });
     await postTurn(svc, companyId, roomId, "hermes", draftText, "plan-turn");
     converged = isAgreed(draftText);
 
-    for (let round = 1; round <= MAX_ROUNDS && !converged; round++) {
+    for (let round = 1; round <= MAX_ROUNDS && !converged && Date.now() < deadline; round++) {
       // 1) Brainstorm (GLM) critiques the current plan.
       const critic = await chat(
         CRITIC_MODEL,
         toChatHistory(CRITIC_SYS, "brainstorm", brief, history),
         1200,
+        CRITIC_TEMPERATURE,
       );
       const criticText = critic || "(no response from the Brainstorm lane)";
       history.push({ speaker: "brainstorm", text: criticText });
@@ -321,6 +347,7 @@ async function runLoop(
         HERMES_MODEL,
         toChatHistory(HERMES_SYS, "hermes", brief, history),
         1200,
+        HERMES_TEMPERATURE,
       );
       const hermesText = hermes || "(no response from the Hermes lane)";
       history.push({ speaker: "hermes", text: hermesText });
@@ -343,7 +370,7 @@ async function runLoop(
         "bite-sized tasks (each with files/change/test/verify) and the " +
         "stop-and-verify checkpoints. This is the handoff artifact for Ares.",
     });
-    const finalPlan = await chat(HERMES_MODEL, finalMsgs, 1400);
+    const finalPlan = await chat(HERMES_MODEL, finalMsgs, 1400, HERMES_TEMPERATURE);
     await postTurn(
       svc,
       companyId,
