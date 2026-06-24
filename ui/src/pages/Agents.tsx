@@ -32,6 +32,8 @@ import {
 } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent, type AgentDetail, type HeartbeatRun } from "@paperclipai/shared";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
+import { AcpCapabilitiesPanel } from "../components/AcpCapabilitiesPanel";
+import { AcpFleetPanel } from "../components/AcpFleetPanel";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 
@@ -1090,6 +1092,15 @@ export function Agents() {
         <FilterPill label="Active" count={counts.active} dot={DS.success} active={tab === "active"} onClick={() => navigate("/agents/active")} />
         <FilterPill label="Paused" count={counts.paused} dot={DS.warning} active={tab === "paused"} onClick={() => navigate("/agents/paused")} />
         <FilterPill label="Error" count={counts.error} dot={DS.critical} active={tab === "error"} onClick={() => navigate("/agents/error")} />
+      </div>
+
+      {/* ACP Phase 1 — multi-agent self-described capabilities (read-only). Each
+          roster agent's models/modes are built from one ACP handshake, not from
+          hard-coded adapter config. Runs alongside the Hermes<->Ares bridge; no
+          cutover. The single-agent POC panel follows for continuity. */}
+      <div className="mb-4 flex flex-col gap-4">
+        <AcpFleetPanel />
+        <AcpCapabilitiesPanel agentId="main" label="OpenClaw Agent" />
       </div>
 
       {error && <p className="text-[13px]" style={{ color: DS.critical }}>{error.message}</p>}

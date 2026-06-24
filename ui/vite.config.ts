@@ -30,6 +30,11 @@ export default defineConfig(({ mode }) => ({
     allowedHosts: ["paperclip.augiport.com", "localhost", "127.0.0.1", ".internal"],
     watch: createUiDevWatchOptions(process.cwd()),
     proxy: {
+      // ACP phase-2 POC sidecar (read-only). Must precede "/api" so it wins.
+      "/api/acp": {
+        target: process.env.PP_ACP_TARGET || "http://127.0.0.1:18900",
+        changeOrigin: true,
+      },
       "/api": {
         target: process.env.PP_API_TARGET || "http://localhost:3100",
         changeOrigin: true,
