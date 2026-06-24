@@ -91,6 +91,16 @@ export { pluginWebhookDeliveries } from "./plugin_webhooks.js";
 export { pluginLogs } from "./plugin_logs.js";
 export { jarvisConversations } from "./jarvis_conversations.js";
 export { jarvisDelegations } from "./jarvis_delegations.js";
+export {
+  agentOperations,
+  type AgentOperation,
+  type NewAgentOperation,
+} from "./agent_operations.js";
+export {
+  teamTaskDependencies,
+  type TeamTaskDependency,
+  type NewTeamTaskDependency,
+} from "./team_task_dependencies.js";
 export { companyJarvisSettings } from "./company_jarvis_settings.js";
 export { jarvisLearnedPreferences } from "./jarvis_learned_preferences.js";
 export { webhookEventLog } from "./webhook_event_log.js";
