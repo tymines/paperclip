@@ -9,7 +9,7 @@
  * Architecture: the heavy feed-aggregation backend is a SEPARATE, host-portable
  * service (services/worldview-collector). This tab only READS from it over the
  * network at a CONFIGURABLE base URL (VITE_WORLDVIEW_API_URL, default
- * http://localhost:8788) — so the collector can live on Box 1 today or move to
+ * the same-origin proxy /api/worldview) — so the collector can live on Box 1 today or move to
  * Box 2 later without changing this page. The seismic panel reads USGS directly
  * (public, no key, CORS-open) so at least one panel is real with zero backend.
  *
@@ -51,7 +51,7 @@ const surfaceCard: CSSProperties = {
 
 const COLLECTOR =
   ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_WORLDVIEW_API_URL) ||
-  "http://localhost:8788";
+  "/api/worldview";
 
 // ── types ─────────────────────────────────────────────────────────────────
 interface FeedResp<T> { status: string; source?: string; items: T[]; note?: string | null }
@@ -67,7 +67,7 @@ async function getFeed<T>(path: string): Promise<FeedResp<T>> {
   return r.json();
 }
 async function getSources(): Promise<{ sources: SourceRow[] }> {
-  const r = await fetch(`${COLLECTOR}/api/sources`, { signal: AbortSignal.timeout(10000) });
+  const r = await fetch(`${COLLECTOR}/sources`, { signal: AbortSignal.timeout(10000) });
   if (!r.ok) throw new Error(`collector ${r.status}`);
   return r.json();
 }
@@ -173,8 +173,8 @@ export function WorldView() {
   const { setBreadcrumbs } = useBreadcrumbs();
   useEffect(() => { setBreadcrumbs([{ label: "World View" }]); }, [setBreadcrumbs]);
 
-  const news = useQuery({ queryKey: ["worldview", "news"], queryFn: () => getFeed<NewsItem>("/api/news"), refetchInterval: 120000, retry: 0 });
-  const geo = useQuery({ queryKey: ["worldview", "geo"], queryFn: () => getFeed<GeoItem>("/api/geopolitical"), refetchInterval: 120000, retry: 0 });
+  const news = useQuery({ queryKey: ["worldview", "news"], queryFn: () => getFeed<NewsItem>("/news"), refetchInterval: 120000, retry: 0 });
+  const geo = useQuery({ queryKey: ["worldview", "geo"], queryFn: () => getFeed<GeoItem>("/geopolitical"), refetchInterval: 120000, retry: 0 });
   const sources = useQuery({ queryKey: ["worldview", "sources"], queryFn: getSources, staleTime: 600000, retry: 0 });
   const quakes = useQuery({ queryKey: ["worldview", "quakes"], queryFn: getQuakes, refetchInterval: 120000, retry: 1 });
 

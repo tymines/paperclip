@@ -46,6 +46,7 @@ import {
   webhookReceiverRoutes,
   elevenlabsWebhookSecretRoutes,
 } from "./routes/webhooks.js";
+import { worldviewProxyRoutes } from "./routes/worldview.js";
 import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
@@ -196,6 +197,11 @@ export async function createApp(
   // Paperclip session/key to present. Auth comes from HMAC verification
   // inside the handler.
   app.use("/api/webhooks", webhookReceiverRoutes(db));
+  // World View tab feed proxy (additive, read-only): browsers on the public
+  // origin cannot reach the tailnet collector directly, so the server fetches
+  // it over Tailscale and returns JSON same-origin. Mounted OUTSIDE the guarded
+  // `/api` router so the passthrough needs no session/board handshake.
+  app.use(worldviewProxyRoutes());
   app.use("/api/auth", authRoutes(db));
   if (opts.betterAuthHandler) {
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
