@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { eq } from "drizzle-orm";
 import {
   afterAll,
   afterEach,
@@ -81,6 +82,62 @@ describeEmbeddedPostgres("jarvis learning + memory", () => {
     expect(turns[0]!.userTranscript).toBe("user message 3");
     expect(turns[4]!.userTranscript).toBe("user message 7");
   });
+
+  it(
+    "fetchRecentTurns bounds the working window to the current session " +
+      "(turns before the last Clear chat are excluded)",
+    async () => {
+      const company = await seedCompany(db);
+      const actor = "user-tyler";
+
+      // Three turns in the FIRST session.
+      for (let i = 1; i <= 3; i += 1) {
+        await db.insert(jarvisConversations).values({
+          companyId: company.id,
+          userActorId: actor,
+          userTranscript: `pre-clear message ${i}`,
+          agentReply: `pre-clear reply ${i}`,
+        });
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      // Tyler hits "Clear chat": stamp cleared_at on the visible rows. This is
+      // exactly what the /conversations/clear route does.
+      const clearMoment = new Date();
+      await db
+        .update(jarvisConversations)
+        .set({ clearedAt: clearMoment })
+        .where(eq(jarvisConversations.companyId, company.id));
+
+      await new Promise((r) => setTimeout(r, 10));
+
+      // Two turns in the NEW (post-clear) session.
+      for (let i = 1; i <= 2; i += 1) {
+        await db.insert(jarvisConversations).values({
+          companyId: company.id,
+          userActorId: actor,
+          userTranscript: `post-clear message ${i}`,
+          agentReply: `post-clear reply ${i}`,
+        });
+        await new Promise((r) => setTimeout(r, 5));
+      }
+
+      const turns = await fetchRecentTurns(db, company.id, actor);
+      // Only the current session's turns are in the working window; the
+      // pre-clear turns are still STORED but out of the active context.
+      expect(turns).toHaveLength(2);
+      expect(turns.map((t) => t.userTranscript)).toEqual([
+        "post-clear message 1",
+        "post-clear message 2",
+      ]);
+      // Pre-clear turns are not deleted — they remain in the table.
+      const all = await db
+        .select({ id: jarvisConversations.id })
+        .from(jarvisConversations)
+        .where(eq(jarvisConversations.companyId, company.id));
+      expect(all).toHaveLength(5);
+    },
+  );
 
   it("formatConversationHistoryBlock renders turns into a CONVERSATION HISTORY block", async () => {
     const company = await seedCompany(db);

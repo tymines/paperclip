@@ -48,13 +48,16 @@ export const jarvisConversations = pgTable(
      */
     interruptedAtChars: integer("interrupted_at_chars"),
     /**
-     * Soft-hide marker for the War Room "Clear chat" control. When set, the
-     * row is omitted from the on-screen transcript (the conversations
-     * endpoint filters cleared_at IS NULL) but is NOT deleted. The brain's
-     * continuity query (fetchRecentTurns) intentionally ignores this column,
-     * so clearing the view never costs Hermes his memory. The external
-     * memory layer (OpenViking / memory-core / QMD) is separate and
-     * unaffected.
+     * Session boundary + soft-hide marker for the War Room "Clear chat"
+     * control. When set, the row is omitted from the on-screen transcript
+     * (the conversations endpoint filters cleared_at IS NULL) but is NOT
+     * deleted. The brain's continuity query (fetchRecentTurns) treats
+     * MAX(cleared_at) for this (company, actor) as the start of the current
+     * session and only loads turns created after it — so "Clear chat" begins
+     * a genuinely fresh working session (clean context, lower cost) without
+     * losing the stored rows. Long-term memory (OpenViking) is committed on
+     * clear and retains everything for cross-session recall; memory-core / QMD
+     * config is untouched.
      */
     clearedAt: timestamp("cleared_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

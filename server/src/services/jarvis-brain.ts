@@ -52,6 +52,12 @@ import {
   observeForPreferences,
   type RecentTurn,
 } from "./jarvis-learning.js";
+import {
+  ingestChatTurn,
+  recallLongTerm,
+  formatRecallBlock,
+  referencesPast,
+} from "./openviking-memory.js";
 
 /**
  * The Jarvis brain.
@@ -847,12 +853,18 @@ export async function jarvisBrainReply(
   // answer "what can you do?" accurately for THIS machine. Conversation
   // history + learned preferences give the brain continuity across turns
   // and let it adapt to Tyler over time.
-  const [persona, ctx, capSnapshot, recentTurns, learnedPrefs] = await Promise.all([
+  const [persona, ctx, capSnapshot, recentTurns, learnedPrefs, recalled] = await Promise.all([
     loadPersona(),
     gatherContext(db, input.companyId),
     getCapabilitySnapshot().catch(() => null),
     fetchRecentTurns(db, input.companyId, input.userActorId, 20),
     fetchLearnedPreferences(db, input.companyId, input.userActorId),
+    // Long-term recall: only when Tyler references the past, query OpenViking
+    // so Hermes can pull back context from before a "Clear chat" or from
+    // earlier sessions. Best-effort and time-boxed inside recallLongTerm.
+    referencesPast(input.transcript)
+      ? recallLongTerm(input.transcript).catch(() => [])
+      : Promise.resolve([] as Awaited<ReturnType<typeof recallLongTerm>>),
   ]);
 
   const timeContext = buildTimeContext();
@@ -862,6 +874,9 @@ export async function jarvisBrainReply(
   const systemPromptParts = [basePrompt, formatTimeContextBlock(timeContext)];
   const prefsBlock = formatLearnedPreferencesBlock(learnedPrefs);
   if (prefsBlock) systemPromptParts.push(prefsBlock);
+  // Long-term recall block (short-term working context above, long-term here).
+  const recallBlock = formatRecallBlock(recalled);
+  if (recallBlock) systemPromptParts.push(recallBlock);
   // Continuity is carried as REAL prior message turns passed to the model
   // (see callLlm) rather than flattened into the system prompt, so the model
   // treats them as the actual back-and-forth and won't re-open with the same
@@ -1066,6 +1081,17 @@ export async function jarvisBrainReply(
       latencyMs: String(latencyMs),
     })
     .returning({ id: jarvisConversations.id });
+
+  // Also file this turn into OpenViking long-term memory (additive, fire-and-
+  // forget; never blocks or fails the reply). This is what lets Hermes recall
+  // the conversation across sessions and after a "Clear chat" — the short-term
+  // working window resets on clear, but long-term memory keeps everything.
+  void ingestChatTurn({
+    companyId: input.companyId,
+    userActorId: input.userActorId,
+    userText: input.transcript,
+    assistantText: reply,
+  });
 
   // Preference-learning observer. Truly fire-and-forget — never blocks the
   // user-facing reply. The deterministic-template path skips this since
