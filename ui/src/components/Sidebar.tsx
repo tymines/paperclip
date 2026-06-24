@@ -7,6 +7,7 @@ import {
   Search,
   SquarePen,
   Share2,
+  Globe,
   Boxes,
   Library,
   Repeat,
@@ -221,6 +222,7 @@ function SidebarLegacy({
       <SidebarSection label="Company">
         <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
+        <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/prompts" label="Prompts" icon={Library} />
@@ -306,6 +308,7 @@ function SidebarV1({
           badge={socialUnread > 0 ? socialUnread : undefined}
         />
         <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
+        <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
         <SidebarNavItem to="/prompts" label="Prompts" icon={Library} />
