@@ -41,6 +41,7 @@ import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
 import { ProviderCreditsSection } from "../components/ProviderCreditsSection";
+import { MlflowObservabilityCard } from "../components/MlflowObservabilityCard";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
@@ -830,6 +831,7 @@ export function Costs() {
 
   return (
     <div className="space-y-6" style={{ color: DS.text }}>
+      <MlflowObservabilityCard variant="costs" />
       <div className="space-y-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>

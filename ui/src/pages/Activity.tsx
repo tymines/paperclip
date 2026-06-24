@@ -17,6 +17,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { queryKeys } from "../lib/queryKeys";
 import { EmptyState } from "../components/EmptyState";
 import { ActivityRow } from "../components/ActivityRow";
+import { MlflowObservabilityCard } from "../components/MlflowObservabilityCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -196,6 +197,8 @@ export function Activity() {
           </SelectContent>
         </Select>
       </div>
+
+      <MlflowObservabilityCard variant="activity" />
 
       {error && (
         <p className="text-sm" style={{ color: DS.critical }}>

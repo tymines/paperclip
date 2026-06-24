@@ -32,6 +32,7 @@ import { approvalRoutes } from "./routes/approvals.js";
 import { secretRoutes } from "./routes/secrets.js";
 import { costRoutes } from "./routes/costs.js";
 import { activityRoutes } from "./routes/activity.js";
+import { mlflowRoutes } from "./routes/mlflow.js";
 import { jarvisRoutes } from "./routes/jarvis.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
@@ -234,6 +235,7 @@ export async function createApp(
   api.use(secretRoutes(db));
   api.use(costRoutes(db, { pluginWorkerManager: workerManager }));
   api.use(activityRoutes(db));
+  api.use(mlflowRoutes());
   api.use(jarvisRoutes(db));
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));

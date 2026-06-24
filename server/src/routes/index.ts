@@ -11,6 +11,7 @@ export { approvalRoutes } from "./approvals.js";
 export { secretRoutes } from "./secrets.js";
 export { costRoutes } from "./costs.js";
 export { activityRoutes } from "./activity.js";
+export { mlflowRoutes } from "./mlflow.js";
 export { dashboardRoutes } from "./dashboard.js";
 export { knowledgeGraphRoutes } from "./knowledge-graph.js";
 export { roomRoutes } from "./rooms.js";
