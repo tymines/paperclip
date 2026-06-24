@@ -70,6 +70,8 @@ export type AcpHandshakeResult = AcpHandshake | AcpHandshakeError;
 export interface AcpAgentCapabilities {
   id: string;
   name: string;
+  role?: string | null;
+  title?: string | null;
   workspace: string | null;
   runtime: string | null;
   model: string | null;
@@ -96,6 +98,7 @@ export interface AcpFleet {
   teamCapableReason: string;
   agents: AcpAgentCapabilities[];
   agentCount: number;
+  rosterSource?: "canonical" | "handshake";
   provenance: Record<string, AcpProvenance>;
   notes: { real: string[]; derived: string[]; stub: string[] };
 }
@@ -111,9 +114,10 @@ export const acpApi = {
     const qs = q.toString();
     return api.get<AcpHandshakeResult>(`/acp/handshake${qs ? `?${qs}` : ""}`);
   },
-  fleet: (params?: { url?: string }) => {
+  fleet: (params?: { url?: string; companyId?: string }) => {
     const q = new URLSearchParams();
     if (params?.url) q.set("url", params.url);
+    if (params?.companyId) q.set("companyId", params.companyId);
     const qs = q.toString();
     return api.get<AcpFleetResult>(`/acp/fleet${qs ? `?${qs}` : ""}`);
   },

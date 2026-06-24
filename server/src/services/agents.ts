@@ -675,23 +675,47 @@ export function agentService(db: Db) {
         .from(agents)
         .where(and(eq(agents.companyId, companyId), ne(agents.status, "terminated")));
       const normalizedRows = rows.map(normalizeAgentRow);
+
+      // Defensive tree build: the org chart MUST never silently drop agents.
+      // Two failure modes are guarded here (both observed as "missing agents"
+      // regressions when reportsTo wiring drifts):
+      //   1. reportsTo points at a manager that is missing/terminated -> the
+      //      agent is reparented to a root instead of vanishing.
+      //   2. a reportsTo cycle leaves a whole subtree unreachable from a root
+      //      -> a cycle guard prevents infinite recursion and any still-
+      //      unreached agents are surfaced as additional roots at the end.
+      const presentIds = new Set(normalizedRows.map((r) => r.id));
       const byManager = new Map<string | null, typeof normalizedRows>();
       for (const row of normalizedRows) {
-        const key = row.reportsTo ?? null;
+        const key =
+          row.reportsTo && presentIds.has(row.reportsTo) ? row.reportsTo : null;
         const group = byManager.get(key) ?? [];
         group.push(row);
         byManager.set(key, group);
       }
 
+      const visited = new Set<string>();
       const build = (managerId: string | null): Array<Record<string, unknown>> => {
         const members = byManager.get(managerId) ?? [];
-        return members.map((member) => ({
-          ...member,
-          reports: build(member.id),
-        }));
+        return members
+          .filter((member) => !visited.has(member.id))
+          .map((member) => {
+            visited.add(member.id);
+            return { ...member, reports: build(member.id) };
+          });
       };
 
-      return build(null);
+      const tree = build(null);
+
+      // Safety net: any agent not reached above (e.g. trapped in a cycle) is
+      // attached as a root so EVERY non-terminated agent always renders.
+      for (const row of normalizedRows) {
+        if (visited.has(row.id)) continue;
+        visited.add(row.id);
+        tree.push({ ...row, reports: build(row.id) });
+      }
+
+      return tree;
     },
 
     getChainOfCommand: async (agentId: string) => {

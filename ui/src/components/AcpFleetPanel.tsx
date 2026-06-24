@@ -97,10 +97,10 @@ function Chip({ children, title }: { children: React.ReactNode; title?: string }
   );
 }
 
-export function AcpFleetPanel({ url }: { url?: string } = {}) {
+export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: string } = {}) {
   const { data, isLoading, error, refetch, isFetching } = useQuery<AcpFleetResult>({
-    queryKey: ["acp", "fleet", url ?? "default"],
-    queryFn: () => acpApi.fleet({ url }),
+    queryKey: ["acp", "fleet", url ?? "default", companyId ?? "no-company"],
+    queryFn: () => acpApi.fleet({ url, companyId }),
     staleTime: 30_000,
     retry: false,
   });
@@ -232,7 +232,9 @@ export function AcpFleetPanel({ url }: { url?: string } = {}) {
                 prov={data.provenance.agents ?? "real"}
                 count={data.agents.length}
               >
-                Agents — per-agent capabilities (from handshake)
+                {data.rosterSource === "canonical"
+                  ? "Agents — per-agent capabilities (real fleet)"
+                  : "Agents — per-agent capabilities (from handshake)"}
               </SectionTitle>
               <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
                 {data.agents.map((a) => (
@@ -241,12 +243,19 @@ export function AcpFleetPanel({ url }: { url?: string } = {}) {
                     className="flex flex-col gap-2 rounded-[10px] p-3"
                     style={{ background: C.surface3, border: `1px solid ${C.border2}` }}
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[13px] font-semibold" style={{ color: C.text }}>
-                        {a.name}
-                      </span>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold" style={{ color: C.text }}>
+                          {a.name}
+                        </div>
+                        {(a.title || a.role) ? (
+                          <div className="truncate text-[10px] leading-tight" style={{ color: C.textMuted }} title={a.title ?? a.role ?? ""}>
+                            {a.title ?? a.role}
+                          </div>
+                        ) : null}
+                      </div>
                       {a.runtime ? (
-                        <span className="font-mono text-[10px]" style={{ color: C.textFaint }}>
+                        <span className="font-mono text-[10px] shrink-0" style={{ color: C.textFaint }}>
                           {a.runtime}
                         </span>
                       ) : null}

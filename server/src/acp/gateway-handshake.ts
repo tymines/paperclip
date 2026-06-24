@@ -25,6 +25,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
+import {
+  canonicalModelFor,
+  type CanonicalModel,
+} from "./canonical-fleet.js";
 
 // Matches the installed OpenClaw gateway (server.protocol === 4). The in-repo
 // openclaw_gateway adapter still pins v3; this reader was verified live against
@@ -108,6 +112,14 @@ export interface GatewayHandshakeOptions {
   /** Override the device identity / token source (defaults to ~/.openclaw). */
   openclawHome?: string;
   timeoutMs?: number;
+  /**
+   * Optional REAL fleet roster (from the Paperclip DB) used to replace the
+   * gateway's self-described persona pool with Tyler's actual agents. When
+   * supplied, per-agent capabilities are built from this roster joined with
+   * the canonical fleet model map (see canonical-fleet.ts) instead of the raw
+   * agents.list handshake. Additive: omit it and behaviour is unchanged.
+   */
+  roster?: Array<{ id: string; name: string; role?: string | null; title?: string | null }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +468,10 @@ export async function readGatewayHandshake(
 export interface AcpAgentCapabilities {
   id: string;
   name: string;
+  /** Org role (e.g. orchestrator, coo, engineer) when known. */
+  role: string | null;
+  /** Human title / role description shown under the name. */
+  title: string | null;
   workspace: string | null;
   runtime: string | null;
   /** Per-agent primary model id (verbatim from agents.list[].model.primary). */
@@ -492,6 +508,8 @@ export interface AcpFleet {
   /** Per-agent capabilities, one per roster entry — built from the handshake. */
   agents: AcpAgentCapabilities[];
   agentCount: number;
+  /** "canonical" = real Paperclip fleet roster; "handshake" = gateway personas. */
+  rosterSource: "canonical" | "handshake";
   provenance: Record<string, Provenance>;
   /** Honest real/derived/stub accounting for the UI legend + report. */
   notes: { real: string[]; derived: string[]; stub: string[] };
@@ -511,6 +529,8 @@ function normaliseAgentCapabilities(
       return {
         id,
         name: String(a?.name ?? a?.id ?? ""),
+        role: null,
+        title: null,
         workspace: a?.workspace ? String(a.workspace) : null,
         runtime: a?.agentRuntime?.id ? String(a.agentRuntime.id) : null,
         model: modelId,
@@ -529,6 +549,59 @@ function normaliseAgentCapabilities(
       };
     })
     .filter((a) => a.id);
+}
+
+/**
+ * Build per-agent capabilities from the REAL Paperclip fleet roster (DB names +
+ * roles/titles) joined with the canonical fleet model map. Used when the caller
+ * passes opts.roster, so the Fleet panel reflects Tyler's actual agents instead
+ * of the gateway's self-described persona pool. The shared model catalog from
+ * the live handshake is still used to resolve a richer modelInfo where possible.
+ */
+function buildCanonicalAgentCapabilities(
+  roster: Array<{ id: string; name: string; role?: string | null; title?: string | null }>,
+  models: AcpModel[],
+  team: { capable: boolean },
+): AcpAgentCapabilities[] {
+  const resolveModelInfo = (cm: CanonicalModel | undefined): AcpModel | null => {
+    if (!cm?.catalogMatch) return null;
+    const needle = cm.catalogMatch.toLowerCase();
+    return (
+      models.find(
+        (m) =>
+          m.id.toLowerCase().includes(needle) ||
+          (m.name ?? "").toLowerCase().includes(needle),
+      ) ?? null
+    );
+  };
+  return roster
+    .filter((a) => a && a.id)
+    .map((a) => {
+      const cm = canonicalModelFor(a.name);
+      return {
+        id: a.id,
+        name: a.name,
+        role: a.role ?? null,
+        title: a.title ?? null,
+        workspace: null,
+        runtime: null,
+        model: cm?.model ?? null,
+        modelInfo: resolveModelInfo(cm),
+        modes: [],
+        modeDefault: null,
+        teamCapable: team.capable,
+        provenance: {
+          // Names/roles/titles are REAL (verbatim from the Paperclip DB roster).
+          name: "real",
+          role: "real",
+          title: "real",
+          // Model is DERIVED: reconciled from the live fleet config (bridge +
+          // litellm aliases + DB titles) via the canonical fleet map.
+          model: "derived",
+          teamCapable: "derived",
+        } as Record<string, Provenance>,
+      };
+    });
 }
 
 export async function readGatewayFleet(
@@ -599,7 +672,11 @@ export async function readGatewayFleet(
 
     const models = normaliseModels(modelsRes);
     const team = deriveTeamCapable(methods);
-    const agents = normaliseAgentCapabilities(asArray(agentsRes?.agents), models, team);
+    const useCanonical = Array.isArray(opts.roster) && opts.roster.length > 0;
+    const agents = useCanonical
+      ? buildCanonicalAgentCapabilities(opts.roster!, models, team)
+      : normaliseAgentCapabilities(asArray(agentsRes?.agents), models, team);
+    const rosterSource: "canonical" | "handshake" = useCanonical ? "canonical" : "handshake";
 
     const fleet: AcpFleet = {
       ok: true,
@@ -621,6 +698,7 @@ export async function readGatewayFleet(
       teamCapableReason: team.reason,
       agents,
       agentCount: agents.length,
+      rosterSource,
       provenance: {
         server: "real",
         methods: "real",
@@ -628,7 +706,7 @@ export async function readGatewayFleet(
         models: "real",
         slashCommands: "real",
         identity: "real",
-        agents: "real",
+        agents: useCanonical ? "derived" : "real",
         teamCapable: "derived",
       },
       notes: {
@@ -637,9 +715,16 @@ export async function readGatewayFleet(
           "per-agent modes + default (thinkingLevels / thinkingDefault)",
           "per-agent runtime + workspace",
           "shared models / slash-commands / method+event catalog / identity",
-          `multi-agent: ${agents.length} agents built from ONE handshake (not hard-coded adapter config)`,
+          useCanonical
+            ? `${agents.length} agents = REAL Paperclip fleet roster (names/roles verbatim from DB)`
+            : `multi-agent: ${agents.length} agents built from ONE handshake (not hard-coded adapter config)`,
         ],
-        derived: ["teamCapable (computed from advertised orchestration methods)"],
+        derived: [
+          "teamCapable (computed from advertised orchestration methods)",
+          ...(useCanonical
+            ? ["per-agent model reconciled from the live fleet config (bridge personas/peers + litellm aliases + DB titles) via the canonical fleet map"]
+            : []),
+        ],
         stub: [
           "no separate live ACP session is opened per agent yet — that is Phase 2 (in parallel, no cutover). All capability data here is verbatim from the live handshake.",
         ],

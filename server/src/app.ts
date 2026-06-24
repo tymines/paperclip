@@ -450,7 +450,7 @@ export async function createApp(
   // (return a handshake error) unless a gateway url is supplied, so default
   // behaviour and the bridge are unaffected. (Was POC-gated behind
   // PAPERCLIP_ACP_POC=1, which left the shipped Phase-1 panel 404ing.)
-  app.use("/api", createAcpRouter());
+  app.use("/api", createAcpRouter(db));
   app.use("/api", api);
   app.use("/api", (_req, res) => {
     res.status(404).json({ error: "API route not found" });

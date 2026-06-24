@@ -1099,7 +1099,7 @@ export function Agents() {
           hard-coded adapter config. Runs alongside the Hermes<->Ares bridge; no
           cutover. The single-agent POC panel follows for continuity. */}
       <div className="mb-4 flex flex-col gap-4">
-        <AcpFleetPanel />
+        <AcpFleetPanel companyId={selectedCompanyId ?? undefined} />
         <AcpCapabilitiesPanel agentId="main" label="OpenClaw Agent" />
       </div>
 
