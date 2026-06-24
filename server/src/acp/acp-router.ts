@@ -14,7 +14,7 @@
  * Hermes<->Ares bridge and the production openclaw_gateway adapter.
  */
 import { Router } from "express";
-import { readGatewayHandshake } from "./gateway-handshake.js";
+import { readGatewayHandshake, readGatewayFleet } from "./gateway-handshake.js";
 
 export function createAcpRouter(): Router {
   const router = Router();
@@ -27,6 +27,18 @@ export function createAcpRouter(): Router {
     try {
       const handshake = await readGatewayHandshake({ gatewayAgentId, url, agentLabel });
       res.status(handshake.ok ? 200 : 502).json(handshake);
+    } catch (err) {
+      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  // GET /acp/fleet?url=<ws url>  — Phase 1: per-agent capabilities for the whole
+  // self-described roster, built from a single handshake (read-only, additive).
+  router.get("/acp/fleet", async (req, res) => {
+    const url = typeof req.query.url === "string" ? req.query.url : undefined;
+    try {
+      const fleet = await readGatewayFleet({ url });
+      res.status(fleet.ok ? 200 : 502).json(fleet);
     } catch (err) {
       res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
     }

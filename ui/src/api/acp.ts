@@ -67,6 +67,41 @@ export interface AcpHandshakeError {
 
 export type AcpHandshakeResult = AcpHandshake | AcpHandshakeError;
 
+export interface AcpAgentCapabilities {
+  id: string;
+  name: string;
+  workspace: string | null;
+  runtime: string | null;
+  model: string | null;
+  modelInfo: AcpModel | null;
+  modes: AcpMode[];
+  modeDefault: string | null;
+  teamCapable: boolean;
+  provenance: Record<string, AcpProvenance>;
+}
+
+export interface AcpFleet {
+  ok: true;
+  transport: string;
+  url: string;
+  connectedAtMs: number;
+  handshakeMs: number;
+  server: { version: string | null; protocol: number | null; connId: string | null };
+  methods: string[];
+  events: string[];
+  models: AcpModel[];
+  slashCommands: AcpSlashCommand[];
+  identity: { name: string | null; avatar: string | null };
+  teamCapable: boolean;
+  teamCapableReason: string;
+  agents: AcpAgentCapabilities[];
+  agentCount: number;
+  provenance: Record<string, AcpProvenance>;
+  notes: { real: string[]; derived: string[]; stub: string[] };
+}
+
+export type AcpFleetResult = AcpFleet | AcpHandshakeError;
+
 export const acpApi = {
   handshake: (params?: { agentId?: string; label?: string; url?: string }) => {
     const q = new URLSearchParams();
@@ -75,5 +110,11 @@ export const acpApi = {
     if (params?.url) q.set("url", params.url);
     const qs = q.toString();
     return api.get<AcpHandshakeResult>(`/acp/handshake${qs ? `?${qs}` : ""}`);
+  },
+  fleet: (params?: { url?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.url) q.set("url", params.url);
+    const qs = q.toString();
+    return api.get<AcpFleetResult>(`/acp/fleet${qs ? `?${qs}` : ""}`);
   },
 };

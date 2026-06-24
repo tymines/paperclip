@@ -435,3 +435,227 @@ export async function readGatewayHandshake(
     client?.close();
   }
 }
+
+// ===========================================================================
+// PHASE 1 — multi-agent fleet capabilities (additive, read-only).
+//
+// The single `connect` handshake already self-describes a MULTI-AGENT roster
+// (`agents.list`), each entry carrying real per-agent capability fields
+// (model.primary, thinkingLevels = modes, thinkingDefault, agentRuntime,
+// workspace). Phase 1 turns that one handshake into a per-agent capability bag
+// for EVERY roster agent, so Paperclip's Fleet builds each agent's models/modes
+// from the handshake instead of hard-coded adapter config.
+//
+// This is strictly parallel to the Hermes<->Ares bridge and the production
+// openclaw_gateway adapter: it opens a read-only connection, reads capability
+// metadata for the whole roster, and disconnects. It spawns nothing and mutates
+// nothing. The proven single-agent `readGatewayHandshake` above is untouched.
+// ===========================================================================
+
+/** One roster agent's capabilities, built entirely from the live handshake. */
+export interface AcpAgentCapabilities {
+  id: string;
+  name: string;
+  workspace: string | null;
+  runtime: string | null;
+  /** Per-agent primary model id (verbatim from agents.list[].model.primary). */
+  model: string | null;
+  /** Full model record resolved against the shared models.list catalog. */
+  modelInfo: AcpModel | null;
+  /** Per-agent thinking levels (= modes), verbatim. */
+  modes: AcpMode[];
+  modeDefault: string | null;
+  /** Derived from the shared gateway method catalog (one backend). */
+  teamCapable: boolean;
+  provenance: Record<string, Provenance>;
+}
+
+/**
+ * Fleet-wide capability bag: the shared backend catalog (read once) plus a
+ * per-agent capability bag for each roster agent.
+ */
+export interface AcpFleet {
+  ok: true;
+  transport: "openclaw-gateway-ws";
+  url: string;
+  connectedAtMs: number;
+  handshakeMs: number;
+  server: { version: string | null; protocol: number | null; connId: string | null };
+  /** Shared, verbatim from the backend. */
+  methods: string[];
+  events: string[];
+  models: AcpModel[];
+  slashCommands: AcpSlashCommand[];
+  identity: { name: string | null; avatar: string | null };
+  teamCapable: boolean;
+  teamCapableReason: string;
+  /** Per-agent capabilities, one per roster entry — built from the handshake. */
+  agents: AcpAgentCapabilities[];
+  agentCount: number;
+  provenance: Record<string, Provenance>;
+  /** Honest real/derived/stub accounting for the UI legend + report. */
+  notes: { real: string[]; derived: string[]; stub: string[] };
+}
+
+function normaliseAgentCapabilities(
+  rawAgents: any[],
+  models: AcpModel[],
+  team: { capable: boolean },
+): AcpAgentCapabilities[] {
+  const byId = new Map(models.map((m) => [m.id, m] as const));
+  return rawAgents
+    .map((a) => {
+      const id = String(a?.id ?? "");
+      const modelId = a?.model?.primary ? String(a.model.primary) : null;
+      const modes = asArray(a?.thinkingLevels).map((l) => ({ id: String(l.id), label: String(l.label ?? l.id) }));
+      return {
+        id,
+        name: String(a?.name ?? a?.id ?? ""),
+        workspace: a?.workspace ? String(a.workspace) : null,
+        runtime: a?.agentRuntime?.id ? String(a.agentRuntime.id) : null,
+        model: modelId,
+        modelInfo: modelId ? byId.get(modelId) ?? null : null,
+        modes,
+        modeDefault: a?.thinkingDefault ? String(a.thinkingDefault) : null,
+        teamCapable: team.capable,
+        provenance: {
+          model: "real",
+          modes: "real",
+          modeDefault: "real",
+          runtime: "real",
+          workspace: "real",
+          teamCapable: "derived",
+        } as Record<string, Provenance>,
+      };
+    })
+    .filter((a) => a.id);
+}
+
+export async function readGatewayFleet(
+  opts: GatewayHandshakeOptions = {},
+): Promise<AcpFleet | AcpHandshakeError> {
+  const url = opts.url ?? process.env.OPENCLAW_GATEWAY_URL ?? "ws://127.0.0.1:18789";
+  const agentLabel = opts.agentLabel ?? "OpenClaw Gateway";
+  const openclawHome = opts.openclawHome ?? path.join(os.homedir(), ".openclaw");
+  const timeoutMs = opts.timeoutMs ?? 12_000;
+
+  let stage = "identity";
+  let client: GatewayProbeClient | null = null;
+  const startedAt = Date.now();
+  try {
+    const identity = loadLocalDeviceIdentity(openclawHome);
+
+    stage = "open";
+    client = new GatewayProbeClient(url, timeoutMs);
+    await client.open();
+
+    stage = "connect";
+    const nonce = await client.waitChallenge();
+    const signedAtMs = Date.now();
+    const clientId = "gateway-client";
+    const clientMode = "backend";
+    const payload = buildDeviceAuthPayloadV3({
+      deviceId: identity.deviceId,
+      clientId,
+      clientMode,
+      role: identity.role,
+      scopes: identity.scopes,
+      signedAtMs,
+      token: identity.token,
+      nonce,
+      platform: process.platform,
+    });
+    // Negotiate protocol range; the live gateway selects v4 (see PROTOCOL_VERSION).
+    const hello = await client.request<any>("connect", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: { id: clientId, version: "paperclip-acp-fleet/0.1.0", platform: process.platform, mode: clientMode },
+      role: identity.role,
+      scopes: identity.scopes,
+      caps: [],
+      auth: { deviceToken: identity.token },
+      device: {
+        id: identity.deviceId,
+        publicKey: identity.publicKeyRawB64,
+        signature: b64u(crypto.sign(null, Buffer.from(payload, "utf8"), crypto.createPrivateKey(identity.privateKeyPem))),
+        signedAt: signedAtMs,
+        nonce,
+      },
+    });
+
+    const methods: string[] = asArray(hello?.features?.methods).map(String);
+    const events: string[] = asArray(hello?.features?.events).map(String);
+
+    stage = "capabilities";
+    const safe = async <T,>(method: string, fallback: T): Promise<T> => {
+      try { return (await client!.request<T>(method, {})) ?? fallback; } catch { return fallback; }
+    };
+    const [modelsRes, commandsRes, agentsRes, identityRes] = await Promise.all([
+      safe<any>("models.list", {}),
+      safe<any>("commands.list", {}),
+      safe<any>("agents.list", {}),
+      safe<any>("agent.identity.get", {}),
+    ]);
+
+    const models = normaliseModels(modelsRes);
+    const team = deriveTeamCapable(methods);
+    const agents = normaliseAgentCapabilities(asArray(agentsRes?.agents), models, team);
+
+    const fleet: AcpFleet = {
+      ok: true,
+      transport: "openclaw-gateway-ws",
+      url,
+      connectedAtMs: startedAt,
+      handshakeMs: Date.now() - startedAt,
+      server: {
+        version: hello?.server?.version ?? null,
+        protocol: typeof hello?.protocol === "number" ? hello.protocol : null,
+        connId: hello?.server?.connId ?? null,
+      },
+      methods,
+      events,
+      models,
+      slashCommands: normaliseCommands(commandsRes),
+      identity: { name: identityRes?.name ?? null, avatar: identityRes?.avatar ?? identityRes?.emoji ?? null },
+      teamCapable: team.capable,
+      teamCapableReason: team.reason,
+      agents,
+      agentCount: agents.length,
+      provenance: {
+        server: "real",
+        methods: "real",
+        events: "real",
+        models: "real",
+        slashCommands: "real",
+        identity: "real",
+        agents: "real",
+        teamCapable: "derived",
+      },
+      notes: {
+        real: [
+          "per-agent model (agents.list[].model.primary)",
+          "per-agent modes + default (thinkingLevels / thinkingDefault)",
+          "per-agent runtime + workspace",
+          "shared models / slash-commands / method+event catalog / identity",
+          `multi-agent: ${agents.length} agents built from ONE handshake (not hard-coded adapter config)`,
+        ],
+        derived: ["teamCapable (computed from advertised orchestration methods)"],
+        stub: [
+          "no separate live ACP session is opened per agent yet — that is Phase 2 (in parallel, no cutover). All capability data here is verbatim from the live handshake.",
+        ],
+      },
+    };
+    void agentLabel;
+    return fleet;
+  } catch (err) {
+    return {
+      ok: false,
+      agentLabel,
+      url,
+      error: err instanceof Error ? err.message : String(err),
+      stage,
+    };
+  } finally {
+    client?.close();
+  }
+}
