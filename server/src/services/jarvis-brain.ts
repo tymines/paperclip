@@ -1,5 +1,11 @@
 import type { Db } from "@paperclipai/db";
-import { jarvisConversations, agentBridgeReplyAttempts } from "@paperclipai/db";
+import {
+  jarvisConversations,
+  agentBridgeReplyAttempts,
+  agentConfigRevisions,
+  agents,
+} from "@paperclipai/db";
+import { desc, eq } from "drizzle-orm";
 import { getCostWatcherPayload } from "./cost-watcher.js";
 import { issueService } from "./issues.js";
 import { agentService } from "./agents.js";
@@ -42,7 +48,6 @@ import {
 import {
   fetchLearnedPreferences,
   fetchRecentTurns,
-  formatConversationHistoryBlock,
   formatLearnedPreferencesBlock,
   observeForPreferences,
   type RecentTurn,
@@ -123,6 +128,28 @@ export interface JarvisBrainOutput {
   };
 }
 
+interface WorkItem {
+  ref: string;
+  title: string;
+  status: string;
+  priority: string | null;
+  assignee: string | null;
+}
+
+interface DecisionItem {
+  agentName: string;
+  changed: string;
+  source: string | null;
+  at: string;
+}
+
+interface RosterItem {
+  name: string;
+  role: string | null;
+  status: string;
+  lastHeartbeatAt: string | null;
+}
+
 interface ContextBriefing {
   revenueMtdUsd: number | null;
   revenueDeltaPct: number | null;
@@ -132,6 +159,14 @@ interface ContextBriefing {
   fleetTotal: number;
   fleetActive: number;
   costAlerts: number;
+  /** Live work queue: active (non-terminal) issues, highest-signal first. */
+  queue: WorkItem[];
+  /** Issues currently blocked / needing Tyler's call. */
+  blocked: WorkItem[];
+  /** Recent agent config changes — closest thing to an upgrades/decisions log. */
+  decisions: DecisionItem[];
+  /** Full fleet roster with per-agent live status. */
+  roster: RosterItem[];
   asOf: string;
 }
 
@@ -170,12 +205,82 @@ function inferResponseType(transcript: string): ResponseType {
   return "standard";
 }
 
+const ACTIVE_ISSUE_STATUSES = new Set([
+  "backlog",
+  "todo",
+  "in_progress",
+  "in_review",
+  "blocked",
+]);
+const ISSUE_PRIORITY_RANK: Record<string, number> = {
+  urgent: 0,
+  high: 1,
+  medium: 2,
+  low: 3,
+};
+
+function toWorkItem(row: any): WorkItem {
+  const ref =
+    typeof row?.identifier === "string" && row.identifier
+      ? row.identifier
+      : row?.issueNumber != null
+        ? `#${row.issueNumber}`
+        : String(row?.id ?? "").slice(0, 8);
+  return {
+    ref,
+    title: typeof row?.title === "string" && row.title ? row.title : "(untitled)",
+    status: typeof row?.status === "string" ? row.status : "unknown",
+    priority: typeof row?.priority === "string" ? row.priority : null,
+    assignee: null,
+  };
+}
+
+async function fetchRecentDecisions(
+  db: Db,
+  companyId: string,
+  limit: number,
+): Promise<DecisionItem[]> {
+  const rows = await db
+    .select({
+      changedKeys: agentConfigRevisions.changedKeys,
+      source: agentConfigRevisions.source,
+      createdAt: agentConfigRevisions.createdAt,
+      agentName: agents.name,
+    })
+    .from(agentConfigRevisions)
+    .leftJoin(agents, eq(agentConfigRevisions.agentId, agents.id))
+    .where(eq(agentConfigRevisions.companyId, companyId))
+    .orderBy(desc(agentConfigRevisions.createdAt))
+    .limit(limit);
+  return rows.map((r) => {
+    const keys = Array.isArray(r.changedKeys)
+      ? (r.changedKeys as unknown[]).map((k) => String(k))
+      : [];
+    return {
+      agentName: r.agentName ?? "fleet",
+      changed: keys.length > 0 ? keys.join(", ") : "config",
+      source: r.source ?? null,
+      at:
+        r.createdAt instanceof Date
+          ? r.createdAt.toISOString()
+          : String(r.createdAt ?? ""),
+    };
+  });
+}
+
 async function gatherContext(db: Db, companyId: string): Promise<ContextBriefing> {
-  const [costPayload, blockedCount, agentList] = await Promise.all([
-    safe(() => getCostWatcherPayload(db, companyId), null),
-    safe(() => issueService(db).count(companyId, { attention: "blocked" }), 0),
-    safe(() => agentService(db).list(companyId), [] as Array<{ status: string }>),
-  ]);
+  const [costPayload, blockedCount, agentList, openIssues, blockedIssues, decisions] =
+    await Promise.all([
+      safe(() => getCostWatcherPayload(db, companyId), null),
+      safe(() => issueService(db).count(companyId, { attention: "blocked" }), 0),
+      safe(() => agentService(db).list(companyId), [] as any[]),
+      safe(() => issueService(db).list(companyId, { limit: 60 }), [] as any[]),
+      safe(
+        () => issueService(db).list(companyId, { attention: "blocked", limit: 12 }),
+        [] as any[],
+      ),
+      safe(() => fetchRecentDecisions(db, companyId, 6), [] as DecisionItem[]),
+    ]);
 
   let revenueMtdUsd: number | null = null;
   let revenueDeltaPct: number | null = null;
@@ -199,10 +304,55 @@ async function gatherContext(db: Db, companyId: string): Promise<ContextBriefing
     costAlerts = Array.isArray(p.alerts) ? p.alerts.length : 0;
   }
 
-  const fleetTotal = agentList.length;
-  const fleetActive = agentList.filter(
+  const agents_ = agentList as Array<{
+    id?: string;
+    name?: string;
+    role?: string | null;
+    status?: string;
+    lastHeartbeatAt?: unknown;
+  }>;
+  const nameById = new Map<string, string>();
+  for (const a of agents_) {
+    if (a && typeof a.id === "string" && typeof a.name === "string") nameById.set(a.id, a.name);
+  }
+  const resolveAssignee = (row: any): string | null => {
+    const id = typeof row?.assigneeAgentId === "string" ? row.assigneeAgentId : null;
+    return id && nameById.has(id) ? nameById.get(id)! : null;
+  };
+
+  const fleetTotal = agents_.length;
+  const fleetActive = agents_.filter(
     (a) => a.status === "active" || a.status === "running",
   ).length;
+
+  const roster: RosterItem[] = agents_.map((a) => ({
+    name: typeof a.name === "string" ? a.name : "(unnamed)",
+    role: typeof a.role === "string" ? a.role : null,
+    status: typeof a.status === "string" ? a.status : "unknown",
+    lastHeartbeatAt:
+      a.lastHeartbeatAt instanceof Date
+        ? a.lastHeartbeatAt.toISOString()
+        : typeof a.lastHeartbeatAt === "string"
+          ? a.lastHeartbeatAt
+          : null,
+  }));
+
+  const queue: WorkItem[] = (openIssues as any[])
+    .filter((r) => ACTIVE_ISSUE_STATUSES.has(String(r?.status)))
+    .sort((a, b) => {
+      const pa = ISSUE_PRIORITY_RANK[String(a?.priority)] ?? 9;
+      const pb = ISSUE_PRIORITY_RANK[String(b?.priority)] ?? 9;
+      if (pa !== pb) return pa - pb;
+      const ta = new Date(a?.updatedAt ?? a?.createdAt ?? 0).getTime();
+      const tb = new Date(b?.updatedAt ?? b?.createdAt ?? 0).getTime();
+      return tb - ta;
+    })
+    .slice(0, 12)
+    .map((r) => ({ ...toWorkItem(r), assignee: resolveAssignee(r) }));
+
+  const blocked: WorkItem[] = (blockedIssues as any[])
+    .slice(0, 12)
+    .map((r) => ({ ...toWorkItem(r), assignee: resolveAssignee(r) }));
 
   return {
     revenueMtdUsd,
@@ -213,6 +363,10 @@ async function gatherContext(db: Db, companyId: string): Promise<ContextBriefing
     fleetTotal,
     fleetActive,
     costAlerts,
+    queue,
+    blocked,
+    decisions,
+    roster,
     asOf: new Date().toISOString(),
   };
 }
@@ -242,22 +396,42 @@ function deterministicReply(
   transcript: string,
   ctx: ContextBriefing,
   responseType: ResponseType,
+  recentTurns: RecentTurn[] = [],
 ): string {
-  const lowered = transcript.toLowerCase();
-  const asksFinance =
-    lowered.includes("revenue") ||
-    lowered.includes("kpi") ||
-    lowered.includes("spend") ||
-    lowered.includes("burn") ||
-    lowered.includes("money") ||
-    lowered.includes("cost");
+  const lowered = transcript.toLowerCase().trim();
+  const list = (items: WorkItem[], n: number): string =>
+    items
+      .slice(0, n)
+      .map((w) => `${w.ref} ${w.title}`)
+      .join("; ");
 
-  // Finance only when explicitly asked.
+  // Greeting — greet, don't dump stats; vary by whether we already greeted so
+  // we never repeat the same opener (the old bug).
+  const isGreeting =
+    /^(hi|hey|hello|yo|sup|howdy|good (morning|afternoon|evening))\b/.test(lowered);
+  if (isGreeting && lowered.length <= 28) {
+    const alreadyGreeted = recentTurns.some((t) =>
+      /^(hi|hey|hello|yo|good (morning|afternoon|evening))\b/.test(
+        (t.userTranscript || "").toLowerCase().trim(),
+      ),
+    );
+    const hint =
+      ctx.queue.length > 0
+        ? ` We've got ${ctx.queue.length} active item${ctx.queue.length === 1 ? "" : "s"} in the queue${ctx.blocked.length > 0 ? ` and ${ctx.blocked.length} blocked` : ""}.`
+        : ctx.blocked.length > 0
+          ? ` ${ctx.blocked.length} item${ctx.blocked.length === 1 ? "" : "s"} blocked right now.`
+          : "";
+    return alreadyGreeted
+      ? `Still here, Tyler.${hint} What do you want to dig into?`
+      : `Hey Tyler.${hint} Want me to run through what's on the board, or do you have something specific in mind?`;
+  }
+
+  const asksFinance = /\b(revenue|kpi|spend|burn|money|cost|budget)\b/.test(lowered);
   if (asksFinance) {
-    if (lowered.includes("burn") || lowered.includes("expensive") || lowered.includes("cost")) {
+    if (/\b(burn|expensive|cost)\b/.test(lowered)) {
       return ctx.topBurnAgentName
         ? `Top burn last 24 hours is ${ctx.topBurnAgentName} at ${formatUsd(ctx.topBurnAgentSpendUsd)}, with ${ctx.costAlerts} alerts open. Want me to pause it?`
-        : `No notable burn in the last 24 hours, and the fleet's healthy at ${ctx.fleetActive} of ${ctx.fleetTotal} active. Anything you want me to dig into?`;
+        : `No notable burn in the last 24 hours, and the fleet's at ${ctx.fleetActive} of ${ctx.fleetTotal} active. Anything you want me to dig into?`;
     }
     const delta =
       ctx.revenueDeltaPct == null
@@ -266,50 +440,84 @@ function deterministicReply(
     return `Spend month-to-date is ${formatUsd(ctx.revenueMtdUsd)}${delta}, with ${ctx.costAlerts} active alerts. Want me to break it down by provider?`;
   }
 
-  if (lowered.includes("block") || lowered.includes("stuck") || lowered.includes("waiting")) {
-    return `${ctx.blockedIssueCount} blocked issues right now, and ${ctx.fleetActive} of ${ctx.fleetTotal} agents are active. Want me to walk you through what's waiting on you?`;
-  }
-  if (lowered.includes("fleet") || lowered.includes("agents") || (lowered.includes("status") && !lowered.includes("morning"))) {
-    return `${ctx.fleetActive} of ${ctx.fleetTotal} agents are active, with ${ctx.blockedIssueCount} blocked issues open. Anything specific you want me to check on?`;
+  // "What should we work on" / priorities / next — used to collapse to the
+  // generic line; now answers from the real queue.
+  if (
+    /\b(work on|what.*next|priorit|to ?do|backlog|tackle|focus|what should|what'?s on|get started|where do we|kick off)\b/.test(
+      lowered,
+    )
+  ) {
+    if (ctx.blocked.length > 0) {
+      return `I'd clear the blocked queue first — ${ctx.blocked.length} waiting: ${list(ctx.blocked, 3)}. After that, top of the active queue is ${list(ctx.queue, 3) || "empty"}. Want me to open the first one?`;
+    }
+    if (ctx.queue.length > 0) {
+      return `Top of the queue right now: ${list(ctx.queue, 4)}. ${ctx.fleetActive} of ${ctx.fleetTotal} agents are active. Want me to start the first one or reprioritize?`;
+    }
+    return `The active queue is empty and nothing's blocked. ${ctx.fleetActive} of ${ctx.fleetTotal} agents online — want me to pull in something new (research, content, or a build)?`;
   }
 
-  // Briefing or morning-style greeting — lead with work, weave 4-6 things.
-  if (
-    responseType === "briefing" ||
-    lowered.startsWith("brief") ||
-    lowered.includes("morning") ||
-    lowered.includes("good morning") ||
-    lowered.includes("good evening") ||
-    lowered.includes("good afternoon") ||
-    lowered.includes("rundown")
-  ) {
-    const greeting =
-      lowered.includes("morning") ? "Good morning, Tyler."
-        : lowered.includes("evening") ? "Good evening, Tyler."
-        : lowered.includes("afternoon") ? "Good afternoon, Tyler."
-        : "Here's where things stand.";
+  if (/\b(block|stuck|waiting)\b/.test(lowered)) {
+    return ctx.blocked.length > 0
+      ? `${ctx.blocked.length} blocked: ${list(ctx.blocked, 4)}. Want me to walk through what each is waiting on?`
+      : `Nothing's blocked right now. ${ctx.fleetActive} of ${ctx.fleetTotal} agents active. Want me to pull up the active queue?`;
+  }
+
+  if (/\b(fleet|agents?|roster|status|team)\b/.test(lowered) && !lowered.includes("morning")) {
+    const names = ctx.roster
+      .slice(0, 8)
+      .map((r) => `${r.name}:${r.status}`)
+      .join(", ");
+    return `${ctx.fleetActive} of ${ctx.fleetTotal} agents active${names ? ` — ${names}` : ""}. ${ctx.blockedIssueCount} blocked issues open. Anything specific you want me to check?`;
+  }
+
+  if (/\b(decision|decided|upgrade|chang(e|ed)|revision|recent)\b/.test(lowered) && ctx.decisions.length > 0) {
+    const d = ctx.decisions
+      .slice(0, 3)
+      .map((x) => `${x.agentName} (${x.changed})`)
+      .join("; ");
+    return `Recent config changes: ${d}. Want the full revision history on any of them?`;
+  }
+
+  if (responseType === "briefing" || /\b(brief|morning|evening|afternoon|rundown)\b/.test(lowered)) {
+    const greeting = lowered.includes("morning")
+      ? "Good morning, Tyler."
+      : lowered.includes("evening")
+        ? "Good evening, Tyler."
+        : lowered.includes("afternoon")
+          ? "Good afternoon, Tyler."
+          : "Here's where things stand.";
+    const queueLine =
+      ctx.queue.length > 0 ? ` Top of the queue: ${list(ctx.queue, 3)}.` : " Active queue is clear.";
     const blockers =
-      ctx.blockedIssueCount > 0
-        ? ` ${ctx.blockedIssueCount} item${ctx.blockedIssueCount === 1 ? "" : "s"} blocked — those need your call when you have a minute.`
-        : " Nothing blocked on you right now.";
+      ctx.blocked.length > 0
+        ? ` ${ctx.blocked.length} blocked and needing your call.`
+        : " Nothing blocked on you.";
     const fleet =
       ctx.fleetActive === ctx.fleetTotal
-        ? ` The fleet's healthy, all ${ctx.fleetTotal} agents online.`
-        : ` Fleet is ${ctx.fleetActive} of ${ctx.fleetTotal} agents active — the rest are idle or paused.`;
-    const alerts =
-      ctx.costAlerts > 0
-        ? ` ${ctx.costAlerts} cost alert${ctx.costAlerts === 1 ? "" : "s"} firing${ctx.topBurnAgentName ? ` on ${ctx.topBurnAgentName}` : ""}.`
-        : "";
-    const reco = ctx.blockedIssueCount > 0
-      ? " My recommendation: clear the blocked queue first. Want me to pull them up?"
-      : ctx.costAlerts > 0
-        ? " Recommend looking at the cost alerts. Want me to break them down?"
-        : " Recommend a quick scan of the active runs — want a list?";
-    return `${greeting}${blockers}${fleet}${alerts}${reco}`;
+        ? ` All ${ctx.fleetTotal} agents online.`
+        : ` Fleet ${ctx.fleetActive} of ${ctx.fleetTotal} active.`;
+    const reco =
+      ctx.blocked.length > 0
+        ? " I'd clear the blockers first — want me to open them?"
+        : ctx.queue.length > 0
+          ? " Want me to start the top item?"
+          : " Want me to line up something new?";
+    return `${greeting}${queueLine}${blockers}${fleet}${reco}`;
   }
 
-  // Standard / quick fallback.
-  return `${ctx.blockedIssueCount} blocked issues, ${ctx.fleetActive} of ${ctx.fleetTotal} agents active. Want me to dig into anything specific?`;
+  // Fallback — still context-aware and varied; never the old static line.
+  if (ctx.blocked.length > 0) {
+    return `Not sure I followed — but heads up, ${ctx.blocked.length} item${ctx.blocked.length === 1 ? " is" : "s are"} blocked (${list(ctx.blocked, 2)}). Want to tackle those, or did you mean something else?`;
+  }
+  if (ctx.queue.length > 0) {
+    return `Tell me a bit more and I'll dig in. Top of the queue is ${list(ctx.queue, 2)} if you want a starting point.`;
+  }
+  return `Tell me a bit more and I'll dig in — the queue's clear and ${ctx.fleetActive} of ${ctx.fleetTotal} agents are online, so we've got room to start something new.`;
+}
+
+interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
 }
 
 interface LlmCallResult {
@@ -338,8 +546,34 @@ You have access to delegate_* tools that hand work off to peer agents in Tyler's
 async function callLlm(
   systemPrompt: string,
   userPrompt: string,
+  history: ChatTurn[] = [],
   withTools = true,
 ): Promise<LlmCallResult | null> {
+  // PRIMARY: local AugiVector / litellm proxy (OpenAI-compatible) — the same
+  // working model lane the live Hermes bridge uses. Gives the in-app Hermes a
+  // real LLM without depending on direct provider keys (DeepSeek/Moonshot are
+  // currently invalid). Additive + safe: a plain HTTP call to a local proxy;
+  // the bridge / OpenViking are untouched. Tools omitted here for upstream
+  // robustness (key-based providers below keep delegation tool-use).
+  const proxyUrl =
+    process.env.AUGIVECTOR_URL ?? "http://localhost:3000/v1/chat/completions";
+  const proxyToken = process.env.AUGIVECTOR_TOKEN ?? "local";
+  const proxyModel = process.env.JARVIS_BRAIN_MODEL ?? "augivector-auto";
+  try {
+    const result = await fetchChatCompletion({
+      url: proxyUrl,
+      apiKey: proxyToken,
+      model: proxyModel,
+      systemPrompt,
+      userPrompt,
+      history,
+      withTools: false,
+    });
+    if (result) return { ...result, provider: "augivector" };
+  } catch (err) {
+    logger.warn({ err }, "jarvis-brain: augivector proxy call failed");
+  }
+
   const anthropicKey = await getRawKey("anthropic").catch(() => null);
   if (anthropicKey) {
     try {
@@ -348,6 +582,7 @@ async function callLlm(
         model: "claude-opus-4-7",
         systemPrompt,
         userPrompt,
+        history,
         tools: withTools
           ? [...DELEGATION_TOOLS, DESIGN_TOOL_DEF, DESIGN_BATCH_TOOL_DEF, DESIGN_PACK_TOOL_DEF]
           : undefined,
@@ -367,6 +602,7 @@ async function callLlm(
         model: "deepseek-chat",
         systemPrompt,
         userPrompt,
+        history,
         withTools,
       });
       if (result) return { ...result, provider: "deepseek" };
@@ -384,6 +620,7 @@ async function callLlm(
         model: "gpt-4o-mini",
         systemPrompt,
         userPrompt,
+        history,
         withTools,
       });
       if (result) return { ...result, provider: "openai" };
@@ -392,6 +629,27 @@ async function callLlm(
     }
   }
 
+  const moonshotKey = await getRawKey("moonshot").catch(() => null);
+  if (moonshotKey) {
+    try {
+      const result = await fetchChatCompletion({
+        url: "https://api.moonshot.ai/v1/chat/completions",
+        apiKey: moonshotKey,
+        model: process.env.JARVIS_MOONSHOT_MODEL ?? "kimi-k2.5",
+        systemPrompt,
+        userPrompt,
+        history,
+        withTools: false,
+      });
+      if (result) return { ...result, provider: "moonshot" };
+    } catch (err) {
+      logger.warn({ err }, "jarvis-brain: moonshot call failed");
+    }
+  }
+
+  logger.warn(
+    "jarvis-brain: no LLM provider produced a reply (AugiVector proxy + all configured keys missing/failing) — using the deterministic offline brain",
+  );
   return null;
 }
 
@@ -405,12 +663,14 @@ async function fetchAnthropicMessage({
   model,
   systemPrompt,
   userPrompt,
+  history,
   tools,
 }: {
   apiKey: string;
   model: string;
   systemPrompt: string;
   userPrompt: string;
+  history?: ChatTurn[];
   tools?: typeof DELEGATION_TOOLS;
 }): Promise<{ reply: string; model: string; toolCall?: ToolCallIntent } | null> {
   const controller = new AbortController();
@@ -419,7 +679,7 @@ async function fetchAnthropicMessage({
     const body: Record<string, unknown> = {
       model,
       system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
+      messages: [...(history ?? []), { role: "user", content: userPrompt }],
       max_tokens: 400,
       temperature: 0.4,
     };
@@ -475,6 +735,7 @@ async function fetchChatCompletion({
   model,
   systemPrompt,
   userPrompt,
+  history,
   withTools,
 }: {
   url: string;
@@ -482,6 +743,7 @@ async function fetchChatCompletion({
   model: string;
   systemPrompt: string;
   userPrompt: string;
+  history?: ChatTurn[];
   withTools?: boolean;
 }): Promise<{ reply: string; model: string; toolCall?: ToolCallIntent } | null> {
   const controller = new AbortController();
@@ -491,6 +753,7 @@ async function fetchChatCompletion({
       model,
       messages: [
         { role: "system", content: systemPrompt },
+        ...(history ?? []),
         { role: "user", content: userPrompt },
       ],
       temperature: 0.4,
@@ -588,7 +851,7 @@ export async function jarvisBrainReply(
     loadPersona(),
     gatherContext(db, input.companyId),
     getCapabilitySnapshot().catch(() => null),
-    fetchRecentTurns(db, input.companyId, input.userActorId),
+    fetchRecentTurns(db, input.companyId, input.userActorId, 20),
     fetchLearnedPreferences(db, input.companyId, input.userActorId),
   ]);
 
@@ -599,8 +862,17 @@ export async function jarvisBrainReply(
   const systemPromptParts = [basePrompt, formatTimeContextBlock(timeContext)];
   const prefsBlock = formatLearnedPreferencesBlock(learnedPrefs);
   if (prefsBlock) systemPromptParts.push(prefsBlock);
-  const historyBlock = formatConversationHistoryBlock(recentTurns);
-  if (historyBlock) systemPromptParts.push(historyBlock);
+  // Continuity is carried as REAL prior message turns passed to the model
+  // (see callLlm) rather than flattened into the system prompt, so the model
+  // treats them as the actual back-and-forth and won't re-open with the same
+  // greeting every turn.
+  const historyMessages: ChatTurn[] = [];
+  for (const t of recentTurns) {
+    if (t.userTranscript?.trim())
+      historyMessages.push({ role: "user", content: t.userTranscript });
+    if (t.agentReply?.trim())
+      historyMessages.push({ role: "assistant", content: t.agentReply });
+  }
   if (capSnapshot) {
     systemPromptParts.push(
       `CAPABILITY GROUNDING (real probe of this host, ${capSnapshot.generatedAt}): ${summarizeForPersona(capSnapshot)} When asked what you can do, ground your answer in these — do not promise capabilities marked needs_install or unsupported without flagging the install hint.`,
@@ -620,7 +892,7 @@ export async function jarvisBrainReply(
       ? composeBriefingContext(input.transcript, ctx)
       : composeStandardContext(input.transcript, ctx));
 
-  const llm = await callLlm(systemPrompt, userPrompt, enableDelegation);
+  const llm = await callLlm(systemPrompt, userPrompt, historyMessages, enableDelegation);
 
   // Tool-use path: model chose to delegate to a peer. Run the dispatch,
   // overwrite the reply with the natural acknowledgment, return early.
@@ -727,7 +999,7 @@ export async function jarvisBrainReply(
     }
   }
 
-  let reply = llm?.reply ?? deterministicReply(input.transcript, ctx, responseType);
+  let reply = llm?.reply ?? deterministicReply(input.transcript, ctx, responseType, recentTurns);
 
   // Belt-and-braces: if the model ignored the voice-mode instruction in
   // the system prompt, strip markdown here too so ElevenLabs / browser
@@ -842,30 +1114,52 @@ export async function jarvisBrainReply(
   };
 }
 
+function formatWorkBlock(ctx: ContextBriefing): string {
+  const lines: string[] = [];
+  if (ctx.queue.length > 0) {
+    lines.push("Work queue (active issues, highest-signal first):");
+    for (const w of ctx.queue)
+      lines.push(
+        `  - ${w.ref} ${w.title} [${w.status}${w.priority ? `, ${w.priority}` : ""}${w.assignee ? `, @${w.assignee}` : ""}]`,
+      );
+  } else {
+    lines.push("Work queue: no active issues found.");
+  }
+  if (ctx.blocked.length > 0) {
+    lines.push("Blocked / needs your call:");
+    for (const w of ctx.blocked) lines.push(`  - ${w.ref} ${w.title} [${w.status}]`);
+  }
+  if (ctx.decisions.length > 0) {
+    lines.push("Recent changes / decisions (agent config revisions):");
+    for (const d of ctx.decisions)
+      lines.push(`  - ${d.agentName}: ${d.changed}${d.source ? ` (${d.source})` : ""}`);
+  }
+  if (ctx.roster.length > 0) {
+    lines.push(`Fleet roster (${ctx.fleetActive}/${ctx.fleetTotal} active):`);
+    for (const r of ctx.roster)
+      lines.push(`  - ${r.name}${r.role ? ` (${r.role})` : ""}: ${r.status}`);
+  }
+  return lines.join("\n");
+}
+
 function composeStandardContext(transcript: string, ctx: ContextBriefing): string {
   return `User said: ${transcript.trim()}
 
-Company snapshot (use real numbers only when relevant — do not lead with finance unless asked):
-- Blocked issues: ${ctx.blockedIssueCount}
-- Top burn agent (last 24h, only mention if asked or alerts > 0): ${ctx.topBurnAgentName ?? "none"}${ctx.topBurnAgentSpendUsd != null ? ` (${formatUsd(ctx.topBurnAgentSpendUsd)})` : ""}
-- Fleet: ${ctx.fleetActive} active of ${ctx.fleetTotal} total
-- Open cost alerts: ${ctx.costAlerts}
-- Spend MTD (only on ask): ${formatUsd(ctx.revenueMtdUsd)}${ctx.revenueDeltaPct != null ? ` (${ctx.revenueDeltaPct >= 0 ? "+" : ""}${ctx.revenueDeltaPct.toFixed(1)}%)` : ""}`;
+LIVE OPERATIONS CONTEXT (real, current — ground your answer in these specifics; cite issue refs/titles when relevant; do not lead with finance unless asked):
+${formatWorkBlock(ctx)}
+
+Finance (only on ask): spend MTD ${formatUsd(ctx.revenueMtdUsd)}${ctx.revenueDeltaPct != null ? ` (${ctx.revenueDeltaPct >= 0 ? "+" : ""}${ctx.revenueDeltaPct.toFixed(1)}%)` : ""}, ${ctx.costAlerts} cost alert(s)${ctx.topBurnAgentName ? `, top burn ${ctx.topBurnAgentName}` : ""}.`;
 }
 
 function composeBriefingContext(transcript: string, ctx: ContextBriefing): string {
-  // Per persona: lead with work, not revenue. Order the snapshot the way
-  // we want it surfaced.
   return `User said: ${transcript.trim()}
 
-This is a briefing. Lead with WORK (what shipped / who's blocked / fleet / projects). Skip revenue unless there's an alert.
+This is a briefing. Lead with WORK (what's queued / who's blocked / fleet / recent decisions). Skip revenue unless there's an alert.
 
-Operations snapshot (real, current):
-- Blocked work: ${ctx.blockedIssueCount} blocked issues right now
-- Fleet status: ${ctx.fleetActive} active of ${ctx.fleetTotal} total agents
-- Open cost alerts (mention only if > 0): ${ctx.costAlerts}
-- Top burn agent (mention only if alerts > 0): ${ctx.topBurnAgentName ?? "none"}${ctx.topBurnAgentSpendUsd != null ? ` (${formatUsd(ctx.topBurnAgentSpendUsd)})` : ""}
-- Spend MTD (only if Tyler asks for it): ${formatUsd(ctx.revenueMtdUsd)}
+LIVE OPERATIONS SNAPSHOT (real, current):
+${formatWorkBlock(ctx)}
 
-Respond in 4-6 sentences of prose, weaving what shipped overnight (you may invent reasonable activity if no real data is wired yet — be honest in tone), blockers, fleet health, and one concrete recommended next action. Do not enumerate every bullet — pick the four to six most important things.`;
+Finance (only if Tyler asks): spend MTD ${formatUsd(ctx.revenueMtdUsd)}, ${ctx.costAlerts} cost alert(s).
+
+Respond in 4-6 sentences of prose, weaving the most important queued work, blockers, fleet health, and one concrete recommended next action. Reference real issue refs/titles. Don't enumerate every item — pick the four to six most important.`;
 }
