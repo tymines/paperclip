@@ -8,6 +8,7 @@ import {
   SquarePen,
   Share2,
   Boxes,
+  Library,
   Repeat,
   GitBranch,
   Settings,
@@ -222,6 +223,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+        <SidebarNavItem to="/prompts" label="Prompts" icon={Library} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
@@ -306,6 +308,7 @@ function SidebarV1({
         <SidebarNavItem to="/approvals" label="Approvals" icon={MoreHorizontal} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
         <SidebarNavItem to="/skills" label="Skills" icon={Boxes} />
+        <SidebarNavItem to="/prompts" label="Prompts" icon={Library} />
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
