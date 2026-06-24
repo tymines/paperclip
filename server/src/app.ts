@@ -23,6 +23,7 @@ import { environmentRoutes } from "./routes/environments.js";
 import { executionWorkspaceRoutes } from "./routes/execution-workspaces.js";
 import { goalRoutes } from "./routes/goals.js";
 import { knowledgeGraphRoutes } from "./routes/knowledge-graph.js";
+import { fleetKbRoutes } from "./routes/fleet-kb.js";
 import { roomRoutes } from "./routes/rooms.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
@@ -247,6 +248,7 @@ export async function createApp(
   api.use(appDevRoutes(db));
   api.use(promptsRoutes(db));
   api.use(knowledgeGraphRoutes(db));
+  api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));

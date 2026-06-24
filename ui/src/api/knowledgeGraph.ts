@@ -57,3 +57,65 @@ export const knowledgeGraphApi = {
   exportObsidianUrl: (companyId: string) =>
     `/api/companies/${companyId}/knowledge-graph/export/obsidian`,
 };
+
+// ─── Fleet KB (Obsidian vault surfaced read-only) ────────────────────────────
+
+export interface FleetKbNote {
+  id: string;
+  title: string;
+  date: string | null;
+  category: string;
+  categoryLabel: string;
+  tags: string[];
+  agentId: string | null;
+  source: string | null;
+  sourceScope: string | null;
+  promoted: string | null;
+  wikilinks: string[];
+  path: string;
+  body: string;
+  excerpt: string;
+  updatedAt: string;
+}
+
+export type FleetKbNodeKind = "note" | "index" | "agent" | "category";
+
+export interface FleetKbGraphNode {
+  id: string;
+  kind: FleetKbNodeKind;
+  label: string;
+  category?: string;
+  agentId?: string | null;
+  date?: string | null;
+  noteId?: string;
+}
+
+export interface FleetKbGraphEdge {
+  source: string;
+  target: string;
+  kind: "link" | "agent" | "category";
+}
+
+export interface FleetKbGraphResponse {
+  available: boolean;
+  vaultPath: string;
+  generatedAt?: string;
+  noteCount: number;
+  indexExists?: boolean;
+  notes: FleetKbNote[];
+  categories: Array<{ key: string; label: string; count: number }>;
+  tags: Array<{ tag: string; count: number }>;
+  agents: Array<{ id: string; count: number }>;
+  graph: { nodes: FleetKbGraphNode[]; edges: FleetKbGraphEdge[] };
+}
+
+export interface FleetKbNoteResponse {
+  note: FleetKbNote;
+  backlinks: Array<{ id: string; title: string; category: string }>;
+  related: Array<{ id: string; title: string; category: string; date: string | null }>;
+}
+
+export const fleetKbApi = {
+  getGraph: () => api.get<FleetKbGraphResponse>(`/fleet-kb/graph`),
+  getNote: (id: string) => api.get<FleetKbNoteResponse>(`/fleet-kb/notes/${encodeURIComponent(id)}`),
+};

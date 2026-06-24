@@ -18,6 +18,7 @@ import { KnowledgeGraphControls } from "../components/knowledge-graph/v2-control
 import { KnowledgeGraphDetailPanel, type DetailPanelNode } from "../components/knowledge-graph/v2-detail-panel";
 import { useKnowledgeGraphGestures } from "../components/knowledge-graph/v2-gestures";
 import { V2Renderer } from "../components/knowledge-graph/v2-renderer";
+import { FleetKbView } from "../components/knowledge-graph/FleetKbView";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -791,6 +792,7 @@ export function KnowledgeGraph() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
+  const [kbMode, setKbMode] = useState<"graph" | "kb">("graph");
 
   useEffect(() => { setBreadcrumbs([{ label: "Knowledge Graph" }]); }, [setBreadcrumbs]);
 
@@ -1881,6 +1883,10 @@ export function KnowledgeGraph() {
     onPullDownReset: handleResetView,
   });
 
+  if (kbMode === "kb") {
+    return <FleetKbView onBack={() => setKbMode("graph")} />;
+  }
+
   return (
     <div
       className="relative flex w-full flex-col overflow-hidden"
@@ -1911,6 +1917,15 @@ export function KnowledgeGraph() {
           "#08090b",
       }}
     >
+      <button
+        onClick={() => setKbMode("kb")}
+        title="Open Fleet KB — Obsidian-style notes view"
+        className="absolute left-4 top-4 z-20 flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-200 transition hover:text-white"
+        style={{ border: "1px solid rgba(167,139,250,0.45)", background: "rgba(8,9,11,0.72)", backdropFilter: "blur(6px)" }}
+      >
+        <Brain size={14} style={{ color: "#a78bfa" }} /> Fleet KB
+      </button>
+
       <div
         ref={containerRef}
         className="relative flex-1 min-h-0"
