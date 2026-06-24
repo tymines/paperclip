@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   jarvisConversations,
@@ -344,4 +344,104 @@ function clampConfidence(value: unknown): number {
   if (value <= 0) return 0;
   if (value >= 1) return 1;
   return value;
+}
+
+
+// ---------------------------------------------------------------------------
+// FAST-PATH verbatim recall of the immediately-prior (just-cleared) session.
+// ---------------------------------------------------------------------------
+
+export interface ClearedSessionTurn {
+  id: string;
+  userTranscript: string;
+  agentReply: string;
+  createdAt: Date;
+}
+
+/**
+ * Read the EXACT turns of the most recently cleared War Room session straight
+ * from Postgres — instant, verbatim, deterministic.
+ *
+ * Why this exists: OpenViking session-extraction distills + async-indexes, so
+ * recall through it is gist-only. For "what did we discuss before I cleared?"
+ * Tyler wants the literal content (codewords, names, numbers, decisions), not a
+ * plausible paraphrase. A "Clear chat" stamps the SAME cleared_at on every
+ * then-visible row, so the most recent cleared session is precisely the rows
+ * whose cleared_at == MAX(cleared_at) for this (company, actor). We select those
+ * directly. Older cross-session recall still goes through OpenViking resource
+ * search (see openviking-memory.ts) — this fast-path is only the just-cleared
+ * session, which is the one that needs to be verbatim and is cheap to fetch.
+ */
+export async function fetchLastClearedSession(
+  db: Db,
+  companyId: string,
+  userActorId: string,
+  limit: number = 40,
+): Promise<ClearedSessionTurn[]> {
+  try {
+    const boundaryRows = await db
+      .select({
+        lastCleared: sql<Date | null>`max(${jarvisConversations.clearedAt})`,
+      })
+      .from(jarvisConversations)
+      .where(
+        and(
+          eq(jarvisConversations.companyId, companyId),
+          eq(jarvisConversations.userActorId, userActorId),
+        ),
+      );
+    const rawLastCleared = boundaryRows[0]?.lastCleared ?? null;
+    const lastCleared: Date | null = rawLastCleared
+      ? rawLastCleared instanceof Date
+        ? rawLastCleared
+        : new Date(rawLastCleared as unknown as string)
+      : null;
+    // Never cleared -> no "prior session" to recall.
+    if (!lastCleared || Number.isNaN(lastCleared.getTime())) return [];
+
+    // cleared_at >= MAX(cleared_at) selects exactly the last-cleared batch
+    // (nothing is greater than the max). Using gte rather than eq is robust to
+    // any timestamptz precision rounding on the boundary round-trip.
+    const rows = await db
+      .select({
+        id: jarvisConversations.id,
+        userTranscript: jarvisConversations.userTranscript,
+        agentReply: jarvisConversations.agentReply,
+        createdAt: jarvisConversations.createdAt,
+      })
+      .from(jarvisConversations)
+      .where(
+        and(
+          eq(jarvisConversations.companyId, companyId),
+          eq(jarvisConversations.userActorId, userActorId),
+          gte(jarvisConversations.clearedAt, lastCleared),
+        ),
+      )
+      .orderBy(desc(jarvisConversations.createdAt))
+      .limit(limit);
+    return rows.reverse();
+  } catch (err) {
+    logger.warn({ err }, "jarvis-learning: fetchLastClearedSession failed");
+    return [];
+  }
+}
+
+/**
+ * Render the just-cleared session as an authoritative VERBATIM system-prompt
+ * block. Distinct from the long-term recall block (which is lossy gist): this
+ * is the exact transcript, so the brain is told to answer word-for-word from it.
+ */
+export function formatClearedSessionBlock(turns: ClearedSessionTurn[]): string {
+  if (!turns.length) return "";
+  const lines = [
+    "EXACT TRANSCRIPT OF THE IMMEDIATELY-PRIOR WAR ROOM SESSION (the one Tyler just cleared) — VERBATIM, read straight from the system of record. It is authoritative and complete for that session. When Tyler asks what was discussed before the clear / in the last or previous session, answer from THESE EXACT turns and preserve specific details (names, codewords, numbers, decisions) word-for-word. Do not paraphrase away specifics and do not invent anything beyond these turns:",
+    "",
+  ];
+  for (const t of turns) {
+    const u = (t.userTranscript ?? "").trim();
+    const a = (t.agentReply ?? "").trim();
+    if (u) lines.push(`Tyler: ${u}`);
+    if (a) lines.push(`Hermes: ${a}`);
+  }
+  return lines.join("\n");
 }

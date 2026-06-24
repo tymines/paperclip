@@ -2,7 +2,10 @@ import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { jarvisConversations, companies, companyJarvisSettings } from "@paperclipai/db";
-import { commitAndResetSession } from "../services/openviking-memory.js";
+import {
+  commitAndResetSession,
+  archiveSessionAsResource,
+} from "../services/openviking-memory.js";
 import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -368,9 +371,31 @@ export function jarvisRoutes(db: Db) {
         return { committed: false, sessionId: null };
       });
 
+      // Capture the session about to be cleared, then archive it VERBATIM:
+      // write the full transcript to disk and ingest it into OpenViking as a
+      // RESOURCE (resources preserve exact content far better than session
+      // extraction's distillation, so verbatim long-term recall is possible).
+      // Fire-and-forget so the Clear click never blocks. We read the rows
+      // BEFORE stamping cleared_at, while they still match `where`.
+      const clearedAt = new Date();
+      const sessionTurns = await db
+        .select({
+          userTranscript: jarvisConversations.userTranscript,
+          agentReply: jarvisConversations.agentReply,
+        })
+        .from(jarvisConversations)
+        .where(where)
+        .orderBy(asc(jarvisConversations.createdAt));
+      void archiveSessionAsResource({
+        companyId,
+        userActorId: userActorId ?? "unknown",
+        turns: sessionTurns,
+        clearedAt,
+      });
+
       const cleared = await db
         .update(jarvisConversations)
-        .set({ clearedAt: new Date() })
+        .set({ clearedAt })
         .where(where)
         .returning({ id: jarvisConversations.id });
 

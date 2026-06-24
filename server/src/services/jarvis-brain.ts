@@ -46,8 +46,10 @@ import {
   formatTimeContextBlock,
 } from "./jarvis-time-context.js";
 import {
+  fetchLastClearedSession,
   fetchLearnedPreferences,
   fetchRecentTurns,
+  formatClearedSessionBlock,
   formatLearnedPreferencesBlock,
   observeForPreferences,
   type RecentTurn,
@@ -55,8 +57,11 @@ import {
 import {
   ingestChatTurn,
   recallLongTerm,
+  recallSessionResources,
   formatRecallBlock,
+  formatResourceRecallBlock,
   referencesPast,
+  referencesPriorSession,
 } from "./openviking-memory.js";
 
 /**
@@ -853,18 +858,47 @@ export async function jarvisBrainReply(
   // answer "what can you do?" accurately for THIS machine. Conversation
   // history + learned preferences give the brain continuity across turns
   // and let it adapt to Tyler over time.
-  const [persona, ctx, capSnapshot, recentTurns, learnedPrefs, recalled] = await Promise.all([
+  // Two-tier recall. The just-cleared session is read VERBATIM from Postgres
+  // (fast-path, deterministic); older cross-session recall comes from OpenViking
+  // (verbatim resource grep + semantic memories). We only pay for recall when
+  // Tyler actually references the past.
+  const wantsPrior = referencesPriorSession(input.transcript);
+  const wantsPast = referencesPast(input.transcript);
+  const [
+    persona,
+    ctx,
+    capSnapshot,
+    recentTurns,
+    learnedPrefs,
+    recalled,
+    priorSession,
+    resourceMatches,
+  ] = await Promise.all([
     loadPersona(),
     gatherContext(db, input.companyId),
     getCapabilitySnapshot().catch(() => null),
     fetchRecentTurns(db, input.companyId, input.userActorId, 20),
     fetchLearnedPreferences(db, input.companyId, input.userActorId),
-    // Long-term recall: only when Tyler references the past, query OpenViking
-    // so Hermes can pull back context from before a "Clear chat" or from
-    // earlier sessions. Best-effort and time-boxed inside recallLongTerm.
-    referencesPast(input.transcript)
+    // Long-term semantic recall (gist) from OpenViking memories.
+    wantsPast
       ? recallLongTerm(input.transcript).catch(() => [])
       : Promise.resolve([] as Awaited<ReturnType<typeof recallLongTerm>>),
+    // FAST-PATH: exact turns of the immediately-prior (just-cleared) session,
+    // read straight from jarvis_conversations. Verbatim + instant.
+    wantsPrior
+      ? fetchLastClearedSession(db, input.companyId, input.userActorId).catch(
+          () => [],
+        )
+      : Promise.resolve(
+          [] as Awaited<ReturnType<typeof fetchLastClearedSession>>,
+        ),
+    // Verbatim grep over archived session RESOURCES for OLDER cross-session
+    // recall (content-preserving; complements the gist memories above).
+    wantsPast
+      ? recallSessionResources(input.transcript).catch(() => [])
+      : Promise.resolve(
+          [] as Awaited<ReturnType<typeof recallSessionResources>>,
+        ),
   ]);
 
   const timeContext = buildTimeContext();
@@ -874,7 +908,14 @@ export async function jarvisBrainReply(
   const systemPromptParts = [basePrompt, formatTimeContextBlock(timeContext)];
   const prefsBlock = formatLearnedPreferencesBlock(learnedPrefs);
   if (prefsBlock) systemPromptParts.push(prefsBlock);
-  // Long-term recall block (short-term working context above, long-term here).
+  // Recall blocks, most-authoritative first: (1) verbatim just-cleared session
+  // from Postgres, (2) verbatim grep matches from archived resources, (3) gist
+  // memories from OpenViking. Short-term working context is carried separately
+  // as real prior turns below.
+  const priorBlock = formatClearedSessionBlock(priorSession);
+  if (priorBlock) systemPromptParts.push(priorBlock);
+  const resourceBlock = formatResourceRecallBlock(resourceMatches);
+  if (resourceBlock) systemPromptParts.push(resourceBlock);
   const recallBlock = formatRecallBlock(recalled);
   if (recallBlock) systemPromptParts.push(recallBlock);
   // Continuity is carried as REAL prior message turns passed to the model

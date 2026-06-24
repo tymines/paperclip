@@ -26,6 +26,9 @@
  *     sessions even after a clear.
  */
 
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { logger } from "../middleware/logger.js";
 
 const ENDPOINT = (
@@ -279,6 +282,193 @@ export function formatRecallBlock(mems: RecalledMemory[]): string {
 export function referencesPast(transcript: string): boolean {
   if (!transcript) return false;
   return /\b(last week|last month|last session|earlier|previously|before i cleared|before we cleared|before the clear|before clearing|recall|remind me what|remember when|do you remember|what did we (discuss|talk|work|do|decide|cover|go over)|what have we (discussed|worked)|we (discussed|talked about|decided|worked on|covered)|you (said|mentioned|told me)|past conversation|our (history|conversations)|a while ago|the other day|yesterday|back then)\b/i.test(
+    transcript,
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Cleared-session RESOURCE archive + verbatim resource recall.
+//
+// Session extraction (commitAndResetSession above) distills a session into
+// memories, which makes long-term recall gist-only. To make verbatim recall
+// possible we ALSO write each cleared session's full transcript to disk and
+// ingest it into OpenViking as a RESOURCE (/api/v1/resources). Resources keep
+// the exact content, and grep over them (/api/v1/search/grep) returns literal
+// lines deterministically — even when semantic embeddings are unavailable.
+// This is additive and uses only OpenViking's normal public API.
+// ---------------------------------------------------------------------------
+
+const ARCHIVE_DIR =
+  process.env.WARROOM_ARCHIVE_DIR ??
+  path.join(os.homedir(), ".paperclip", "warroom-sessions");
+// OpenViking namespace the transcripts are filed under. grep over the
+// `warroom` root then spans every archived session for cross-session recall.
+const RESOURCE_ROOT = "warroom";
+const RESOURCE_NAMESPACE = `${RESOURCE_ROOT}/sessions`;
+
+/**
+ * Write a cleared session's full transcript to disk and ingest it into
+ * OpenViking as a resource. Fire-and-forget: callers `void` this so the
+ * "Clear chat" click never blocks. The on-disk copy is the source of record,
+ * so nothing is lost even if the OpenViking ingest is slow or down.
+ */
+export async function archiveSessionAsResource(input: {
+  companyId: string;
+  userActorId: string;
+  turns: { userTranscript: string; agentReply: string }[];
+  clearedAt?: Date;
+}): Promise<{ filePath: string | null; uri: string | null }> {
+  try {
+    const turns = (input.turns ?? []).filter(
+      (t) => (t.userTranscript ?? "").trim() || (t.agentReply ?? "").trim(),
+    );
+    if (!turns.length) return { filePath: null, uri: null };
+
+    const clearedAt = input.clearedAt ?? new Date();
+    const stamp = clearedAt.toISOString().replace(/[:.]/g, "-");
+    const safeActor = input.userActorId.replace(/[^a-zA-Z0-9_-]/g, "_");
+    const fileName = `session-${safeActor}-${stamp}.md`;
+
+    const lines: string[] = [
+      `# War Room session (cleared ${clearedAt.toISOString()})`,
+      "",
+      `Company: ${input.companyId}`,
+      `Actor: ${input.userActorId}`,
+      `Turns: ${turns.length}`,
+      "",
+      "---",
+      "",
+    ];
+    for (const t of turns) {
+      const u = (t.userTranscript ?? "").trim();
+      const a = (t.agentReply ?? "").trim();
+      if (u) lines.push(`Tyler: ${u}`, "");
+      if (a) lines.push(`Hermes: ${a}`, "");
+    }
+    const body = lines.join("\n");
+
+    await fs.mkdir(ARCHIVE_DIR, { recursive: true });
+    const filePath = path.join(ARCHIVE_DIR, fileName);
+    await fs.writeFile(filePath, body, "utf8");
+
+    const to = `${RESOURCE_NAMESPACE}/${input.companyId}`;
+    // wait:false -> returns immediately; indexing proceeds async. Best-effort.
+    const res = await ovPost(
+      "/api/v1/resources",
+      {
+        path: filePath,
+        to,
+        reason: "war-room cleared-session archive",
+        instruction:
+          "Verbatim War Room conversation transcript for a cleared session. Preserve exact content (names, codewords, numbers, decisions) for long-term recall.",
+        wait: false,
+      },
+      COMMIT_TIMEOUT_MS,
+    );
+    const uri: string =
+      (res?.result?.root_uri as string | undefined) ?? to;
+    logger.info(
+      { filePath, to, turns: turns.length, ingested: res != null },
+      "openviking: cleared-session archived as resource",
+    );
+    return { filePath, uri };
+  } catch (err) {
+    logger.warn({ err }, "openviking: archiveSessionAsResource failed");
+    return { filePath: null, uri: null };
+  }
+}
+
+export interface ResourceMatch {
+  uri: string;
+  content: string;
+}
+
+const RECALL_STOP_WORDS = new Set([
+  "the","a","an","and","or","of","to","in","on","for","with","it","is","are",
+  "was","were","be","do","does","did","what","when","where","who","why","how",
+  "we","i","you","me","my","our","us","that","this","these","those","about",
+  "before","after","again","earlier","previously","previous","last","session",
+  "sessions","clear","cleared","clearing","discuss","discussed","talk","talked",
+  "talking","said","say","mention","mentioned","remember","recall","tell","told",
+  "go","went","over","cover","covered","decide","decided","work","worked","just",
+  "back","then","ago","while","time","chat","conversation","conversations",
+]);
+
+/** Pull distinctive keyword(s) from the user's question to grep resources for. */
+export function salientTerms(query: string): string[] {
+  const words = (query.toLowerCase().match(/[a-z0-9][a-z0-9'-]*/g) ?? []).filter(
+    (w) => w.length >= 3 && !RECALL_STOP_WORDS.has(w),
+  );
+  const uniq = Array.from(new Set(words));
+  // Longer tokens are more distinctive (codewords, proper nouns, topics).
+  uniq.sort((a, b) => b.length - a.length);
+  return uniq.slice(0, 6);
+}
+
+/**
+ * Verbatim recall from archived session RESOURCES via OpenViking grep. Used for
+ * OLDER cross-session recall — the immediately-prior session is served by the
+ * Postgres fast-path (fetchLastClearedSession). Deterministic and content-
+ * preserving; works even when semantic embeddings are unavailable.
+ */
+export async function recallSessionResources(
+  query: string,
+  limit = 8,
+): Promise<ResourceMatch[]> {
+  const terms = salientTerms(query).slice(0, 4);
+  if (!terms.length) return [];
+  // Run the per-term greps in PARALLEL so the worst-case latency is a single
+  // timeout, never N sequential ones. grep can be slow when OpenViking is busy
+  // indexing a freshly-ingested resource, so a sequential loop could otherwise
+  // stack multiple timeouts onto the user-facing reply. Best-effort: a failed
+  // or timed-out grep resolves to null and is simply skipped.
+  const results = await Promise.all(
+    terms.map((term) =>
+      ovPost(
+        "/api/v1/search/grep",
+        { uri: RESOURCE_ROOT, pattern: term, case_insensitive: true },
+        RECALL_TIMEOUT_MS,
+      ).catch(() => null),
+    ),
+  );
+  const seen = new Set<string>();
+  const out: ResourceMatch[] = [];
+  for (const res of results) {
+    const matches = res?.result?.matches;
+    if (!Array.isArray(matches)) continue;
+    for (const m of matches) {
+      const content: string = typeof m?.content === "string" ? m.content : "";
+      const uri: string = typeof m?.uri === "string" ? m.uri : "";
+      if (!content) continue;
+      const k = `${uri}::${content}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ uri, content });
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+
+/** Render verbatim resource matches as a system-prompt block. */
+export function formatResourceRecallBlock(matches: ResourceMatch[]): string {
+  if (!matches.length) return "";
+  const lines = [
+    "VERBATIM MATCHES FROM ARCHIVED WAR ROOM SESSIONS (OpenViking resource search — exact lines from earlier, possibly older, cleared sessions. Treat as factual recall and quote specifics exactly; do not invent beyond them):",
+  ];
+  for (const m of matches) lines.push(`- ${m.content}`);
+  return lines.join("\n");
+}
+
+/**
+ * Tighter heuristic than referencesPast: does this turn reference the
+ * IMMEDIATELY-PRIOR / just-cleared / last session specifically? Gates the
+ * Postgres verbatim fast-path.
+ */
+export function referencesPriorSession(transcript: string): boolean {
+  if (!transcript) return false;
+  return /\b(before (i|we) cleared|before the clear|before clearing|just cleared|last session|previous session|prior session|earlier session|last (chat|conversation)|previous (chat|conversation)|what did we (discuss|talk about|cover|go over|work on|decide)|what were we (discuss|talk|working|doing)|what was (discussed|said))\b/i.test(
     transcript,
   );
 }
