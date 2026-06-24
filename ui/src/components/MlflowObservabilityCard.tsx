@@ -9,8 +9,13 @@ import { mlflowApi } from "../api/mlflow";
  * unreachable or has logged no calls, it shows an explicit status line and
  * renders NO numbers — never mock/placeholder values.
  *
- *   variant="costs"    -> aggregate spend grouped by model alias (Costs page)
+ *   variant="costs"    -> actual provider-billed spend grouped by model (Costs page)
  *   variant="activity" -> most-recent individual calls (Activity page)
+ *
+ * The "costs" view groups by the underlying provider MODEL (so Tyler can see
+ * exactly what each model costs); two proxy aliases that share one model are
+ * combined. These figures come straight from MLflow's logged cost/token metrics,
+ * so they reconcile with MLflow by construction.
  */
 
 const C = {
@@ -93,14 +98,15 @@ export function MlflowObservabilityCard({ variant }: { variant: "costs" | "activ
   });
 
   if (isCosts) {
-    const subtitle = "Real per-call spend logged by the AugiVector proxy, grouped by model alias.";
+    const subtitle = "Actual provider-billed spend, grouped by model. Source of truth — reconciles with MLflow.";
     if (costsQ.isLoading) return <Shell subtitle={subtitle}><StatusLine tone="muted" text="Loading MLflow data…" /></Shell>;
     const d = costsQ.data;
     if (!d || d.reachable === false) {
       return <Shell subtitle={subtitle}><StatusLine tone="warn" text="MLflow tracking server not reachable — no data shown." /></Shell>;
     }
-    if (!d.byAlias?.length) {
-      return <Shell subtitle={subtitle}><StatusLine tone="muted" text="No LLM calls logged yet." /></Shell>;
+    const rows = d.byModel ?? [];
+    if (!rows.length) {
+      return <Shell subtitle={subtitle}><StatusLine tone="muted" text="No billable LLM calls logged yet." /></Shell>;
     }
     return (
       <Shell subtitle={subtitle}>
@@ -108,18 +114,19 @@ export function MlflowObservabilityCard({ variant }: { variant: "costs" | "activ
           <Stat label={`Spend · last ${d.windowDays ?? 30}d`} value={fmtUsd(d.totalCostUsd)} accent={C.success} />
           <Stat label="Calls" value={String(d.totalCalls)} />
           <Stat label="Tokens" value={fmtTokens(d.totalTokens)} />
+          <Stat label="Models" value={String(rows.length)} />
         </div>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontFamily: MONO, fontSize: 12 }}>
             <thead>
               <tr style={{ color: C.textFaint, textAlign: "left" }}>
-                <Th>Model alias</Th><Th right>Calls</Th><Th right>Cost</Th><Th right>Tokens</Th><Th right>Avg latency</Th>
+                <Th>Model</Th><Th right>Calls</Th><Th right>Cost</Th><Th right>Tokens</Th><Th right>Avg latency</Th>
               </tr>
             </thead>
             <tbody>
-              {d.byAlias.map((r) => (
-                <tr key={r.alias} style={{ borderTop: `1px solid ${C.border}` }}>
-                  <Td><span style={{ color: C.text }}>{r.alias}</span></Td>
+              {rows.map((r) => (
+                <tr key={r.model} style={{ borderTop: `1px solid ${C.border}` }}>
+                  <Td><span style={{ color: C.text }}>{r.model}</span></Td>
                   <Td right>{r.calls}</Td>
                   <Td right><span style={{ color: C.success }}>{fmtUsd(r.costUsd)}</span></Td>
                   <Td right>{fmtTokens(r.totalTokens)}</Td>
@@ -129,12 +136,15 @@ export function MlflowObservabilityCard({ variant }: { variant: "costs" | "activ
             </tbody>
           </table>
         </div>
-        {d.truncated ? <div style={{ marginTop: 8, fontSize: 11, color: C.textFaint }}>Showing a capped sample of recent runs.</div> : null}
+        <div style={{ marginTop: 8, fontSize: 11, color: C.textFaint }}>
+          Computed by litellm from live provider pricing at the proxy chokepoint.
+          {d.excludedEmptyCalls ? ` Excluded ${d.excludedEmptyCalls} empty/failed call${d.excludedEmptyCalls === 1 ? "" : "s"} (no tokens billed).` : ""}
+          {d.truncated ? " Showing a capped sample of recent runs." : ""}
+        </div>
       </Shell>
     );
   }
 
-  // activity variant
   const subtitle = "Most recent individual model calls captured at the proxy chokepoint.";
   if (activityQ.isLoading) return <Shell subtitle={subtitle}><StatusLine tone="muted" text="Loading MLflow data…" /></Shell>;
   const a = activityQ.data;

@@ -8,8 +8,17 @@ export interface MlflowStatus {
   error?: string;
 }
 
+export interface MlflowCostsByModel {
+  model: string;
+  calls: number;
+  costUsd: number;
+  totalTokens: number;
+  avgLatencyMs: number | null;
+}
+
 export interface MlflowCostsByAlias {
   alias: string;
+  providerModel: string | null;
   calls: number;
   costUsd: number;
   totalTokens: number;
@@ -24,7 +33,9 @@ export interface MlflowCosts {
   totalCalls: number;
   totalCostUsd: number;
   totalTokens: number;
+  excludedEmptyCalls?: number;
   truncated?: boolean;
+  byModel: MlflowCostsByModel[];
   byAlias: MlflowCostsByAlias[];
   error?: string;
 }

@@ -4,13 +4,15 @@ import { Router } from "express";
  * Read-only MLflow observability routes.
  *
  * Surfaces the fleet's real per-call LLM telemetry (cost / latency / tokens /
- * model alias) that the AugiVector litellm proxy logs to the local MLflow
- * tracking server. Strictly READ-ONLY: it only issues MLflow `search` queries
- * and never writes runs, params, metrics or tags.
+ * model alias / provider model) that the AugiVector litellm proxy logs to the
+ * local MLflow tracking server. Strictly READ-ONLY: it only issues MLflow
+ * `search` queries and never writes runs, params, metrics or tags.
  *
  * Data-honest contract: if MLflow is unreachable or has no runs, the endpoints
  * return `reachable:false` / empty arrays so the UI can omit the section. No
- * synthetic or placeholder numbers are ever produced here.
+ * synthetic or placeholder numbers are ever produced here. Dead/empty runs
+ * (failed or legacy calls with no token usage and no cost) are excluded from
+ * the breakdown so the UI never shows $0.00 placeholder rows.
  */
 
 const MLFLOW_URL = (process.env.MLFLOW_URL ?? "http://127.0.0.1:5566").replace(/\/+$/, "");
@@ -86,6 +88,35 @@ function windowFilter(days: number): string {
   return `attributes.start_time > ${sinceMs}`;
 }
 
+type Agg = {
+  calls: number;
+  costUsd: number;
+  totalTokens: number;
+  latencySum: number;
+  latencyN: number;
+  providerModel?: string;
+};
+
+function bump(
+  map: Map<string, Agg>,
+  key: string,
+  cost: number,
+  tokens: number,
+  latency: number | undefined,
+  providerModel?: string,
+): void {
+  const g = map.get(key) ?? { calls: 0, costUsd: 0, totalTokens: 0, latencySum: 0, latencyN: 0 };
+  g.calls += 1;
+  g.costUsd += cost;
+  g.totalTokens += tokens;
+  if (providerModel && !g.providerModel) g.providerModel = providerModel;
+  if (typeof latency === "number") {
+    g.latencySum += latency;
+    g.latencyN += 1;
+  }
+  map.set(key, g);
+}
+
 export function mlflowRoutes() {
   const router = Router();
 
@@ -110,15 +141,18 @@ export function mlflowRoutes() {
     }
   });
 
-  // GET /mlflow/costs — aggregate spend over the trailing window, grouped by
-  // model alias (the honest dimension the proxy records; callers do not pass a
-  // per-agent identity to the proxy).
+  // GET /mlflow/costs — aggregate spend over the trailing window. Returns BOTH:
+  //   byModel — grouped by the underlying provider model (what each model costs;
+  //             two aliases on the same model are combined). This is the honest
+  //             "per-model spend" view.
+  //   byAlias — grouped by the proxy model alias / lane (kept for compatibility).
+  // Dead/empty runs (no tokens AND no cost) are excluded from totals and rows.
   router.get("/mlflow/costs", async (req, res) => {
     const days = clampInt(req.query.days, DEFAULT_WINDOW_DAYS, 1, 365);
     try {
       const experimentId = await resolveExperimentId();
       if (!experimentId) {
-        res.json({ reachable: true, experimentPresent: false, totalCalls: 0, totalCostUsd: 0, totalTokens: 0, byAlias: [], windowDays: days });
+        res.json({ reachable: true, experimentPresent: false, totalCalls: 0, totalCostUsd: 0, totalTokens: 0, byModel: [], byAlias: [], windowDays: days });
         return;
       }
       const filter = windowFilter(days);
@@ -135,30 +169,45 @@ export function mlflowRoutes() {
         pageToken = nextPageToken;
       } while (pageToken && all.length < MAX_RUNS_SCAN);
 
-      const groups = new Map<string, { calls: number; costUsd: number; totalTokens: number; latencySum: number; latencyN: number }>();
+      const modelGroups = new Map<string, Agg>();
+      const aliasGroups = new Map<string, Agg>();
       let totalCost = 0;
       let totalTokens = 0;
+      let billableCalls = 0;
+      let excludedEmptyCalls = 0;
+
       for (const run of all) {
-        const alias = tag(run, "model_alias") ?? "unknown";
         const cost = metric(run, "cost_usd") ?? 0;
         const tokens = metric(run, "total_tokens") ?? 0;
-        const latency = metric(run, "latency_ms");
-        const g = groups.get(alias) ?? { calls: 0, costUsd: 0, totalTokens: 0, latencySum: 0, latencyN: 0 };
-        g.calls += 1;
-        g.costUsd += cost;
-        g.totalTokens += tokens;
-        if (typeof latency === "number") {
-          g.latencySum += latency;
-          g.latencyN += 1;
+        // Skip dead/empty runs so the breakdown shows only real billable spend.
+        if (cost <= 0 && tokens <= 0) {
+          excludedEmptyCalls += 1;
+          continue;
         }
-        groups.set(alias, g);
+        const alias = tag(run, "model_alias") ?? "unknown";
+        const providerModel = tag(run, "provider_model") || alias;
+        const latency = metric(run, "latency_ms");
+        bump(modelGroups, providerModel, cost, tokens, latency, providerModel);
+        bump(aliasGroups, alias, cost, tokens, latency, providerModel);
         totalCost += cost;
         totalTokens += tokens;
+        billableCalls += 1;
       }
 
-      const byAlias = [...groups.entries()]
+      const byModel = [...modelGroups.entries()]
+        .map(([model, g]) => ({
+          model,
+          calls: g.calls,
+          costUsd: round(g.costUsd, 6),
+          totalTokens: g.totalTokens,
+          avgLatencyMs: g.latencyN ? Math.round(g.latencySum / g.latencyN) : null,
+        }))
+        .sort((a, b) => b.costUsd - a.costUsd);
+
+      const byAlias = [...aliasGroups.entries()]
         .map(([alias, g]) => ({
           alias,
+          providerModel: g.providerModel ?? null,
           calls: g.calls,
           costUsd: round(g.costUsd, 6),
           totalTokens: g.totalTokens,
@@ -171,14 +220,16 @@ export function mlflowRoutes() {
         experimentPresent: true,
         generatedAt: new Date().toISOString(),
         windowDays: days,
-        totalCalls: all.length,
+        totalCalls: billableCalls,
         totalCostUsd: round(totalCost, 6),
         totalTokens,
+        excludedEmptyCalls,
         truncated: all.length >= MAX_RUNS_SCAN,
+        byModel,
         byAlias,
       });
     } catch (err) {
-      res.json({ reachable: false, error: err instanceof Error ? err.message : String(err), byAlias: [], totalCalls: 0, totalCostUsd: 0, totalTokens: 0 });
+      res.json({ reachable: false, error: err instanceof Error ? err.message : String(err), byModel: [], byAlias: [], totalCalls: 0, totalCostUsd: 0, totalTokens: 0 });
     }
   });
 
