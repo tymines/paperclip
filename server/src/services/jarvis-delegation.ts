@@ -27,6 +27,10 @@ import { logger } from "../middleware/logger.js";
 
 export type PeerAgentId =
   | "hermes"
+  // Ares — the COO / distributor. The approved-plan handoff from the War Room
+  // routes here; Ares fans the plan out to the fleet. Additive: the `agent`
+  // column is plain text, so no migration is required.
+  | "ares"
   | "august"
   | "codex"
   | "content"
@@ -438,6 +442,7 @@ export async function countRecentDelegations(
 
 const PEER_LABEL: Record<PeerAgentId, string> = {
   hermes: "Hermes",
+  ares: "Ares (COO)",
   august: "August",
   codex: "Codex",
   content: "the content desk",
@@ -448,6 +453,7 @@ const PEER_LABEL: Record<PeerAgentId, string> = {
 
 const PEER_ETA: Record<PeerAgentId, string> = {
   hermes: "about ten minutes",
+  ares: "a few minutes — Ares fans it out to the fleet",
   august: "a few minutes — assuming the Mac mini's reachable",
   codex: "a couple of minutes",
   content: "fifteen or twenty minutes",

@@ -213,6 +213,24 @@ export interface JarvisBrainstormKickoffResponse {
   brief: string;
 }
 
+export interface JarvisPlanApproveRequest {
+  title: string;
+  steps?: { n?: number; label: string; duration?: string }[];
+  conversationId?: string;
+  estimatedCompletion?: string;
+  agentsInvolved?: number;
+}
+
+export interface JarvisPlanApproveResponse {
+  ok: boolean;
+  delegationId: string | null;
+  agent: string;
+  status: "queued" | "failed";
+  reachable: boolean;
+  remainingQuotaThisMinute: number;
+  error: string | null;
+}
+
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
@@ -306,6 +324,17 @@ export const jarvisApi = {
     body: { title?: string; brief?: string; seedText?: string } = {},
   ): Promise<JarvisBrainstormKickoffResponse> =>
     api.post(`/companies/${companyId}/jarvis/brainstorm/kickoff`, body),
+
+  /**
+   * Approve & send to team. Records the approval and hands the plan to Ares
+   * (COO / distributor) over the real delegation/handoff path. Returns the
+   * delegation id + reachability so the UI can show where the plan landed.
+   */
+  approvePlan: (
+    companyId: string,
+    body: JarvisPlanApproveRequest,
+  ): Promise<JarvisPlanApproveResponse> =>
+    api.post(`/companies/${companyId}/jarvis/plan/approve`, body),
 
   /**
    * Health probe — confirms /api/jarvis routes are mounted and reports

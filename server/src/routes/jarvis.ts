@@ -37,6 +37,7 @@ import {
   listDelegations,
   recordDelegationResult,
   checkPeerReachable,
+  dispatchDelegation,
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
 import { kickoffBrainstorm } from "../services/brainstorm-kickoff.js";
@@ -447,6 +448,90 @@ export function jarvisRoutes(db: Db) {
         seedText,
       });
       res.json(result);
+    },
+  );
+
+  /**
+   * Approve & send to team. The War Room plan card calls this when Tyler
+   * approves a proposed plan. It records the approval and hands the plan to
+   * ARES (the COO / distributor) over the REAL delegation/handoff path
+   * (dispatchDelegation -> persists a jarvis_delegations row -> POSTs the
+   * plan to the bridge's /jarvis/dispatch as identity "ares"). Ares then fans
+   * the steps out to the fleet. This is the deferred Hermes->Ares handoff,
+   * now wired to the mechanism that already exists — no faked success.
+   *
+   * Returns the delegation id + reachability so the UI can show exactly where
+   * the plan landed ("Sent to Ares") or that the bridge is down (queued).
+   */
+  const planApproveSchema = z.object({
+    title: z.string().min(1).max(200),
+    steps: z
+      .array(
+        z.object({
+          n: z.number().int().optional(),
+          label: z.string().max(400),
+          duration: z.string().max(80).optional(),
+        }),
+      )
+      .max(40)
+      .optional(),
+    conversationId: z.string().optional(),
+    estimatedCompletion: z.string().max(120).optional(),
+    agentsInvolved: z.number().int().optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/plan/approve",
+    validate(planApproveSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const body = req.body as z.infer<typeof planApproveSchema>;
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : null;
+
+      // Build the human-readable task brief Ares receives.
+      const steps = body.steps ?? [];
+      const stepLines = steps
+        .map((s, i) => `${s.n ?? i + 1}. ${s.label}${s.duration ? `  (${s.duration})` : ""}`)
+        .join("\n");
+      const task =
+        `APPROVED PLAN — ${body.title}\n` +
+        (stepLines ? `${stepLines}\n` : "") +
+        `\nApproved by Tyler in the War Room. Distribute these steps across the ` +
+        `fleet and assign an owner to each.`;
+
+      const dispatch = await dispatchDelegation(db, {
+        companyId,
+        conversationId: body.conversationId ?? null,
+        agent: "ares",
+        task,
+        metadata: {
+          kind: "plan-approval",
+          plan: {
+            title: body.title,
+            steps,
+            estimatedCompletion: body.estimatedCompletion ?? null,
+            agentsInvolved: body.agentsInvolved ?? null,
+          },
+          approvedAt: new Date().toISOString(),
+        },
+        requestedByActorId: userActorId,
+      });
+
+      res.json({
+        ok: dispatch.status !== "failed",
+        delegationId: dispatch.id || null,
+        agent: "ares",
+        status: dispatch.status,
+        reachable: dispatch.reachable,
+        remainingQuotaThisMinute: dispatch.remainingQuotaThisMinute,
+        error: dispatch.error ?? null,
+      });
     },
   );
 

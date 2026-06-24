@@ -13,7 +13,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
   Check,
+  Copy,
   Eraser,
+  Eye,
   Lightbulb,
   MoreHorizontal,
   Paperclip,
@@ -23,6 +25,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquarePen,
+  X,
 } from "lucide-react";
 import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
 import { roomsApi } from "@/api/rooms";
@@ -382,6 +385,11 @@ export function JarvisPage() {
   const [sending, setSending] = useState(false);
   const [listening, setListening] = useState(false);
   const [approved, setApproved] = useState<Set<string>>(new Set());
+  // Per-message approval feedback (where the plan landed / errors). Keyed by
+  // message id so each card shows its own status line under the buttons.
+  const [approvalInfo, setApprovalInfo] = useState<
+    Record<string, { state: "sending" | "sent" | "queued" | "error"; detail: string }>
+  >({});
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
   const [view, setView] = useState<"chat" | "brainstorm" | "team">("chat");
@@ -500,16 +508,116 @@ export function JarvisPage() {
     }
   }, [selectedCompanyId, queryClient]);
 
-  // Approve & send to team — routes through the real Hermes dispatch path so
-  // Ares can assign agents. (Structured plan→approval wiring is flagged.)
+  // Approve & send to team — records the approval and hands the plan to Ares
+  // (COO / distributor) over the REAL delegation/handoff path
+  // (POST /jarvis/plan/approve -> dispatchDelegation -> bridge /jarvis/dispatch
+  // as identity "ares"). The status line under the buttons shows where it
+  // landed (Sent to Ares / queued / error) — no faked success toast.
   const onApprove = useCallback(
-    (msgId: string, plan: ProposedPlan) => {
+    async (msgId: string, plan: ProposedPlan) => {
+      if (!selectedCompanyId) return;
       setApproved((prev) => new Set(prev).add(msgId));
-      void send(
-        `Approved — send "${plan.title}" to the team and have Ares assign agents to each step.`,
-      );
+      setApprovalInfo((prev) => ({
+        ...prev,
+        [msgId]: { state: "sending", detail: "Handing off to Ares…" },
+      }));
+      try {
+        const r = await jarvisApi.approvePlan(selectedCompanyId, {
+          title: plan.title,
+          steps: plan.steps.map((s) => ({
+            n: s.n,
+            label: s.label,
+            duration: s.duration,
+          })),
+          estimatedCompletion: plan.estimatedCompletion,
+          agentsInvolved: plan.agentsInvolved,
+        });
+        if (r.status === "failed") {
+          // Roll the button back so Tyler can retry.
+          setApproved((prev) => {
+            const n = new Set(prev);
+            n.delete(msgId);
+            return n;
+          });
+          setApprovalInfo((prev) => ({
+            ...prev,
+            [msgId]: {
+              state: "error",
+              detail: r.error
+                ? `Couldn't hand off to Ares: ${r.error}`
+                : "Couldn't hand off to Ares.",
+            },
+          }));
+        } else if (!r.reachable) {
+          setApprovalInfo((prev) => ({
+            ...prev,
+            [msgId]: {
+              state: "queued",
+              detail:
+                "Ares' bridge is down — plan queued; it'll dispatch when the daemon's back up.",
+            },
+          }));
+        } else {
+          setApprovalInfo((prev) => ({
+            ...prev,
+            [msgId]: {
+              state: "sent",
+              detail: "Sent to Ares — fanning the steps out to the team.",
+            },
+          }));
+        }
+        // Reconcile against the REAL delegation row a couple seconds later. The
+        // bridge POST is fire-and-forget, so the synchronous ack is optimistic;
+        // if the bridge has no "ares" identity wired yet the row flips to
+        // "failed" and we surface that honestly instead of a false success.
+        if (r.delegationId && r.status !== "failed") {
+          const delegationId = r.delegationId;
+          window.setTimeout(() => {
+            void jarvisApi
+              .delegations(selectedCompanyId, { limit: 20 })
+              .then((list) => {
+                const row = list.delegations.find((d) => d.id === delegationId);
+                if (!row) return;
+                if (row.status === "failed") {
+                  setApprovalInfo((prev) => ({
+                    ...prev,
+                    [msgId]: {
+                      state: "queued",
+                      detail:
+                        "Handoff recorded and the bridge was reached, but Ares' dispatch endpoint isn't registered on the bridge yet — set JARVIS_PEER_ARES_URL/TOKEN so it lands.",
+                    },
+                  }));
+                } else if (row.status === "running" || row.status === "completed") {
+                  setApprovalInfo((prev) => ({
+                    ...prev,
+                    [msgId]: {
+                      state: "sent",
+                      detail: "Ares picked it up — fanning the steps out to the team.",
+                    },
+                  }));
+                }
+              })
+              .catch(() => {
+                /* keep the optimistic line if the poll fails */
+              });
+          }, 2200);
+        }
+      } catch (err) {
+        setApproved((prev) => {
+          const n = new Set(prev);
+          n.delete(msgId);
+          return n;
+        });
+        setApprovalInfo((prev) => ({
+          ...prev,
+          [msgId]: {
+            state: "error",
+            detail: `Couldn't hand off to Ares: ${(err as Error).message}`,
+          },
+        }));
+      }
     },
-    [send],
+    [selectedCompanyId],
   );
 
   // EXPLICIT "Send to Brainstorm". Two-step (arm -> confirm) so it never fires
@@ -545,9 +653,32 @@ export function JarvisPage() {
     [selectedCompanyId, kickoffArmedId, kickoffBusy],
   );
 
-  const onAdjust = useCallback(() => {
-    composerRef.current?.focus();
-    setComposer((c) => (c ? c : ""));
+  // Adjust plan — seed the composer with a revision request scaffold referencing
+  // the plan, focus it, and put the caret at the end. Tyler types what to change
+  // and hits enter; that goes back to Hermes, who returns a revised plan card.
+  const onAdjust = useCallback((plan?: ProposedPlan) => {
+    if (plan?.title) {
+      setComposer((c) =>
+        c && c.trim() ? c : `Revise the "${plan.title}" plan — `,
+      );
+    }
+    // Focus on the next tick so the seeded value is in the textarea first.
+    window.setTimeout(() => {
+      const el = composerRef.current;
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        el.setSelectionRange(len, len);
+      }
+    }, 0);
+  }, []);
+
+  // Dismiss a plan card — drops the inline plan from the message locally so the
+  // card disappears. Non-destructive: the underlying Hermes turn text stays.
+  const onDismissPlan = useCallback((msgId: string) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, plan: null } : m)),
+    );
   }, []);
 
   // Lightweight browser speech-to-text feeding the composer (voice input).
@@ -770,8 +901,10 @@ export function JarvisPage() {
                   key={m.id}
                   msg={m}
                   approved={approved.has(m.id)}
+                  approvalInfo={approvalInfo[m.id] ?? null}
                   onApprove={onApprove}
                   onAdjust={onAdjust}
+                  onDismiss={onDismissPlan}
                   onSendToBrainstorm={onSendToBrainstorm}
                   kickoffArmed={kickoffArmedId === m.id}
                   kickoffBusy={kickoffBusy}
@@ -911,16 +1044,20 @@ function EmptyThread() {
 function MessageRow({
   msg,
   approved,
+  approvalInfo,
   onApprove,
   onAdjust,
+  onDismiss,
   onSendToBrainstorm,
   kickoffArmed,
   kickoffBusy,
 }: {
   msg: ChatMessage;
   approved: boolean;
+  approvalInfo: { state: "sending" | "sent" | "queued" | "error"; detail: string } | null;
   onApprove: (msgId: string, plan: ProposedPlan) => void;
-  onAdjust: () => void;
+  onAdjust: (plan?: ProposedPlan) => void;
+  onDismiss: (msgId: string) => void;
   onSendToBrainstorm: (msgId: string, plan: ProposedPlan) => void;
   kickoffArmed: boolean;
   kickoffBusy: boolean;
@@ -979,8 +1116,10 @@ function MessageRow({
           <PlanCard
             plan={msg.plan}
             approved={approved}
+            approvalInfo={approvalInfo}
             onApprove={() => onApprove(msg.id, msg.plan!)}
-            onAdjust={onAdjust}
+            onAdjust={() => onAdjust(msg.plan!)}
+            onDismiss={() => onDismiss(msg.id)}
             onSendToBrainstorm={() => onSendToBrainstorm(msg.id, msg.plan!)}
             kickoffArmed={kickoffArmed}
             kickoffBusy={kickoffBusy}
@@ -1038,24 +1177,54 @@ function Dot({ delay }: { delay: string }) {
 function PlanCard({
   plan,
   approved,
+  approvalInfo,
   onApprove,
   onAdjust,
+  onDismiss,
   onSendToBrainstorm,
   kickoffArmed,
   kickoffBusy,
 }: {
   plan: ProposedPlan;
   approved: boolean;
+  approvalInfo: { state: "sending" | "sent" | "queued" | "error"; detail: string } | null;
   onApprove: () => void;
   onAdjust: () => void;
+  onDismiss: () => void;
   onSendToBrainstorm: () => void;
   kickoffArmed: boolean;
   kickoffBusy: boolean;
 }) {
+  // Overflow ("…") menu + "View full plan" expansion + copy feedback. Local to
+  // the card so each plan card manages its own popover.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [copied, setCopied] = useState(false);
   const meta: string[] = [];
   if (typeof plan.agentsInvolved === "number") meta.push(`${plan.agentsInvolved} agents involved`);
   if (plan.parallel) meta.push("Parallel execution");
   if (plan.estimatedCompletion) meta.push(`Estimated completion: ${plan.estimatedCompletion}`);
+
+  // Plain-text rendering of the whole plan — used by "View full plan" and
+  // "Copy plan" in the overflow menu.
+  const fullPlanText =
+    `${plan.title}${plan.version ? ` (${plan.version})` : ""}\n` +
+    plan.steps
+      .map((s) => `${s.n}. ${s.label}${s.duration ? ` — ${s.duration}` : ""}`)
+      .join("\n") +
+    (meta.length ? `\n\n${meta.join("  ·  ")}` : "") +
+    (plan.totalLabel ? `\n${plan.totalLabel}` : "");
+
+  const copyPlan = () => {
+    try {
+      void navigator.clipboard?.writeText(fullPlanText);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
+    } catch {
+      /* clipboard blocked — no-op */
+    }
+    setMenuOpen(false);
+  };
 
   return (
     <div className="mt-3 overflow-hidden" style={surfaceCard}>
@@ -1170,17 +1339,153 @@ function PlanCard({
               ? "Confirm — start planning loop"
               : "Send to Brainstorm"}
         </button>
-        <button
-          type="button"
-          className="ml-auto flex h-9 w-9 items-center justify-center rounded-[12px] transition-colors"
-          style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
-          aria-label="More plan options"
-          title="More"
-        >
-          <MoreHorizontal className="h-4 w-4" />
-        </button>
+        <div className="relative ml-auto">
+          <button
+            type="button"
+            onClick={() => setMenuOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            className="flex h-9 w-9 items-center justify-center rounded-[12px] transition-colors"
+            style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+            aria-label="More plan options"
+            title="More"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {menuOpen ? (
+            <>
+              {/* Click-away backdrop */}
+              <button
+                type="button"
+                aria-hidden
+                tabIndex={-1}
+                onClick={() => setMenuOpen(false)}
+                className="fixed inset-0 z-40 cursor-default"
+                style={{ background: "transparent" }}
+              />
+              <div
+                role="menu"
+                className="absolute bottom-full right-0 z-50 mb-2 w-52 overflow-hidden rounded-[12px] py-1"
+                style={{
+                  background: DS.surface2,
+                  border: `1px solid ${DS.border2}`,
+                  boxShadow: "0 12px 32px -12px rgba(0,0,0,0.8)",
+                }}
+              >
+                <MenuItem
+                  icon={<Eye className="h-4 w-4" />}
+                  label={expanded ? "Hide full plan" : "View full plan"}
+                  onClick={() => {
+                    setExpanded((e) => !e);
+                    setMenuOpen(false);
+                  }}
+                />
+                <MenuItem
+                  icon={copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  label={copied ? "Copied" : "Copy plan"}
+                  onClick={copyPlan}
+                />
+                <MenuItem
+                  icon={<Lightbulb className="h-4 w-4" />}
+                  label="Send to Brainstorm"
+                  onClick={() => {
+                    onSendToBrainstorm();
+                    setMenuOpen(false);
+                  }}
+                />
+                <MenuItem
+                  icon={<X className="h-4 w-4" />}
+                  label="Dismiss"
+                  danger
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onDismiss();
+                  }}
+                />
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
+
+      {/* Approval feedback — shows exactly where the plan landed (Sent to Ares /
+          queued / error). Additive line; the card layout above is untouched. */}
+      {approvalInfo ? (
+        <div
+          className="flex items-center gap-2 px-5 pb-4 text-[12px]"
+          style={{
+            color:
+              approvalInfo.state === "error"
+                ? DS.critical
+                : approvalInfo.state === "queued"
+                  ? DS.warning
+                  : approvalInfo.state === "sent"
+                    ? DS.success
+                    : DS.textMuted,
+          }}
+        >
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{
+              background:
+                approvalInfo.state === "error"
+                  ? DS.critical
+                  : approvalInfo.state === "queued"
+                    ? DS.warning
+                    : approvalInfo.state === "sent"
+                      ? DS.success
+                      : DS.textFaint,
+            }}
+          />
+          {approvalInfo.detail}
+        </div>
+      ) : null}
+
+      {/* Full-plan expansion (toggled from the overflow menu). */}
+      {expanded ? (
+        <div
+          className="px-5 pb-4 pt-1"
+          style={{ borderTop: `1px solid ${DS.border}` }}
+        >
+          <pre
+            className="whitespace-pre-wrap text-[12px] leading-relaxed"
+            style={{ color: DS.textMuted, fontFamily: MONO, margin: 0 }}
+          >
+            {fullPlanText}
+          </pre>
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+/* Overflow-menu row. */
+function MenuItem({
+  icon,
+  label,
+  onClick,
+  danger,
+}: {
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] transition-colors hover:opacity-90"
+      style={{ color: danger ? DS.critical : DS.text, background: "transparent" }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = DS.surface3)}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      <span className="shrink-0" style={{ color: danger ? DS.critical : DS.textMuted }}>
+        {icon}
+      </span>
+      {label}
+    </button>
   );
 }
 
