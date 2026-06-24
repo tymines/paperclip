@@ -139,3 +139,11 @@ export {
   type DesignAsset,
   type NewDesignAsset,
 } from "./design_assets.js";
+export {
+  promptCategories,
+  prompts,
+  type PromptCategory,
+  type NewPromptCategory,
+  type Prompt,
+  type NewPrompt,
+} from "./prompts.js";
