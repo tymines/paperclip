@@ -932,6 +932,13 @@
       "when": 1782345600000,
       "tag": "0132_team_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 133,
+      "version": "7",
+      "when": 1782432000000,
+      "tag": "0133_jarvis_chat_clear",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { jarvisConversations, companies, companyJarvisSettings } from "@paperclipai/db";
-import { and, asc, desc, eq, gte, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
 import { jarvisBrainReply } from "../services/jarvis-brain.js";
@@ -275,12 +275,19 @@ export function jarvisRoutes(db: Db) {
             ? actor.agentId
             : null;
 
+      // Soft-hide filter: rows the user "cleared" from the view (cleared_at
+      // set) are omitted here. They are NOT deleted — the brain's continuity
+      // query ignores cleared_at so Hermes keeps full memory.
       const where = userActorId
         ? and(
             eq(jarvisConversations.companyId, companyId),
             eq(jarvisConversations.userActorId, userActorId),
+            isNull(jarvisConversations.clearedAt),
           )
-        : eq(jarvisConversations.companyId, companyId);
+        : and(
+            eq(jarvisConversations.companyId, companyId),
+            isNull(jarvisConversations.clearedAt),
+          );
 
       const rows = await db
         .select({
@@ -300,6 +307,51 @@ export function jarvisRoutes(db: Db) {
         .limit(limit);
 
       res.json({ conversations: rows.reverse() });
+    },
+  );
+
+  /**
+   * Clear the War Room chat VIEW. NON-DESTRUCTIVE by design: this soft-hides
+   * the caller's conversation rows by stamping cleared_at — nothing is ever
+   * deleted. Hermes's memory is untouched on two counts: (1) the brain's
+   * continuity query (fetchRecentTurns in jarvis-learning.ts) deliberately
+   * does NOT filter on cleared_at, so the next turn still sees prior context;
+   * (2) the external memory layer (OpenViking / memory-core / QMD) is a
+   * separate system this route never touches. Scope mirrors the GET above:
+   * per-actor when we can resolve one, else company-wide.
+   */
+  router.post(
+    "/companies/:companyId/jarvis/conversations/clear",
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : null;
+
+      const where = userActorId
+        ? and(
+            eq(jarvisConversations.companyId, companyId),
+            eq(jarvisConversations.userActorId, userActorId),
+            isNull(jarvisConversations.clearedAt),
+          )
+        : and(
+            eq(jarvisConversations.companyId, companyId),
+            isNull(jarvisConversations.clearedAt),
+          );
+
+      const cleared = await db
+        .update(jarvisConversations)
+        .set({ clearedAt: new Date() })
+        .where(where)
+        .returning({ id: jarvisConversations.id });
+
+      res.json({ ok: true, cleared: cleared.length });
     },
   );
 

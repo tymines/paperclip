@@ -279,6 +279,17 @@ export const jarvisApi = {
     api.get(`/companies/${companyId}/jarvis/conversations?limit=${limit}`),
 
   /**
+   * Clears the War Room chat VIEW. Non-destructive: the server soft-hides the
+   * caller's transcript rows (stamps cleared_at) so they stop rendering, but
+   * never deletes them and never touches Hermes's memory layer. Returns how
+   * many rows were hidden. Hermes keeps full continuity on the next turn.
+   */
+  clearConversations: (
+    companyId: string,
+  ): Promise<{ ok: boolean; cleared: number }> =>
+    api.post(`/companies/${companyId}/jarvis/conversations/clear`, {}),
+
+  /**
    * Health probe — confirms /api/jarvis routes are mounted and reports
    * which LLM / voice provider keys are configured. Used by the UI to
    * surface "no real LLM wired" when every provider is missing.

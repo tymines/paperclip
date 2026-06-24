@@ -47,6 +47,16 @@ export const jarvisConversations = pgTable(
      * truncated portion later if Tyler asks "where were you?".
      */
     interruptedAtChars: integer("interrupted_at_chars"),
+    /**
+     * Soft-hide marker for the War Room "Clear chat" control. When set, the
+     * row is omitted from the on-screen transcript (the conversations
+     * endpoint filters cleared_at IS NULL) but is NOT deleted. The brain's
+     * continuity query (fetchRecentTurns) intentionally ignores this column,
+     * so clearing the view never costs Hermes his memory. The external
+     * memory layer (OpenViking / memory-core / QMD) is separate and
+     * unaffected.
+     */
+    clearedAt: timestamp("cleared_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
@@ -61,5 +71,8 @@ export const jarvisConversations = pgTable(
       table.source,
       table.createdAt,
     ),
+    companyActorClearedIdx: index(
+      "jarvis_conversations_company_actor_cleared_idx",
+    ).on(table.companyId, table.userActorId, table.clearedAt),
   }),
 );

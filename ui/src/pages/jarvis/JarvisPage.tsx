@@ -9,10 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate } from "@/lib/router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
   Check,
+  Eraser,
   MoreHorizontal,
   Paperclip,
   Mic,
@@ -280,6 +281,10 @@ export function JarvisPage() {
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
   const [view, setView] = useState<"chat" | "team">("chat");
+  // "Clear chat" control — soft-hides the on-screen transcript only.
+  const queryClient = useQueryClient();
+  const [clearing, setClearing] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "War Room" }]);
@@ -368,6 +373,28 @@ export function JarvisPage() {
     },
     [composer, send],
   );
+
+  // Clear the visible conversation. NON-DESTRUCTIVE: hits the soft-hide
+  // endpoint (stamps cleared_at server-side) and empties the local thread.
+  // Hermes's memory is untouched — his next reply still has full continuity.
+  const onClearChat = useCallback(async () => {
+    if (!selectedCompanyId) return;
+    setClearing(true);
+    try {
+      await jarvisApi.clearConversations(selectedCompanyId);
+      setMessages([]);
+      setApproved(new Set());
+      // Drop cached history so any refetch reflects the now-hidden rows.
+      void queryClient.invalidateQueries({
+        queryKey: ["jarvis", "conversations"],
+      });
+    } catch {
+      /* keep the view as-is if the clear call fails */
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
+  }, [selectedCompanyId, queryClient]);
 
   // Approve & send to team — routes through the real Hermes dispatch path so
   // Ares can assign agents. (Structured plan→approval wiring is flagged.)
@@ -498,6 +525,50 @@ export function JarvisPage() {
               );
             })}
           </div>
+          {view === "chat" && !isDemo ? (
+            confirmClear ? (
+              <div
+                className="flex items-center gap-2 rounded-full px-2.5 py-1"
+                style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}
+              >
+                <span className="text-[12px]" style={{ color: DS.textMuted }}>
+                  Clear this view? Hermes keeps his memory.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void onClearChat()}
+                  disabled={clearing}
+                  className="rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors"
+                  style={{ background: DS.primary, color: "#fff" }}
+                  data-testid="warroom-clear-confirm"
+                >
+                  {clearing ? "Clearing\u2026" : "Clear view"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmClear(false)}
+                  disabled={clearing}
+                  className="rounded-full px-2.5 py-1 text-[12px] font-medium"
+                  style={{ background: "transparent", color: DS.textMuted }}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmClear(true)}
+                title="Clear the on-screen conversation. Hermes keeps his memory."
+                aria-label="Clear chat"
+                className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors"
+                style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+                data-testid="warroom-clear-chat"
+              >
+                <Eraser className="h-3.5 w-3.5" />
+                Clear chat
+              </button>
+            )
+          ) : null}
           {isDemo ? (
             <span
               className="rounded-full px-3 py-1 text-[11px] font-medium"
