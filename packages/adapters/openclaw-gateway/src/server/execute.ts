@@ -87,7 +87,16 @@ type GatewayClientRequestOptions = {
   expectFinal?: boolean;
 };
 
-const PROTOCOL_VERSION = 3;
+// Protocol negotiation range. The wire sends minProtocol..maxProtocol and the
+// gateway selects the highest it supports. The installed OpenClaw gateway
+// (2026.6.1) negotiates v4; pinning v3/v3 is rejected with "protocol mismatch"
+// (verified live against ws://127.0.0.1:18789 on 2026-06-23). Keeping min=3
+// preserves backward-compat with older gateways. The auth-payload schema
+// (buildDeviceAuthPayloadV3 / "v3" prefix) is a SEPARATE version and unchanged.
+const MIN_PROTOCOL_VERSION = 3;
+const MAX_PROTOCOL_VERSION = 4;
+// Back-compat alias retained for log fallbacks below.
+const PROTOCOL_VERSION = MAX_PROTOCOL_VERSION;
 const DEFAULT_SCOPES = ["operator.admin"];
 const DEFAULT_CLIENT_ID = "gateway-client";
 const DEFAULT_CLIENT_MODE = "backend";
@@ -876,8 +885,8 @@ async function autoApproveDevicePairing(params: {
 
     await client.connect(
       () => ({
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
+        minProtocol: MIN_PROTOCOL_VERSION,
+        maxProtocol: MAX_PROTOCOL_VERSION,
         client: {
           id: params.clientId,
           version: params.clientVersion,
@@ -1282,8 +1291,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const hello = await client.connect((nonce) => {
         const signedAtMs = Date.now();
         const connectParams: Record<string, unknown> = {
-          minProtocol: PROTOCOL_VERSION,
-          maxProtocol: PROTOCOL_VERSION,
+          minProtocol: MIN_PROTOCOL_VERSION,
+          maxProtocol: MAX_PROTOCOL_VERSION,
           client: {
             id: clientId,
             version: clientVersion,

@@ -145,8 +145,10 @@ async function probeGateway(input: {
             id: connectId,
             method: "connect",
             params: {
+              // Negotiate 3..4: live gateway selects v4 (pinning 3/3 is rejected
+              // with "protocol mismatch"). Verified live 2026-06-23.
               minProtocol: 3,
-              maxProtocol: 3,
+              maxProtocol: 4,
               client: {
                 id: "gateway-client",
                 version: "paperclip-probe",
