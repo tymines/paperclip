@@ -1,0 +1,10 @@
+{
+  "name": "@paperclip/worldview-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Separable, host-portable data backend for the Paperclip World View tab. Zero dependencies.",
+  "bin": { "worldview-collector": "server.mjs" },
+  "scripts": { "start": "node server.mjs" },
+  "engines": { "node": ">=18" }
+}

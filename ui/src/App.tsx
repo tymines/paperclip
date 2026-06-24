@@ -62,6 +62,7 @@ import { PluginPage } from "./pages/PluginPage";
 import { OrgChart } from "./pages/OrgChart";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
+import { WorldView } from "./pages/WorldView";
 import { RoomDetail } from "./pages/RoomDetail";
 // /social now points at the multi-platform scheduler (Buffer/Later-style).
 // The legacy in-app broadcast feed `Social.tsx` is no longer routed —
@@ -108,6 +109,7 @@ function boardRoutes() {
       <Route path="plugins/:pluginId" element={<PluginPage />} />
       <Route path="org" element={<OrgChart />} />
       <Route path="knowledge-graph" element={<KnowledgeGraph />} />
+      <Route path="world-view" element={<WorldView />} />
       <Route path="rooms" element={<Rooms />} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
       <Route path="social" element={<SocialScheduler />} />

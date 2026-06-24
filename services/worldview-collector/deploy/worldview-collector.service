@@ -1,0 +1,15 @@
+# Linux alternative. Edit User= and WorkingDirectory=, then:
+#   sudo cp worldview-collector.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now worldview-collector
+[Unit]
+Description=Paperclip World View Collector
+After=network-online.target
+[Service]
+Environment=WORLDVIEW_PORT=8788
+Environment=WORLDVIEW_POLL_MS=300000
+WorkingDirectory=/opt/worldview-collector
+ExecStart=/usr/bin/env node server.mjs
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
