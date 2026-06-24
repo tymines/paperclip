@@ -14,6 +14,7 @@ import {
   ArrowUp,
   Check,
   Eraser,
+  Lightbulb,
   MoreHorizontal,
   Paperclip,
   Mic,
@@ -24,6 +25,8 @@ import {
   SquarePen,
 } from "lucide-react";
 import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
+import { roomsApi } from "@/api/rooms";
+import type { RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -259,6 +262,107 @@ function turnsToMessages(turns: JarvisConversationTurn[]): ChatMessage[] {
 /* ========================================================================== */
 /* War Room                                                                   */
 /* ========================================================================== */
+/* -------------------------------------------------------------------------- */
+/* Brainstorm — live Hermes <-> Brainstorm planning transcript.               */
+/* Streams the planning room's messages (real room transport). When no        */
+/* planning session is live yet, shows an honest empty state (never faked).   */
+/* -------------------------------------------------------------------------- */
+function BrainstormPanel({ companyId }: { companyId: string | null }) {
+  const { data: rooms } = useQuery({
+    queryKey: ["jarvis", "brainstorm", "rooms", companyId],
+    queryFn: () => roomsApi.list(companyId!),
+    enabled: !!companyId,
+    refetchInterval: 15000,
+  });
+  const planningRoom = (rooms ?? []).find((r) =>
+    /brainstorm|planning|plan loop|hermes.*plan/i.test(r.name),
+  );
+  const roomId = planningRoom?.id ?? null;
+
+  const { data: page } = useQuery({
+    queryKey: ["jarvis", "brainstorm", "messages", companyId, roomId],
+    queryFn: () => roomsApi.listMessages(companyId!, roomId!, undefined, 100),
+    enabled: !!companyId && !!roomId,
+    refetchInterval: 3000,
+  });
+  const messages: RoomMessage[] = page?.messages ?? [];
+  const endRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.length]);
+
+  const speakerLabel = (m: RoomMessage): string => {
+    const id = (m.senderId || "").toLowerCase();
+    if (id.includes("hermes")) return "Hermes";
+    if (id.includes("brainstorm") || id.includes("glm") || id.includes("atlas")) return "Brainstorm";
+    if (m.senderType === "user") return "Tyler";
+    if (m.senderType === "system") return "System";
+    return m.senderId || "agent";
+  };
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" aria-label="Hermes and Brainstorm planning">
+      <div className="mb-4">
+        <h2 className="text-[15px] font-semibold" style={{ color: DS.text }}>
+          Hermes ↔ Brainstorm — live planning
+        </h2>
+        <p className="mt-0.5 text-[13px]" style={{ color: DS.textMuted }}>
+          When you approve a project in Conversation, Hermes opens a planning loop with Brainstorm (GLM-5.2). Their exchange streams here live.
+        </p>
+      </div>
+      {!companyId ? (
+        <div className="text-[13px]" style={{ color: DS.textMuted }}>
+          Select a company to view planning sessions.
+        </div>
+      ) : !roomId ? (
+        <div
+          className="rounded-xl px-5 py-6 text-[13px]"
+          style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+        >
+          <div className="flex items-center gap-2" style={{ color: DS.text }}>
+            <Lightbulb className="h-4 w-4" style={{ color: DS.primary }} />
+            <span className="font-medium">No live planning session yet</span>
+          </div>
+          <p className="mt-2">
+            Approve a plan in the Conversation tab to kick off a Hermes ↔ Brainstorm planning loop. Their back-and-forth will appear here live as they converge on a plan.
+          </p>
+        </div>
+      ) : messages.length === 0 ? (
+        <div className="text-[13px]" style={{ color: DS.textMuted }}>
+          Planning room <span style={{ color: DS.text }}>{planningRoom?.name}</span> is open — waiting for the first message…
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {messages.map((m) => {
+            const who = speakerLabel(m);
+            const isHermes = who === "Hermes";
+            return (
+              <div
+                key={m.id}
+                className="rounded-xl px-4 py-3"
+                style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}
+              >
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="text-[12px] font-semibold" style={{ color: isHermes ? DS.primary : DS.text }}>
+                    {who}
+                  </span>
+                  <span className="text-[11px]" style={{ color: DS.textMuted }}>
+                    {clockFromIso(String(m.createdAt))}
+                  </span>
+                </div>
+                <div className="whitespace-pre-wrap text-[13px] leading-relaxed" style={{ color: DS.text }}>
+                  {m.content}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function JarvisPage() {
   const navigate = useNavigate();
   const { selectedCompanyId, selectedCompany } = useCompany();
@@ -280,7 +384,7 @@ export function JarvisPage() {
   const [approved, setApproved] = useState<Set<string>>(new Set());
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
-  const [view, setView] = useState<"chat" | "team">("chat");
+  const [view, setView] = useState<"chat" | "brainstorm" | "team">("chat");
   // "Clear chat" control — soft-hides the on-screen transcript only.
   const queryClient = useQueryClient();
   const [clearing, setClearing] = useState(false);
@@ -504,6 +608,7 @@ export function JarvisPage() {
           >
             {([
               { id: "chat", label: "Conversation" },
+              { id: "brainstorm", label: "Brainstorm" },
               { id: "team", label: "Team Mode" },
             ] as const).map((t) => {
               const active = view === t.id;
@@ -601,7 +706,9 @@ export function JarvisPage() {
         </div>
       </header>
 
-      {view === "team" ? (
+      {view === "brainstorm" ? (
+        <BrainstormPanel companyId={selectedCompanyId ?? null} />
+      ) : view === "team" ? (
         <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Team Mode board">
           {selectedCompanyId ? (
             <TeamModeBoard companyId={selectedCompanyId} />

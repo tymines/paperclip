@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   jarvisConversations,
@@ -45,6 +45,16 @@ const TRUNCATED_SUMMARY_CHARS = 140;
 /**
  * Pull the most recent jarvis_conversations rows for this (company, actor)
  * in chronological order (oldest first). Returns up to HISTORY_TURNS rows.
+ *
+ * SESSION BOUNDARY: the working window is bounded by the most recent
+ * "Clear chat". When Tyler clears, the route stamps cleared_at on the
+ * then-visible rows; we treat MAX(cleared_at) for this (company, actor) as
+ * the start of the current session and only load turns created AFTER it.
+ * This makes "Clear chat" a genuine fresh session for the brain's working
+ * context (clean + lower cost), while the rows themselves stay STORED (never
+ * deleted) and everything also lives in long-term memory (OpenViking), which
+ * is queried separately when Tyler references the past. If the chat was never
+ * cleared, MAX(cleared_at) is NULL and all recent turns load as before.
  */
 export async function fetchRecentTurns(
   db: Db,
@@ -53,6 +63,37 @@ export async function fetchRecentTurns(
   limit: number = HISTORY_TURNS,
 ): Promise<RecentTurn[]> {
   try {
+    // Find the current session boundary: the moment of the last "Clear chat".
+    const boundaryRows = await db
+      .select({
+        lastCleared: sql<Date | null>`max(${jarvisConversations.clearedAt})`,
+      })
+      .from(jarvisConversations)
+      .where(
+        and(
+          eq(jarvisConversations.companyId, companyId),
+          eq(jarvisConversations.userActorId, userActorId),
+        ),
+      );
+    // Raw max() over a timestamptz can come back as a string from the driver;
+    // coerce to a Date so the gt() comparison binds as timestamptz (binding a
+    // string would error: "operator does not exist: timestamptz > text").
+    const rawLastCleared = boundaryRows[0]?.lastCleared ?? null;
+    const lastCleared: Date | null = rawLastCleared
+      ? rawLastCleared instanceof Date
+        ? rawLastCleared
+        : new Date(rawLastCleared as unknown as string)
+      : null;
+
+    const conditions = [
+      eq(jarvisConversations.companyId, companyId),
+      eq(jarvisConversations.userActorId, userActorId),
+    ];
+    // Only load turns from the current session (created after the last clear).
+    if (lastCleared && !Number.isNaN(lastCleared.getTime())) {
+      conditions.push(gt(jarvisConversations.createdAt, lastCleared));
+    }
+
     const rows = await db
       .select({
         id: jarvisConversations.id,
@@ -62,12 +103,7 @@ export async function fetchRecentTurns(
         source: jarvisConversations.source,
       })
       .from(jarvisConversations)
-      .where(
-        and(
-          eq(jarvisConversations.companyId, companyId),
-          eq(jarvisConversations.userActorId, userActorId),
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(desc(jarvisConversations.createdAt))
       .limit(limit);
     return rows.reverse();

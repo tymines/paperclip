@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
 import { jarvisConversations, companies, companyJarvisSettings } from "@paperclipai/db";
+import { commitAndResetSession } from "../services/openviking-memory.js";
 import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { validate } from "../middleware/validate.js";
 import { assertCompanyAccess } from "./authz.js";
@@ -276,8 +277,10 @@ export function jarvisRoutes(db: Db) {
             : null;
 
       // Soft-hide filter: rows the user "cleared" from the view (cleared_at
-      // set) are omitted here. They are NOT deleted — the brain's continuity
-      // query ignores cleared_at so Hermes keeps full memory.
+      // set) are omitted here. They are NOT deleted. The brain's continuity
+      // query (fetchRecentTurns) treats the last clear as a session boundary
+      // and only loads the current session, while long-term memory (OpenViking)
+      // retains everything for cross-session recall.
       const where = userActorId
         ? and(
             eq(jarvisConversations.companyId, companyId),
@@ -311,14 +314,22 @@ export function jarvisRoutes(db: Db) {
   );
 
   /**
-   * Clear the War Room chat VIEW. NON-DESTRUCTIVE by design: this soft-hides
-   * the caller's conversation rows by stamping cleared_at — nothing is ever
-   * deleted. Hermes's memory is untouched on two counts: (1) the brain's
-   * continuity query (fetchRecentTurns in jarvis-learning.ts) deliberately
-   * does NOT filter on cleared_at, so the next turn still sees prior context;
-   * (2) the external memory layer (OpenViking / memory-core / QMD) is a
-   * separate system this route never touches. Scope mirrors the GET above:
-   * per-actor when we can resolve one, else company-wide.
+   * Clear the War Room chat — start a genuinely FRESH SESSION on demand.
+   * NON-DESTRUCTIVE: conversation rows are soft-hidden by stamping cleared_at,
+   * never deleted. Two things happen so the new session is clean AND nothing
+   * is lost:
+   *   (1) Working context resets. fetchRecentTurns (jarvis-learning.ts) treats
+   *       MAX(cleared_at) as the session boundary, so the brain's recent-turns
+   *       window excludes everything before this clear — each new session is
+   *       clean and high-quality (no ever-growing single context to degrade
+   *       quality/cost).
+   *   (2) Long-term memory is preserved + checkpointed. We commit the active
+   *       OpenViking session (commitAndResetSession) which triggers automatic
+   *       memory extraction into long-term store, then open a fresh session on
+   *       the next turn. So even in a brand-new session Hermes can still recall
+   *       past conversations via OpenViking. QMD / memory-core config untouched.
+   * Scope mirrors the GET above: per-actor when we can resolve one, else
+   * company-wide.
    */
   router.post(
     "/companies/:companyId/jarvis/conversations/clear",
@@ -345,13 +356,29 @@ export function jarvisRoutes(db: Db) {
             isNull(jarvisConversations.clearedAt),
           );
 
+      // Commit + reset the long-term memory session for this actor BEFORE we
+      // soft-hide the rows: extraction folds the just-ended session into
+      // OpenViking long-term memory, then the next turn opens a fresh session.
+      // Best-effort — a down/slow OpenViking never blocks the clear.
+      const longTerm = await commitAndResetSession({
+        companyId,
+        userActorId: userActorId ?? "unknown",
+      }).catch((err) => {
+        logger.warn({ err, companyId }, "jarvis/clear: OpenViking commit failed");
+        return { committed: false, sessionId: null };
+      });
+
       const cleared = await db
         .update(jarvisConversations)
         .set({ clearedAt: new Date() })
         .where(where)
         .returning({ id: jarvisConversations.id });
 
-      res.json({ ok: true, cleared: cleared.length });
+      res.json({
+        ok: true,
+        cleared: cleared.length,
+        longTermCommitDispatched: longTerm.committed,
+      });
     },
   );
 
