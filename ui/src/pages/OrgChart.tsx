@@ -527,6 +527,20 @@ export function OrgChart() {
             height: "100%",
           }}
         >
+          <defs>
+            {/* Bidirectional arrowhead for the Hermes ⇄ Brainstorm planning loop. */}
+            <marker
+              id="org-plan-loop-arrow"
+              viewBox="0 0 10 10"
+              refX="5"
+              refY="5"
+              markerWidth="6"
+              markerHeight="6"
+              orient="auto-start-reverse"
+            >
+              <path d="M 1 1 L 9 5 L 1 9 z" fill="var(--primary)" />
+            </marker>
+          </defs>
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
             {edges.map(({ parent, child }) => {
               const x1 = parent.x + CARD_W / 2;
@@ -534,6 +548,40 @@ export function OrgChart() {
               const x2 = child.x + CARD_W / 2;
               const y2 = child.y;
               const midY = (y1 + y2) / 2;
+
+              // Planning loop: the orchestrator (leader, e.g. Hermes) and its
+              // strategist (plan critic, e.g. Brainstorm) go back and forth on a
+              // plan before it is handed down to the COO. The org tree can only
+              // nest single parent→child edges, so we render *this one* edge as a
+              // two-way (double-headed, dashed) link to surface the loop. Every
+              // other edge stays a plain report line.
+              const isPlanningLoop =
+                parent.role === "orchestrator" && child.role === "strategist";
+
+              if (isPlanningLoop) {
+                return (
+                  <g key={`${parent.id}-${child.id}`}>
+                    <path
+                      d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
+                      fill="none"
+                      stroke="var(--primary)"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 3"
+                      markerStart="url(#org-plan-loop-arrow)"
+                      markerEnd="url(#org-plan-loop-arrow)"
+                    />
+                    <text
+                      x={x2 + 8}
+                      y={midY - 4}
+                      fill="var(--primary)"
+                      fontSize={10}
+                      fontWeight={600}
+                    >
+                      ⇄ plan loop
+                    </text>
+                  </g>
+                );
+              }
 
               return (
                 <path
