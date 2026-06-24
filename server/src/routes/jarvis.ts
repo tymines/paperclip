@@ -39,6 +39,7 @@ import {
   checkPeerReachable,
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
+import { kickoffBrainstorm } from "../services/brainstorm-kickoff.js";
 
 /**
  * Jarvis voice endpoint.
@@ -404,6 +405,48 @@ export function jarvisRoutes(db: Db) {
         cleared: cleared.length,
         longTermCommitDispatched: longTerm.committed,
       });
+    },
+  );
+
+  /**
+   * Send-to-Brainstorm kickoff. EXPLICIT trigger from the War Room
+   * Conversation view (never fires on ambiguous agreement). Hermes distills
+   * the session into a PROJECT BRIEF, opens a `type:"mission"` planning room,
+   * seeds it, and starts a BOUNDED Hermes<->Brainstorm planning loop whose
+   * turns stream into the Brainstorm tab via the existing room transport.
+   * Real model lanes (Hermes lane + GLM-5.2 critic lane) — no faked turns.
+   */
+  const brainstormKickoffSchema = z.object({
+    title: z.string().max(120).optional(),
+    brief: z.string().max(8000).optional(),
+    seedText: z.string().max(8000).optional(),
+  });
+  router.post(
+    "/companies/:companyId/jarvis/brainstorm/kickoff",
+    validate(brainstormKickoffSchema),
+    async (req, res) => {
+      const { companyId } = req.params as { companyId: string };
+      assertCompanyAccess(req, companyId);
+      const { title, brief, seedText } = req.body as z.infer<
+        typeof brainstormKickoffSchema
+      >;
+      const actor = req.actor;
+      const userActorId =
+        actor.type === "board" && "userId" in actor && actor.userId
+          ? actor.userId
+          : actor.type === "agent" && "agentId" in actor && actor.agentId
+            ? actor.agentId
+            : null;
+
+      const result = await kickoffBrainstorm(db, {
+        companyId,
+        userActorId,
+        createdBy: userActorId,
+        title,
+        brief,
+        seedText,
+      });
+      res.json(result);
     },
   );
 

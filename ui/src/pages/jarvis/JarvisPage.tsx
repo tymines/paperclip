@@ -512,6 +512,39 @@ export function JarvisPage() {
     [send],
   );
 
+  // EXPLICIT "Send to Brainstorm". Two-step (arm -> confirm) so it never fires
+  // on an accidental click. Hands the agreed plan to the server, which distills
+  // the brief, opens the planning room, and runs the bounded Hermes<->Brainstorm
+  // loop; we then switch to the Brainstorm tab to watch it stream live.
+  const [kickoffArmedId, setKickoffArmedId] = useState<string | null>(null);
+  const [kickoffBusy, setKickoffBusy] = useState(false);
+  const onSendToBrainstorm = useCallback(
+    async (msgId: string, plan: ProposedPlan) => {
+      if (!selectedCompanyId || kickoffBusy) return;
+      if (kickoffArmedId !== msgId) {
+        setKickoffArmedId(msgId);
+        return;
+      }
+      setKickoffBusy(true);
+      try {
+        const seedText =
+          `${plan.title}\n` +
+          plan.steps.map((s) => `${s.n}. ${s.label}`).join("\n");
+        await jarvisApi.brainstormKickoff(selectedCompanyId, {
+          title: plan.title,
+          seedText,
+        });
+        setKickoffArmedId(null);
+        setView("brainstorm");
+      } catch {
+        setKickoffArmedId(null);
+      } finally {
+        setKickoffBusy(false);
+      }
+    },
+    [selectedCompanyId, kickoffArmedId, kickoffBusy],
+  );
+
   const onAdjust = useCallback(() => {
     composerRef.current?.focus();
     setComposer((c) => (c ? c : ""));
@@ -739,6 +772,9 @@ export function JarvisPage() {
                   approved={approved.has(m.id)}
                   onApprove={onApprove}
                   onAdjust={onAdjust}
+                  onSendToBrainstorm={onSendToBrainstorm}
+                  kickoffArmed={kickoffArmedId === m.id}
+                  kickoffBusy={kickoffBusy}
                 />
               ))}
             </div>
@@ -877,11 +913,17 @@ function MessageRow({
   approved,
   onApprove,
   onAdjust,
+  onSendToBrainstorm,
+  kickoffArmed,
+  kickoffBusy,
 }: {
   msg: ChatMessage;
   approved: boolean;
   onApprove: (msgId: string, plan: ProposedPlan) => void;
   onAdjust: () => void;
+  onSendToBrainstorm: (msgId: string, plan: ProposedPlan) => void;
+  kickoffArmed: boolean;
+  kickoffBusy: boolean;
 }) {
   const isHermes = msg.role === "hermes";
   return (
@@ -939,6 +981,9 @@ function MessageRow({
             approved={approved}
             onApprove={() => onApprove(msg.id, msg.plan!)}
             onAdjust={onAdjust}
+            onSendToBrainstorm={() => onSendToBrainstorm(msg.id, msg.plan!)}
+            kickoffArmed={kickoffArmed}
+            kickoffBusy={kickoffBusy}
           />
         ) : null}
       </div>
@@ -995,11 +1040,17 @@ function PlanCard({
   approved,
   onApprove,
   onAdjust,
+  onSendToBrainstorm,
+  kickoffArmed,
+  kickoffBusy,
 }: {
   plan: ProposedPlan;
   approved: boolean;
   onApprove: () => void;
   onAdjust: () => void;
+  onSendToBrainstorm: () => void;
+  kickoffArmed: boolean;
+  kickoffBusy: boolean;
 }) {
   const meta: string[] = [];
   if (typeof plan.agentsInvolved === "number") meta.push(`${plan.agentsInvolved} agents involved`);
@@ -1099,6 +1150,25 @@ function PlanCard({
         >
           <SlidersHorizontal className="h-4 w-4" />
           Adjust plan
+        </button>
+        <button
+          type="button"
+          onClick={onSendToBrainstorm}
+          disabled={kickoffBusy}
+          className="flex items-center gap-2 rounded-[12px] px-4 py-2 text-[13px] font-medium transition-colors hover:opacity-90 disabled:opacity-60"
+          style={
+            kickoffArmed
+              ? { background: DS.primary, color: "#fff" }
+              : { background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.text }
+          }
+          title="Hand this agreed plan to Brainstorm (GLM-5.2) and watch Hermes and Brainstorm converge on a plan"
+        >
+          <Lightbulb className="h-4 w-4" />
+          {kickoffBusy
+            ? "Opening planning room…"
+            : kickoffArmed
+              ? "Confirm — start planning loop"
+              : "Send to Brainstorm"}
         </button>
         <button
           type="button"

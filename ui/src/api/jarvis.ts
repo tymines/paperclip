@@ -206,6 +206,13 @@ export interface JarvisCompanySettings {
 // "Jarvis is broken" report: every call below was 404ing silently, the
 // catch blocks ate the failures, and the chat panel stayed on the
 // MOCK_INITIAL_CHAT seed making it LOOK like the backend was responding.
+export interface JarvisBrainstormKickoffResponse {
+  roomId: string;
+  roomName: string;
+  title: string;
+  brief: string;
+}
+
 export const jarvisApi = {
   /**
    * Sends a transcript to the server and returns the agent's reply.
@@ -288,6 +295,17 @@ export const jarvisApi = {
     companyId: string,
   ): Promise<{ ok: boolean; cleared: number }> =>
     api.post(`/companies/${companyId}/jarvis/conversations/clear`, {}),
+
+  /**
+   * EXPLICIT "Send to Brainstorm" trigger. Hermes distills the current session
+   * into a PROJECT BRIEF, opens a planning room, and starts the bounded
+   * Hermes<->Brainstorm loop. Returns the room so the UI can stream it live.
+   */
+  brainstormKickoff: (
+    companyId: string,
+    body: { title?: string; brief?: string; seedText?: string } = {},
+  ): Promise<JarvisBrainstormKickoffResponse> =>
+    api.post(`/companies/${companyId}/jarvis/brainstorm/kickoff`, body),
 
   /**
    * Health probe — confirms /api/jarvis routes are mounted and reports
