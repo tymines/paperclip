@@ -42,6 +42,7 @@ import { PageTabBar } from "../components/PageTabBar";
 import { ProviderQuotaCard } from "../components/ProviderQuotaCard";
 import { ProviderCreditsSection } from "../components/ProviderCreditsSection";
 import { MlflowObservabilityCard } from "../components/MlflowObservabilityCard";
+import { mlflowApi } from "../api/mlflow";
 import { StatusBadge } from "../components/StatusBadge";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
@@ -448,6 +449,15 @@ export function Costs() {
     enabled: !!selectedCompanyId && customReady,
   });
 
+  // Authoritative MLflow per-call spend (same source the LLM-observability card
+  // and /mlflow/costs use). Drives the Inference-spend headline so the page
+  // agrees on ONE source of truth. Shares the cache key with the card.
+  const { data: mlflowCostsData } = useQuery({
+    queryKey: ["mlflow", "costs"],
+    queryFn: () => mlflowApi.costs(30),
+    staleTime: 30_000,
+  });
+
   const { data: financeData, isLoading: financeLoading, error: financeError } = useQuery({
     queryKey: [
       queryKeys.financeSummary(companyId, from || undefined, to || undefined),
@@ -828,6 +838,24 @@ export function Costs() {
   const budgetCents = spendData?.summary.budgetCents ?? 0;
   const hasBudgetCap = budgetCents > 0;
   const spendCents = spendData?.summary.spendCents ?? 0;
+  // Repoint the Inference-spend headline from the cost_events bridge ESTIMATE
+  // to the authoritative MLflow total (real per-call billed cost across every
+  // metered model, including Gemini + Qwen which bypass the litellm proxy and
+  // are logged directly). Fall back to the cost_events figure only if MLflow
+  // is unreachable, so the headline degrades gracefully instead of showing $0.
+  const mlflowReachable =
+    mlflowCostsData?.reachable === true && mlflowCostsData?.experimentPresent === true;
+  const inferenceSpendCents = mlflowReachable
+    ? Math.round((mlflowCostsData?.totalCostUsd ?? 0) * 100)
+    : spendCents;
+  const inferenceSpendTokens = mlflowReachable
+    ? (mlflowCostsData?.totalTokens ?? 0)
+    : inferenceTokenTotal;
+  // Budget utilization recomputed against the same MLflow figure so the
+  // Budget card agrees with the Inference-spend headline (one source of truth).
+  const inferenceUtilPct = hasBudgetCap
+    ? Math.min(100, (inferenceSpendCents / budgetCents) * 100)
+    : 0;
 
   return (
     <div className="space-y-6" style={{ color: DS.text }}>
@@ -923,14 +951,14 @@ export function Costs() {
               </div>
               <div className="flex items-end justify-between gap-2">
                 <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
-                  {formatCents(spendCents)}
+                  {formatCents(inferenceSpendCents)}
                 </span>
                 <div className="opacity-90">
                   <Sparkline values={dailyTotals.totals.length >= 2 ? dailyTotals.totals : [0, 0]} color={DS.primary} />
                 </div>
               </div>
               <span className="text-[12px]" style={{ color: DS.textMuted }}>
-                {formatTokens(inferenceTokenTotal)} tokens
+                {formatTokens(inferenceSpendTokens)} tokens{mlflowReachable ? " \u00b7 MLflow" : ""}
               </span>
             </div>
 
@@ -944,7 +972,7 @@ export function Costs() {
               </div>
               <div className="flex items-baseline gap-2">
                 <span className="text-[30px] font-semibold leading-none tabular-nums" style={{ color: DS.text, fontFamily: MONO }}>
-                  {formatCents(spendCents)}
+                  {formatCents(inferenceSpendCents)}
                 </span>
                 {hasBudgetCap ? (
                   <span className="text-[13px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
@@ -958,18 +986,18 @@ export function Costs() {
                     <div
                       className="h-full rounded-full"
                       style={{
-                        width: `${Math.min(100, spendData?.summary.utilizationPercent ?? 0)}%`,
+                        width: `${inferenceUtilPct}%`,
                         background:
-                          (spendData?.summary.utilizationPercent ?? 0) > 90
+                          inferenceUtilPct > 90
                             ? DS.critical
-                            : (spendData?.summary.utilizationPercent ?? 0) > 70
+                            : inferenceUtilPct > 70
                               ? DS.warning
                               : DS.success,
                       }}
                     />
                   </div>
                   <span className="text-[12px]" style={{ color: DS.textMuted }}>
-                    {formatCents(Math.max(0, budgetCents - spendCents))} remaining
+                    {formatCents(Math.max(0, budgetCents - inferenceSpendCents))} remaining
                   </span>
                 </>
               ) : (
