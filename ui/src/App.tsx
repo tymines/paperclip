@@ -435,6 +435,12 @@ export function App() {
           <Route path="design" element={<UnprefixedBoardRedirect />} />
           <Route path="design/library" element={<UnprefixedBoardRedirect />} />
           <Route path="costs" element={<UnprefixedBoardRedirect />} />
+          {/* Bare sidebar links for company-scoped tools — redirect to the
+              active company prefix like every other tab (was missing, so
+              /app-dev and /prompts fell through to :companyPrefix → "company
+              not found"). */}
+          <Route path="app-dev" element={<UnprefixedBoardRedirect />} />
+          <Route path="prompts" element={<UnprefixedBoardRedirect />} />
           <Route path="goals" element={<UnprefixedBoardRedirect />} />
           <Route path="goals/:goalId" element={<UnprefixedBoardRedirect />} />
           <Route path="approvals" element={<UnprefixedBoardRedirect />} />
