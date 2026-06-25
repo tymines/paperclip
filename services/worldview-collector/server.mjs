@@ -28,6 +28,7 @@
  *   GET /api/waqi         -> air-quality index (AQI) for major cities (WAQI, token)
  *   GET /api/opensky      -> live aircraft state vectors (OpenSky, OAuth2 client-creds)
  *   GET /api/aviationstack -> live / scheduled flight data (AviationStack, key)
+ *   GET /api/ais          -> live vessel AIS positions (AISStream, WebSocket key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -774,6 +775,191 @@ async function refreshAviationstack() {
   }
 }
 
+// ---- AISStream: live vessel AIS positions (WebSocket stream, key-gated) -----
+// AISStream.io is a *streaming* feed, not a REST API: we hold a single
+// WebSocket to wss://stream.aisstream.io/v0/stream, send a subscription (API
+// key + bounding boxes for a few busy shipping lanes) within 3s, then receive a
+// continuous stream of vessel PositionReport messages. We keep ONLY the
+// most-recent position per MMSI in a bounded in-memory map (capped at
+// AISSTREAM_MAX_VESSELS, oldest-seen evicted first) so memory cannot grow
+// unbounded, and serve a snapshot from /api/ais. Zero-dependency: uses Node's
+// built-in global WebSocket (stable in Node >=22). If the runtime lacks it we
+// degrade honestly (status "error" + note) instead of crashing the collector.
+// Honest needs_key / 0 rows when AISSTREAM_API_KEY is unset. The key is never
+// logged or echoed into any response.
+const AISSTREAM_KEY = process.env.AISSTREAM_API_KEY || "";
+const AISSTREAM_WS_URL = process.env.AISSTREAM_WS_URL || "wss://stream.aisstream.io/v0/stream";
+const AISSTREAM_MAX_VESSELS = Number(process.env.AISSTREAM_MAX_VESSELS || 500);
+const AISSTREAM_SAMPLE_ROWS = Number(process.env.AISSTREAM_SAMPLE_ROWS || 25);
+// Default to a handful of busy shipping lanes so we get steady traffic without
+// subscribing to the whole world (which streams ~300 msg/s). Each bbox is two
+// [lat, lon] corners. Override with AISSTREAM_BBOXES as a JSON array of bboxes.
+const AISSTREAM_BBOXES = (() => {
+  if (process.env.AISSTREAM_BBOXES) {
+    try { return JSON.parse(process.env.AISSTREAM_BBOXES); } catch { /* fall through to defaults */ }
+  }
+  return [
+    [[51.6, 1.0], [50.9, 2.1]],     // Dover Strait / English Channel
+    [[36.2, -5.8], [35.8, -5.2]],   // Strait of Gibraltar
+    [[1.35, 103.5], [1.05, 104.2]], // Singapore Strait
+    [[31.6, 121.5], [30.6, 122.8]], // Shanghai / Yangtze approaches
+  ];
+})();
+const AISSTREAM_MESSAGE_TYPES = ["PositionReport"];
+
+// Bounded "most-recent position per MMSI" store + lightweight connection state.
+const aisVessels = new Map(); // MMSI -> { mmsi, name, lat, lon, sog, cog, time }
+let aisConn = null;           // current WebSocket instance (or null)
+let aisConnecting = false;
+let aisMsgCount = 0;          // total position reports ingested since boot
+let aisLastMsgAt = 0;         // epoch ms of the last position report
+let aisReconnectMs = 2000;    // reconnect backoff; grows to a cap on repeat drops
+let aisReconnectTimer = null;
+let aisLastPubAt = 0;
+
+function aisRememberVessel(meta, pr) {
+  const mmsi = (meta && meta.MMSI != null) ? meta.MMSI : (pr && pr.UserID);
+  if (mmsi == null) return;
+  const lat = (meta && typeof meta.latitude === "number") ? meta.latitude : (pr && pr.Latitude);
+  const lon = (meta && typeof meta.longitude === "number") ? meta.longitude : (pr && pr.Longitude);
+  if (typeof lat !== "number" || typeof lon !== "number") return;
+  // Re-insert so iteration order is oldest-seen -> newest (eviction takes head).
+  aisVessels.delete(mmsi);
+  aisVessels.set(mmsi, {
+    mmsi,
+    name: ((meta && meta.ShipName) || "").trim(),
+    lat: Math.round(lat * 1e5) / 1e5,
+    lon: Math.round(lon * 1e5) / 1e5,
+    sog: (pr && typeof pr.Sog === "number") ? pr.Sog : null,
+    cog: (pr && typeof pr.Cog === "number") ? pr.Cog : null,
+    time: (meta && meta.time_utc) || new Date().toISOString(),
+  });
+  while (aisVessels.size > AISSTREAM_MAX_VESSELS) {
+    aisVessels.delete(aisVessels.keys().next().value);
+  }
+  aisMsgCount++;
+  aisLastMsgAt = Date.now();
+}
+
+function aisPublish() {
+  if (!AISSTREAM_KEY) {
+    setCache("ais", {
+      status: "needs_key",
+      source: "AISStream wss /v0/stream",
+      vesselCount: 0,
+      items: [],
+      note: "Set AISSTREAM_API_KEY to enable. No data served without a key.",
+    });
+    return;
+  }
+  const connected = !!aisConn && aisConn.readyState === 1; // 1 = OPEN
+  const freshMs = aisLastMsgAt ? Date.now() - aisLastMsgAt : Infinity;
+  const receiving = connected && freshMs < 120000;
+  const sample = [...aisVessels.values()].reverse().slice(0, AISSTREAM_SAMPLE_ROWS).map((v) => ({
+    mmsi: v.mmsi, name: v.name, lat: v.lat, lon: v.lon, speed: v.sog, course: v.cog, time: v.time,
+  }));
+  let status, note;
+  if (receiving) {
+    status = "live";
+    note = "Live AIS stream — " + aisVessels.size + " vessels tracked across " +
+      AISSTREAM_BBOXES.length + " shipping-lane boxes; " + aisMsgCount + " position reports since boot.";
+  } else if (aisVessels.size) {
+    status = "stale";
+    note = connected ? "Stream connected, awaiting position reports."
+      : "Stream disconnected — serving last known positions, reconnecting.";
+  } else {
+    status = "pending";
+    note = connected ? "Connected to AISStream, waiting for first vessel report." : "Connecting to AISStream…";
+  }
+  setCache("ais", { status, source: "AISStream wss /v0/stream", vesselCount: aisVessels.size, items: sample, note });
+}
+
+function aisScheduleReconnect() {
+  if (aisReconnectTimer) return;
+  const delay = aisReconnectMs;
+  aisReconnectMs = Math.min(aisReconnectMs * 2, 30000);
+  aisReconnectTimer = setTimeout(() => { aisReconnectTimer = null; aisConnect(); }, delay);
+}
+
+function aisConnect() {
+  if (!AISSTREAM_KEY) { aisPublish(); return; }
+  if (typeof WebSocket === "undefined") {
+    setCache("ais", {
+      status: "error",
+      source: "AISStream wss /v0/stream",
+      vesselCount: aisVessels.size,
+      items: [],
+      note: "Runtime has no built-in WebSocket (needs Node >=22). AIS stream unavailable; rest of collector unaffected.",
+    });
+    return;
+  }
+  if (aisConnecting || (aisConn && aisConn.readyState === 1)) return;
+  aisConnecting = true;
+  let ws;
+  try { ws = new WebSocket(AISSTREAM_WS_URL); }
+  catch { aisConnecting = false; aisScheduleReconnect(); return; }
+  // AISStream delivers JSON over BINARY frames; Node's built-in WebSocket hands
+  // them back as Blob by default. Force ArrayBuffer so we can decode synchronously.
+  try { ws.binaryType = "arraybuffer"; } catch { /* default binaryType is fine */ }
+  aisConn = ws;
+  ws.addEventListener("open", () => {
+    aisConnecting = false;
+    aisReconnectMs = 2000; // reset backoff after a good connection
+    try {
+      ws.send(JSON.stringify({
+        APIKey: AISSTREAM_KEY,
+        BoundingBoxes: AISSTREAM_BBOXES,
+        FilterMessageTypes: AISSTREAM_MESSAGE_TYPES,
+      }));
+    } catch { /* a send failure surfaces via close/error below */ }
+    aisPublish();
+  });
+  ws.addEventListener("message", (ev) => {
+    let msg;
+    try {
+      const raw = typeof ev.data === "string" ? ev.data : Buffer.from(ev.data).toString("utf8");
+      msg = JSON.parse(raw);
+    } catch { return; }
+    if (msg && msg.error) { // invalid key / malformed subscription / throttling
+      setCache("ais", {
+        status: "error",
+        source: "AISStream wss /v0/stream",
+        vesselCount: aisVessels.size,
+        items: [],
+        note: "AISStream error: " + String(msg.error).slice(0, 200),
+      });
+      return;
+    }
+    if (msg && msg.MessageType === "PositionReport") {
+      aisRememberVessel(msg.MetaData || {}, (msg.Message && msg.Message.PositionReport) || {});
+      if (Date.now() - aisLastPubAt > 1000) { aisLastPubAt = Date.now(); aisPublish(); }
+    }
+  });
+  ws.addEventListener("close", () => {
+    aisConnecting = false;
+    if (aisConn === ws) aisConn = null;
+    aisPublish();
+    aisScheduleReconnect();
+  });
+  ws.addEventListener("error", () => {
+    aisConnecting = false;
+    try { ws.close(); } catch { /* close handler will reconnect */ }
+  });
+}
+
+// Called from refreshAll() (every POLL_MS) and once at boot: a watchdog that
+// (re)connects the stream if it is not OPEN/CONNECTING, otherwise republishes.
+function ensureAisStream() {
+  if (!AISSTREAM_KEY) { aisPublish(); return; }
+  if (typeof WebSocket === "undefined") { aisConnect(); return; }
+  if (!aisConn || aisConn.readyState > 1) aisConnect(); // null / CLOSING / CLOSED
+  else aisPublish();
+}
+
+// Heartbeat: refresh the /api/ais snapshot (and its live/stale flag) every 30s
+// even when no new position reports have arrived, so freshness reflects reality.
+setInterval(() => { if (AISSTREAM_KEY) aisPublish(); }, 30000).unref?.();
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -810,7 +996,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack", "ais"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -824,10 +1010,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/waqi") return send(res, 200, getCache("waqi") || { status: "pending", items: [] });
   if (path === "/api/opensky") return send(res, 200, getCache("opensky") || { status: "pending", items: [] });
   if (path === "/api/aviationstack") return send(res, 200, getCache("aviationstack") || { status: "pending", items: [] });
+  if (path === "/api/ais") return send(res, 200, getCache("ais") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack"), "AISStream": getCache("ais") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -836,10 +1023,11 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/sources"] });
 });
 
 async function refreshAll() {
+  ensureAisStream(); // maintain AISStream WebSocket (connect / reconnect watchdog)
   await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack()]);
 }
 server.listen(PORT, () => {
