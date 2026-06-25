@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Search, Network, FileText, X, RefreshCw, ArrowLeft, Tag as TagIcon,
+  Search, Network, FileText, X, RefreshCw, Tag as TagIcon,
   Folder, Bot, Link2, BookOpen, Hash,
 } from "lucide-react";
 import { fleetKbApi, type FleetKbGraphNode, type FleetKbGraphEdge } from "../../api/knowledgeGraph";
@@ -30,6 +30,7 @@ const COLORS = {
   edgeLink: "rgba(167,139,250,0.32)",
   edgeAgent: "rgba(34,211,238,0.22)",
   edgeCategory: "rgba(244,114,182,0.20)",
+  edgeRelated: "rgba(96,165,250,0.30)", // synthesized note↔note relationships
 };
 
 function noteColor(category?: string): string {
@@ -116,13 +117,19 @@ function computeLayout(
         vb.x -= fx; vb.y -= fy;
       }
     }
-    // springs
+    // springs — related/wikilink edges pull harder (scaled by weight) so
+    // related notes cluster; hub edges stay soft so they don't flatten clusters.
     for (const e of validEdges) {
       const pa = pos.get(e.source)!, pb = pos.get(e.target)!;
       const va = vel.get(e.source)!, vb = vel.get(e.target)!;
       const dx = pb.x - pa.x, dy = pb.y - pa.y;
       const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-      const f = (d - SPRING_LEN) * SPRING;
+      const strength = e.kind === "related"
+        ? SPRING * (0.7 + (e.weight ?? 0.3) * 1.6)
+        : e.kind === "link"
+          ? SPRING * 1.4
+          : SPRING * 0.85;
+      const f = (d - SPRING_LEN) * strength;
       const fx = (dx / d) * f, fy = (dy / d) * f;
       va.x += fx; va.y += fy;
       vb.x -= fx; vb.y -= fy;
@@ -424,7 +431,7 @@ export function FleetKbView({ onBack }: { onBack: () => void }) {
           className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-300 hover:bg-white/5"
           style={{ border }}
         >
-          <ArrowLeft size={13} /> Back to Fleet Graph
+          <Network size={13} /> 3D Entity Graph
         </button>
       </aside>
 
@@ -484,13 +491,18 @@ export function FleetKbView({ onBack }: { onBack: () => void }) {
                 const filterDim = filtersActive &&
                   ((graphNodes.find((n) => n.id === e.source)?.kind === "note" && !matchedNoteIds.has(e.source)) ||
                    (graphNodes.find((n) => n.id === e.target)?.kind === "note" && !matchedNoteIds.has(e.target)));
-                const col = e.kind === "agent" ? COLORS.edgeAgent : e.kind === "category" ? COLORS.edgeCategory : COLORS.edgeLink;
+                const col = e.kind === "agent" ? COLORS.edgeAgent
+                  : e.kind === "category" ? COLORS.edgeCategory
+                  : e.kind === "related" ? COLORS.edgeRelated
+                  : COLORS.edgeLink;
+                // synthesized relationships scale stroke by connection strength
+                const baseW = e.kind === "related" ? 0.5 + (e.weight ?? 0.3) * 2.2 : 0.7;
                 return (
                   <line
                     key={i}
                     x1={a.x} y1={a.y} x2={b.x} y2={b.y}
                     stroke={col}
-                    strokeWidth={focusSet && !dim ? 1.4 : 0.7}
+                    strokeWidth={focusSet && !dim ? Math.max(1.4, baseW) : baseW}
                     opacity={dim || filterDim ? 0.06 : 1}
                   />
                 );

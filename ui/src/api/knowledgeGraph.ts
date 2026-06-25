@@ -93,7 +93,8 @@ export interface FleetKbGraphNode {
 export interface FleetKbGraphEdge {
   source: string;
   target: string;
-  kind: "link" | "agent" | "category";
+  kind: "link" | "agent" | "category" | "related";
+  weight?: number;
 }
 
 export interface FleetKbGraphResponse {

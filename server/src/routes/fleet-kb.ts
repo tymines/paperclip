@@ -62,7 +62,8 @@ interface GraphNode {
 interface GraphEdge {
   source: string;
   target: string;
-  kind: "link" | "agent" | "category";
+  kind: "link" | "agent" | "category" | "related";
+  weight?: number;
 }
 
 // ─── Front-matter + markdown helpers ─────────────────────────────────────────
@@ -227,6 +228,128 @@ function loadVault(): {
 
 // ─── Graph construction ──────────────────────────────────────────────────────
 
+// ─── Note-to-note relationship synthesis ─────────────────────────────────────
+//
+// The vault's explicit wikilinks mostly point at `_Index`, which made the graph
+// a hub-and-spoke star. To surface the *real* web of relationships we synthesize
+// note→note edges from: shared distinctive terms (TF-IDF cosine), shared tags,
+// and same category. Edges are capped per node and weighted by strength so the
+// result is a legible cluster web, not a hairball.
+
+const STOPWORDS = new Set([
+  "the","and","for","are","but","not","you","all","any","can","had","her","was",
+  "one","our","out","get","has","him","his","how","new","now","old","see","two",
+  "way","who","did","its","let","put","say","she","too","use","that","this","with",
+  "from","they","will","would","there","their","what","which","when","make","like",
+  "time","just","know","take","into","your","some","could","them","than","then",
+  "been","were","also","have","more","most","such","only","over","very","work",
+  "note","notes","fleet","paperclip","agent","task","tasks","using","used","via",
+  "etc","each","other","these","those","being","after","before","while","where",
+  "because","should","between","both","under","once","here","does","done","made",
+  "need","needs","want","https","http","com","www",
+]);
+
+function tokenize(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (raw.length < 3 || raw.length > 24) continue;
+    if (/^\d+$/.test(raw)) continue;
+    if (STOPWORDS.has(raw)) continue;
+    out.push(raw);
+  }
+  return out;
+}
+
+// L2-normalized TF-IDF vectors keyed by note id. Title terms are weighted 2x.
+function buildTfIdf(notes: FleetNote[]): Map<string, Map<string, number>> {
+  const docTokens = new Map<string, string[]>();
+  const df = new Map<string, number>();
+  for (const n of notes) {
+    const tokens = [...tokenize(n.title), ...tokenize(n.title), ...tokenize(n.body)];
+    docTokens.set(n.id, tokens);
+    for (const t of new Set(tokens)) df.set(t, (df.get(t) ?? 0) + 1);
+  }
+  const N = notes.length || 1;
+  const vectors = new Map<string, Map<string, number>>();
+  for (const [id, tokens] of docTokens) {
+    const tf = new Map<string, number>();
+    for (const t of tokens) tf.set(t, (tf.get(t) ?? 0) + 1);
+    const vec = new Map<string, number>();
+    let norm = 0;
+    for (const [t, freq] of tf) {
+      const dfreq = df.get(t) ?? 1;
+      // Drop terms in ≥60% of docs (not distinctive) — keeps clusters meaningful.
+      if (dfreq >= N * 0.6) continue;
+      const idf = Math.log((N + 1) / (dfreq + 0.5));
+      const w = (1 + Math.log(freq)) * idf;
+      if (w <= 0) continue;
+      vec.set(t, w);
+      norm += w * w;
+    }
+    norm = Math.sqrt(norm) || 1;
+    for (const [t, w] of vec) vec.set(t, w / norm);
+    vectors.set(id, vec);
+  }
+  return vectors;
+}
+
+function cosine(a: Map<string, number>, b: Map<string, number>): number {
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let dot = 0;
+  for (const [t, w] of small) {
+    const w2 = large.get(t);
+    if (w2) dot += w * w2; // vectors are L2-normalized → dot product is cosine
+  }
+  return dot;
+}
+
+const RELATED_MAX_PER_NODE = 6;
+const RELATED_MIN_SCORE = 0.12;
+
+function synthesizeRelatedEdges(notes: FleetNote[], existingPairs: Set<string>): GraphEdge[] {
+  const tfidf = buildTfIdf(notes);
+  const cands: Array<{ a: string; b: string; score: number }> = [];
+
+  for (let i = 0; i < notes.length; i++) {
+    const na = notes[i]!;
+    const va = tfidf.get(na.id)!;
+    const tagsA = new Set(na.tags);
+    for (let j = i + 1; j < notes.length; j++) {
+      const nb = notes[j]!;
+      const key = na.id < nb.id ? `${na.id}|${nb.id}` : `${nb.id}|${na.id}`;
+      if (existingPairs.has(key)) continue; // already joined by an explicit wikilink
+
+      const termScore = cosine(va, tfidf.get(nb.id)!);
+      let shared = 0;
+      for (const t of nb.tags) if (tagsA.has(t)) shared++;
+
+      // Require a real signal: shared distinctive terms OR a shared tag.
+      // Same-category alone must NOT create an edge (would form category cliques).
+      if (termScore < 0.08 && shared === 0) continue;
+
+      const tagScore = Math.min(1, shared * 0.5);
+      const sameCat = na.category === nb.category ? 0.12 : 0;
+      const score = termScore + tagScore * 0.6 + sameCat;
+      if (score < RELATED_MIN_SCORE) continue;
+      cands.push({ a: na.id, b: nb.id, score });
+    }
+  }
+
+  // Greedy strongest-first with a per-node degree cap → legible web, not hairball.
+  cands.sort((x, y) => y.score - x.score);
+  const degree = new Map<string, number>();
+  const edges: GraphEdge[] = [];
+  for (const c of cands) {
+    const da = degree.get(c.a) ?? 0;
+    const db = degree.get(c.b) ?? 0;
+    if (da >= RELATED_MAX_PER_NODE || db >= RELATED_MAX_PER_NODE) continue;
+    degree.set(c.a, da + 1);
+    degree.set(c.b, db + 1);
+    edges.push({ source: c.a, target: c.b, kind: "related", weight: Math.round(c.score * 100) / 100 });
+  }
+  return edges;
+}
+
 function buildGraph(notes: FleetNote[], indexExists: boolean): { nodes: GraphNode[]; edges: GraphEdge[] } {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -234,6 +357,7 @@ function buildGraph(notes: FleetNote[], indexExists: boolean): { nodes: GraphNod
 
   const categoriesSeen = new Map<string, string>(); // key -> label
   const agentsSeen = new Set<string>();
+  const wikiPairs = new Set<string>(); // note↔note pairs already joined by an explicit wikilink
 
   const INDEX_ID = "__index__";
   if (indexExists) nodes.push({ id: INDEX_ID, kind: "index", label: "Fleet KB Index" });
@@ -250,12 +374,15 @@ function buildGraph(notes: FleetNote[], indexExists: boolean): { nodes: GraphNod
     });
     if (!categoriesSeen.has(n.category)) categoriesSeen.set(n.category, n.categoryLabel);
 
-    // wiki-link edges (note → note, or note → _Index hub)
+    // Explicit note → note wikilinks (strong, authored relationships). The
+    // near-ubiquitous note → _Index spoke is intentionally dropped: nearly every
+    // note links _Index, which made the whole graph a hub-and-spoke star.
     for (const link of n.wikilinks) {
-      if (link === "_Index") {
-        if (indexExists) edges.push({ source: n.id, target: INDEX_ID, kind: "link" });
-      } else if (noteIds.has(link)) {
+      if (link === "_Index") continue;
+      if (noteIds.has(link)) {
         edges.push({ source: n.id, target: link, kind: "link" });
+        const key = n.id < link ? `${n.id}|${link}` : `${link}|${n.id}`;
+        wikiPairs.add(key);
       }
     }
 
@@ -272,10 +399,17 @@ function buildGraph(notes: FleetNote[], indexExists: boolean): { nodes: GraphNod
 
   for (const [key, label] of categoriesSeen) {
     nodes.push({ id: `cat:${key}`, kind: "category", label, category: key });
+    // Root the category hubs under the index (a handful of edges) rather than
+    // wiring every single note to the index.
+    if (indexExists) edges.push({ source: INDEX_ID, target: `cat:${key}`, kind: "category" });
   }
   for (const agentId of agentsSeen) {
     nodes.push({ id: `agent:${agentId}`, kind: "agent", label: `agent ${agentId.slice(0, 6)}`, agentId });
   }
+
+  // Synthesized note↔note relationships — the real "web" that clusters related
+  // decisions and finished-work notes (shared terms / tags / category).
+  edges.push(...synthesizeRelatedEdges(notes, wikiPairs));
 
   return { nodes, edges };
 }

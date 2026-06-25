@@ -792,7 +792,7 @@ export function KnowledgeGraph() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
-  const [kbMode, setKbMode] = useState<"graph" | "kb">("graph");
+  const [kbMode, setKbMode] = useState<"graph" | "kb">("kb"); // Fleet KB is the default/primary Knowledge Graph view; the 3D entity graph is the secondary toggle
 
   useEffect(() => { setBreadcrumbs([{ label: "Knowledge Graph" }]); }, [setBreadcrumbs]);
 
