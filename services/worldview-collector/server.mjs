@@ -24,6 +24,7 @@
  *   GET /api/geopolitical -> geopolitical headlines (public RSS, no key)
  *   GET /api/firms        -> satellite active-fire detections (NASA FIRMS, key)
  *   GET /api/finnhub      -> markets / finance radar quotes (Finnhub, key)
+ *   GET /api/openaq       -> air-quality PM2.5 radar for major cities (OpenAQ, key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -67,6 +68,33 @@ const FINNHUB_SYMBOLS = (process.env.FINNHUB_SYMBOLS
     ]);
 const FINNHUB_BASE = "https://finnhub.io/api/v1";
 
+// ---- OpenAQ config (air quality) -------------------------------------------
+// Free key from https://openaq.org/. OpenAQ v3 authenticates with an X-API-Key
+// header. Without a key the panel honestly reports needs_key and serves NO rows.
+// Override the city set via OPENAQ_CITIES="Name:lat:lon,Name:lat:lon".
+const OPENAQ_KEY = process.env.OPENAQ_API_KEY || "";
+const OPENAQ_BASE = "https://api.openaq.org/v3";
+const OPENAQ_PM25 = 2; // OpenAQ parameters_id for PM2.5
+const OPENAQ_RADIUS_M = Number(process.env.OPENAQ_RADIUS_M || 25000);
+const OPENAQ_MAX_AGE_MS = Number(process.env.OPENAQ_MAX_AGE_DAYS || 7) * 24 * 3600 * 1000;
+const OPENAQ_CITIES = (process.env.OPENAQ_CITIES
+  ? process.env.OPENAQ_CITIES.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [name, lat, lon] = p.split(":").map((x) => x.trim());
+      return [name, Number(lat), Number(lon)];
+    })
+  : [
+      ["Delhi", 28.6139, 77.2090],
+      ["Beijing", 39.9042, 116.4074],
+      ["London", 51.5074, -0.1278],
+      ["Los Angeles", 34.0522, -118.2437],
+      ["New York", 40.7128, -74.0060],
+      ["Paris", 48.8566, 2.3522],
+      ["Tokyo", 35.6762, 139.6503],
+      ["Sao Paulo", -23.5505, -46.6333],
+      ["Mexico City", 19.4326, -99.1332],
+      ["Jakarta", -6.2088, 106.8456],
+    ]);
+
 // ---- in-memory cache (no DB; LRU not needed, fixed small key set) ----------
 const cache = new Map(); // key -> { status, source, fetchedAt, items, note }
 const setCache = (k, v) => cache.set(k, { ...v, fetchedAt: new Date().toISOString() });
@@ -78,6 +106,15 @@ async function getJson(url, ms = 12000) {
   const t = setTimeout(() => ctl.abort(), ms);
   try {
     const r = await fetch(url, { headers: { "user-agent": UA, accept: "application/json" }, signal: ctl.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+async function getJsonHeaders(url, headers = {}, ms = 12000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA, accept: "application/json", ...headers }, signal: ctl.signal });
     if (!r.ok) throw new Error("HTTP " + r.status);
     return await r.json();
   } finally { clearTimeout(t); }
@@ -303,6 +340,85 @@ async function refreshFinnhub() {
   }
 }
 
+// ---- OpenAQ: air-quality PM2.5 radar for major cities (key-gated) ----------
+// For each city, find nearby PM2.5 monitoring locations, then read each
+// location's latest sensor values and surface the freshest PM2.5 reading. Many
+// OpenAQ stations report sporadically, so we prefer a reading inside the
+// freshness window (OPENAQ_MAX_AGE_DAYS) and fall back to the most recent
+// available, flagging it stale. Honest needs_key with no rows when unset.
+async function refreshOpenaq() {
+  if (!OPENAQ_KEY) {
+    setCache("openaq", {
+      status: "needs_key",
+      source: "OpenAQ v3 /locations + /latest",
+      items: [],
+      note: "Set OPENAQ_API_KEY to enable. No data served without a key.",
+    });
+    return;
+  }
+  const H = { "X-API-Key": OPENAQ_KEY };
+  const results = [];
+  const failures = [];
+  for (const [city, lat, lon] of OPENAQ_CITIES) {
+    try {
+      const locs = await getJsonHeaders(
+        OPENAQ_BASE + "/locations?coordinates=" + lat + "," + lon +
+          "&radius=" + OPENAQ_RADIUS_M + "&parameters_id=" + OPENAQ_PM25 + "&limit=5", H);
+      let best = null;
+      for (const loc of (locs.results || [])) {
+        const smap = new Map((loc.sensors || []).map((sn) => [sn.id, sn.parameter]));
+        const latest = await getJsonHeaders(OPENAQ_BASE + "/locations/" + loc.id + "/latest", H);
+        for (const m of (latest.results || [])) {
+          const p = smap.get(m.sensorsId);
+          if (!p || p.name !== "pm25") continue;
+          const when = m?.datetime?.utc || "";
+          const age = Date.now() - (Date.parse(when) || 0);
+          const cand = {
+            city,
+            location: loc.name,
+            country: loc.country?.code || "",
+            parameter: "pm25",
+            value: m.value,
+            unit: p.units,
+            lat: m.coordinates?.latitude ?? loc.coordinates?.latitude ?? null,
+            lon: m.coordinates?.longitude ?? loc.coordinates?.longitude ?? null,
+            observedAt: when,
+            stale: age > OPENAQ_MAX_AGE_MS,
+            _age: age,
+          };
+          if (!best || age < best._age) best = cand;
+          if (age <= OPENAQ_MAX_AGE_MS) break;
+        }
+        if (best && best._age <= OPENAQ_MAX_AGE_MS) break;
+      }
+      if (best) { delete best._age; results.push(best); }
+      else failures.push(city + ": no pm25 reading");
+    } catch (e) {
+      failures.push(city + ": " + e.message);
+    }
+  }
+  if (results.length) {
+    const staleCount = results.filter((r) => r.stale).length;
+    setCache("openaq", {
+      status: "live",
+      source: "OpenAQ v3 /locations + /latest (key)",
+      items: results,
+      note: (failures.length || staleCount)
+        ? [failures.length ? failures.length + " city(ies) unavailable: " + failures.join(" | ") : null,
+           staleCount ? staleCount + " reading(s) older than freshness window" : null].filter(Boolean).join("; ")
+        : null,
+    });
+  } else {
+    const prev = getCache("openaq");
+    setCache("openaq", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "OpenAQ v3 /locations + /latest (key)",
+      items: prev?.items || [],
+      note: "OpenAQ fetch failed for all cities: " + failures.join(" | "),
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -338,7 +454,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -348,10 +464,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/geopolitical") return send(res, 200, getCache("geopolitical") || { status: "pending", items: [] });
   if (path === "/api/firms") return send(res, 200, getCache("firms") || { status: "pending", items: [] });
   if (path === "/api/finnhub") return send(res, 200, getCache("finnhub") || { status: "pending", items: [] });
+  if (path === "/api/openaq") return send(res, 200, getCache("openaq") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -360,11 +477,11 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
