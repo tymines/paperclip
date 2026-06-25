@@ -19,6 +19,8 @@ const CARD_H = 100;
 const GAP_X = 32;
 const GAP_Y = 80;
 const PADDING = 60;
+const GRID_GAP_Y = 28; // vertical gap between wrapped grid rows
+const GRID_MIN_CHILDREN = 7; // wrap a manager's leaf reports into a grid past this many
 const MIN_ZOOM = 0.2;
 const MAX_ZOOM = 2;
 const TOUCH_MOVE_THRESHOLD = 6;
@@ -52,9 +54,26 @@ interface TouchGesture {
 
 // ── Layout algorithm ────────────────────────────────────────────────────
 
+/** A manager with many leaf-only reports is laid out as a grid, not one wide row. */
+function isGridGroup(node: OrgNode): boolean {
+  return (
+    node.reports.length >= GRID_MIN_CHILDREN &&
+    node.reports.every((c) => c.reports.length === 0)
+  );
+}
+
+/** Columns for a wrapped grid: roughly square but biased wider to suit landscape. */
+function gridCols(count: number): number {
+  return Math.min(count, Math.max(6, Math.ceil(Math.sqrt(count))));
+}
+
 /** Compute the width each subtree needs. */
 function subtreeWidth(node: OrgNode): number {
   if (node.reports.length === 0) return CARD_W;
+  if (isGridGroup(node)) {
+    const cols = gridCols(node.reports.length);
+    return cols * CARD_W + (cols - 1) * GAP_X;
+  }
   const childrenW = node.reports.reduce((sum, c) => sum + subtreeWidth(c), 0);
   const gaps = (node.reports.length - 1) * GAP_X;
   return Math.max(CARD_W, childrenW + gaps);
@@ -64,15 +83,37 @@ function subtreeWidth(node: OrgNode): number {
 function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
   const totalW = subtreeWidth(node);
   const layoutChildren: LayoutNode[] = [];
+  const childY = y + CARD_H + GAP_Y;
 
-  if (node.reports.length > 0) {
+  if (isGridGroup(node)) {
+    const count = node.reports.length;
+    const cols = gridCols(count);
+    const rows = Math.ceil(count / cols);
+    for (let i = 0; i < count; i++) {
+      const child = node.reports[i]!;
+      const r = Math.floor(i / cols);
+      const c = i % cols;
+      const itemsInRow = r < rows - 1 ? cols : count - cols * (rows - 1);
+      const rowW = itemsInRow * CARD_W + (itemsInRow - 1) * GAP_X;
+      const rowStartX = x + (totalW - rowW) / 2;
+      layoutChildren.push({
+        id: child.id,
+        name: child.name,
+        role: child.role,
+        status: child.status,
+        x: rowStartX + c * (CARD_W + GAP_X),
+        y: childY + r * (CARD_H + GRID_GAP_Y),
+        children: [],
+      });
+    }
+  } else if (node.reports.length > 0) {
     const childrenW = node.reports.reduce((sum, c) => sum + subtreeWidth(c), 0);
     const gaps = (node.reports.length - 1) * GAP_X;
     let cx = x + (totalW - childrenW - gaps) / 2;
 
     for (const child of node.reports) {
       const cw = subtreeWidth(child);
-      layoutChildren.push(layoutTree(child, cx, y + CARD_H + GAP_Y));
+      layoutChildren.push(layoutTree(child, cx, childY));
       cx += cw + GAP_X;
     }
   }
@@ -92,19 +133,21 @@ function layoutTree(node: OrgNode, x: number, y: number): LayoutNode {
 function layoutForest(roots: OrgNode[]): LayoutNode[] {
   if (roots.length === 0) return [];
 
-  const totalW = roots.reduce((sum, r) => sum + subtreeWidth(r), 0);
-  const gaps = (roots.length - 1) * GAP_X;
+  // Largest tree first so the primary org (the orchestrator's tree) anchors the
+  // layout and small unmanaged roots sit beside it rather than dangling to the
+  // far left of leadership.
+  const ordered = [...roots].sort((a, b) => subtreeWidth(b) - subtreeWidth(a));
+
   let x = PADDING;
   const y = PADDING;
 
   const result: LayoutNode[] = [];
-  for (const root of roots) {
+  for (const root of ordered) {
     const w = subtreeWidth(root);
     result.push(layoutTree(root, x, y));
     x += w + GAP_X;
   }
 
-  // Compute bounds and return
   return result;
 }
 
@@ -117,19 +160,6 @@ function flattenLayout(nodes: LayoutNode[]): LayoutNode[] {
   }
   nodes.forEach(walk);
   return result;
-}
-
-/** Collect all parent→child edges. */
-function collectEdges(nodes: LayoutNode[]): Array<{ parent: LayoutNode; child: LayoutNode }> {
-  const edges: Array<{ parent: LayoutNode; child: LayoutNode }> = [];
-  function walk(n: LayoutNode) {
-    for (const c of n.children) {
-      edges.push({ parent: n, child: c });
-      walk(c);
-    }
-  }
-  nodes.forEach(walk);
-  return edges;
 }
 
 function clampZoom(value: number): number {
@@ -200,7 +230,10 @@ export function OrgChart() {
   // Layout computation
   const layout = useMemo(() => layoutForest(orgTree ?? []), [orgTree]);
   const allNodes = useMemo(() => flattenLayout(layout), [layout]);
-  const edges = useMemo(() => collectEdges(layout), [layout]);
+  const parentGroups = useMemo(
+    () => allNodes.filter((n) => n.children.length > 0),
+    [allNodes],
+  );
 
   // Compute SVG bounds
   const bounds = useMemo(() => {
@@ -542,25 +575,31 @@ export function OrgChart() {
             </marker>
           </defs>
           <g transform={`translate(${pan.x}, ${pan.y}) scale(${zoom})`}>
-            {edges.map(({ parent, child }) => {
-              const x1 = parent.x + CARD_W / 2;
-              const y1 = parent.y + CARD_H;
-              const x2 = child.x + CARD_W / 2;
-              const y2 = child.y;
-              const midY = (y1 + y2) / 2;
+            {parentGroups.map((parent) => {
+              const px = parent.x + CARD_W / 2;
+              const pBottom = parent.y + CARD_H;
+              const busY = pBottom + GAP_Y / 2;
 
-              // Planning loop: the orchestrator (leader, e.g. Hermes) and its
-              // strategist (plan critic, e.g. Brainstorm) go back and forth on a
-              // plan before it is handed down to the COO. The org tree can only
-              // nest single parent→child edges, so we render *this one* edge as a
-              // two-way (double-headed, dashed) link to surface the loop. Every
-              // other edge stays a plain report line.
-              const isPlanningLoop =
-                parent.role === "orchestrator" && child.role === "strategist";
+              // Planning loop: the orchestrator (e.g. Hermes) and its strategist
+              // plan-critic (e.g. Brainstorm) iterate on a plan before it is
+              // handed to the COO. A strict parent→child tree can't express the
+              // back-and-forth, so this single edge renders as a two-way dashed
+              // link. Every other edge is a plain report line.
+              const planChild =
+                parent.role === "orchestrator" &&
+                parent.children.length === 1 &&
+                parent.children[0]!.role === "strategist"
+                  ? parent.children[0]!
+                  : null;
 
-              if (isPlanningLoop) {
+              if (planChild) {
+                const x1 = px;
+                const y1 = pBottom;
+                const x2 = planChild.x + CARD_W / 2;
+                const y2 = planChild.y;
+                const midY = (y1 + y2) / 2;
                 return (
-                  <g key={`${parent.id}-${child.id}`}>
+                  <g key={parent.id}>
                     <path
                       d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
                       fill="none"
@@ -583,14 +622,42 @@ export function OrgChart() {
                 );
               }
 
+              // Standard manager → reports connector: a stem down to a shared
+              // horizontal bus, then a vertical drop to each report. Works for a
+              // single report (straight line), a wide row, and wrapped grids.
+              const tops = parent.children.map((c) => ({
+                x: c.x + CARD_W / 2,
+                y: c.y,
+              }));
+              const minX = Math.min(px, ...tops.map((t) => t.x));
+              const maxX = Math.max(px, ...tops.map((t) => t.x));
+
               return (
-                <path
-                  key={`${parent.id}-${child.id}`}
-                  d={`M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`}
-                  fill="none"
-                  stroke="var(--border)"
-                  strokeWidth={1.5}
-                />
+                <g key={parent.id}>
+                  <path
+                    d={`M ${px} ${pBottom} L ${px} ${busY}`}
+                    fill="none"
+                    stroke="var(--border)"
+                    strokeWidth={1.5}
+                  />
+                  {parent.children.length > 1 && (
+                    <path
+                      d={`M ${minX} ${busY} L ${maxX} ${busY}`}
+                      fill="none"
+                      stroke="var(--border)"
+                      strokeWidth={1.5}
+                    />
+                  )}
+                  {tops.map((t, i) => (
+                    <path
+                      key={parent.children[i]!.id}
+                      d={`M ${t.x} ${busY} L ${t.x} ${t.y}`}
+                      fill="none"
+                      stroke="var(--border)"
+                      strokeWidth={1.5}
+                    />
+                  ))}
+                </g>
               );
             })}
           </g>
