@@ -39,6 +39,7 @@ const ROUTE_MAP: Record<string, string> = {
   aviationstack: "/api/aviationstack",
   ais: "/api/ais",
   cloudflare: "/api/cloudflare",
+  brief: "/api/brief",
   sources: "/api/sources",
 };
 

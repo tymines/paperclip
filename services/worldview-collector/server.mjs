@@ -30,6 +30,7 @@
  *   GET /api/aviationstack -> live / scheduled flight data (AviationStack, key)
  *   GET /api/ais          -> live vessel AIS positions (AISStream, WebSocket key)
 *   GET /api/cloudflare   -> internet outages + traffic/attack/quality trends (Cloudflare Radar, token)
+ *   GET /api/brief        -> AI situational brief synthesized from our own feeds (Groq, key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -1065,6 +1066,178 @@ async function refreshCloudflareRadar() {
   }
 }
 
+// ---- Groq AI Brief: synthesized situational summary (key-gated) ------------
+// Unlike the raw-data sources, this panel CONSUMES the collector's OWN freshly
+// aggregated feeds this cycle (news + geopolitical + live seismic + whatever
+// else is live) and asks an LLM to write a short, neutral situational brief —
+// "the world right now in N bullets". Groq is OpenAI-compatible: base
+// https://api.groq.com/openai/v1, chat completions at /chat/completions,
+// Authorization: Bearer <key>. The key is read from GROQ_API_KEY and is NEVER
+// logged or echoed into any response (it only ever rides the request header).
+// Honest needs_key / 0 rows when GROQ_API_KEY is unset.
+//
+// Cost/latency control: the brief is regenerated at most once per
+// GROQ_BRIEF_MIN_INTERVAL_MS (default 20 min) even though refreshAll runs every
+// POLL_MS — between regenerations the cached brief is served untouched, so we do
+// not burn tokens every cycle. Model is overridable via GROQ_MODEL.
+const GROQ_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_BASE = (process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, "");
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const GROQ_BRIEF_BULLETS = Number(process.env.GROQ_BRIEF_BULLETS || 6);
+const GROQ_BRIEF_MIN_INTERVAL_MS = Number(process.env.GROQ_BRIEF_MIN_INTERVAL_MS || 20 * 60 * 1000);
+
+// Pull the most salient rows out of a cached feed for the prompt (compact, and
+// only when that feed actually has live data this cycle).
+function briefLinesFromCache(key, max, fmt) {
+  const c = getCache(key);
+  if (!c || !Array.isArray(c.items) || c.status === "needs_key") return [];
+  return c.items.slice(0, max).map(fmt).filter(Boolean);
+}
+
+// OpenAI-compatible chat call to Groq. Returns parsed JSON; throws with the
+// provider's error message (never the key) on a non-2xx.
+async function groqChat(messages, ms = 25000) {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), ms);
+  try {
+    const r = await fetch(GROQ_BASE + "/chat/completions", {
+      method: "POST",
+      headers: {
+        "user-agent": UA,
+        "content-type": "application/json",
+        accept: "application/json",
+        authorization: "Bearer " + GROQ_KEY,
+      },
+      body: JSON.stringify({ model: GROQ_MODEL, messages, temperature: 0.2, max_tokens: 700 }),
+      signal: ctl.signal,
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      let msg = "HTTP " + r.status;
+      try { const j = JSON.parse(text); msg = (j.error && (j.error.message || j.error.type)) || msg; } catch { /* keep HTTP code */ }
+      throw new Error(msg);
+    }
+    return JSON.parse(text);
+  } finally { clearTimeout(t); }
+}
+
+async function refreshAiBrief() {
+  // Key-gated: serve an honest needs_key state (no brief) when GROQ_API_KEY unset.
+  if (!GROQ_KEY) {
+    setCache("brief", {
+      status: "needs_key",
+      source: "Groq chat completions (" + GROQ_MODEL + ")",
+      items: [],
+      brief: "",
+      note: "Set GROQ_API_KEY to enable. No brief generated without a key.",
+    });
+    return;
+  }
+  // Throttle: regenerate at most once per min-interval; otherwise keep the cache
+  // untouched so we serve the last good brief without spending tokens.
+  const prev = getCache("brief");
+  if (prev && prev.status === "live" && prev.fetchedAt) {
+    const age = Date.now() - Date.parse(prev.fetchedAt);
+    if (Number.isFinite(age) && age < GROQ_BRIEF_MIN_INTERVAL_MS) return;
+  }
+
+  // ---- gather the collector's OWN aggregated data this cycle ----
+  const news = briefLinesFromCache("news", 14, (n) => n.title && ("- " + n.title + (n.source ? " [" + n.source + "]" : "")));
+  const geo = briefLinesFromCache("geopolitical", 14, (g) => g.title && ("- " + g.title + (g.source ? " [" + g.source + "]" : "")));
+  // Seismic is read client-side (not in collector cache); pull a compact USGS
+  // M4.5+/day snapshot directly (keyless, CORS-open) so the brief has real
+  // seismic context. Optional: omitted silently if USGS is unreachable.
+  let quakes = [];
+  try {
+    const qj = await getJson("https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.geojson");
+    quakes = (qj.features || [])
+      .map((f) => ({ mag: f.properties?.mag, place: f.properties?.place }))
+      .filter((q) => Number.isFinite(q.mag))
+      .sort((a, b) => b.mag - a.mag)
+      .slice(0, 8)
+      .map((q) => "- M" + q.mag.toFixed(1) + " " + (q.place || ""));
+  } catch { /* seismic optional */ }
+  // Whatever else is live this cycle: a compact market-direction line + an
+  // enumeration of any other live feeds, so the model knows the breadth.
+  const extras = [];
+  const fin = getCache("finnhub");
+  if (fin && fin.status === "live" && Array.isArray(fin.items) && fin.items.length) {
+    const mkt = fin.items.slice(0, 8)
+      .map((m) => (m.label || m.symbol) + (Number.isFinite(m.changePct) ? " " + (m.changePct > 0 ? "+" : "") + m.changePct.toFixed(2) + "%" : ""))
+      .join(", ");
+    if (mkt) extras.push("- Markets: " + mkt);
+  }
+  const otherLive = [];
+  for (const [key, label] of [["firms", "satellite active fires"], ["cloudflare", "internet outages/traffic"], ["opensky", "live aircraft"], ["aviationstack", "flights"], ["ais", "vessel AIS"], ["waqi", "air-quality index"], ["openaq", "air-quality PM2.5"]]) {
+    const c = getCache(key);
+    if (c && c.status === "live" && Array.isArray(c.items) && c.items.length) otherLive.push(label + " (" + c.items.length + ")");
+  }
+  if (otherLive.length) extras.push("- Other live feeds available: " + otherLive.join(", "));
+
+  const sections = [];
+  if (news.length) sections.push("GLOBAL NEWS (last 24h):\n" + news.join("\n"));
+  if (geo.length) sections.push("GEOPOLITICAL HEADLINES:\n" + geo.join("\n"));
+  if (quakes.length) sections.push("SIGNIFICANT SEISMIC (USGS M4.5+/24h):\n" + quakes.join("\n"));
+  if (extras.length) sections.push("OTHER SIGNALS:\n" + extras.join("\n"));
+
+  if (!sections.length) {
+    setCache("brief", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "Groq chat completions (" + GROQ_MODEL + ")",
+      items: prev?.items || [],
+      brief: prev?.brief || "",
+      note: "No upstream feed data available this cycle to synthesize a brief.",
+    });
+    return;
+  }
+
+  const system =
+    "You are a neutral wire-service desk editor. Using ONLY the feed data " +
+    "provided, write a concise situational brief of the world right now. " +
+    "Output exactly " + GROQ_BRIEF_BULLETS + " bullet points, each a single " +
+    "factual sentence, neutral and non-speculative. Group related items. Do " +
+    "NOT invent facts, numbers, or events not present in the data. No preamble, " +
+    "no headings, no closing line — only the bullets, one per line, each " +
+    "starting with '- '.";
+  const user =
+    "Live feed data aggregated by the World View collector (" +
+    new Date().toISOString() + "):\n\n" + sections.join("\n\n");
+
+  try {
+    const j = await groqChat([
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ]);
+    const content = (j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || "").trim();
+    if (!content) throw new Error("empty completion");
+    const bullets = content
+      .split(/\r?\n+/)
+      .map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, "").trim())
+      .filter(Boolean);
+    const items = (bullets.length ? bullets : [content]).map((text) => ({ text }));
+    const usage = j.usage || {};
+    setCache("brief", {
+      status: "live",
+      source: "Groq chat completions (" + GROQ_MODEL + ")",
+      model: GROQ_MODEL,
+      items,
+      brief: content,
+      generatedAt: new Date().toISOString(),
+      note: "Synthesized from this cycle's live feeds (news, geopolitical, seismic" +
+        (extras.length ? ", + other live signals" : "") + ")." +
+        (usage.total_tokens ? " Tokens: " + usage.total_tokens + "." : ""),
+    });
+  } catch (e) {
+    setCache("brief", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "Groq chat completions (" + GROQ_MODEL + ")",
+      items: prev?.items || [],
+      brief: prev?.brief || "",
+      note: "Groq brief generation failed: " + e.message,
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -1101,7 +1274,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack", "ais", "cloudflare"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack", "ais", "cloudflare", "brief"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -1117,10 +1290,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/aviationstack") return send(res, 200, getCache("aviationstack") || { status: "pending", items: [] });
   if (path === "/api/ais") return send(res, 200, getCache("ais") || { status: "pending", items: [] });
   if (path === "/api/cloudflare") return send(res, 200, getCache("cloudflare") || { status: "pending", items: [] });
+  if (path === "/api/brief") return send(res, 200, getCache("brief") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack"), "AISStream": getCache("ais"), "Cloudflare Radar": getCache("cloudflare") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack"), "AISStream": getCache("ais"), "Cloudflare Radar": getCache("cloudflare"), "Groq / OpenRouter / Anthropic": getCache("brief") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -1129,12 +1303,15 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/cloudflare", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/cloudflare", "/api/brief", "/api/sources"] });
 });
 
 async function refreshAll() {
   ensureAisStream(); // maintain AISStream WebSocket (connect / reconnect watchdog)
   await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack(), refreshCloudflareRadar()]);
+  // The AI brief consumes the feeds refreshed above, so run it AFTER they settle
+  // (it self-throttles to GROQ_BRIEF_MIN_INTERVAL_MS, so this is cheap per cycle).
+  await refreshAiBrief();
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
