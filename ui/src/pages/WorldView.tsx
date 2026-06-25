@@ -154,11 +154,16 @@ function Loading({ label }: { label: string }) {
   return <p className="px-3 py-4 text-[11px] uppercase tracking-wider" style={{ color: C.faint }}>··· {label}</p>;
 }
 
-// ── live UTC clock ──────────────────────────────────────────────────────────
-function useUtcClock() {
+// ── live local clock (America/New_York) ─────────────────────────────────────
+function useLocalClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
-  return now.toUTCString().replace("GMT", "UTC").toUpperCase();
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "long", month: "short", day: "2-digit", year: "numeric",
+    hour: "numeric", minute: "2-digit", second: "2-digit",
+    hour12: true, timeZoneName: "short",
+  }).format(now).toUpperCase();
 }
 
 // ── world map centerpiece (real continents + live USGS seismic layer) ───────
@@ -205,7 +210,7 @@ function WorldMap({ quakes, layers }: {
 export function WorldView() {
   const { setBreadcrumbs } = useBreadcrumbs();
   useEffect(() => { setBreadcrumbs([{ label: "World View" }]); }, [setBreadcrumbs]);
-  const clock = useUtcClock();
+  const clock = useLocalClock();
 
   const [layers, setLayers] = useState({ seismic: true, major: true, grid: true, borders: true });
   const toggle = (k: keyof typeof layers) => setLayers((s) => ({ ...s, [k]: !s[k] }));
