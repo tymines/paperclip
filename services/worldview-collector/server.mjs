@@ -27,6 +27,7 @@
  *   GET /api/openaq       -> air-quality PM2.5 radar for major cities (OpenAQ, key)
  *   GET /api/waqi         -> air-quality index (AQI) for major cities (WAQI, token)
  *   GET /api/opensky      -> live aircraft state vectors (OpenSky, OAuth2 client-creds)
+ *   GET /api/aviationstack -> live / scheduled flight data (AviationStack, key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -133,6 +134,27 @@ function aqiCategory(aqi) {
   if (aqi <= 300) return "Very Unhealthy";
   return "Hazardous";
 }
+
+// ---- AviationStack: live / scheduled flight data (key-gated, tiny free tier) -
+// AviationStack authenticates with a ?access_key=... query param. The FREE plan
+// is HTTP-only (https is blocked) and capped at a low monthly request count
+// (~100/mo), so we poll VERY conservatively: refreshAll runs every POLL_MS, but
+// this collector only actually calls the API when the cached row is older than
+// AVIATIONSTACK_MIN_INTERVAL_MS (default 8h) — otherwise it serves the cache
+// untouched. That keeps us comfortably under the free cap (~3 fetches/day). We
+// surface a capped sample of flights (callsign, airline, route, status, and live
+// position when airborne) plus the provider's total result count. Honest
+// needs_key / 0 rows when AVIATIONSTACK_API_KEY is unset. Override the flight
+// query via AVIATIONSTACK_PARAMS (raw query appended, e.g. "flight_status=active").
+const AVIATIONSTACK_KEY = process.env.AVIATIONSTACK_API_KEY || "";
+const AVIATIONSTACK_BASE = (process.env.AVIATIONSTACK_BASE || "http://api.aviationstack.com/v1").replace(/\/+$/, "");
+const AVIATIONSTACK_LIMIT = Number(process.env.AVIATIONSTACK_LIMIT || 100);
+const AVIATIONSTACK_MAX_ROWS = Number(process.env.AVIATIONSTACK_MAX_ROWS || 25);
+const AVIATIONSTACK_PARAMS = process.env.AVIATIONSTACK_PARAMS || "";
+// Free tier ~100 req/month -> default to at most one live fetch every 8 hours
+// (~90/month). Raise AVIATIONSTACK_MIN_INTERVAL_MS for a stricter cap, lower it
+// only on a paid plan.
+const AVIATIONSTACK_MIN_INTERVAL_MS = Number(process.env.AVIATIONSTACK_MIN_INTERVAL_MS || 8 * 60 * 60 * 1000);
 
 // ---- OpenSky Network: live aircraft state vectors (OAuth2 client-creds) ----
 // OpenSky's current API authenticates with an OAuth2 *client-credentials* flow:
@@ -674,6 +696,84 @@ async function refreshOpensky() {
   }
 }
 
+// ---- AviationStack: live / scheduled flight data (key-gated) ----------------
+// Conservatively polled to respect the tiny free-tier monthly cap (see config).
+// Honest needs_key / 0 rows when the key is unset.
+async function refreshAviationstack() {
+  if (!AVIATIONSTACK_KEY) {
+    setCache("aviationstack", {
+      status: "needs_key",
+      source: "AviationStack /flights",
+      items: [],
+      note: "Set AVIATIONSTACK_API_KEY to enable. No data served without a key.",
+    });
+    return;
+  }
+  // Tiny free-tier cap: only hit the API if our cached row is older than the
+  // configured minimum interval; otherwise keep the cache untouched. Also gates
+  // error retries so a quota/HTTP failure does not hammer the monthly budget.
+  const prev = getCache("aviationstack");
+  if (prev && prev.status !== "needs_key" && prev.fetchedAt) {
+    const age = Date.now() - Date.parse(prev.fetchedAt);
+    if (Number.isFinite(age) && age < AVIATIONSTACK_MIN_INTERVAL_MS) return;
+  }
+  try {
+    const qs =
+      "?access_key=" + encodeURIComponent(AVIATIONSTACK_KEY) +
+      "&limit=" + AVIATIONSTACK_LIMIT +
+      (AVIATIONSTACK_PARAMS ? "&" + AVIATIONSTACK_PARAMS.replace(/^[?&]/, "") : "");
+    const j = await getJson(AVIATIONSTACK_BASE + "/flights" + qs);
+    // AviationStack errors come back as { error: { code, message, type } }.
+    if (j && j.error) {
+      throw new Error(j.error.message || j.error.info || j.error.code || j.error.type || "api error");
+    }
+    const data = Array.isArray(j && j.data) ? j.data : [];
+    const total = Number(j && j.pagination && j.pagination.total);
+    const items = data.slice(0, AVIATIONSTACK_MAX_ROWS).map((f) => {
+      const dep = f.departure || {}, arr = f.arrival || {}, fl = f.flight || {}, al = f.airline || {};
+      const live = f.live || null;
+      return {
+        flight: fl.iata || fl.icao || fl.number || "",
+        callsign: fl.icao || fl.iata || "",
+        airline: al.name || "",
+        status: f.flight_status || "",
+        depIata: dep.iata || "", depAirport: dep.airport || "",
+        arrIata: arr.iata || "", arrAirport: arr.airport || "",
+        scheduledDep: dep.scheduled || "",
+        flightDate: f.flight_date || "",
+        lat: live && Number.isFinite(live.latitude) ? live.latitude : null,
+        lon: live && Number.isFinite(live.longitude) ? live.longitude : null,
+        altitude: live && Number.isFinite(live.altitude) ? live.altitude : null,
+      };
+    });
+    if (items.length) {
+      setCache("aviationstack", {
+        status: "live",
+        source: "AviationStack /flights (access_key)",
+        items,
+        note: [
+          Number.isFinite(total) ? "Showing " + items.length + " of " + total.toLocaleString("en-US") + " flights in result set." : null,
+          "Free tier: live fetch at most once per " + Math.round(AVIATIONSTACK_MIN_INTERVAL_MS / 3600000) + "h to respect the monthly cap.",
+        ].filter(Boolean).join(" "),
+      });
+    } else {
+      setCache("aviationstack", {
+        status: prev && prev.items && prev.items.length ? "stale" : "error",
+        source: "AviationStack /flights (access_key)",
+        items: (prev && prev.items) || [],
+        note: "AviationStack returned no flight rows.",
+      });
+    }
+  } catch (e) {
+    setCache("aviationstack", {
+      status: prev && prev.items && prev.items.length ? "stale" : "error",
+      source: "AviationStack /flights (access_key)",
+      items: (prev && prev.items) || [],
+      note: "AviationStack fetch failed: " + e.message,
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -682,7 +782,7 @@ const SOURCE_CATALOG = [
   { panel: "Conflict & Protest Events", provider: "ACLED", key: "ACLED_EMAIL/PASSWORD", status: "needs_key" },
   { panel: "Conflict Events", provider: "UCDP", key: "UCDP_ACCESS_TOKEN", status: "needs_key" },
   { panel: "Satellite Fire Detection", provider: "NASA FIRMS", key: "NASA_FIRMS_API_KEY", status: "needs_key" },
-  { panel: "Live Flights", provider: "AviationStack", key: "AVIATIONSTACK_API", status: "needs_key" },
+  { panel: "Live Flights", provider: "AviationStack", key: "AVIATIONSTACK_API_KEY", status: "needs_key" },
   { panel: "Vessel / AIS Tracking", provider: "AISStream", key: "AISSTREAM_API_KEY", status: "needs_key" },
   { panel: "Aircraft Tracking", provider: "OpenSky Network", key: "OPENSKY_CLIENT_ID + OPENSKY_CLIENT_SECRET", status: "needs_key", notes: "OAuth2 client-credentials. Live state vectors over busy-airspace bboxes." },
   { panel: "Markets / Finance Radar", provider: "Finnhub", key: "FINNHUB_API_KEY", status: "needs_key" },
@@ -710,7 +810,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -723,10 +823,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/openaq") return send(res, 200, getCache("openaq") || { status: "pending", items: [] });
   if (path === "/api/waqi") return send(res, 200, getCache("waqi") || { status: "pending", items: [] });
   if (path === "/api/opensky") return send(res, 200, getCache("opensky") || { status: "pending", items: [] });
+  if (path === "/api/aviationstack") return send(res, 200, getCache("aviationstack") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -735,11 +836,11 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");

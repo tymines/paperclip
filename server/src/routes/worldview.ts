@@ -36,6 +36,7 @@ const ROUTE_MAP: Record<string, string> = {
   openaq: "/api/openaq",
   waqi: "/api/waqi",
   opensky: "/api/opensky",
+  aviationstack: "/api/aviationstack",
   sources: "/api/sources",
 };
 
