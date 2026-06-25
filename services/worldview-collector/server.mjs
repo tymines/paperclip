@@ -22,6 +22,7 @@
  *   GET /health           -> liveness + per-source freshness
  *   GET /api/news         -> global news (GDELT DOC 2.0, no key)
  *   GET /api/geopolitical -> geopolitical headlines (public RSS, no key)
+ *   GET /api/firms        -> satellite active-fire detections (NASA FIRMS, key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -29,6 +30,17 @@ import http from "node:http";
 const PORT = Number(process.env.WORLDVIEW_PORT || 8788);
 const POLL_MS = Number(process.env.WORLDVIEW_POLL_MS || 5 * 60 * 1000); // 5 min
 const UA = "PaperclipWorldView/1.0 (+collector; contact augi)";
+
+// ---- NASA FIRMS config (satellite active-fire / thermal anomalies) ----------
+// Free MAP_KEY from https://firms.modaps.eosdis.nasa.gov/api/area/. Without a
+// key the panel honestly reports needs_key and serves NO rows.
+const FIRMS_KEY = process.env.NASA_FIRMS_API_KEY || "";
+const FIRMS_SOURCE = process.env.FIRMS_SOURCE || "VIIRS_SNPP_NRT";
+const FIRMS_AREA = process.env.FIRMS_AREA || "-180,-90,180,90"; // whole globe: W,S,E,N
+// Day range (1–10). Default 2: the most recent NRT day is still being processed
+// and is near-empty globally, so 1 often yields zero rows. 2 covers that latency.
+const FIRMS_DAYS = process.env.FIRMS_DAYS || "2";
+const FIRMS_MAX_ROWS = Number(process.env.FIRMS_MAX_ROWS || 500);
 
 // ---- in-memory cache (no DB; LRU not needed, fixed small key set) ----------
 const cache = new Map(); // key -> { status, source, fetchedAt, items, note }
@@ -134,6 +146,82 @@ async function refreshGeopolitical() {
   });
 }
 
+// ---- NASA FIRMS: satellite active-fire detections (key-gated) --------------
+function parseFirmsCsv(csv) {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const header = lines[0].split(",").map((h) => h.trim());
+  const idx = (name) => header.indexOf(name);
+  const li = idx("latitude"), loi = idx("longitude"), bi = idx("bright_ti4"),
+    ci = idx("confidence"), fi = idx("frp"), di = idx("acq_date"), ti = idx("acq_time"),
+    si = idx("satellite"), ii = idx("instrument"), dn = idx("daynight");
+  const items = [];
+  for (let r = 1; r < lines.length; r++) {
+    const c = lines[r].split(",");
+    if (c.length < 2) continue;
+    const lat = parseFloat(c[li]), lon = parseFloat(c[loi]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    items.push({
+      lat, lon,
+      brightness: bi >= 0 ? parseFloat(c[bi]) : null, // bright_ti4 (Kelvin)
+      confidence: ci >= 0 ? c[ci] : "",               // VIIRS: l / n / h
+      frp: fi >= 0 ? parseFloat(c[fi]) : null,        // fire radiative power (MW)
+      acq_date: di >= 0 ? c[di] : "",
+      acq_time: ti >= 0 ? c[ti] : "",
+      satellite: si >= 0 ? c[si] : "",
+      instrument: ii >= 0 ? c[ii] : "",
+      daynight: dn >= 0 ? c[dn] : "",
+    });
+  }
+  return items;
+}
+
+async function refreshFirms() {
+  // Key-gated: serve an honest needs_key state (no rows) when no MAP_KEY is set.
+  if (!FIRMS_KEY) {
+    setCache("firms", {
+      status: "needs_key",
+      source: "NASA FIRMS " + FIRMS_SOURCE,
+      items: [],
+      note: "Set NASA_FIRMS_API_KEY to enable. No data served without a key.",
+    });
+    return;
+  }
+  // Area CSV API: /api/area/csv/{MAP_KEY}/{SOURCE}/{W,S,E,N}/{DAY_RANGE}
+  const url = "https://firms.modaps.eosdis.nasa.gov/api/area/csv/" +
+    encodeURIComponent(FIRMS_KEY) + "/" + FIRMS_SOURCE + "/" + FIRMS_AREA + "/" + FIRMS_DAYS;
+  try {
+    const csv = await getText(url);
+    // FIRMS returns plain-text errors with HTTP 200 (bad/over-limit key, bad source).
+    const head = csv.slice(0, 200);
+    if (!/^latitude/i.test(csv.trimStart()) &&
+        /invalid|error|map_key|exceeded|too many|not a valid/i.test(head)) {
+      throw new Error(csv.split(/\r?\n/)[0].slice(0, 160));
+    }
+    const all = parseFirmsCsv(csv);
+    // Surface the most intense fires first (highest fire radiative power) so the
+    // capped panel shows the significant detections rather than an arbitrary slice.
+    all.sort((a, b) => (b.frp ?? -1) - (a.frp ?? -1));
+    const items = all.slice(0, FIRMS_MAX_ROWS);
+    setCache("firms", {
+      status: "live",
+      source: "NASA FIRMS " + FIRMS_SOURCE + " area CSV (key)",
+      items,
+      note: all.length
+        ? (all.length > FIRMS_MAX_ROWS ? "Top " + FIRMS_MAX_ROWS + " of " + all.length + " detections by FRP." : null)
+        : "Key valid; no active fire detections in window/area.",
+    });
+  } catch (e) {
+    const prev = getCache("firms");
+    setCache("firms", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "NASA FIRMS " + FIRMS_SOURCE + " area CSV (key)",
+      items: prev?.items || [],
+      note: "FIRMS fetch failed: " + e.message,
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -169,7 +257,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical"]) {
+    for (const k of ["news", "geopolitical", "firms"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -177,12 +265,22 @@ const server = http.createServer((req, res) => {
   }
   if (path === "/api/news") return send(res, 200, getCache("news") || { status: "pending", items: [] });
   if (path === "/api/geopolitical") return send(res, 200, getCache("geopolitical") || { status: "pending", items: [] });
-  if (path === "/api/sources") return send(res, 200, { sources: SOURCE_CATALOG, fetchedAt: new Date().toISOString() });
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/sources"] });
+  if (path === "/api/firms") return send(res, 200, getCache("firms") || { status: "pending", items: [] });
+  if (path === "/api/sources") {
+    // Overlay the live FIRMS status (from cache) onto its static catalog row so
+    // the panel flips needs_key -> live once the key is set and a fetch succeeds.
+    const firms = getCache("firms");
+    const sources = SOURCE_CATALOG.map((s) =>
+      s.provider === "NASA FIRMS"
+        ? { ...s, status: firms ? firms.status : s.status, notes: firms?.note ?? s.notes, count: firms?.items?.length }
+        : s);
+    return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
+  }
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");

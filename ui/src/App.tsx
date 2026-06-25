@@ -443,6 +443,11 @@ export function App() {
               not found"). */}
           <Route path="app-dev" element={<UnprefixedBoardRedirect />} />
           <Route path="prompts" element={<UnprefixedBoardRedirect />} />
+          {/* World View: bare /world-view must redirect to the active company
+              prefix too. Without this it fell through to :companyPrefix and was
+              parsed as company "world-view" → 404 (and the sidebar link then
+              compounded to /WORLD-VIEW/world-view). */}
+          <Route path="world-view" element={<UnprefixedBoardRedirect />} />
           <Route path="goals" element={<UnprefixedBoardRedirect />} />
           <Route path="goals/:goalId" element={<UnprefixedBoardRedirect />} />
           <Route path="approvals" element={<UnprefixedBoardRedirect />} />

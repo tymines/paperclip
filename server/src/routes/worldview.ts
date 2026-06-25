@@ -31,6 +31,7 @@ const COLLECTOR_BASE = (
 const ROUTE_MAP: Record<string, string> = {
   news: "/api/news",
   geopolitical: "/api/geopolitical",
+  firms: "/api/firms",
   sources: "/api/sources",
 };
 
