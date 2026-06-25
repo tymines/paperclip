@@ -23,6 +23,7 @@
  *   GET /api/news         -> global news (GDELT DOC 2.0, no key)
  *   GET /api/geopolitical -> geopolitical headlines (public RSS, no key)
  *   GET /api/firms        -> satellite active-fire detections (NASA FIRMS, key)
+ *   GET /api/finnhub      -> markets / finance radar quotes (Finnhub, key)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -41,6 +42,30 @@ const FIRMS_AREA = process.env.FIRMS_AREA || "-180,-90,180,90"; // whole globe: 
 // and is near-empty globally, so 1 often yields zero rows. 2 covers that latency.
 const FIRMS_DAYS = process.env.FIRMS_DAYS || "2";
 const FIRMS_MAX_ROWS = Number(process.env.FIRMS_MAX_ROWS || 500);
+
+// ---- Finnhub config (markets / finance radar) ------------------------------
+// Free token from https://finnhub.io/. Without a key the panel honestly reports
+// needs_key and serves NO rows. Override the radar via
+// FINNHUB_SYMBOLS="SYM:Label,SYM:Label" (label optional, defaults to symbol).
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
+const FINNHUB_SYMBOLS = (process.env.FINNHUB_SYMBOLS
+  ? process.env.FINNHUB_SYMBOLS.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [sym, ...rest] = p.split(":");
+      return [sym.trim(), rest.join(":").trim() || sym.trim()];
+    })
+  : [
+      ["SPY", "S&P 500 (SPY)"],
+      ["QQQ", "Nasdaq 100 (QQQ)"],
+      ["DIA", "Dow 30 (DIA)"],
+      ["IWM", "Russell 2000 (IWM)"],
+      ["GLD", "Gold (GLD)"],
+      ["USO", "Crude Oil (USO)"],
+      ["TLT", "20Y Treasuries (TLT)"],
+      ["AAPL", "Apple"],
+      ["MSFT", "Microsoft"],
+      ["NVDA", "Nvidia"],
+    ]);
+const FINNHUB_BASE = "https://finnhub.io/api/v1";
 
 // ---- in-memory cache (no DB; LRU not needed, fixed small key set) ----------
 const cache = new Map(); // key -> { status, source, fetchedAt, items, note }
@@ -222,6 +247,62 @@ async function refreshFirms() {
   }
 }
 
+// ---- Finnhub: markets / finance radar (key-gated) --------------------------
+// Uses the REST /quote endpoint (real-time-ish US quotes on the free tier) across
+// a curated set of index ETFs, macro proxies and mega-caps so the radar shows
+// broad market direction rather than a single ticker. Honest needs_key with no
+// rows when FINNHUB_API_KEY is unset.
+async function refreshFinnhub() {
+  if (!FINNHUB_KEY) {
+    setCache("finnhub", {
+      status: "needs_key",
+      source: "Finnhub /quote",
+      items: [],
+      note: "Set FINNHUB_API_KEY to enable. No data served without a key.",
+    });
+    return;
+  }
+  const results = [];
+  const failures = [];
+  for (const [symbol, label] of FINNHUB_SYMBOLS) {
+    try {
+      const q = await getJson(
+        FINNHUB_BASE + "/quote?symbol=" + encodeURIComponent(symbol) +
+          "&token=" + encodeURIComponent(FINNHUB_KEY)
+      );
+      // Finnhub returns {c,d,dp,h,l,o,pc,t}. c===0 with no pc => unknown symbol.
+      if (q && Number.isFinite(q.c) && (q.c !== 0 || q.pc)) {
+        results.push({
+          symbol, label,
+          price: q.c, change: q.d, changePct: q.dp,
+          high: q.h, low: q.l, open: q.o, prevClose: q.pc,
+          t: q.t ? new Date(q.t * 1000).toISOString() : "",
+        });
+      } else {
+        failures.push(symbol + ": no quote");
+      }
+    } catch (e) {
+      failures.push(symbol + ": " + e.message);
+    }
+  }
+  if (results.length) {
+    setCache("finnhub", {
+      status: "live",
+      source: "Finnhub /quote (key)",
+      items: results,
+      note: failures.length ? "Some symbols unavailable: " + failures.join(" | ") : null,
+    });
+  } else {
+    const prev = getCache("finnhub");
+    setCache("finnhub", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "Finnhub /quote (key)",
+      items: prev?.items || [],
+      note: "Finnhub fetch failed for all symbols: " + failures.join(" | "),
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -257,7 +338,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -266,21 +347,24 @@ const server = http.createServer((req, res) => {
   if (path === "/api/news") return send(res, 200, getCache("news") || { status: "pending", items: [] });
   if (path === "/api/geopolitical") return send(res, 200, getCache("geopolitical") || { status: "pending", items: [] });
   if (path === "/api/firms") return send(res, 200, getCache("firms") || { status: "pending", items: [] });
+  if (path === "/api/finnhub") return send(res, 200, getCache("finnhub") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const firms = getCache("firms");
-    const sources = SOURCE_CATALOG.map((s) =>
-      s.provider === "NASA FIRMS"
-        ? { ...s, status: firms ? firms.status : s.status, notes: firms?.note ?? s.notes, count: firms?.items?.length }
-        : s);
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub") };
+    const sources = SOURCE_CATALOG.map((s) => {
+      const c = overlay[s.provider];
+      return c
+        ? { ...s, status: c.status, notes: c.note ?? s.notes, count: c.items?.length }
+        : s;
+    });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
