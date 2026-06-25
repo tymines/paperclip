@@ -1,0 +1,452 @@
+/**
+ * FleetBrainView — the live Knowledge Graph rendered as a glowing 3D
+ * "neural brain" (neurons firing). Wired to the REAL Fleet KB data from
+ * GET /api/fleet-kb/graph (notes + agents + category/index hubs + the
+ * ~245 cross-note "related" links). Real KB nodes/links are clustered into
+ * brain regions and color-coded, with UnrealBloom neon glow, directional
+ * particle "synapse firing", curved translucent links, floating monospace
+ * region labels and a slow auto-rotating camera.
+ *
+ * Renderer stack matches the app's proven KG stack: react-force-graph-3d
+ * (3d-force-graph) + a single three@0.183 instance (>=0.179, so the Timer
+ * export exists) + UnrealBloomPass via postProcessingComposer() +
+ * three-spritetext labels — all sharing ONE three instance.
+ */
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import ForceGraph3D from "react-force-graph-3d";
+import * as THREE from "three";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import SpriteText from "three-spritetext";
+import { Network, FileText, RefreshCw, BookOpen, X, Bot, ExternalLink } from "lucide-react";
+import { fleetKbApi, type FleetKbGraphNode } from "../../api/knowledgeGraph";
+
+// ─── Brain regions mapped onto REAL fleet-kb clusters ────────────────────────
+type RegionKey =
+  | "PREFRONTAL" | "MOTOR" | "HIPPOCAMPUS" | "BROCA"
+  | "ASSOCIATION" | "SENSORY" | "CEREBELLUM";
+
+interface Region { label: string; role: string; color: string; }
+
+const REGIONS: Record<RegionKey, Region> = {
+  PREFRONTAL:  { label: "PREFRONTAL CORTEX",  role: "decisions · orchestration",   color: "#c061f7" },
+  MOTOR:       { label: "MOTOR CORTEX",        role: "completed work · executors",  color: "#ff3b5c" },
+  HIPPOCAMPUS: { label: "HIPPOCAMPUS",         role: "KB index · long-term memory", color: "#3b82ff" },
+  BROCA:       { label: "BROCA'S AREA",        role: "agents · authorship",         color: "#ffd21a" },
+  ASSOCIATION: { label: "ASSOCIATION CORTEX",  role: "cross-links · synthesis",     color: "#22e06b" },
+  SENSORY:     { label: "SENSORY CORTEX",      role: "perception · review",         color: "#19e3ff" },
+  CEREBELLUM:  { label: "CEREBELLUM",          role: "automation · watchdogs",      color: "#ff8a1a" },
+};
+
+function regionForNode(n: FleetKbGraphNode): RegionKey {
+  if (n.kind === "index") return "HIPPOCAMPUS";
+  if (n.kind === "agent") return "BROCA";
+  if (n.kind === "category") return n.category === "decision" ? "PREFRONTAL" : "MOTOR";
+  // notes
+  if (n.category === "decision") return "PREFRONTAL";
+  if (n.category === "completed") return "MOTOR";
+  return "ASSOCIATION";
+}
+
+function nodeSize(n: FleetKbGraphNode): number {
+  switch (n.kind) {
+    case "index": return 44;
+    case "category": return 26;
+    case "agent": return 12;
+    default: return 2.4 + ((hashStr(n.id) % 100) / 100) * 4.5;
+  }
+}
+
+function hashStr(s: string): number {
+  let h = 0x2545f491;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+// deterministic per-edge RNG so "firing" varies but is stable across renders
+function edgeRand(a: string, b: string, salt: number): number {
+  return ((hashStr(a + "|" + b + "|" + salt) % 100000) / 100000);
+}
+
+interface BrainNode extends FleetKbGraphNode {
+  region: RegionKey; color: string; val: number; isHub: boolean;
+  x?: number; y?: number; z?: number;
+}
+interface BrainLink {
+  source: string; target: string; kind: string; color: string;
+  particles: number; pwidth: number; pspeed: number;
+}
+
+export function FleetBrainView({
+  onShowKb, onShowGraph,
+}: {
+  onShowKb: () => void;
+  onShowGraph: () => void;
+}) {
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ["fleet-kb", "graph"],
+    queryFn: () => fleetKbApi.getGraph(),
+    staleTime: 60_000,
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dim, setDim] = useState({ w: window.innerWidth, h: window.innerHeight - 56 });
+  const [hover, setHover] = useState<BrainNode | null>(null);
+  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+
+  // ── size tracking ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setDim({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── transform REAL fleet-kb graph into brain graph ──────────────────────────
+  const graph = useMemo(() => {
+    const rawNodes = data?.graph?.nodes ?? [];
+    const rawEdges = data?.graph?.edges ?? [];
+    const regionOf = new Map<string, RegionKey>();
+    const nodes: BrainNode[] = rawNodes.map((n) => {
+      const region = regionForNode(n);
+      regionOf.set(n.id, region);
+      return {
+        ...n,
+        region,
+        color: REGIONS[region].color,
+        val: nodeSize(n),
+        isHub: n.kind !== "note",
+      };
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    const links: BrainLink[] = rawEdges
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e, i) => {
+        const r = edgeRand(e.source, e.target, i);
+        const cross = e.kind === "related"; // the ~245 cross-note synapses
+        const srcRegion = regionOf.get(e.source)!;
+        return {
+          source: e.source,
+          target: e.target,
+          kind: e.kind,
+          color: REGIONS[srcRegion].color,
+          // cross-links fire denser/faster → "neurons firing" between lobes
+          particles: cross ? (r < 0.5 ? 2 : 3) : (r < 0.7 ? 1 : 2),
+          pwidth: cross ? (0.9 + r * 1.6) : (0.6 + r * 1.0),
+          pspeed: 0.004 + r * 0.011,
+        };
+      });
+    return { nodes, links, regionOf };
+  }, [data]);
+
+  // present regions (for legend) with node counts
+  const presentRegions = useMemo(() => {
+    const counts = new Map<RegionKey, number>();
+    for (const n of graph.nodes) counts.set(n.region, (counts.get(n.region) ?? 0) + 1);
+    return (Object.keys(REGIONS) as RegionKey[])
+      .filter((k) => counts.has(k))
+      .map((k) => ({ key: k, ...REGIONS[k], count: counts.get(k)! }));
+  }, [graph.nodes]);
+
+  // ── node label sprites (hubs get floating monospace labels) ─────────────────
+  const nodeThreeObject = useCallback((node: BrainNode) => {
+    if (!node.isHub) return undefined as unknown as THREE.Object3D; // default glowing sphere
+    const label = node.kind === "agent" ? (node.label || "agent").slice(0, 14) : node.label;
+    const sprite = new SpriteText(label);
+    sprite.color = node.color;
+    sprite.fontWeight = "700";
+    sprite.fontFace = "Menlo, Consolas, monospace";
+    sprite.textHeight = node.kind === "index" ? 9 : node.kind === "category" ? 8 : 4.5;
+    sprite.backgroundColor = false as unknown as string;
+    sprite.padding = 1.5;
+    sprite.strokeColor = node.color;
+    sprite.strokeWidth = 0.5;
+    sprite.position.set(0, node.kind === "note" ? 6 : 13, 0);
+    return sprite;
+  }, []);
+
+  // ── bloom + forces + floating region labels + auto-rotate ───────────────────
+  const regionLabelsRef = useRef<THREE.Sprite[]>([]);
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    let raf = 0;
+    let rotTimer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+    let bloomDone = false;
+
+    function buildRegionLabels(scene: THREE.Scene, nodes: BrainNode[]) {
+      for (const s of regionLabelsRef.current) scene.remove(s);
+      regionLabelsRef.current = [];
+      const sums = new Map<RegionKey, { x: number; y: number; z: number; n: number }>();
+      for (const nd of nodes) {
+        if (nd.x == null) continue;
+        const a = sums.get(nd.region) ?? { x: 0, y: 0, z: 0, n: 0 };
+        a.x += nd.x; a.y += nd.y!; a.z += nd.z!; a.n++;
+        sums.set(nd.region, a);
+      }
+      for (const [rk, a] of sums) {
+        if (!a.n) continue;
+        const reg = REGIONS[rk];
+        const st = new SpriteText(reg.label);
+        st.color = reg.color;
+        st.fontWeight = "700";
+        st.fontFace = "Menlo, Consolas, monospace";
+        st.textHeight = 16;
+        st.backgroundColor = false as unknown as string;
+        st.strokeColor = reg.color;
+        st.strokeWidth = 0.4;
+        st.material.opacity = 0.55;
+        st.material.depthWrite = false;
+        st.position.set(a.x / a.n, a.y / a.n + 46, a.z / a.n);
+        scene.add(st);
+        regionLabelsRef.current.push(st);
+      }
+    }
+
+    function setup() {
+      if (cancelled) return;
+      const fg = fgRef.current;
+      if (!fg) { raf = requestAnimationFrame(setup); return; }
+      const renderer = fg.renderer?.() as THREE.WebGLRenderer | undefined;
+      const scene = fg.scene?.() as THREE.Scene | undefined;
+      if (!renderer || !scene) { raf = requestAnimationFrame(setup); return; }
+
+      if (!bloomDone) {
+        bloomDone = true;
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        renderer.toneMappingExposure = 1.15;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const composer = (fg as any).postProcessingComposer();
+        const bloom = new UnrealBloomPass(
+          new THREE.Vector2(dim.w, dim.h),
+          2.4,  // strength — the neon-neuron glow
+          0.85, // radius
+          0.0,  // threshold (0 = everything glows)
+        );
+        composer.addPass(bloom);
+
+        // spread regions into distinct lobes
+        try {
+          fg.d3Force("charge")?.strength(-135);
+          const linkForce = fg.d3Force("link");
+          if (linkForce) {
+            linkForce.distance((l: BrainLink) => {
+              const ra = graph.regionOf.get(typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string));
+              const rb = graph.regionOf.get(typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string));
+              return ra && rb && ra === rb ? 28 : 95;
+            });
+          }
+          fg.d3ReheatSimulation?.();
+        } catch { /* forces best-effort */ }
+
+        // slow auto-rotating camera around the fleet centroid
+        const RADIUS = 430;
+        let angle = 0;
+        fg.cameraPosition({ x: 0, y: 50, z: RADIUS });
+        rotTimer = setInterval(() => {
+          angle += Math.PI / 1500;
+          fg.cameraPosition({
+            x: RADIUS * Math.sin(angle),
+            y: 110 * Math.sin(angle * 0.35),
+            z: RADIUS * Math.cos(angle),
+          });
+        }, 30);
+      }
+      // (re)build region labels once nodes have positions
+      buildRegionLabels(scene, graph.nodes);
+    }
+    raf = requestAnimationFrame(setup);
+    // refresh region label positions after the layout settles
+    const settle = setTimeout(() => {
+      const fg = fgRef.current; const scene = fg?.scene?.() as THREE.Scene | undefined;
+      if (scene) buildRegionLabels(scene, graph.nodes);
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(settle);
+      if (rotTimer) clearInterval(rotTimer);
+      const scene = fgRef.current?.scene?.() as THREE.Scene | undefined;
+      if (scene) for (const s of regionLabelsRef.current) scene.remove(s);
+      regionLabelsRef.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph.nodes.length]);
+
+  const selectedNote = useMemo(
+    () => (selectedNoteId ? (data?.notes ?? []).find((n) => n.id === selectedNoteId) ?? null : null),
+    [selectedNoteId, data],
+  );
+
+  const handleNodeClick = useCallback((node: BrainNode) => {
+    if (node.kind === "note" && node.noteId) setSelectedNoteId(node.noteId);
+  }, []);
+
+  const panelBorder = "1px solid rgba(255,255,255,0.08)";
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: "100dvh", background: "#000003" }}>
+      {/* ── top-left controls ─────────────────────────────────────────────── */}
+      <div className="absolute left-4 top-4 z-20 flex items-center gap-2">
+        <button
+          onClick={onShowKb}
+          title="Open Fleet KB — Obsidian-style notes reader"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-200 transition hover:text-white"
+          style={{ border: "1px solid rgba(167,139,250,0.45)", background: "rgba(8,9,11,0.72)", backdropFilter: "blur(6px)" }}
+        >
+          <BookOpen size={14} style={{ color: "#a78bfa" }} /> Fleet KB
+        </button>
+        <button
+          onClick={onShowGraph}
+          title="Open the 3D entity graph (agents · issues · runs)"
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-200 transition hover:text-white"
+          style={{ border: "1px solid rgba(255,255,255,0.14)", background: "rgba(8,9,11,0.72)", backdropFilter: "blur(6px)" }}
+        >
+          <Network size={14} style={{ color: "#7dd3fc" }} /> Entity Graph
+        </button>
+        <button
+          onClick={() => refetch()}
+          title="Refresh"
+          className="rounded-lg p-1.5 text-gray-400 transition hover:text-white"
+          style={{ border: "1px solid rgba(255,255,255,0.14)", background: "rgba(8,9,11,0.72)" }}
+        >
+          <RefreshCw size={14} className={isFetching ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      {/* ── HUD ───────────────────────────────────────────────────────────── */}
+      <div className="pointer-events-none absolute left-4 top-16 z-10" style={{ fontFamily: "Menlo, ui-monospace, monospace", letterSpacing: "0.14em" }}>
+        <div className="text-[13px] font-bold" style={{ color: "#cfe0ff", textShadow: "0 0 12px rgba(90,150,255,0.7)" }}>
+          FLEET KNOWLEDGE GRAPH
+        </div>
+        <div className="mt-1 text-[10px]" style={{ color: "rgba(160,185,225,0.6)" }}>
+          NEURAL VIEW · LIVE SYNAPSE TRACE · {graph.nodes.length} NEURONS / {graph.links.length} SYNAPSES
+        </div>
+      </div>
+
+      {/* ── legend: region → fleet role ───────────────────────────────────── */}
+      <div
+        className="pointer-events-none absolute bottom-4 right-4 z-10 rounded-lg p-3 text-right"
+        style={{ fontFamily: "Menlo, ui-monospace, monospace", fontSize: 10, letterSpacing: "0.06em", lineHeight: 1.7, background: "rgba(4,5,8,0.55)", border: panelBorder }}
+      >
+        {presentRegions.map((r) => (
+          <div key={r.key} className="flex items-center justify-end gap-2">
+            <span style={{ color: r.color }}>{r.label}</span>
+            <span style={{ opacity: 0.5 }}>{r.role}</span>
+            <span style={{ opacity: 0.4 }}>{r.count}</span>
+            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
+          </div>
+        ))}
+      </div>
+
+      {/* ── hover tooltip ─────────────────────────────────────────────────── */}
+      {hover && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-4 z-20 -translate-x-1/2 rounded-md px-3 py-1.5 text-xs"
+          style={{ background: "rgba(8,9,11,0.85)", border: panelBorder, color: "#e5e7eb", backdropFilter: "blur(6px)" }}
+        >
+          <span style={{ color: hover.color }}>●</span>{" "}
+          <span className="font-medium">{hover.label}</span>{" "}
+          <span className="text-gray-500">· {REGIONS[hover.region].label}</span>
+        </div>
+      )}
+
+      {/* ── states ────────────────────────────────────────────────────────── */}
+      {isLoading && (
+        <div className="flex h-full items-center justify-center text-sm" style={{ color: "#6f9bff", fontFamily: "Menlo, monospace", letterSpacing: "0.2em" }}>
+          INITIALIZING SYNAPSES…
+        </div>
+      )}
+      {isError && (
+        <div className="flex h-full items-center justify-center text-sm text-red-400">Failed to load Fleet KB graph.</div>
+      )}
+      {!isLoading && !isError && data?.available === false && (
+        <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500">
+          <div>Fleet KB vault not found.</div>
+          <code className="text-[11px] text-gray-600">{data.vaultPath}</code>
+        </div>
+      )}
+
+      {/* ── the brain ─────────────────────────────────────────────────────── */}
+      <div ref={containerRef} className="absolute inset-0" style={{ touchAction: "none" }}>
+        {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+          <ForceGraph3D<BrainNode, BrainLink>
+            ref={fgRef}
+            width={dim.w}
+            height={dim.h}
+            graphData={graph}
+            backgroundColor="#000003"
+            showNavInfo={false}
+            nodeRelSize={4}
+            nodeVal="val"
+            nodeColor="color"
+            nodeOpacity={0.92}
+            nodeResolution={12}
+            nodeThreeObjectExtend={true}
+            nodeThreeObject={nodeThreeObject}
+            nodeLabel={(n) => `${n.label} · ${REGIONS[n.region].label}`}
+            linkColor="color"
+            linkOpacity={0.16}
+            linkWidth={0.45}
+            linkCurvature={0.22}
+            linkDirectionalParticles="particles"
+            linkDirectionalParticleWidth="pwidth"
+            linkDirectionalParticleSpeed="pspeed"
+            linkDirectionalParticleColor="color"
+            linkDirectionalParticleResolution={6}
+            warmupTicks={60}
+            cooldownTime={9000}
+            onNodeHover={(n) => setHover((n as BrainNode) ?? null)}
+            onNodeClick={(n) => handleNodeClick(n as BrainNode)}
+          />
+        )}
+      </div>
+
+      {/* ── note detail card ──────────────────────────────────────────────── */}
+      {selectedNote && (
+        <aside
+          className="absolute right-4 top-4 z-30 flex max-h-[80vh] w-[400px] flex-col overflow-hidden rounded-xl"
+          style={{ background: "rgba(10,11,15,0.94)", border: panelBorder, backdropFilter: "blur(8px)" }}
+        >
+          <div className="flex items-start gap-2 px-4 pb-3 pt-3" style={{ borderBottom: panelBorder }}>
+            <FileText size={16} className="mt-0.5 shrink-0" style={{ color: selectedNote.category === "decision" ? "#c061f7" : "#ff3b5c" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold leading-snug text-white">{selectedNote.title}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500">
+                {selectedNote.date && <span>{selectedNote.date}</span>}
+                <span className="rounded px-1.5 py-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>{selectedNote.categoryLabel}</span>
+                {selectedNote.agentId && (
+                  <span className="inline-flex items-center gap-1" style={{ color: "#ffd21a" }}>
+                    <Bot size={11} /> {selectedNote.agentId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button onClick={() => setSelectedNoteId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed text-gray-300">
+            {selectedNote.excerpt || selectedNote.body?.slice(0, 600) || "No preview available."}
+          </div>
+          <button
+            onClick={onShowKb}
+            className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-200 hover:bg-white/5"
+            style={{ border: panelBorder }}
+          >
+            <ExternalLink size={13} /> Open in Fleet KB reader
+          </button>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export default FleetBrainView;

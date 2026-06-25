@@ -19,6 +19,7 @@ import { KnowledgeGraphDetailPanel, type DetailPanelNode } from "../components/k
 import { useKnowledgeGraphGestures } from "../components/knowledge-graph/v2-gestures";
 import { V2Renderer } from "../components/knowledge-graph/v2-renderer";
 import { FleetKbView } from "../components/knowledge-graph/FleetKbView";
+import { FleetBrainView } from "../components/knowledge-graph/FleetBrainView";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -792,7 +793,7 @@ export function KnowledgeGraph() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
   const queryClient = useQueryClient();
-  const [kbMode, setKbMode] = useState<"graph" | "kb">("kb"); // Fleet KB is the default/primary Knowledge Graph view; the 3D entity graph is the secondary toggle
+  const [kbMode, setKbMode] = useState<"graph" | "kb" | "brain">("brain"); // Neural brain (FleetBrainView on live fleet-kb data) is the default/primary KG view; "kb" = Obsidian reader, "graph" = 3D entity graph
 
   useEffect(() => { setBreadcrumbs([{ label: "Knowledge Graph" }]); }, [setBreadcrumbs]);
 
@@ -1883,8 +1884,12 @@ export function KnowledgeGraph() {
     onPullDownReset: handleResetView,
   });
 
+  if (kbMode === "brain") {
+    return <FleetBrainView onShowKb={() => setKbMode("kb")} onShowGraph={() => setKbMode("graph")} />;
+  }
+
   if (kbMode === "kb") {
-    return <FleetKbView onBack={() => setKbMode("graph")} />;
+    return <FleetKbView onBack={() => setKbMode("brain")} />;
   }
 
   return (

@@ -431,7 +431,7 @@ export function FleetKbView({ onBack }: { onBack: () => void }) {
           className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-300 hover:bg-white/5"
           style={{ border }}
         >
-          <Network size={13} /> 3D Entity Graph
+          <Network size={13} /> Neural Graph
         </button>
       </aside>
 
