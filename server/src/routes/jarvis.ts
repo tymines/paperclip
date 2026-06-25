@@ -41,6 +41,7 @@ import {
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
 import { kickoffBrainstorm } from "../services/brainstorm-kickoff.js";
+import { parseToolsRequired } from "../services/tools-required.js";
 
 /**
  * Jarvis voice endpoint.
@@ -478,6 +479,11 @@ export function jarvisRoutes(db: Db) {
     conversationId: z.string().optional(),
     estimatedCompletion: z.string().max(120).optional(),
     agentsInvolved: z.number().int().optional(),
+    // Optional raw FINAL-PLAN artifact text. If it carries a fenced
+    // ```tools-required``` block, the parsed manifest rides metadata to the
+    // worker (dynamic-tool-loading Part B). Optional/back-compat: absent =
+    // lean context7 baseline.
+    planText: z.string().max(20000).optional(),
   });
   router.post(
     "/companies/:companyId/jarvis/plan/approve",
@@ -505,6 +511,17 @@ export function jarvisRoutes(db: Db) {
         `\nApproved by Tyler in the War Room. Distribute these steps across the ` +
         `fleet and assign an owner to each.`;
 
+      // dynamic-tool-loading (Part B / Phase 2a): parse the optional
+      // tools-required manifest out of the plan artifact and attach it to the
+      // delegation metadata. It rides payload.metadata to {bridge}/jarvis/dispatch
+      // unchanged. Absent/malformed => null => lean context7 baseline downstream.
+      const planArtifactText = [
+        body.planText ?? "",
+        body.title,
+        ...steps.map((s) => s.label),
+      ].join("\n");
+      const toolsRequired = parseToolsRequired(planArtifactText);
+
       const dispatch = await dispatchDelegation(db, {
         companyId,
         conversationId: body.conversationId ?? null,
@@ -519,6 +536,7 @@ export function jarvisRoutes(db: Db) {
             agentsInvolved: body.agentsInvolved ?? null,
           },
           approvedAt: new Date().toISOString(),
+          ...(toolsRequired ? { tools_required: toolsRequired } : {}),
         },
         requestedByActorId: userActorId,
       });

@@ -142,6 +142,35 @@ const CRITIC_SYS = [
   "line; otherwise give the single most important concrete fix.",
 ].join(" ");
 
+// --- Tools-required manifest instruction (dynamic-tool-loading, Part B / Phase 1)
+// Appended to Hermes' FINAL-PLAN turn so the plan optionally declares which MCP
+// servers + skills the build needs. Parsed downstream (parseToolsRequired) and
+// carried verbatim through the delegation metadata to the worker. Optional &
+// back-compat: if Hermes omits the block, downstream falls back to the lean
+// context7-only baseline. Shape is the manifest defined in
+// dynamic-tool-loading-plan.md.
+const TOOLS_REQUIRED_INSTRUCTION = [
+  "Then, on a NEW line AFTER the plan, emit a single fenced code block tagged",
+  "`tools-required` containing ONLY JSON declaring the tools this build needs:",
+  "```tools-required",
+  "{",
+  '  "version": 1,',
+  '  "servers": ["context7"],',
+  '  "skills": [],',
+  '  "tools_allow": [],',
+  '  "tools_deny": [],',
+  '  "baseline_servers": ["context7"],',
+  '  "teardown": "reset-to-baseline",',
+  '  "reason": "<one short phrase>",',
+  '  "ttl_seconds": 1800',
+  "}",
+  "```",
+  "Name only MCP servers/skills the work genuinely needs beyond the context7",
+  "baseline; if unsure, keep servers=[\"context7\"] and skills=[] (the lean",
+  "default). Every field except `version` is optional. Omit the whole block if",
+  "no extra tools are needed — absence means the lean baseline.",
+].join(" ");
+
 // --- Brief distillation ------------------------------------------------------
 export interface ProjectBrief {
   title: string;
@@ -368,7 +397,8 @@ async function runLoop(
           : "The planning window is closing without an explicit AGREED. ") +
         "Write the FINAL agreed plan now: a short title line, then the numbered " +
         "bite-sized tasks (each with files/change/test/verify) and the " +
-        "stop-and-verify checkpoints. This is the handoff artifact for Ares.",
+        "stop-and-verify checkpoints. This is the handoff artifact for Ares.\n\n" +
+        TOOLS_REQUIRED_INSTRUCTION,
     });
     const finalPlan = await chat(HERMES_MODEL, finalMsgs, 1400, HERMES_TEMPERATURE);
     await postTurn(
