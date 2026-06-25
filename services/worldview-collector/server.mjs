@@ -29,6 +29,7 @@
  *   GET /api/opensky      -> live aircraft state vectors (OpenSky, OAuth2 client-creds)
  *   GET /api/aviationstack -> live / scheduled flight data (AviationStack, key)
  *   GET /api/ais          -> live vessel AIS positions (AISStream, WebSocket key)
+*   GET /api/cloudflare   -> internet outages + traffic/attack/quality trends (Cloudflare Radar, token)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -960,6 +961,110 @@ function ensureAisStream() {
 // even when no new position reports have arrived, so freshness reflects reality.
 setInterval(() => { if (AISSTREAM_KEY) aisPublish(); }, 30000).unref?.();
 
+// ---- Cloudflare Radar: internet outages + global traffic / attack trends ---
+// Cloudflare Radar exposes aggregate internet insight via a Bearer-token API
+// (Authorization: Bearer <token>) under /client/v4/radar. We surface, in one
+// compact panel: notable internet OUTAGES (the panel's primary rows), plus a
+// summary of global HTTP traffic trend, Layer-7 DDoS attack trend, and median
+// connection quality (speed / latency). Honest needs_key with NO rows when the
+// token is unset. Radar timeseries values are normalized indices (share of the
+// window max), so we report day-over-day % change rather than absolute volume.
+const CLOUDFLARE_TOKEN = process.env.CLOUDFLARE_API_TOKEN || "";
+const CLOUDFLARE_RADAR_BASE = "https://api.cloudflare.com/client/v4/radar";
+
+// Reduce a Radar hourly timeseries to {latest, day-over-day %, latestAt}.
+function cfTrend(serie) {
+  const vals = (serie?.values || []).map(Number).filter(Number.isFinite);
+  const ts = serie?.timestamps || [];
+  if (!vals.length) return null;
+  const latest = vals[vals.length - 1];
+  const prev = vals.length > 24 ? vals[vals.length - 25] : vals[0]; // ~24h ago
+  const dod = prev ? ((latest - prev) / prev) * 100 : null;
+  return {
+    latest: Number(latest.toFixed(4)),
+    dayOverDayPct: dod == null ? null : Number(dod.toFixed(1)),
+    latestAt: ts[ts.length - 1] || null,
+  };
+}
+
+async function refreshCloudflareRadar() {
+  if (!CLOUDFLARE_TOKEN) {
+    setCache("cloudflare", {
+      status: "needs_key",
+      source: "Cloudflare Radar",
+      items: [],
+      summary: null,
+      note: "Set CLOUDFLARE_API_TOKEN to enable. No data served without a token.",
+    });
+    return;
+  }
+  const auth = { authorization: "Bearer " + CLOUDFLARE_TOKEN };
+  const failures = [];
+  let outages = [];
+  const summary = {};
+  // 1) Notable internet outages over the last 30d (the panel's primary rows).
+  try {
+    const j = await getJsonHeaders(
+      CLOUDFLARE_RADAR_BASE + "/annotations/outages?dateRange=30d&format=json&limit=20",
+      auth
+    );
+    const anns = j?.result?.annotations || [];
+    outages = anns.map((a) => ({
+      id: a.id,
+      description: a.description || "",
+      eventType: a.eventType || "",
+      cause: a.outage?.outageCause || "",
+      outageType: a.outage?.outageType || "",
+      startDate: a.startDate || "",
+      endDate: a.endDate || "",
+      locations: (a.locationsDetails || []).map((l) => l.name).filter(Boolean),
+      asns: (a.asnsDetails || []).map((x) => ({ asn: x.asn, name: x.name, country: x.location?.name || "" })),
+      url: a.linkedUrl || "",
+    }));
+  } catch (e) { failures.push("outages: " + e.message); }
+  // 2) Global HTTP traffic trend (normalized index, day-over-day).
+  try {
+    const j = await getJsonHeaders(CLOUDFLARE_RADAR_BASE + "/http/timeseries?dateRange=7d&format=json", auth);
+    summary.httpTraffic = cfTrend(j?.result?.serie_0);
+  } catch (e) { failures.push("http: " + e.message); }
+  // 3) Global Layer-7 attack trend (normalized index, day-over-day).
+  try {
+    const j = await getJsonHeaders(CLOUDFLARE_RADAR_BASE + "/attacks/layer7/timeseries?dateRange=7d&format=json", auth);
+    summary.layer7Attacks = cfTrend(j?.result?.serie_0);
+  } catch (e) { failures.push("attacks: " + e.message); }
+  // 4) Median connection quality (speed / latency / packet loss), raw values.
+  try {
+    const j = await getJsonHeaders(CLOUDFLARE_RADAR_BASE + "/quality/speed/summary?format=json", auth);
+    const s = j?.result?.summary_0;
+    if (s) summary.quality = {
+      downloadMbps: Number(Number(s.bandwidthDownload).toFixed(1)),
+      uploadMbps: Number(Number(s.bandwidthUpload).toFixed(1)),
+      latencyIdleMs: Number(Number(s.latencyIdle).toFixed(1)),
+      latencyLoadedMs: Number(Number(s.latencyLoaded).toFixed(1)),
+      packetLossPct: Number(Number(s.packetLoss).toFixed(2)),
+    };
+  } catch (e) { failures.push("quality: " + e.message); }
+
+  if (outages.length || Object.keys(summary).length) {
+    setCache("cloudflare", {
+      status: "live",
+      source: "Cloudflare Radar (Bearer token)",
+      items: outages,
+      summary,
+      note: failures.length ? "Some Radar endpoints unavailable: " + failures.join(" | ") : null,
+    });
+  } else {
+    const prev = getCache("cloudflare");
+    setCache("cloudflare", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "Cloudflare Radar (Bearer token)",
+      items: prev?.items || [],
+      summary: prev?.summary || null,
+      note: "Cloudflare Radar fetch failed: " + failures.join(" | "),
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -996,7 +1101,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack", "ais"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky", "aviationstack", "ais", "cloudflare"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -1011,10 +1116,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/opensky") return send(res, 200, getCache("opensky") || { status: "pending", items: [] });
   if (path === "/api/aviationstack") return send(res, 200, getCache("aviationstack") || { status: "pending", items: [] });
   if (path === "/api/ais") return send(res, 200, getCache("ais") || { status: "pending", items: [] });
+  if (path === "/api/cloudflare") return send(res, 200, getCache("cloudflare") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack"), "AISStream": getCache("ais") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky"), "AviationStack": getCache("aviationstack"), "AISStream": getCache("ais"), "Cloudflare Radar": getCache("cloudflare") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -1023,12 +1129,12 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/cloudflare", "/api/sources"] });
 });
 
 async function refreshAll() {
   ensureAisStream(); // maintain AISStream WebSocket (connect / reconnect watchdog)
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack(), refreshCloudflareRadar()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
