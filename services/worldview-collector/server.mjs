@@ -25,6 +25,7 @@
  *   GET /api/firms        -> satellite active-fire detections (NASA FIRMS, key)
  *   GET /api/finnhub      -> markets / finance radar quotes (Finnhub, key)
  *   GET /api/openaq       -> air-quality PM2.5 radar for major cities (OpenAQ, key)
+ *   GET /api/waqi         -> air-quality index (AQI) for major cities (WAQI, token)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -94,6 +95,43 @@ const OPENAQ_CITIES = (process.env.OPENAQ_CITIES
       ["Mexico City", 19.4326, -99.1332],
       ["Jakarta", -6.2088, 106.8456],
     ]);
+
+// ---- WAQI config (World Air Quality Index — aqicn.org) ---------------------
+// Free token from https://aqicn.org/data-platform/token/ (NON-COMMERCIAL use).
+// WAQI authenticates with a ?token=... query param. Without a token the panel
+// honestly reports needs_key and serves NO rows. We read the nearest station to
+// each curated city via /feed/geo:{lat};{lon}/ and surface its overall AQI plus
+// WAQI's dominant pollutant. Override the city set via
+// WAQI_CITIES="Name:lat:lon,Name:lat:lon".
+const WAQI_TOKEN = process.env.WAQI_TOKEN || "";
+const WAQI_BASE = "https://api.waqi.info";
+const WAQI_CITIES = (process.env.WAQI_CITIES
+  ? process.env.WAQI_CITIES.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [name, lat, lon] = p.split(":").map((x) => x.trim());
+      return [name, Number(lat), Number(lon)];
+    })
+  : [
+      ["Beijing", 39.9042, 116.4074],
+      ["Delhi", 28.6139, 77.2090],
+      ["Shanghai", 31.2304, 121.4737],
+      ["London", 51.5074, -0.1278],
+      ["Paris", 48.8566, 2.3522],
+      ["Los Angeles", 34.0522, -118.2437],
+      ["New York", 40.7128, -74.0060],
+      ["Tokyo", 35.6762, 139.6503],
+      ["Moscow", 55.7558, 37.6173],
+      ["Dubai", 25.2048, 55.2708],
+    ]);
+// US-EPA AQI category bands (the scale WAQI reports its overall AQI on).
+function aqiCategory(aqi) {
+  if (aqi == null || !Number.isFinite(aqi)) return "";
+  if (aqi <= 50) return "Good";
+  if (aqi <= 100) return "Moderate";
+  if (aqi <= 150) return "Unhealthy for Sensitive Groups";
+  if (aqi <= 200) return "Unhealthy";
+  if (aqi <= 300) return "Very Unhealthy";
+  return "Hazardous";
+}
 
 // ---- in-memory cache (no DB; LRU not needed, fixed small key set) ----------
 const cache = new Map(); // key -> { status, source, fetchedAt, items, note }
@@ -419,6 +457,69 @@ async function refreshOpenaq() {
   }
 }
 
+// ---- WAQI: air-quality index (AQI) radar for major cities (token-gated) ----
+// For each curated city we query WAQI's nearest-station feed by geo, surfacing
+// the station's overall AQI (US-EPA scale) and dominant pollutant. WAQI returns
+// {status:"ok",data:{aqi,dominentpol,city,time,...}} on success and
+// {status:"error",data:"Invalid key"} (or "Over quota") on auth/limit problems,
+// so a bad token degrades to an honest error with no fabricated rows.
+async function refreshWaqi() {
+  if (!WAQI_TOKEN) {
+    setCache("waqi", {
+      status: "needs_key",
+      source: "WAQI /feed/geo",
+      items: [],
+      note: "Set WAQI_TOKEN to enable. No data served without a token.",
+    });
+    return;
+  }
+  const results = [];
+  const failures = [];
+  for (const [city, lat, lon] of WAQI_CITIES) {
+    try {
+      const j = await getJson(
+        WAQI_BASE + "/feed/geo:" + lat + ";" + lon + "/?token=" + encodeURIComponent(WAQI_TOKEN)
+      );
+      if (j && j.status === "ok" && j.data && typeof j.data === "object") {
+        const d = j.data;
+        const aqi = Number(d.aqi);
+        const geo = Array.isArray(d.city?.geo) ? d.city.geo : null;
+        results.push({
+          city,
+          station: d.city?.name || "",
+          aqi: Number.isFinite(aqi) ? aqi : null,
+          dominantPollutant: d.dominentpol || "",   // WAQI spells it "dominentpol"
+          category: aqiCategory(Number.isFinite(aqi) ? aqi : null),
+          lat: geo ? geo[0] : lat,
+          lon: geo ? geo[1] : lon,
+          observedAt: d.time?.iso || d.time?.s || "",
+        });
+      } else {
+        // WAQI puts the reason (e.g. "Invalid key", "Over quota") in data on error.
+        failures.push(city + ": " + (typeof j?.data === "string" ? j.data : (j?.status || "no data")));
+      }
+    } catch (e) {
+      failures.push(city + ": " + e.message);
+    }
+  }
+  if (results.length) {
+    setCache("waqi", {
+      status: "live",
+      source: "WAQI /feed/geo (token)",
+      items: results,
+      note: failures.length ? "Some cities unavailable: " + failures.join(" | ") : null,
+    });
+  } else {
+    const prev = getCache("waqi");
+    setCache("waqi", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "WAQI /feed/geo (token)",
+      items: prev?.items || [],
+      note: "WAQI fetch failed for all cities: " + failures.join(" | "),
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -434,6 +535,7 @@ const SOURCE_CATALOG = [
   { panel: "Energy", provider: "EIA", key: "EIA_API_KEY", status: "needs_key" },
   { panel: "Economic Data", provider: "FRED", key: "FRED_API_KEY", status: "needs_key" },
   { panel: "Air Quality", provider: "OpenAQ", key: "OPENAQ_API_KEY", status: "needs_key" },
+  { panel: "Air Quality Index", provider: "WAQI", key: "WAQI_TOKEN", status: "needs_key" },
   { panel: "Internet Outages", provider: "Cloudflare Radar", key: "CLOUDFLARE_API_TOKEN", status: "needs_key" },
   { panel: "AI Brief Synthesis", provider: "Groq / OpenRouter / Anthropic", key: "GROQ_API_KEY (or Paperclip's own LLM provider)", status: "needs_key" },
 ];
@@ -454,7 +556,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -465,10 +567,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/firms") return send(res, 200, getCache("firms") || { status: "pending", items: [] });
   if (path === "/api/finnhub") return send(res, 200, getCache("finnhub") || { status: "pending", items: [] });
   if (path === "/api/openaq") return send(res, 200, getCache("openaq") || { status: "pending", items: [] });
+  if (path === "/api/waqi") return send(res, 200, getCache("waqi") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -477,11 +580,11 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
