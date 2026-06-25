@@ -7,6 +7,19 @@
  * particle "synapse firing", curved translucent links, floating monospace
  * region labels and a slow auto-rotating camera.
  *
+ * Interactive layer (additive, aesthetic preserved):
+ *   • SEARCH / HIGHLIGHT — type to highlight matching neurons (title + content),
+ *     dimming the rest; clearing restores.
+ *   • REGION FOCUS — click a legend entry to isolate that lobe (fades others);
+ *     click again to restore.
+ *   • FILTERS — agent + category chips show/hide neuron sets.
+ *   • NODE DETAIL + JUMP — click a neuron for its memory + related links;
+ *     click a related link to fly the camera to that neuron and select it.
+ *   • LIVE PULSE — poll the graph endpoint; when a NEW memory appears, flash
+ *     that neuron so the brain visibly "fires" as the fleet files memories.
+ *   • Auto-rotation pauses while interacting (hover/drag/search) and resumes
+ *     after a short idle.
+ *
  * Renderer stack matches the app's proven KG stack: react-force-graph-3d
  * (3d-force-graph) + a single three@0.183 instance (>=0.179, so the Timer
  * export exists) + UnrealBloomPass via postProcessingComposer() +
@@ -18,7 +31,7 @@ import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import SpriteText from "three-spritetext";
-import { Network, FileText, RefreshCw, BookOpen, X, Bot, ExternalLink } from "lucide-react";
+import { Network, FileText, RefreshCw, BookOpen, X, Bot, ExternalLink, Search, Link2 } from "lucide-react";
 import { fleetKbApi, type FleetKbGraphNode } from "../../api/knowledgeGraph";
 
 // ─── Brain regions mapped onto REAL fleet-kb clusters ────────────────────────
@@ -37,6 +50,13 @@ const REGIONS: Record<RegionKey, Region> = {
   SENSORY:     { label: "SENSORY CORTEX",      role: "perception · review",         color: "#19e3ff" },
   CEREBELLUM:  { label: "CEREBELLUM",          role: "automation · watchdogs",      color: "#ff8a1a" },
 };
+
+// dim color for de-emphasised neurons/links (dark => bloom barely lights it)
+const DIM_NODE = "#141823";
+const DIM_LINK = "#0b0e15";
+const PULSE_MS = 2600;   // how long a "newly fired" neuron flashes
+const IDLE_MS = 2200;    // idle before auto-rotation resumes
+const POLL_MS = 12000;   // live-pulse poll interval
 
 function regionForNode(n: FleetKbGraphNode): RegionKey {
   if (n.kind === "index") return "HIPPOCAMPUS";
@@ -87,6 +107,8 @@ export function FleetBrainView({
     queryKey: ["fleet-kb", "graph"],
     queryFn: () => fleetKbApi.getGraph(),
     staleTime: 60_000,
+    refetchInterval: POLL_MS,           // ── LIVE PULSE: poll for new memories
+    refetchIntervalInBackground: true,
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,7 +116,37 @@ export function FleetBrainView({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [dim, setDim] = useState({ w: window.innerWidth, h: window.innerHeight - 56 });
   const [hover, setHover] = useState<BrainNode | null>(null);
-  const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  // ── interactive controls state ──────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState("");
+  const [focusRegion, setFocusRegion] = useState<RegionKey | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+
+  // ── interaction clock (drives auto-rotation pause/resume) ─────────────────────
+  const lastInteractRef = useRef(0);
+  const bump = useCallback(() => { lastInteractRef.current = Date.now(); }, []);
+
+  // ── live-pulse bookkeeping ────────────────────────────────────────────────────
+  const prevIdsRef = useRef<Set<string>>(new Set());
+  const pulseRef = useRef<Map<string, number>>(new Map()); // id -> end time
+  const pulseRunning = useRef(false);
+  const [pulseVersion, setPulseVersion] = useState(0);
+
+  const startPulseLoop = useCallback(() => {
+    if (pulseRunning.current) return;
+    pulseRunning.current = true;
+    let last = 0;
+    const tick = () => {
+      const now = Date.now();
+      for (const [id, end] of pulseRef.current) if (end <= now) pulseRef.current.delete(id);
+      if (now - last > 70) { last = now; setPulseVersion((v) => v + 1); }
+      if (pulseRef.current.size > 0) requestAnimationFrame(tick);
+      else { pulseRunning.current = false; setPulseVersion((v) => v + 1); }
+    };
+    requestAnimationFrame(tick);
+  }, []);
 
   // ── size tracking ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -145,6 +197,58 @@ export function FleetBrainView({
     return { nodes, links, regionOf };
   }, [data]);
 
+  // fast lookups
+  const nodeById = useMemo(() => {
+    const m = new Map<string, BrainNode>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph.nodes]);
+
+  const notesById = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof data>["notes"][number]>();
+    for (const n of data?.notes ?? []) m.set(n.id, n);
+    return m;
+  }, [data]);
+
+  // searchable text per node (label + full note content)
+  const searchIndex = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of graph.nodes) {
+      let t = n.label || "";
+      if (n.noteId) {
+        const note = notesById.get(n.noteId);
+        if (note) t += " " + note.title + " " + (note.body || "") + " " + (note.excerpt || "");
+      }
+      m.set(n.id, t.toLowerCase());
+    }
+    return m;
+  }, [graph.nodes, notesById]);
+
+  const q = searchQuery.trim().toLowerCase();
+  const matchSet = useMemo(() => {
+    if (!q) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      const t = searchIndex.get(n.id);
+      if (t && t.includes(q)) s.add(n.id);
+    }
+    return s;
+  }, [q, graph.nodes, searchIndex]);
+
+  const hasNarrowing =
+    !!q || !!focusRegion || selectedAgents.size > 0 || selectedCats.size > 0;
+
+  const isNodeActive = useCallback(
+    (n: BrainNode) => {
+      if (focusRegion && n.region !== focusRegion) return false;
+      if (selectedAgents.size > 0 && n.kind === "note" && !(n.agentId && selectedAgents.has(n.agentId))) return false;
+      if (selectedCats.size > 0 && n.kind === "note" && !(n.category && selectedCats.has(n.category))) return false;
+      if (matchSet && !matchSet.has(n.id)) return false;
+      return true;
+    },
+    [focusRegion, selectedAgents, selectedCats, matchSet],
+  );
+
   // present regions (for legend) with node counts
   const presentRegions = useMemo(() => {
     const counts = new Map<RegionKey, number>();
@@ -170,6 +274,55 @@ export function FleetBrainView({
     sprite.position.set(0, node.kind === "note" ? 6 : 13, 0);
     return sprite;
   }, []);
+
+  // ── dynamic accessors (search / filter / focus / pulse aware) ────────────────
+  const nodeColorFn = useCallback(
+    (n: BrainNode) => {
+      const pe = pulseRef.current.get(n.id);
+      if (pe && pe > Date.now()) return "#ffffff";          // newly-fired flash
+      if (n.id === selectedNodeId) return "#ffffff";        // selected neuron
+      if (hasNarrowing && !isNodeActive(n)) return DIM_NODE; // de-emphasised
+      return n.color;
+    },
+    // pulseVersion forces re-eval while a flash is animating
+    [hasNarrowing, isNodeActive, selectedNodeId, pulseVersion],
+  );
+
+  const nodeValFn = useCallback(
+    (n: BrainNode) => {
+      let v = n.val;
+      const pe = pulseRef.current.get(n.id);
+      if (pe) {
+        const rem = pe - Date.now();
+        if (rem > 0) v *= 1 + 2.4 * (rem / PULSE_MS);       // swell while firing
+      }
+      if (n.id === selectedNodeId) v *= 1.6;
+      return v;
+    },
+    [selectedNodeId, pulseVersion],
+  );
+
+  const linkColorFn = useCallback(
+    (l: BrainLink) => {
+      if (!hasNarrowing) return l.color;
+      const sid = typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string);
+      const tid = typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string);
+      const s = nodeById.get(sid); const t = nodeById.get(tid);
+      return s && t && isNodeActive(s) && isNodeActive(t) ? l.color : DIM_LINK;
+    },
+    [hasNarrowing, isNodeActive, nodeById],
+  );
+
+  const linkParticlesFn = useCallback(
+    (l: BrainLink) => {
+      if (!hasNarrowing) return l.particles;
+      const sid = typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string);
+      const tid = typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string);
+      const s = nodeById.get(sid); const t = nodeById.get(tid);
+      return s && t && isNodeActive(s) && isNodeActive(t) ? l.particles : 0;
+    },
+    [hasNarrowing, isNodeActive, nodeById],
+  );
 
   // ── bloom + forces + floating region labels + auto-rotate ───────────────────
   const regionLabelsRef = useRef<THREE.Sprite[]>([]);
@@ -203,6 +356,8 @@ export function FleetBrainView({
         st.strokeWidth = 0.4;
         st.material.opacity = 0.55;
         st.material.depthWrite = false;
+        // tag with region key so focus can re-style without rebuilding
+        (st as unknown as { __rk: RegionKey }).__rk = rk;
         st.position.set(a.x / a.n, a.y / a.n + 46, a.z / a.n);
         scene.add(st);
         regionLabelsRef.current.push(st);
@@ -245,11 +400,19 @@ export function FleetBrainView({
           fg.d3ReheatSimulation?.();
         } catch { /* forces best-effort */ }
 
-        // slow auto-rotating camera around the fleet centroid
+        // slow auto-rotating camera around the fleet centroid — pauses while
+        // the user is interacting (hover/drag/search), resumes after IDLE_MS.
         const RADIUS = 430;
         let angle = 0;
         fg.cameraPosition({ x: 0, y: 50, z: RADIUS });
         rotTimer = setInterval(() => {
+          // paused while interacting: re-sync angle to current camera so the
+          // resume is seamless (no snap).
+          if (Date.now() - lastInteractRef.current < IDLE_MS) {
+            const cam = fg.camera?.();
+            if (cam) angle = Math.atan2(cam.position.x, cam.position.z);
+            return;
+          }
           angle += Math.PI / 1500;
           fg.cameraPosition({
             x: RADIUS * Math.sin(angle),
@@ -280,16 +443,105 @@ export function FleetBrainView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [graph.nodes.length]);
 
-  const selectedNote = useMemo(
-    () => (selectedNoteId ? (data?.notes ?? []).find((n) => n.id === selectedNoteId) ?? null : null),
-    [selectedNoteId, data],
-  );
+  // ── focus: fade floating region labels for non-focused lobes ────────────────
+  useEffect(() => {
+    for (const s of regionLabelsRef.current) {
+      const rk = (s as unknown as { __rk?: RegionKey }).__rk;
+      s.material.opacity = !focusRegion || rk === focusRegion ? 0.55 : 0.08;
+    }
+  }, [focusRegion, pulseVersion]);
+
+  // ── LIVE PULSE: diff node ids vs last poll, flash the new neurons ────────────
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    const ids = new Set(graph.nodes.map((n) => n.id));
+    if (prevIdsRef.current.size === 0) { prevIdsRef.current = ids; return; } // seed
+    const news: string[] = [];
+    for (const id of ids) if (!prevIdsRef.current.has(id)) news.push(id);
+    prevIdsRef.current = ids;
+    if (news.length) {
+      const end = Date.now() + PULSE_MS;
+      for (const id of news) pulseRef.current.set(id, end);
+      startPulseLoop();
+    }
+  }, [graph.nodes, startPulseLoop]);
+
+  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null;
+
+  const selectedNote = useMemo(() => {
+    if (!selectedNode || selectedNode.kind !== "note" || !selectedNode.noteId) return null;
+    return (data?.notes ?? []).find((n) => n.id === selectedNode.noteId) ?? null;
+  }, [selectedNode, data]);
+
+  // related neurons for the detail panel (from the real cross-note links)
+  const relatedLinks = useMemo(() => {
+    if (!selectedNodeId) return [] as Array<{ id: string; title: string; region: RegionKey; color: string }>;
+    const out: Array<{ id: string; title: string; region: RegionKey; color: string }> = [];
+    const seen = new Set<string>();
+    for (const e of data?.graph?.edges ?? []) {
+      if (e.kind !== "related" && e.kind !== "link") continue;
+      let other: string | null = null;
+      if (e.source === selectedNodeId) other = e.target;
+      else if (e.target === selectedNodeId) other = e.source;
+      if (!other || seen.has(other)) continue;
+      const on = nodeById.get(other);
+      if (!on || on.kind !== "note") continue;
+      seen.add(other);
+      out.push({ id: other, title: on.label, region: on.region, color: on.color });
+    }
+    return out.slice(0, 24);
+  }, [selectedNodeId, data, nodeById]);
+
+  // ── camera fly-to (used by related-link jump) ───────────────────────────────
+  const flyTo = useCallback((id: string) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const n = nodeById.get(id) as (BrainNode & { x?: number; y?: number; z?: number }) | undefined;
+    if (!n || n.x == null) return;
+    bump(); // hold auto-rotation through the flight
+    const dist = 120;
+    const r = 1 + dist / Math.max(1, Math.hypot(n.x, n.y ?? 0, n.z ?? 0));
+    fg.cameraPosition({ x: n.x * r, y: (n.y ?? 0) * r, z: (n.z ?? 0) * r }, n, 1400);
+  }, [nodeById, bump]);
 
   const handleNodeClick = useCallback((node: BrainNode) => {
-    if (node.kind === "note" && node.noteId) setSelectedNoteId(node.noteId);
-  }, []);
+    bump();
+    if (node.kind === "note") setSelectedNodeId(node.id);
+  }, [bump]);
+
+  const jumpToRelated = useCallback((id: string) => {
+    setSelectedNodeId(id);
+    flyTo(id);
+  }, [flyTo]);
+
+  // ── chip / focus toggles ────────────────────────────────────────────────────
+  const toggleAgent = useCallback((id: string) => {
+    bump();
+    setSelectedAgents((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, [bump]);
+  const toggleCat = useCallback((key: string) => {
+    bump();
+    setSelectedCats((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }, [bump]);
+  const toggleRegion = useCallback((key: RegionKey) => {
+    bump();
+    setFocusRegion((prev) => (prev === key ? null : key));
+  }, [bump]);
+  const resetAll = useCallback(() => {
+    bump();
+    setSearchQuery(""); setFocusRegion(null);
+    setSelectedAgents(new Set()); setSelectedCats(new Set());
+  }, [bump]);
 
   const panelBorder = "1px solid rgba(255,255,255,0.08)";
+  const matchCount = matchSet ? matchSet.size : 0;
+
+  const chipStyle = (on: boolean, color: string) => ({
+    border: on ? `1px solid ${color}` : panelBorder,
+    background: on ? `${color}26` : "rgba(8,9,11,0.62)",
+    color: on ? color : "#9aa4b2",
+    boxShadow: on ? `0 0 10px ${color}55` : "none",
+  });
 
   return (
     <div className="relative w-full overflow-hidden" style={{ height: "100dvh", background: "#000003" }}>
@@ -312,7 +564,7 @@ export function FleetBrainView({
           <Network size={14} style={{ color: "#7dd3fc" }} /> Entity Graph
         </button>
         <button
-          onClick={() => refetch()}
+          onClick={() => { bump(); refetch(); }}
           title="Refresh"
           className="rounded-lg p-1.5 text-gray-400 transition hover:text-white"
           style={{ border: "1px solid rgba(255,255,255,0.14)", background: "rgba(8,9,11,0.72)" }}
@@ -331,19 +583,96 @@ export function FleetBrainView({
         </div>
       </div>
 
-      {/* ── legend: region → fleet role ───────────────────────────────────── */}
+      {/* ── interactive control deck (search · filters) ───────────────────── */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute bottom-4 left-4 z-20 flex flex-col gap-2" style={{ width: 304 }}>
+          {/* search */}
+          <div
+            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+            style={{ border: panelBorder, background: "rgba(8,9,11,0.8)", backdropFilter: "blur(6px)" }}
+          >
+            <Search size={14} style={{ color: "#7dd3fc" }} />
+            <input
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); bump(); }}
+              onFocus={bump}
+              placeholder="search neurons…"
+              className="w-full bg-transparent text-xs text-gray-100 outline-none placeholder:text-gray-600"
+              style={{ fontFamily: "Menlo, ui-monospace, monospace" }}
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); bump(); }} className="text-gray-500 transition hover:text-white">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="px-1 text-[10px]" style={{ color: "rgba(160,185,225,0.7)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}>
+              {matchCount} NEURON{matchCount === 1 ? "" : "S"} HIGHLIGHTED
+            </div>
+          )}
+          {/* category chips */}
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.categories ?? []).map((c) => (
+              <button
+                key={c.key}
+                onClick={() => toggleCat(c.key)}
+                className="rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedCats.has(c.key), c.key === "decision" ? "#c061f7" : "#ff3b5c"), fontFamily: "Menlo, monospace" }}
+              >
+                {c.label} · {c.count}
+              </button>
+            ))}
+          </div>
+          {/* agent chips */}
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.agents ?? []).map((a) => (
+              <button
+                key={a.id}
+                onClick={() => toggleAgent(a.id)}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedAgents.has(a.id), "#ffd21a"), fontFamily: "Menlo, monospace" }}
+                title={`agent ${a.id}`}
+              >
+                <Bot size={10} /> {a.id.slice(0, 6)} · {a.count}
+              </button>
+            ))}
+          </div>
+          {hasNarrowing && (
+            <button
+              onClick={resetAll}
+              className="self-start rounded-md px-2 py-0.5 text-[10px] text-gray-300 transition hover:text-white"
+              style={{ border: panelBorder, background: "rgba(8,9,11,0.6)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}
+            >
+              ✕ CLEAR FILTERS
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── legend: region → fleet role (click to focus a lobe) ───────────── */}
       <div
-        className="pointer-events-none absolute bottom-4 right-4 z-10 rounded-lg p-3 text-right"
+        className="absolute bottom-4 right-4 z-20 rounded-lg p-3 text-right"
         style={{ fontFamily: "Menlo, ui-monospace, monospace", fontSize: 10, letterSpacing: "0.06em", lineHeight: 1.7, background: "rgba(4,5,8,0.55)", border: panelBorder }}
       >
-        {presentRegions.map((r) => (
-          <div key={r.key} className="flex items-center justify-end gap-2">
-            <span style={{ color: r.color }}>{r.label}</span>
-            <span style={{ opacity: 0.5 }}>{r.role}</span>
-            <span style={{ opacity: 0.4 }}>{r.count}</span>
-            <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
-          </div>
-        ))}
+        <div className="mb-1 text-[9px]" style={{ color: "rgba(150,170,210,0.5)" }}>CLICK A LOBE TO FOCUS</div>
+        {presentRegions.map((r) => {
+          const active = focusRegion === r.key;
+          const faded = focusRegion != null && !active;
+          return (
+            <button
+              key={r.key}
+              onClick={() => toggleRegion(r.key)}
+              className="flex w-full items-center justify-end gap-2 rounded px-1 transition hover:bg-white/5"
+              style={{ opacity: faded ? 0.35 : 1, background: active ? `${r.color}1f` : "transparent" }}
+            >
+              <span style={{ color: r.color, fontWeight: active ? 700 : 400 }}>{r.label}</span>
+              <span style={{ opacity: 0.5 }}>{r.role}</span>
+              <span style={{ opacity: 0.4 }}>{r.count}</span>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
+            </button>
+          );
+        })}
       </div>
 
       {/* ── hover tooltip ─────────────────────────────────────────────────── */}
@@ -375,7 +704,14 @@ export function FleetBrainView({
       )}
 
       {/* ── the brain ─────────────────────────────────────────────────────── */}
-      <div ref={containerRef} className="absolute inset-0" style={{ touchAction: "none" }}>
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ touchAction: "none" }}
+        onPointerDown={bump}
+        onPointerMove={bump}
+        onWheel={bump}
+      >
         {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
           <ForceGraph3D<BrainNode, BrainLink>
             ref={fgRef}
@@ -385,25 +721,25 @@ export function FleetBrainView({
             backgroundColor="#000003"
             showNavInfo={false}
             nodeRelSize={4}
-            nodeVal="val"
-            nodeColor="color"
+            nodeVal={nodeValFn}
+            nodeColor={nodeColorFn}
             nodeOpacity={0.92}
             nodeResolution={12}
             nodeThreeObjectExtend={true}
             nodeThreeObject={nodeThreeObject}
             nodeLabel={(n) => `${n.label} · ${REGIONS[n.region].label}`}
-            linkColor="color"
+            linkColor={linkColorFn}
             linkOpacity={0.16}
             linkWidth={0.45}
             linkCurvature={0.22}
-            linkDirectionalParticles="particles"
+            linkDirectionalParticles={linkParticlesFn}
             linkDirectionalParticleWidth="pwidth"
             linkDirectionalParticleSpeed="pspeed"
             linkDirectionalParticleColor="color"
             linkDirectionalParticleResolution={6}
             warmupTicks={60}
             cooldownTime={9000}
-            onNodeHover={(n) => setHover((n as BrainNode) ?? null)}
+            onNodeHover={(n) => { setHover((n as BrainNode) ?? null); bump(); }}
             onNodeClick={(n) => handleNodeClick(n as BrainNode)}
           />
         )}
@@ -429,12 +765,35 @@ export function FleetBrainView({
                 )}
               </div>
             </div>
-            <button onClick={() => setSelectedNoteId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
+            <button onClick={() => setSelectedNodeId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
               <X size={16} />
             </button>
           </div>
           <div className="flex-1 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed text-gray-300">
             {selectedNote.excerpt || selectedNote.body?.slice(0, 600) || "No preview available."}
+
+            {relatedLinks.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500" style={{ fontFamily: "Menlo, monospace" }}>
+                  <Link2 size={11} /> Related neurons · {relatedLinks.length}
+                </div>
+                <div className="flex flex-col gap-1">
+                  {relatedLinks.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => jumpToRelated(r.id)}
+                      title="Fly to this neuron"
+                      className="group flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-gray-300 transition hover:bg-white/5 hover:text-white"
+                      style={{ border: panelBorder }}
+                    >
+                      <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 99, background: r.color, boxShadow: `0 0 6px ${r.color}`, flexShrink: 0 }} />
+                      <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                      <ExternalLink size={11} className="shrink-0 opacity-40 transition group-hover:opacity-90" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <button
             onClick={onShowKb}
