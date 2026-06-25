@@ -35,6 +35,7 @@ const ROUTE_MAP: Record<string, string> = {
   finnhub: "/api/finnhub",
   openaq: "/api/openaq",
   waqi: "/api/waqi",
+  opensky: "/api/opensky",
   sources: "/api/sources",
 };
 

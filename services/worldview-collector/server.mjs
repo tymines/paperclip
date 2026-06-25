@@ -26,6 +26,7 @@
  *   GET /api/finnhub      -> markets / finance radar quotes (Finnhub, key)
  *   GET /api/openaq       -> air-quality PM2.5 radar for major cities (OpenAQ, key)
  *   GET /api/waqi         -> air-quality index (AQI) for major cities (WAQI, token)
+ *   GET /api/opensky      -> live aircraft state vectors (OpenSky, OAuth2 client-creds)
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
@@ -131,6 +132,58 @@ function aqiCategory(aqi) {
   if (aqi <= 200) return "Unhealthy";
   if (aqi <= 300) return "Very Unhealthy";
   return "Hazardous";
+}
+
+// ---- OpenSky Network: live aircraft state vectors (OAuth2 client-creds) ----
+// OpenSky's current API authenticates with an OAuth2 *client-credentials* flow:
+// POST client_id+client_secret to the Keycloak token endpoint for a ~30-min
+// bearer token, then call /states/all with Authorization: Bearer <token>. We
+// bound each poll to a few busy-airspace bounding boxes (lamin,lomin,lamax,lomax)
+// to keep payloads small and stay well within rate limits. Honest needs_key with
+// no rows when either OPENSKY_CLIENT_ID or OPENSKY_CLIENT_SECRET is unset.
+// Override the regions via OPENSKY_REGIONS="Name:lamin:lomin:lamax:lomax,...".
+const OPENSKY_CLIENT_ID = process.env.OPENSKY_CLIENT_ID || "";
+const OPENSKY_CLIENT_SECRET = process.env.OPENSKY_CLIENT_SECRET || "";
+const OPENSKY_TOKEN_URL = process.env.OPENSKY_TOKEN_URL ||
+  "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token";
+const OPENSKY_BASE = (process.env.OPENSKY_BASE || "https://opensky-network.org/api").replace(/\/+$/, "");
+const OPENSKY_MAX_ROWS = Number(process.env.OPENSKY_MAX_ROWS || 500);
+const OPENSKY_REGIONS = (process.env.OPENSKY_REGIONS
+  ? process.env.OPENSKY_REGIONS.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [name, lamin, lomin, lamax, lomax] = p.split(":").map((x) => x.trim());
+      return [name, Number(lamin), Number(lomin), Number(lamax), Number(lomax)];
+    })
+  : [
+      ["Europe", 35, -15, 60, 30],
+      ["North America", 24, -125, 49, -66],
+      ["East Asia", 20, 100, 46, 146],
+    ]);
+// OAuth2 token cache: a single token is reused across polls/regions until ~60s
+// before it expires, then transparently refreshed. Token/secret are never logged.
+let openskyTokenCache = { token: "", exp: 0 };
+async function getOpenskyToken() {
+  const now = Date.now();
+  if (openskyTokenCache.token && now < openskyTokenCache.exp) return openskyTokenCache.token;
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const r = await fetch(OPENSKY_TOKEN_URL, {
+      method: "POST",
+      headers: { "user-agent": UA, "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: OPENSKY_CLIENT_ID,
+        client_secret: OPENSKY_CLIENT_SECRET,
+      }),
+      signal: ctl.signal,
+    });
+    if (!r.ok) throw new Error("token HTTP " + r.status);
+    const j = await r.json();
+    if (!j.access_token) throw new Error("token response missing access_token");
+    const ttlMs = (Number(j.expires_in) || 1800) * 1000;
+    openskyTokenCache = { token: j.access_token, exp: now + ttlMs - 60000 };
+    return openskyTokenCache.token;
+  } finally { clearTimeout(t); }
 }
 
 // ---- in-memory cache (no DB; LRU not needed, fixed small key set) ----------
@@ -520,6 +573,107 @@ async function refreshWaqi() {
   }
 }
 
+// ---- OpenSky Network: live aircraft tracking (OAuth2-gated) ----------------
+// Aggregates live state vectors across the configured regions, surfacing the
+// aircraft count plus a capped sample of flights (callsign, origin country,
+// position, altitude, speed, heading). OpenSky returns each aircraft as a
+// positional "state vector" array; we map the indices we display. Honest
+// needs_key with no rows when credentials are unset.
+function parseOpenskyStates(states, region) {
+  const out = [];
+  for (const s of states || []) {
+    const lat = s[6], lon = s[5];
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    out.push({
+      icao24: (s[0] || "").trim(),
+      callsign: (s[1] || "").trim(),
+      origin: s[2] || "",                // origin_country
+      lat, lon,
+      altitude: s[13] ?? s[7] ?? null,   // geo_altitude, fallback baro_altitude (m)
+      velocity: s[9] ?? null,            // m/s
+      heading: s[10] ?? null,            // true_track (deg)
+      verticalRate: s[11] ?? null,       // m/s
+      onGround: !!s[8],
+      squawk: s[14] || "",
+      region,
+    });
+  }
+  return out;
+}
+
+async function refreshOpensky() {
+  // OAuth2-gated: serve an honest needs_key state (no rows) when creds are unset.
+  if (!OPENSKY_CLIENT_ID || !OPENSKY_CLIENT_SECRET) {
+    setCache("opensky", {
+      status: "needs_key",
+      source: "OpenSky Network /states/all",
+      items: [],
+      note: "Set OPENSKY_CLIENT_ID and OPENSKY_CLIENT_SECRET to enable. No data served without credentials.",
+    });
+    return;
+  }
+  let token;
+  try {
+    token = await getOpenskyToken();
+  } catch (e) {
+    const prev = getCache("opensky");
+    setCache("opensky", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "OpenSky Network OAuth2 (client-credentials)",
+      items: prev?.items || [],
+      note: "OpenSky token exchange failed: " + e.message,
+    });
+    return;
+  }
+  const all = [];
+  const failures = [];
+  let total = 0;
+  for (const [name, lamin, lomin, lamax, lomax] of OPENSKY_REGIONS) {
+    try {
+      const j = await getJsonHeaders(
+        OPENSKY_BASE + "/states/all?lamin=" + lamin + "&lomin=" + lomin +
+          "&lamax=" + lamax + "&lomax=" + lomax,
+        { authorization: "Bearer " + token }
+      );
+      const parsed = parseOpenskyStates(j.states, name);
+      total += parsed.length;
+      all.push(...parsed);
+    } catch (e) {
+      failures.push(name + ": " + e.message);
+    }
+  }
+  if (all.length) {
+    // Surface airborne flights first, fastest first, so the capped panel shows
+    // significant traffic rather than an arbitrary slice.
+    all.sort((a, b) => (Number(a.onGround) - Number(b.onGround)) || ((b.velocity ?? -1) - (a.velocity ?? -1)));
+    const items = all.slice(0, OPENSKY_MAX_ROWS);
+    setCache("opensky", {
+      status: "live",
+      source: "OpenSky Network /states/all (OAuth2) — regions: " + OPENSKY_REGIONS.map((r) => r[0]).join(", "),
+      items,
+      note: [
+        total > OPENSKY_MAX_ROWS ? "Top " + OPENSKY_MAX_ROWS + " of " + total + " live aircraft by speed." : null,
+        failures.length ? failures.length + " region(s) unavailable: " + failures.join(" | ") : null,
+      ].filter(Boolean).join("; ") || null,
+    });
+  } else if (failures.length) {
+    const prev = getCache("opensky");
+    setCache("opensky", {
+      status: prev?.items?.length ? "stale" : "error",
+      source: "OpenSky Network /states/all (OAuth2)",
+      items: prev?.items || [],
+      note: "OpenSky fetch failed for all regions: " + failures.join(" | "),
+    });
+  } else {
+    setCache("opensky", {
+      status: "live",
+      source: "OpenSky Network /states/all (OAuth2)",
+      items: [],
+      note: "Credentials valid; no aircraft currently in configured regions.",
+    });
+  }
+}
+
 // ---- source catalog: honest map of what the full experience needs ----------
 const SOURCE_CATALOG = [
   { panel: "Global News", provider: "GDELT DOC 2.0", key: null, status: "live", notes: "No key. Global news index." },
@@ -530,7 +684,7 @@ const SOURCE_CATALOG = [
   { panel: "Satellite Fire Detection", provider: "NASA FIRMS", key: "NASA_FIRMS_API_KEY", status: "needs_key" },
   { panel: "Live Flights", provider: "AviationStack", key: "AVIATIONSTACK_API", status: "needs_key" },
   { panel: "Vessel / AIS Tracking", provider: "AISStream", key: "AISSTREAM_API_KEY", status: "needs_key" },
-  { panel: "Aircraft Tracking", provider: "OpenSky Network", key: "OPENSKY_CLIENT_ID/SECRET", status: "needs_key (anon ratelimited)" },
+  { panel: "Aircraft Tracking", provider: "OpenSky Network", key: "OPENSKY_CLIENT_ID + OPENSKY_CLIENT_SECRET", status: "needs_key", notes: "OAuth2 client-credentials. Live state vectors over busy-airspace bboxes." },
   { panel: "Markets / Finance Radar", provider: "Finnhub", key: "FINNHUB_API_KEY", status: "needs_key" },
   { panel: "Energy", provider: "EIA", key: "EIA_API_KEY", status: "needs_key" },
   { panel: "Economic Data", provider: "FRED", key: "FRED_API_KEY", status: "needs_key" },
@@ -556,7 +710,7 @@ const server = http.createServer((req, res) => {
   if (req.method === "OPTIONS") return send(res, 204, {});
   if (path === "/health") {
     const freshness = {};
-    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi"]) {
+    for (const k of ["news", "geopolitical", "firms", "finnhub", "openaq", "waqi", "opensky"]) {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
@@ -568,10 +722,11 @@ const server = http.createServer((req, res) => {
   if (path === "/api/finnhub") return send(res, 200, getCache("finnhub") || { status: "pending", items: [] });
   if (path === "/api/openaq") return send(res, 200, getCache("openaq") || { status: "pending", items: [] });
   if (path === "/api/waqi") return send(res, 200, getCache("waqi") || { status: "pending", items: [] });
+  if (path === "/api/opensky") return send(res, 200, getCache("opensky") || { status: "pending", items: [] });
   if (path === "/api/sources") {
     // Overlay the live FIRMS status (from cache) onto its static catalog row so
     // the panel flips needs_key -> live once the key is set and a fetch succeeds.
-    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi") };
+    const overlay = { "NASA FIRMS": getCache("firms"), "Finnhub": getCache("finnhub"), "OpenAQ": getCache("openaq"), "WAQI": getCache("waqi"), "OpenSky Network": getCache("opensky") };
     const sources = SOURCE_CATALOG.map((s) => {
       const c = overlay[s.provider];
       return c
@@ -580,11 +735,11 @@ const server = http.createServer((req, res) => {
     });
     return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/sources"] });
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/sources"] });
 });
 
 async function refreshAll() {
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky()]);
 }
 server.listen(PORT, () => {
   console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
