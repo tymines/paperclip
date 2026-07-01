@@ -75,7 +75,7 @@ export interface AcpHandshake {
   agentLabel: string;
   /** Which gateway agent the per-agent fields (modes/identity) were read from. */
   gatewayAgentId: string;
-  transport: "openclaw-gateway-ws";
+  transport: "openclaw-gateway-ws" | "canonical-db";
   url: string;
   connectedAtMs: number;
   handshakeMs: number;
@@ -122,6 +122,13 @@ export interface GatewayHandshakeOptions {
    * agents.list handshake. Additive: omit it and behaviour is unchanged.
    */
   roster?: Array<{ id: string; name: string; role?: string | null; title?: string | null }>;
+  /**
+   * When true, skip the OpenClaw gateway WebSocket entirely and build the
+   * fleet view from the canonical DB roster + static model/host maps only.
+   * Requires `roster` to be supplied (otherwise returns an error). This
+   * severs the Fleet panel's dependency on Augi's OpenClaw gateway.
+   */
+  skipGateway?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -496,7 +503,7 @@ export interface AcpAgentCapabilities {
  */
 export interface AcpFleet {
   ok: true;
-  transport: "openclaw-gateway-ws";
+  transport: "openclaw-gateway-ws" | "canonical-db";
   url: string;
   connectedAtMs: number;
   handshakeMs: number;
@@ -620,6 +627,57 @@ export async function readGatewayFleet(
   const agentLabel = opts.agentLabel ?? "OpenClaw Gateway";
   const openclawHome = opts.openclawHome ?? path.join(os.homedir(), ".openclaw");
   const timeoutMs = opts.timeoutMs ?? 12_000;
+
+  // When skipGateway is true, build the fleet from the canonical DB roster
+  // without opening any WebSocket to the OpenClaw gateway. Requires roster.
+  if (opts.skipGateway) {
+    if (!Array.isArray(opts.roster) || opts.roster.length === 0) {
+      return { ok: false, agentLabel, url, error: "skipGateway requires a non-empty roster", stage: "param" };
+    }
+    const emptyTeam = { capable: true };
+    const agents = buildCanonicalAgentCapabilities(opts.roster, [], emptyTeam);
+    const fleet: AcpFleet = {
+      ok: true,
+      transport: "canonical-db",
+      url,
+      connectedAtMs: Date.now(),
+      handshakeMs: 0,
+      server: { version: "lean-roster", protocol: null, connId: null },
+      methods: [],
+      events: [],
+      models: [],
+      slashCommands: [],
+      identity: { name: "Canonical Fleet", avatar: "⚡" },
+      teamCapable: true,
+      teamCapableReason: "canonical lean roster (no gateway handshake)",
+      agents,
+      agentCount: agents.length,
+      rosterSource: "canonical",
+      provenance: {
+        server: "derived",
+        methods: "derived",
+        events: "derived",
+        models: "derived",
+        slashCommands: "derived",
+        identity: "derived",
+        agents: "derived",
+        teamCapable: "derived",
+      },
+      notes: {
+        real: [
+          `${agents.length} agents — canonical lean roster from Paperclip DB`,
+          "per-agent model from CANONICAL_FLEET_MODELS (derived from fleet config)",
+          "host map from CANONICAL_HOST_MAP (derived from fleet config)",
+        ],
+        derived: [
+          "all fields are derived — no live ACP gateway handshake",
+          "teamCapable is set to true (lean Hermes agents are ACP-capable)",
+        ],
+        stub: [],
+      },
+    };
+    return fleet;
+  }
 
   let stage = "identity";
   let client: GatewayProbeClient | null = null;

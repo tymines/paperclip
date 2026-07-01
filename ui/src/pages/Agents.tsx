@@ -33,7 +33,6 @@ import {
 } from "lucide-react";
 import { AGENT_ROLE_LABELS, type Agent, type AgentDetail, type HeartbeatRun } from "@paperclipai/shared";
 import { getAdapterLabel } from "../adapters/adapter-display-registry";
-import { AcpCapabilitiesPanel } from "../components/AcpCapabilitiesPanel";
 import { AcpFleetPanel } from "../components/AcpFleetPanel";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
@@ -41,24 +40,30 @@ const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
 // --- Host map for "Hosted by" field on Fleet cards --------------------------
 // Source: canonical-fleet.ts CANONICAL_HOST_MAP (bridge daemon + DB seed)
 const HOST_MAP: Record<string, string> = {
-  hermes:        "AugiAIs-Mini · under Augi",
-  augi:          "AugiAIs-Mini · under Augi",
-  brainstorm:    "AugiAIs-Mini · under Augi",
-  reviewer:      "AugiAIs-Mini · under Augi",
-  security:      "AugiAIs-Mini · under Augi",
-  forge:         "AugiAIs-Mini · under Augi",
-  atlas:         "AugiAIs-Mini · under Augi",
-  codex:         "AugiAIs-Mini · under Augi",
-  researcher:    "AugiAIs-Mini · under Augi",
-  builder:       "AugiAIs-Mini · under Augi",
-  "coder b":     "AugiAIs-Mini · under Augi",
-  "baily ai":    "AugiAIs-Mini · under Augi",
-  august:        "AugiBot2s-Mini · under August",
-  ares:          "AugiBot2s-Mini · under August",
-  designer:      "AugiBot2s-Mini · under Ares",
-  "vision coder":"AugiBot2s-Mini · under Ares",
-  zeus:          "WindowsAugi · under Zeus",
-  "zeus vision": "WindowsAugi · under Zeus",
+  // ── Windows (Zeus) ─────────────────────────────────────────────────────
+  zeus:              "WindowsAugi · under Zeus",
+  "zeus book keeper":"WindowsAugi · under Zeus",
+  "zeus critic":     "WindowsAugi · under Zeus",
+  "zeus dispatch":   "WindowsAugi · under Zeus",
+
+  // ── Box 1 — under Hermes ──────────────────────────────────────────────
+  hermes:            "AugiAIs-Mini · under Hermes",
+  augi:              "AugiAIs-Mini · under Augi",
+  "hermes coder 1":  "AugiAIs-Mini · under Hermes",
+  "hermes coder 2":  "AugiAIs-Mini · under Hermes",
+  "hermes coder 3":  "AugiAIs-Mini · under Hermes",
+  "hermes designer": "AugiAIs-Mini · under Hermes",
+  "hermes researcher":"AugiAIs-Mini · under Hermes",
+
+  // ── Box 2 — under Ares ────────────────────────────────────────────────
+  ares:                "AugiBot2s-Mini · under Ares",
+  august:              "AugiBot2s-Mini · under August",
+  "ares evidence verifier":"AugiBot2s-Mini · under Ares",
+  "ares reviewer 1":       "AugiBot2s-Mini · under Ares",
+  "ares reviewer 2":       "AugiBot2s-Mini · under Ares",
+
+  // ── External ───────────────────────────────────────────────────────────
+  "baily ai":         "BailysApp · under Baily AI",
 };
 
 function hostForAgent(name: string): string | null {
@@ -1205,7 +1210,6 @@ export function Agents() {
           cutover. The single-agent POC panel follows for continuity. */}
       <div className="mb-4 flex flex-col gap-4">
         <AcpFleetPanel companyId={selectedCompanyId ?? undefined} />
-        <AcpCapabilitiesPanel agentId="main" label="OpenClaw Agent" />
       </div>
 
       {error && <p className="text-[13px]" style={{ color: DS.critical }}>{error.message}</p>}

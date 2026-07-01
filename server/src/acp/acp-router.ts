@@ -55,7 +55,9 @@ export function createAcpRouter(db?: Db): Router {
       if (db && companyId) {
         try {
           const rows = await agentService(db).list(companyId);
-          roster = rows.map((a) => ({
+          roster = rows
+            .filter((a) => a.status !== "paused")
+            .map((a) => ({
             id: a.id,
             name: a.name,
             role: (a.role as string | null) ?? null,
@@ -66,7 +68,7 @@ export function createAcpRouter(db?: Db): Router {
           roster = undefined;
         }
       }
-      const fleet = await readGatewayFleet({ url, roster });
+      const fleet = await readGatewayFleet({ url, roster, skipGateway: true });
       res.status(fleet.ok ? 200 : 502).json(fleet);
     } catch (err) {
       res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
