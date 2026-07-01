@@ -57,26 +57,26 @@ export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
     source: "Zeus Dispatch on Windows = DeepSeek V4 Flash (operations dispatcher)",
   },
   hermes: {
-    model: "moonshot/kimi-k2.6",
-    catalogMatch: "kimi-k2.6",
-    source: "Hermes orchestrator on Box 1 = Kimi k2.6",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Hermes orchestrator on Box 1 = DeepSeek V4 Flash",
   },
   ares: {
-    model: "moonshot/kimi-k2.6",
-    catalogMatch: "kimi-k2.6",
-    source: "Ares (COO/review boss) on Box 2 = Kimi k2.6",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Ares (COO/review boss) on Box 2 = DeepSeek V4 Flash",
   },
 
   // ── Hermes cluster (Box 1, under Hermes) ──────────────────────────────
   "hermes coder 1": {
-    model: "moonshot/kimi-k2.6",
-    catalogMatch: "kimi-k2.6",
-    source: "Hermes Coder 1 on Box 1 = Kimi k2.6 (deep-reasoning)",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Hermes Coder 1 on Box 1 = DeepSeek V4 Flash (deep-reasoning, P2: kimi-k2.6)",
   },
   "hermes coder 2": {
-    model: "z.ai/glm-5.2",
-    catalogMatch: "glm-5.2",
-    source: "Hermes Coder 2 on Box 1 = GLM-5.2 (1M ctx, large-context)",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Hermes Coder 2 on Box 1 = DeepSeek V4 Flash (large-context, P2: glm-5.2)",
   },
   "hermes coder 3": {
     model: "deepseek/deepseek-chat",
@@ -84,9 +84,9 @@ export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
     source: "Hermes Coder 3 on Box 1 = DeepSeek V4 Flash (fast-iteration)",
   },
   "hermes designer": {
-    model: "openai/gpt-4o",
-    catalogMatch: "gpt-4o",
-    source: "Hermes Designer on Box 1 = GPT-4o (vision-capable, UI/UX)",
+    model: "google/gemini-2.5-flash",
+    catalogMatch: "gemini-2.5-flash",
+    source: "Hermes Designer on Box 1 = Gemini 2.5 Flash (vision-capable, replaces GPT-4o)",
   },
   "hermes researcher": {
     model: "deepseek/deepseek-chat",
@@ -96,14 +96,14 @@ export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
 
   // ── Ares cluster (Box 2, under Ares) ──────────────────────────────────
   "ares evidence verifier": {
-    model: "openai/gpt-4o-mini",
-    catalogMatch: "gpt-4o-mini",
-    source: "Ares Evidence Verifier on Box 2 = GPT-4o-mini (proof gatekeeper)",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Ares Evidence Verifier on Box 2 = DeepSeek V4 Flash (proof gatekeeper, replaces GPT-4o-mini)",
   },
   "ares reviewer 1": {
-    model: "moonshot/kimi-k2.6",
-    catalogMatch: "kimi-k2.6",
-    source: "Ares Reviewer 1 on Box 2 = Kimi k2.6 (depth-focused review)",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "Ares Reviewer 1 on Box 2 = DeepSeek V4 Flash (depth-focused review, P2: kimi-k2.6)",
   },
   "ares reviewer 2": {
     model: "deepseek/deepseek-chat",
@@ -118,9 +118,9 @@ export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
     source: "Augi standalone on Box 1 = DeepSeek V4 Flash",
   },
   august: {
-    model: "openclaw-peer - remote model",
-    catalogMatch: null,
-    source: "August standalone on Box 2 = remote Hermes profile (own model)",
+    model: "deepseek/deepseek-chat",
+    catalogMatch: "deepseek-chat",
+    source: "August standalone on Box 2 = DeepSeek V4 Flash (fleet ops responder)",
   },
   "baily ai": {
     model: "qwen/qwen3-vl-8b",
