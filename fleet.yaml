@@ -1,0 +1,147 @@
+# fleet.yaml — SINGLE SOURCE OF TRUTH for the Tyler Co roster.
+# Souls, Hermes profiles, and Paperclip roster entries are GENERATED from this file.
+# Edit here, regenerate, commit. If a soul or the DB disagrees with this file, this file wins.
+# Watchdog runs a drift check against this file.
+
+meta:
+  version: 1
+  updated: 2026-07-01
+  rules:
+    - "No OpenAI models anywhere."
+    - "Test-phase baseline: deepseek-v4-flash fleet-wide, except vision -> gemini."
+    - "Planned upgrades (P2): zeus + ares -> kimi-k2.6; reviewer-1 and reviewer-2 on different model families."
+
+boxes:
+  windows:
+    hostname: WindowsAugi
+    tailscale_ip: 100.103.95.73
+    stage: plan
+    hosts: [paperclip, postgres, vault, obsidian-brain]
+  box1:
+    hostname: AugiAIs-Mini
+    tailscale_ip: 100.68.190.105
+    user: augi
+    stage: execute
+  box2:
+    hostname: AugiBot2s-Mini
+    tailscale_ip: 100.85.82.53
+    user: augibot2
+    stage: review
+
+agents:
+  # ---- Plan (Windows, Hermes framework) ----
+  - name: Zeus
+    box: windows
+    orchestrator: null          # top of the tree
+    role: plan-orchestrator
+    model: deepseek-v4-flash    # P2: kimi-k2.6
+    framework: hermes
+    adapter: hermes_local
+  - name: Zeus Critic
+    box: windows
+    orchestrator: Zeus
+    role: plan-critic
+    model: deepseek-v4-flash
+    framework: hermes
+  - name: Zeus Book Keeper
+    box: windows
+    orchestrator: Zeus
+    role: memory-scribe
+    model: deepseek-v4-flash
+    framework: hermes
+  - name: Zeus Dispatch
+    box: windows
+    orchestrator: Zeus
+    role: board-dispatcher      # Jarvis routing layer owner — see soul
+    model: deepseek-v4-flash
+    framework: hermes
+
+  # ---- Execute (Box 1, Hermes framework) ----
+  - name: Hermes
+    box: box1
+    orchestrator: Zeus
+    role: execute-dispatcher
+    model: deepseek-v4-flash
+    framework: hermes
+    adapter: hermes_local
+  - name: Hermes Coder 1
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: deepseek-v4-flash    # diversified target: kimi-k2.6
+    framework: hermes
+  - name: Hermes Coder 2
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: deepseek-v4-flash    # diversified target: glm-5.2 (1M ctx)
+    framework: hermes
+  - name: Hermes Coder 3
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: deepseek-v4-flash
+    framework: hermes
+  - name: Hermes Designer
+    box: box1
+    orchestrator: Hermes
+    role: designer
+    model: gemini               # vision required
+    framework: hermes
+  - name: Hermes Researcher
+    box: box1
+    orchestrator: Hermes
+    role: researcher
+    model: deepseek-v4-flash
+    framework: hermes
+
+  # ---- Review (Box 2, Hermes framework) ----
+  - name: Ares
+    box: box2
+    orchestrator: Zeus
+    role: review-boss
+    model: deepseek-v4-flash    # P2: kimi-k2.6
+    framework: hermes
+    adapter: hermes_local
+  - name: Ares Evidence Verifier
+    box: box2
+    orchestrator: Ares
+    role: evidence-verifier
+    model: deepseek-v4-flash    # replaces gpt-4o-mini (no-OpenAI rule)
+    framework: hermes
+  - name: Ares Reviewer 1
+    box: box2
+    orchestrator: Ares
+    role: reviewer
+    model: deepseek-v4-flash    # P2: kimi-k2.6 (must differ from Reviewer 2's family)
+    framework: hermes
+  - name: Ares Reviewer 2
+    box: box2
+    orchestrator: Ares
+    role: reviewer
+    model: deepseek-v4-flash
+    framework: hermes
+
+  # ---- Standalones ----
+  - name: Augi
+    box: box1
+    orchestrator: null
+    role: apps-build-engineer   # Apple/Xcode toolchain lives here
+    model: deepseek-v4-flash
+    framework: openclaw
+    standalone: true
+  - name: August
+    box: box2
+    orchestrator: null
+    role: fleet-ops-responder   # PROPOSED — see soul; secondary burst worker
+    model: deepseek-v4-flash
+    framework: openclaw
+    standalone: true
+  - name: Baily AI
+    box: external
+    orchestrator: null
+    role: in-app-service        # BailysApp — DO NOT dispatch, DO NOT reconfigure
+    model: qwen/qwen3-vl-8b-instruct
+    framework: external
+    standalone: true
+    dispatchable: false
