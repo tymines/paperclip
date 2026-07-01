@@ -1,0 +1,3 @@
+2026-06-28 16:03:53.678 EDT [52560] FATAL:  pre-existing shared memory block is still in use
+2026-06-28 16:03:53.678 EDT [52560] HINT:  Check if there are any old server processes still running, and terminate them.
+2026-06-28 16:03:53.679 EDT [52560] LOG:  database system is shut down

@@ -1,0 +1,1441 @@
+/**
+ * FleetBrainView — Neural Command Network (Radial Canvas Rebuild)
+ *
+ * A glowing 2D radial neural brain rendering of the live Fleet KB graph.
+ * 6 color-coded regions arranged symmetrically around a central energy core,
+ * radiating filaments, dense per-lobe particle glow, and a full sci-fi HUD overlay.
+ *
+ * Data: 100% real — nodes/synapses from GET /api/fleet-kb/graph,
+ *       dreams from GET /api/fleet-kb/dreams (OpenViking consolidation logs).
+ */
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  FileText, RefreshCw, BookOpen, X, Bot, ExternalLink, Search, Link2,
+  Brain, Activity, Zap, Wifi,
+} from "lucide-react";
+import { fleetKbApi, type FleetKbGraphNode } from "../../api/knowledgeGraph";
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  REGIONS — 6-lobe neural command network
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+type RegionKey = "CORE" | "HIPPOCAMPUS" | "BROCA" | "TEMPORAL" | "VISUAL" | "DREAMS";
+
+interface Region { label: string; role: string; color: string; glow: string; }
+
+const REGIONS: Record<RegionKey, Region> = {
+  CORE:        { label: "CORE",              role: "orchestration · index",       color: "#3b82ff", glow: "#60a5fa" },
+  HIPPOCAMPUS: { label: "HIPPOCAMPUS",       role: "long-term memory",            color: "#a855f7", glow: "#d946ef" },
+  BROCA:       { label: "BROCA'S AREA",      role: "agents · authorship",         color: "#ef4444", glow: "#f87171" },
+  TEMPORAL:    { label: "TEMPORAL CORTEX",   role: "time · sequencing",           color: "#06b6d4", glow: "#22d3ee" },
+  VISUAL:      { label: "VISUAL CORTEX",     role: "decisions · completed work",  color: "#f59e0b", glow: "#fb923c" },
+  DREAMS:      { label: "DREAMS",            role: "synthesis · cross-links",     color: "#d946ef", glow: "#f472b6" },
+};
+
+const OUTER_REGION_ORDER: RegionKey[] = ["HIPPOCAMPUS", "BROCA", "TEMPORAL", "VISUAL", "DREAMS"];
+
+function regionPos(key: RegionKey, W: number, H: number): { x: number; y: number } {
+  if (key === "CORE") {
+    return { x: W * 0.50, y: H * 0.44 };
+  }
+  const idx = OUTER_REGION_ORDER.indexOf(key);
+  const angle = (idx / OUTER_REGION_ORDER.length) * Math.PI * 2 - Math.PI / 2;
+  const radius = Math.min(W, H) * 0.32;
+  return {
+    x: W * 0.50 + Math.cos(angle) * radius,
+    y: H * 0.44 + Math.sin(angle) * radius,
+  };
+}
+
+const DIM_NODE = "#141823";
+const DIM_LINK = "#0b0e15";
+const PULSE_MS = 2600;
+const IDLE_MS = 2200;
+const POLL_MS = 12000;
+
+function regionForNode(n: FleetKbGraphNode): RegionKey {
+  if (n.kind === "index") return "CORE";
+  if (n.kind === "agent") return "BROCA";
+  if (n.kind === "category") return "VISUAL";
+  if (n.category === "decision") return "VISUAL";
+  if (n.category === "completed") return "VISUAL";
+  if (n.category === "dreams") return "DREAMS";
+  if (n.kind === "note") {
+    const h = hashStr(n.id);
+    if (h % 3 === 0) return "HIPPOCAMPUS";
+    if (h % 3 === 1) return "TEMPORAL";
+    return "DREAMS";
+  }
+  return "DREAMS";
+}
+
+function nodeSize(n: FleetKbGraphNode): number {
+  switch (n.kind) {
+    case "index": return 5;
+    case "category": return 3.5;
+    case "agent": return 2.2;
+    default: return 1.2 + ((hashStr(n.id) % 100) / 100) * 1.8;
+  }
+}
+
+function hashStr(s: string): number {
+  let h = 0x2545f491;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+function edgeRand(a: string, b: string, salt: number): number {
+  return ((hashStr(a + "|" + b + "|" + salt) % 100000) / 100000);
+}
+
+interface BrainNode extends FleetKbGraphNode {
+  region: RegionKey; color: string; val: number; isHub: boolean;
+  rx: number; ry: number; // radial position (0-1)
+}
+interface BrainLink {
+  source: string; target: string; kind: string; color: string;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//  CANVAS RENDERER
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+interface CanvasNode {
+  id: string;
+  x: number; y: number;
+  region: RegionKey;
+  size: number;
+  phase: number;
+  speed: number;
+  brightness: number;
+  active: boolean;
+  pulsing: boolean;
+  selected: boolean;
+}
+
+interface CanvasEdge {
+  s: string; t: string;
+  color: string;
+  active: boolean;
+}
+
+function hexAlpha(a: number) {
+  const v = Math.max(0, Math.min(255, Math.floor(a * 255)));
+  return v.toString(16).padStart(2, '0');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//  COMPONENT
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
+  // —— latency + stats ————————————————————————————————————————————————————————
+  const [latency, setLatency] = useState<number | null>(null);
+  const [activityPct, setActivityPct] = useState<string>("—");
+
+  // —— graph query ———————————————————————————————————————————————————————————
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ["fleet-kb", "graph"],
+    queryFn: async () => {
+      const start = Date.now();
+      const result = await fleetKbApi.getGraph();
+      setLatency(Date.now() - start);
+      return result;
+    },
+    staleTime: 60_000,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+
+  // —— dreams query ——————————————————————————————————————————————————————————
+  const { data: dreamsData } = useQuery({
+    queryKey: ["fleet-kb", "dreams"],
+    queryFn: () => fleetKbApi.getDreams(),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dim, setDim] = useState({ w: window.innerWidth, h: window.innerHeight - 56 });
+  const [hover, setHover] = useState<BrainNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  // —— interactive controls ———————————————————————————————————————————————————————
+  const [searchQuery, setSearchQuery] = useState("");
+  const [focusRegion, setFocusRegion] = useState<RegionKey | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+
+  // —— interaction clock ————————————————————————————————————————————————————————————
+  const lastInteractRef = useRef(0);
+  const bump = useCallback(() => { lastInteractRef.current = Date.now(); }, []);
+
+  // —— pulse bookkeeping ————————————————————————————————————————————————————————————
+  const prevIdsRef = useRef<Set<string>>(new Set());
+  const pulseRef = useRef<Map<string, number>>(new Map());
+  const pulseRunning = useRef(false);
+  const [pulseVersion, setPulseVersion] = useState(0);
+
+  const startPulseLoop = useCallback(() => {
+    if (pulseRunning.current) return;
+    pulseRunning.current = true;
+    let last = 0;
+    const tick = () => {
+      const now = Date.now();
+      for (const [id, end] of pulseRef.current) if (end <= now) pulseRef.current.delete(id);
+      if (now - last > 70) { last = now; setPulseVersion((v) => v + 1); }
+      if (pulseRef.current.size > 0) requestAnimationFrame(tick);
+      else { pulseRunning.current = false; setPulseVersion((v) => v + 1); }
+    };
+    requestAnimationFrame(tick);
+  }, []);
+
+  // —— size tracking —————————————————————————————————————————————————————————————————
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setDim({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // —— transform graph —————————————————————————————————————————————————————————————————
+  const graph = useMemo(() => {
+    const rawNodes = data?.graph?.nodes ?? [];
+    const rawEdges = data?.graph?.edges ?? [];
+    const regionOf = new Map<string, RegionKey>();
+    const nodes: BrainNode[] = rawNodes.map((n) => {
+      const region = regionForNode(n);
+      regionOf.set(n.id, region);
+      const h = hashStr(n.id);
+      const angle = (h % 360) / 360 * Math.PI * 2;
+      const dist = ((h % 100) / 100) * 0.065 + ((h % 7) / 7) * 0.025;
+      return {
+        ...n,
+        region,
+        color: REGIONS[region].color,
+        val: nodeSize(n),
+        isHub: n.kind !== "note",
+        rx: Math.cos(angle) * dist,
+        ry: Math.sin(angle) * dist,
+      };
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    const links: BrainLink[] = rawEdges
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e) => {
+        const srcRegion = regionOf.get(e.source)!;
+        return {
+          source: e.source,
+          target: e.target,
+          kind: e.kind,
+          color: REGIONS[srcRegion].color,
+        };
+      });
+    return { nodes, links, regionOf };
+  }, [data]);
+
+  // fast lookups
+  const nodeById = useMemo(() => {
+    const m = new Map<string, BrainNode>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph.nodes]);
+
+  const notesById = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof data>["notes"][number]>();
+    for (const n of data?.notes ?? []) m.set(n.id, n);
+    return m;
+  }, [data]);
+
+  // search index
+  const searchIndex = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of graph.nodes) {
+      let t = n.label || "";
+      if (n.noteId) {
+        const note = notesById.get(n.noteId);
+        if (note) t += " " + note.title + " " + (note.body || "") + " " + (note.excerpt || "");
+      }
+      m.set(n.id, t.toLowerCase());
+    }
+    return m;
+  }, [graph.nodes, notesById]);
+
+  const q = searchQuery.trim().toLowerCase();
+  const matchSet = useMemo(() => {
+    if (!q) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      const t = searchIndex.get(n.id);
+      if (t && t.includes(q)) s.add(n.id);
+    }
+    return s;
+  }, [q, graph.nodes, searchIndex]);
+
+  const hasNarrowing =
+    !!q || !!focusRegion || selectedAgents.size > 0 || selectedCats.size > 0;
+
+  const isNodeActive = useCallback(
+    (n: BrainNode) => {
+      if (focusRegion && n.region !== focusRegion) return false;
+      if (selectedAgents.size > 0 && n.kind === "note" && !(n.agentId && selectedAgents.has(n.agentId))) return false;
+      if (selectedCats.size > 0 && n.kind === "note" && !(n.category && selectedCats.has(n.category))) return false;
+      if (matchSet && !matchSet.has(n.id)) return false;
+      return true;
+    },
+    [focusRegion, selectedAgents, selectedCats, matchSet],
+  );
+
+  // present regions with counts
+  const presentRegions = useMemo(() => {
+    const counts = new Map<RegionKey, number>();
+    for (const n of graph.nodes) counts.set(n.region, (counts.get(n.region) ?? 0) + 1);
+    return (Object.keys(REGIONS) as RegionKey[])
+      .filter((k) => counts.has(k))
+      .map((k) => ({ key: k, ...REGIONS[k], count: counts.get(k)! }));
+  }, [graph.nodes]);
+
+  const totalNodes = graph.nodes.length;
+  const totalLinks = graph.links.length;
+
+  // —— coherence ——————————————————————————————————————————————————————————————————————————————————
+  const coherencePct = useMemo(() => {
+    const rawEdges = data?.graph?.edges ?? [];
+    const connected = new Set<string>();
+    for (const e of rawEdges) { connected.add(e.source); connected.add(e.target); }
+    const isolated = graph.nodes.filter((n) => !connected.has(n.id)).length;
+    return totalNodes > 0 ? ((1 - isolated / totalNodes) * 100).toFixed(1) : "—";
+  }, [data?.graph?.edges, graph.nodes, totalNodes]);
+
+  // —— LIVE PULSE —————————————————————————————————————————————————————————————————————————————————
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    const ids = new Set(graph.nodes.map((n) => n.id));
+    if (prevIdsRef.current.size === 0) { prevIdsRef.current = ids; return; }
+    const news: string[] = [];
+    for (const id of ids) if (!prevIdsRef.current.has(id)) news.push(id);
+    if (news.length) {
+      const pct = ids.size > 0 ? ((news.length / ids.size) * 100).toFixed(1) : "0.0";
+      setActivityPct(pct);
+      const end = Date.now() + PULSE_MS;
+      for (const id of news) pulseRef.current.set(id, end);
+      startPulseLoop();
+    } else {
+      setActivityPct("0.0");
+    }
+    prevIdsRef.current = ids;
+  }, [graph.nodes, startPulseLoop]);
+
+  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null;
+
+  const selectedNote = useMemo(() => {
+    if (!selectedNode || selectedNode.kind !== "note" || !selectedNode.noteId) return null;
+    return (data?.notes ?? []).find((n) => n.id === selectedNode.noteId) ?? null;
+  }, [selectedNode, data]);
+
+  const relatedLinks = useMemo(() => {
+    if (!selectedNodeId) return [] as Array<{ id: string; title: string; region: RegionKey; color: string }>;
+    const out: Array<{ id: string; title: string; region: RegionKey; color: string }> = [];
+    const seen = new Set<string>();
+    for (const e of data?.graph?.edges ?? []) {
+      if (e.kind !== "related" && e.kind !== "link") continue;
+      let other: string | null = null;
+      if (e.source === selectedNodeId) other = e.target;
+      else if (e.target === selectedNodeId) other = e.source;
+      if (!other || seen.has(other)) continue;
+      const on = nodeById.get(other);
+      if (!on || on.kind !== "note") continue;
+      seen.add(other);
+      out.push({ id: other, title: on.label, region: on.region, color: on.color });
+    }
+    return out.slice(0, 24);
+  }, [selectedNodeId, data, nodeById]);
+
+  // —— toggles ——————————————————————————————————————————————————————————————————————————————————————
+  const toggleAgent = useCallback((id: string) => {
+    bump();
+    setSelectedAgents((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, [bump]);
+  const toggleCat = useCallback((key: string) => {
+    bump();
+    setSelectedCats((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }, [bump]);
+  const toggleRegion = useCallback((key: RegionKey) => {
+    bump();
+    setFocusRegion((prev) => (prev === key ? null : key));
+  }, [bump]);
+  const resetAll = useCallback(() => {
+    bump();
+    setSearchQuery(""); setFocusRegion(null);
+    setSelectedAgents(new Set()); setSelectedCats(new Set());
+  }, [bump]);
+
+  const panelBorder = "1px solid rgba(255,255,255,0.08)";
+  const matchCount = matchSet ? matchSet.size : 0;
+
+  const chipStyle = (on: boolean, color: string) => ({
+    border: on ? `1px solid ${color}` : panelBorder,
+    background: on ? `${color}26` : "rgba(8,9,11,0.62)",
+    color: on ? color : "#9aa4b2",
+    boxShadow: on ? `0 0 10px ${color}55` : "none",
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //  CANVAS RENDERING
+  // ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+  // Precompute canvas node positions
+  const canvasNodesRef = useRef<CanvasNode[]>([]);
+  const canvasEdgesRef = useRef<CanvasEdge[]>([]);
+  const timeRef = useRef(0);
+  const rafRef = useRef(0);
+  const mouseRef = useRef({ x: -1, y: -1 });
+
+  useEffect(() => {
+    canvasNodesRef.current = graph.nodes.map((n) => {
+      const h = hashStr(n.id);
+      return {
+        id: n.id,
+        x: 0, y: 0, // computed each frame
+        region: n.region,
+        size: n.val,
+        phase: (h % 360) / 360 * Math.PI * 2,
+        speed: 0.0003 + ((h % 100) / 100) * 0.0003,
+        brightness: 0.75 + ((h % 50) / 50) * 0.25,
+        active: true,
+        pulsing: false,
+        selected: false,
+      };
+    });
+    canvasEdgesRef.current = graph.links.map((e) => ({
+      s: e.source,
+      t: e.target,
+      color: e.color,
+      active: true,
+    }));
+  }, [graph]);
+
+  // Traveling pulses
+  const pulsesRef = useRef<Array<{ s: string; t: string; progress: number; speed: number; color: string }>>([]);
+  const lastPulseSpawn = useRef(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+
+    let W = dim.w;
+    let H = dim.h;
+    canvas.width = W;
+    canvas.height = H;
+
+    const CORE_POS = regionPos("CORE", W, H);
+    const CORE_RADIUS = Math.min(W, H) * 0.125;
+
+    // Atmospheric particles
+    const dustParticles = (() => {
+      const arr = [];
+      for (let i = 0; i < 700; i++) {
+        const h = hashStr(`dust${i}`);
+        arr.push({
+          x: (h % 1000) / 1000,
+          y: ((h * 7) % 1000) / 1000,
+          size: 0.2 + ((h % 100) / 100) * 1.0,
+          vx: ((h % 20) - 10) * 0.000012,
+          vy: (((h * 3) % 20) - 10) * 0.000012,
+          alpha: 0.06 + ((h % 30) / 30) * 0.20,
+          color: (h % 5) === 0 ? "#a855f7" : (h % 5) === 1 ? "#22d3ee" : "#ffffff",
+        });
+      }
+      return arr;
+    })();
+
+    const nebulaParticles = (() => {
+      const arr = [];
+      for (let i = 0; i < 60; i++) {
+        const h = hashStr(`neb${i}`);
+        const colors = ["#a855f7", "#ef4444", "#06b6d4", "#f59e0b", "#d946ef"];
+        const regionIdx = i % 5;
+        const rp = regionPos(OUTER_REGION_ORDER[regionIdx], 1, 1);
+        const biasX = rp.x;
+        const biasY = rp.y;
+        arr.push({
+          x: biasX + (((h * 13) % 1000) / 1000 - 0.5) * 0.22,
+          y: biasY + (((h * 17) % 1000) / 1000 - 0.5) * 0.22,
+          size: 60 + ((h % 100) / 100) * 120,
+          vx: ((h % 10) - 5) * 0.000003,
+          vy: (((h * 7) % 10) - 5) * 0.000003,
+          color: colors[h % 5],
+          alpha: 0.011 + ((h % 20) / 20) * 0.026,
+        });
+      }
+      return arr;
+    })();
+
+    // Core sparks
+    const coreSparks = (() => {
+      const arr = [];
+      for (let i = 0; i < 35; i++) {
+        const h = hashStr(`spark${i}`);
+        arr.push({
+          angle: (h % 360) / 360 * Math.PI * 2,
+          radius: (h % 100) / 100 * 0.8,
+          speed: 0.002 + ((h % 50) / 50) * 0.003,
+          size: 0.4 + ((h % 60) / 60) * 0.9,
+          color: (h % 2) === 0 ? "#ffffff" : "#60a5fa",
+        });
+      }
+      return arr;
+    })();
+
+    // Decorative satellites (visual density treatment)
+    const satellites = (() => {
+      const arr: Array<{ parent: string; dx: number; dy: number; size: number; phase: number; speed: number }> = [];
+      for (const n of canvasNodesRef.current) {
+        const h = hashStr(n.id + "sat");
+        const count = 4 + (h % 6);
+        for (let i = 0; i < count; i++) {
+          const hh = hashStr(n.id + "sat" + i);
+          const angle = (hh % 360) / 360 * Math.PI * 2;
+          const dist = 0.005 + ((hh % 100) / 100) * 0.018;
+          arr.push({
+            parent: n.id,
+            dx: Math.cos(angle) * dist,
+            dy: Math.sin(angle) * dist,
+            size: 0.25 + ((hh % 50) / 50) * 0.6,
+            phase: (hh % 360) / 360 * Math.PI * 2,
+            speed: 0.0005 + ((hh % 40) / 40) * 0.0006,
+          });
+        }
+      }
+      return arr;
+    })();
+
+    // Per-region ambient orbiting particles
+    const regionOrbitals = (() => {
+      const arr: Array<{ region: RegionKey; angle: number; radius: number; speed: number; size: number; alpha: number; phase: number }> = [];
+      for (const rk of OUTER_REGION_ORDER) {
+        const hBase = hashStr(`orb${rk}`);
+        for (let i = 0; i < 20; i++) {
+          const h = hashStr(`orb${rk}${i}`);
+          arr.push({
+            region: rk,
+            angle: (h % 360) / 360 * Math.PI * 2,
+            radius: 0.04 + ((h % 100) / 100) * 0.06,
+            speed: 0.0002 + ((h % 50) / 50) * 0.0003,
+            size: 0.3 + ((h % 50) / 50) * 0.5,
+            alpha: 0.04 + ((h % 30) / 30) * 0.06,
+            phase: (hBase + i) * 0.4,
+          });
+        }
+      }
+      return arr;
+    })();
+
+    function nodePos(n: CanvasNode) {
+      const rp = regionPos(n.region, W, H);
+      const cx = rp.x;
+      const cy = rp.y;
+      const t = timeRef.current;
+      const orbit = n.speed * t;
+      // Find underlying brain node for stable offset
+      const bn = nodeById.get(n.id);
+      const rx = bn ? bn.rx : 0;
+      const ry = bn ? bn.ry : 0;
+      return {
+        x: cx + rx * W + Math.sin(t * 0.0006 + n.phase + orbit) * 3,
+        y: cy + ry * H + Math.cos(t * 0.0006 + n.phase + orbit) * 3,
+      };
+    }
+
+    function drawBackground() {
+      const g = ctx.createRadialGradient(W * 0.5, H * 0.36, 0, W * 0.5, H * 0.36, W * 0.9);
+      g.addColorStop(0, "#070a10");
+      g.addColorStop(0.3, "#04080f");
+      g.addColorStop(0.65, "#010307");
+      g.addColorStop(1, "#000000");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+
+      for (const p of nebulaParticles) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < -0.1) p.x = 1.1; if (p.x > 1.1) p.x = -0.1;
+        if (p.y < -0.1) p.y = 1.1; if (p.y > 1.1) p.y = -0.1;
+        const grad = ctx.createRadialGradient(p.x * W, p.y * H, 0, p.x * W, p.y * H, p.size);
+        grad.addColorStop(0, p.color + hexAlpha(p.alpha));
+        grad.addColorStop(1, "transparent");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    function drawDust() {
+      for (const p of dustParticles) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = 1; if (p.x > 1) p.x = 0;
+        if (p.y < 0) p.y = 1; if (p.y > 1) p.y = 0;
+        const a = Math.max(0, p.alpha + Math.sin(timeRef.current * 0.0008 + p.x * 12) * 0.05);
+        ctx.fillStyle = p.color + hexAlpha(a);
+        ctx.beginPath();
+        ctx.arc(p.x * W, p.y * H, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function drawCore() {
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const r = CORE_RADIUS;
+      const pulse = 1 + Math.sin(timeRef.current * 0.002) * 0.07;
+
+      // God rays
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const rayCount = 24;
+      for (let i = 0; i < rayCount; i++) {
+        const angle = (i / rayCount) * Math.PI * 2 + timeRef.current * 0.0006;
+        const len = r * (2.6 + Math.sin(timeRef.current * 0.0012 + i * 1.3) * 0.8);
+        const grad = ctx.createLinearGradient(cx, cy, cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+        grad.addColorStop(0, "rgba(220,240,255,0.49)");
+        grad.addColorStop(0.25, "rgba(56,189,248,0.28)");
+        grad.addColorStop(1, "transparent");
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2.8 + Math.sin(timeRef.current * 0.0018 + i * 2) * 0.9;
+        ctx.shadowColor = "#38bdf8";
+        ctx.shadowBlur = 4;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Geodesic rings
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const ringCount = 5;
+      for (let ri = 0; ri < ringCount; ri++) {
+        const ringR = r * (0.28 + ri * 0.16) * pulse;
+        const segs = 12 + ri * 4;
+        const rot = timeRef.current * 0.001 * (ri % 2 === 0 ? 1 : -1) + ri * 1.2;
+        ctx.strokeStyle = `rgba(160,210,255,${0.25 - ri * 0.03})`;
+        ctx.lineWidth = 1.6;
+        ctx.shadowColor = "#60a5fa";
+        ctx.shadowBlur = 5;
+        ctx.beginPath();
+        for (let i = 0; i <= segs; i++) {
+          const a = (i / segs) * Math.PI * 2 + rot;
+          const x = cx + Math.cos(a) * ringR;
+          const y = cy + Math.sin(a) * ringR * 0.5;
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(160,210,255,0.22)";
+      ctx.lineWidth = 1.2;
+      ctx.shadowBlur = 4;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 0.35, r * 0.65, timeRef.current * 0.0005, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r * 0.65, r * 0.25, -timeRef.current * 0.0003, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(160,210,255,0.18)";
+      ctx.lineWidth = 0.9;
+      ctx.shadowBlur = 4;
+      for (let i = 0; i < 10; i++) {
+        const a1 = (i / 10) * Math.PI * 2 + timeRef.current * 0.001;
+        const a2 = a1 + Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a1) * r * 0.20, cy + Math.sin(a1) * r * 0.10);
+        ctx.lineTo(cx + Math.cos(a2) * r * 0.20, cy + Math.sin(a2) * r * 0.10);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Slow-rotating hexagonal outline
+      ctx.save();
+      ctx.strokeStyle = "rgba(160,210,255,0.20)";
+      ctx.lineWidth = 0.8;
+      const hexRot = timeRef.current * 0.0003;
+      const hexR = r * 1.15 * pulse;
+      ctx.beginPath();
+      for (let hi = 0; hi < 6; hi++) {
+        const a = (hi / 6) * Math.PI * 2 + hexRot;
+        const hx = cx + Math.cos(a) * hexR;
+        const hy = cy + Math.sin(a) * hexR * 0.5;
+        hi === 0 ? ctx.moveTo(hx, hy) : ctx.lineTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+
+      // Core sparks
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const s of coreSparks) {
+        s.angle += s.speed;
+        const sx = cx + Math.cos(s.angle) * r * s.radius * pulse;
+        const sy = cy + Math.sin(s.angle) * r * s.radius * 0.5 * pulse;
+        ctx.fillStyle = s.color;
+        ctx.shadowColor = s.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Aura layers
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 3; i >= 1; i--) {
+        const aura = ctx.createRadialGradient(cx, cy, r * 0.10, cx, cy, r * (1.0 + i * 0.28));
+        aura.addColorStop(0, `rgba(186,230,253,${0.22 / i})`);
+        aura.addColorStop(0.5, `rgba(56,189,248,${0.10 / i})`);
+        aura.addColorStop(1, "transparent");
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * (1.0 + i * 0.28), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Central sphere
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const mid = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * pulse * 0.78);
+      mid.addColorStop(0, "rgba(255,255,255,0.98)");
+      mid.addColorStop(0.12, "rgba(186,230,253,0.92)");
+      mid.addColorStop(0.4, "rgba(56,189,248,0.50)");
+      mid.addColorStop(0.75, "rgba(14,165,233,0.18)");
+      mid.addColorStop(1, "transparent");
+      ctx.fillStyle = mid;
+      ctx.shadowColor = "#38bdf8";
+      ctx.shadowBlur = 6;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * pulse * 0.78, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Inner hot core
+      const inner = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.22);
+      inner.addColorStop(0, "rgba(255,255,255,0.98)");
+      inner.addColorStop(0.5, "rgba(186,230,253,0.65)");
+      inner.addColorStop(1, "rgba(56,189,248,0.10)");
+      ctx.fillStyle = inner;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.22 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawFilaments() {
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const coreR = CORE_RADIUS;
+
+      for (let i = 0; i < regionKeys.length; i++) {
+        const reg = REGIONS[regionKeys[i]];
+        if (regionKeys[i] === "CORE") continue;
+        const tp = regionPos(regionKeys[i], W, H);
+        const tx = tp.x;
+        const ty = tp.y;
+        const angle = Math.atan2(ty - cy, tx - cx);
+        const dist = Math.hypot(tx - cx, ty - cy);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const strandCount = 18;
+        for (let si = 0; si < strandCount; si++) {
+          const segments = 40 + Math.floor(((hashStr(`strand${i}${si}`) % 100) / 100) * 20);
+          const baseOffset = (si / strandCount - 0.5) * coreR * 0.6;
+          const alpha = 0.18 + ((hashStr(`sa${i}${si}`) % 100) / 100) * 0.18;
+          const width = 1.0 + ((hashStr(`sw${i}${si}`) % 100) / 100) * 1.2;
+
+          ctx.strokeStyle = reg.color + hexAlpha(alpha);
+          ctx.lineWidth = width;
+          ctx.shadowColor = reg.color;
+          ctx.shadowBlur = 5;
+          ctx.beginPath();
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const jitter = Math.sin(timeRef.current * 0.0025 + i * 4 + s * 0.6 + si) * (dist * 0.018);
+            const spread = Math.sin(t * Math.PI) * baseOffset * (1 - t * 0.3);
+            const px = cx + Math.cos(angle) * dist * t + Math.cos(angle + Math.PI / 2) * (jitter + spread);
+            const py = cy + Math.sin(angle) * dist * t + Math.sin(angle + Math.PI / 2) * (jitter + spread);
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+      // Inter-region ghost filaments (adjacent outer regions)
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < OUTER_REGION_ORDER.length; i++) {
+        const rkA = OUTER_REGION_ORDER[i];
+        const rkB = OUTER_REGION_ORDER[(i + 1) % OUTER_REGION_ORDER.length];
+        const pa = regionPos(rkA, W, H);
+        const pb = regionPos(rkB, W, H);
+        const midColor = REGIONS[rkA].color;
+        const segCount = 3;
+        for (let gi = 0; gi < segCount; gi++) {
+          const h = hashStr(`mesh${rkA}${rkB}${gi}`);
+          const segments = 30 + Math.floor(((h % 100) / 100) * 15);
+          const alpha = 0.06 + ((h % 100) / 100) * 0.04;
+          ctx.strokeStyle = midColor + hexAlpha(alpha);
+          ctx.lineWidth = 0.4 + ((h % 100) / 100) * 0.4;
+          ctx.beginPath();
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const jitter = Math.sin(timeRef.current * 0.0015 + i * 3 + s * 0.5 + gi) * (W * 0.008);
+            const px = pa.x + (pb.x - pa.x) * t + Math.cos(t * Math.PI * 2 + gi) * jitter;
+            const py = pa.y + (pb.y - pa.y) * t + Math.sin(t * Math.PI * 2 + gi) * jitter * 0.5;
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+
+    function drawBezierEdge(a: { x: number; y: number }, b: { x: number; y: number }, color: string, alpha: number, width: number) {
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return;
+      const perpX = -dy / len * len * 0.12;
+      const perpY = dx / len * len * 0.12;
+      const cp1x = a.x + dx * 0.35 + perpX;
+      const cp1y = a.y + dy * 0.35 + perpY;
+      const cp2x = b.x - dx * 0.35 + perpX;
+      const cp2y = b.y - dy * 0.35 + perpY;
+
+      ctx.strokeStyle = color + hexAlpha(alpha);
+      ctx.lineWidth = width || 0.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, b.x, b.y);
+      ctx.stroke();
+    }
+
+    function drawSynapsesAndMesh() {
+      const positions = new Map<string, { x: number; y: number }>();
+      for (const n of canvasNodesRef.current) {
+        positions.set(n.id, nodePos(n));
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+
+      // Edges
+      for (const e of canvasEdgesRef.current) {
+        if (!e.active) continue;
+        const a = positions.get(e.s);
+        const b = positions.get(e.t);
+        if (!a || !b) continue;
+        drawBezierEdge(a, b, e.color, 0.16, 0.5);
+      }
+
+      // Traveling pulses
+      for (let i = pulsesRef.current.length - 1; i >= 0; i--) {
+        const p = pulsesRef.current[i];
+        p.progress += p.speed;
+        if (p.progress >= 1) { pulsesRef.current.splice(i, 1); continue; }
+        const a = positions.get(p.s);
+        const b = positions.get(p.t);
+        if (!a || !b) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const perpX = -dy / len * len * 0.12;
+        const perpY = dx / len * len * 0.12;
+        const cp1x = a.x + dx * 0.35 + perpX;
+        const cp1y = a.y + dy * 0.35 + perpY;
+        const cp2x = b.x - dx * 0.35 + perpX;
+        const cp2y = b.y - dy * 0.35 + perpY;
+
+        const t = p.progress;
+        const mt = 1 - t;
+        const x = mt * mt * mt * a.x + 3 * mt * mt * t * cp1x + 3 * mt * t * t * cp2x + t * t * t * b.x;
+        const y = mt * mt * mt * a.y + 3 * mt * mt * t * cp1y + 3 * mt * t * t * cp2y + t * t * t * b.y;
+
+        const alpha = 1 - Math.abs(t - 0.5) * 2;
+        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.95})`;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 8;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2 * alpha + 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.restore();
+    }
+
+    function drawRegions() {
+      const positions = new Map<string, { x: number; y: number }>();
+      for (const n of canvasNodesRef.current) {
+        positions.set(n.id, nodePos(n));
+      }
+
+      // Lobe ambient glows
+      for (const rk of regionKeys) {
+        if (rk === "CORE") continue;
+        const rp = regionPos(rk, W, H);
+        const cx = rp.x;
+        const cy = rp.y;
+        const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, W * 0.12);
+        glow.addColorStop(0, REGIONS[rk].color + "40");
+        glow.addColorStop(0.5, REGIONS[rk].color + "18");
+        glow.addColorStop(1, "transparent");
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      drawSynapsesAndMesh();
+
+      // Satellite particles
+      for (const sat of satellites) {
+        const parent = positions.get(sat.parent);
+        if (!parent) continue;
+        const pn = canvasNodesRef.current.find((n) => n.id === sat.parent);
+        if (!pn) continue;
+        const reg = REGIONS[pn.region];
+        const orbit = sat.speed * timeRef.current;
+        const x = parent.x + sat.dx * W + Math.sin(timeRef.current * 0.0008 + sat.phase + orbit) * 3;
+        const y = parent.y + sat.dy * H + Math.cos(timeRef.current * 0.0008 + sat.phase + orbit) * 3;
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = reg.color + "70";
+        ctx.beginPath();
+        ctx.arc(x, y, sat.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Region orbital particles
+      for (const orb of regionOrbitals) {
+        const rp = regionPos(orb.region, W, H);
+        const t = timeRef.current;
+        const angle = orb.angle + t * orb.speed;
+        const x = rp.x + Math.cos(angle + orb.phase) * orb.radius * Math.min(W, H);
+        const y = rp.y + Math.sin(angle + orb.phase) * orb.radius * Math.min(W, H) * 0.6;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = REGIONS[orb.region].color + hexAlpha(orb.alpha + Math.sin(t * 0.001 + orb.phase) * 0.02);
+        ctx.beginPath();
+        ctx.arc(x, y, orb.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Nodes
+      for (const n of canvasNodesRef.current) {
+        const pos = positions.get(n.id)!;
+        const reg = REGIONS[n.region];
+        const isActive = n.active;
+        const isDimmed = hasNarrowing && !isActive;
+        const isSelected = n.selected;
+        const isPulsing = n.pulsing;
+
+        let alpha = n.brightness * (0.90 + Math.sin(timeRef.current * 0.001 + n.phase) * 0.10);
+        let size = n.size * (1.2 + Math.sin(timeRef.current * 0.0015 + hashStr(n.id) * 2) * 0.12);
+
+        if (isDimmed) { alpha *= 0.25; size *= 0.7; }
+        if (isSelected) { alpha = 1; size *= 1.6; }
+        if (isPulsing) { alpha = 1; size *= 1 + 2.4 * ((pulseRef.current.get(n.id) ?? 0) - Date.now()) / PULSE_MS; }
+
+        // Large outer bloom
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const bloomGrad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size * 5.5);
+        bloomGrad.addColorStop(0, reg.color + hexAlpha(alpha * 0.46));
+        bloomGrad.addColorStop(0.15, reg.color + hexAlpha(alpha * 0.26));
+        bloomGrad.addColorStop(0.45, reg.color + hexAlpha(alpha * 0.09));
+        bloomGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = bloomGrad;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, size * 5.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Medium halo with shadowBlur
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = reg.glow + hexAlpha(alpha * 0.65);
+        ctx.shadowColor = reg.glow;
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, size * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Hard white center
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = isDimmed ? reg.color : "#ffffff";
+        ctx.shadowColor = isDimmed ? reg.color : "#ffffff";
+        ctx.shadowBlur = 6;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, Math.max(1.6, size * 1.1), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    }
+
+    function draw() {
+      timeRef.current++;
+      const t = timeRef.current;
+
+      // Update canvas nodes from brain state
+      for (const cn of canvasNodesRef.current) {
+        const bn = nodeById.get(cn.id);
+        if (!bn) continue;
+        cn.active = isNodeActive(bn);
+        cn.selected = cn.id === selectedNodeId;
+        const pe = pulseRef.current.get(cn.id);
+        cn.pulsing = !!pe && pe > Date.now();
+      }
+
+      // Update canvas edges
+      for (const ce of canvasEdgesRef.current) {
+        const s = nodeById.get(ce.s);
+        const t_ = nodeById.get(ce.t);
+        ce.active = !hasNarrowing || !!(s && t_ && isNodeActive(s) && isNodeActive(t_));
+      }
+
+      // Spawn pulses
+      if (t - lastPulseSpawn.current > 140 && canvasEdgesRef.current.length > 0) {
+        lastPulseSpawn.current = t;
+        const activeEdges = canvasEdgesRef.current.filter((e) => e.active);
+        if (activeEdges.length > 0) {
+          const e = activeEdges[Math.floor(Math.random() * activeEdges.length)];
+          pulsesRef.current.push({ s: e.s, t: e.t, progress: 0, speed: 0.003 + Math.random() * 0.004, color: e.color });
+        }
+      }
+
+      drawBackground();
+      drawDust();
+      drawFilaments();
+      drawCore();
+      drawRegions();
+
+      rafRef.current = requestAnimationFrame(draw);
+    }
+
+    rafRef.current = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [dim.w, dim.h, graph, nodeById, isNodeActive, hasNarrowing, selectedNodeId, pulseVersion]);
+
+  // —— mouse handlers for canvas ———————————————————————————————————————————————————————————————————
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    mouseRef.current = { x: mx, y: my };
+
+    // Find nearest node
+    let nearest: BrainNode | null = null;
+    let nearestDist = Infinity;
+    for (const n of graph.nodes) {
+      const rp = regionPos(n.region, dim.w, dim.h);
+      const cx = rp.x;
+      const cy = rp.y;
+      const nx = cx + n.rx * dim.w;
+      const ny = cy + n.ry * dim.h;
+      const d = Math.hypot(mx - nx, my - ny);
+      if (d < 20 && d < nearestDist) {
+        nearestDist = d;
+        nearest = n;
+      }
+    }
+    setHover(nearest);
+    bump();
+  }, [graph.nodes, dim.w, dim.h, bump]);
+
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    let nearest: BrainNode | null = null;
+    let nearestDist = Infinity;
+    for (const n of graph.nodes) {
+      const rp = regionPos(n.region, dim.w, dim.h);
+      const cx = rp.x;
+      const cy = rp.y;
+      const nx = cx + n.rx * dim.w;
+      const ny = cy + n.ry * dim.h;
+      const d = Math.hypot(mx - nx, my - ny);
+      if (d < 24 && d < nearestDist) {
+        nearestDist = d;
+        nearest = n;
+      }
+    }
+    if (nearest && nearest.kind === "note") {
+      setSelectedNodeId(nearest.id);
+    } else {
+      setSelectedNodeId(null);
+    }
+    bump();
+  }, [graph.nodes, dim.w, dim.h, bump]);
+
+  const jumpToRelated = useCallback((id: string) => {
+    setSelectedNodeId(id);
+  }, []);
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //  RENDER
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+
+  const regionKeys = Object.keys(REGIONS) as RegionKey[];
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: "100dvh", background: "#030408" }}>
+
+      {/* —— CANVAS ———————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ touchAction: "none" }}
+        onPointerDown={bump}
+        onWheel={bump}
+      >
+        <canvas
+          ref={canvasRef}
+          width={dim.w}
+          height={dim.h}
+          className="absolute inset-0"
+          onMouseMove={handleCanvasMouseMove}
+          onMouseLeave={() => { setHover(null); mouseRef.current = { x: -1, y: -1 }; }}
+          onClick={handleCanvasClick}
+        />
+      </div>
+
+      {/* —— TOP BAR ———————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between px-4 py-2"
+        style={{ background: "rgba(3,4,8,0.72)", borderBottom: panelBorder, backdropFilter: "blur(10px)" }}
+      >
+        <div className="flex items-center gap-2">
+          <Brain size={16} style={{ color: "#3b82ff" }} />
+          <span
+            className="text-xs font-bold tracking-widest"
+            style={{ color: "#cfe0ff", fontFamily: "Menlo, ui-monospace, monospace", letterSpacing: "0.18em" }}
+          >
+            FLEET BRAIN · NEURAL COMMAND NETWORK
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-[10px]" style={{ fontFamily: "Menlo, ui-monospace, monospace", color: "rgba(160,185,225,0.7)" }}>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "#22e06b", boxShadow: "0 0 6px #22e06b" }} />
+            LIVE
+          </span>
+          {latency !== null && (
+            <span className="inline-flex items-center gap-1">
+              <Wifi size={10} /> {latency}ms
+            </span>
+          )}
+          <button
+            onClick={() => { bump(); refetch(); }}
+            title="Refresh"
+            className="inline-flex items-center gap-1 rounded p-1 text-gray-400 transition hover:text-white"
+            style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <RefreshCw size={12} className={isFetching ? "animate-spin" : ""} />
+          </button>
+          <button
+            onClick={onShowKb}
+            title="Open Fleet KB"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-gray-300 transition hover:text-white"
+            style={{ border: "1px solid rgba(167,139,250,0.35)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <BookOpen size={11} style={{ color: "#a78bfa" }} /> KB
+          </button>
+        </div>
+      </div>
+
+      {/* —— LEFT CONTROL DECK (search · filters) ——————————————————————————————————————————————————————— */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute left-4 top-16 z-20 flex flex-col gap-2" style={{ width: 280 }}>
+          <div
+            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+            style={{ border: panelBorder, background: "rgba(8,9,11,0.8)", backdropFilter: "blur(6px)" }}
+          >
+            <Search size={14} style={{ color: "#7dd3fc" }} />
+            <input
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); bump(); }}
+              onFocus={bump}
+              placeholder="search neurons…"
+              className="w-full bg-transparent text-xs text-gray-100 outline-none placeholder:text-gray-600"
+              style={{ fontFamily: "Menlo, ui-monospace, monospace" }}
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); bump(); }} className="text-gray-500 transition hover:text-white">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="px-1 text-[10px]" style={{ color: "rgba(160,185,225,0.7)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}>
+              {matchCount} NEURON{matchCount === 1 ? "" : "S"} HIGHLIGHTED
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.categories ?? []).map((c) => (
+              <button
+                key={c.key}
+                onClick={() => toggleCat(c.key)}
+                className="rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedCats.has(c.key), c.key === "decision" ? "#c061f7" : "#ff3b5c"), fontFamily: "Menlo, monospace" }}
+              >
+                {c.label} · {c.count}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.agents ?? []).map((a) => (
+              <button
+                key={a.id}
+                onClick={() => toggleAgent(a.id)}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedAgents.has(a.id), "#ffd21a"), fontFamily: "Menlo, monospace" }}
+                title={`agent ${a.id}`}
+              >
+                <Bot size={10} /> {a.id.slice(0, 6)} · {a.count}
+              </button>
+            ))}
+          </div>
+          {hasNarrowing && (
+            <button
+              onClick={resetAll}
+              className="self-start rounded-md px-2 py-0.5 text-[10px] text-gray-300 transition hover:text-white"
+              style={{ border: panelBorder, background: "rgba(8,9,11,0.6)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}
+            >
+              ✕ CLEAR FILTERS
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* —— LEGEND (right side) —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        className="absolute right-4 top-16 z-20 rounded-lg p-3 text-right"
+        style={{ fontFamily: "Menlo, ui-monospace, monospace", fontSize: 10, letterSpacing: "0.06em", lineHeight: 1.7, background: "rgba(4,5,8,0.55)", border: panelBorder, maxWidth: 260 }}
+      >
+        <div className="mb-1 text-[9px]" style={{ color: "rgba(150,170,210,0.5)" }}>CLICK A LOBE TO FOCUS</div>
+        {presentRegions.map((r) => {
+          const active = focusRegion === r.key;
+          const faded = focusRegion != null && !active;
+          return (
+            <button
+              key={r.key}
+              onClick={() => toggleRegion(r.key)}
+              className="flex w-full items-center justify-end gap-2 rounded px-1 transition hover:bg-white/5"
+              style={{ opacity: faded ? 0.35 : 1, background: active ? `${r.color}1f` : "transparent" }}
+            >
+              <span style={{ color: r.color, fontWeight: active ? 700 : 400 }}>{r.label}</span>
+              <span style={{ opacity: 0.5 }}>{r.role}</span>
+              <span style={{ opacity: 0.4 }}>{r.count}</span>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* —— HOVER TOOLTIP —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {hover && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-md px-3 py-1.5 text-xs"
+          style={{ background: "rgba(8,9,11,0.85)", border: panelBorder, color: "#e5e7eb", backdropFilter: "blur(6px)" }}
+        >
+          <span style={{ color: hover.color }}>●</span>{" "}
+          <span className="font-medium">{hover.label}</span>{" "}
+          <span className="text-gray-500">· {REGIONS[hover.region].label}</span>
+        </div>
+      )}
+
+      {/* —— BOTTOM HUD STRIP —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute bottom-4 left-4 right-4 z-20 flex items-end gap-3">
+          {/* Fleet Brain Overview */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 220, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#cfe0ff", fontFamily: "Menlo, monospace" }}>
+              <Brain size={12} /> FLEET BRAIN OVERVIEW
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Neurons</span>
+              <span className="text-right text-gray-200">{totalNodes}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Synapses</span>
+              <span className="text-right text-gray-200">{totalLinks}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Activity</span>
+              <span className="text-right" style={{ color: activityPct !== "—" ? "#22e06b" : "#9aa4b2" }}>{activityPct}%</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Coherence</span>
+              <span className="text-right text-gray-200">{coherencePct}%</span>
+            </div>
+          </div>
+
+          {/* Dreams */}
+          <div
+            className="flex flex-1 flex-col gap-1.5 rounded-lg p-3"
+            style={{ background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)", minWidth: 200 }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#d946ef", fontFamily: "Menlo, monospace" }}>
+                <Zap size={12} /> DREAMS
+              </div>
+              <span className="text-[9px]" style={{ color: "rgba(160,185,225,0.5)", fontFamily: "Menlo, monospace" }}>
+                {dreamsData?.date ?? "—"}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Dirs:</span>
+              <span className="text-gray-200">{dreamsData?.dirsConsolidated ?? 0}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Failures:</span>
+              <span className={dreamsData && dreamsData.failures > 0 ? "text-red-400" : "text-green-400"}>
+                {dreamsData?.failures ?? 0}
+              </span>
+            </div>
+            <div className="max-h-20 overflow-y-auto text-[10px] leading-relaxed text-gray-400" style={{ fontFamily: "Menlo, monospace" }}>
+              {dreamsData?.content ? (
+                dreamsData.content.slice(0, 360).replace(/\n/g, " ").replace(/\s+/g, " ") + (dreamsData.content.length > 360 ? "…" : "")
+              ) : (
+                <span className="italic opacity-50">No consolidation data available.</span>
+              )}
+            </div>
+          </div>
+
+          {/* Signal Flow */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 240, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#f59e0b", fontFamily: "Menlo, monospace" }}>
+              <Activity size={12} /> SIGNAL FLOW
+            </div>
+            <div className="mt-1 flex flex-col gap-1.5">
+              {presentRegions.map((r) => {
+                const pct = totalNodes > 0 ? ((r.count / totalNodes) * 100).toFixed(1) : "0.0";
+                return (
+                  <div key={r.key} className="flex items-center gap-2">
+                    <span className="w-16 text-[9px] uppercase" style={{ color: r.color }}>{r.label}</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-1000"
+                        style={{ width: `${pct}%`, background: r.color, boxShadow: `0 0 6px ${r.color}66` }}
+                      />
+                    </div>
+                    <span className="w-8 text-[9px] text-right text-gray-400">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* —— STATES ————————————————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {isLoading && (
+        <div className="flex h-full items-center justify-center text-sm" style={{ color: "#6f9bff", fontFamily: "Menlo, monospace", letterSpacing: "0.2em" }}>
+          INITIALIZING SYNAPSES…
+        </div>
+      )}
+      {isError && (
+        <div className="flex h-full items-center justify-center text-sm text-red-400">Failed to load Fleet KB graph.</div>
+      )}
+      {!isLoading && !isError && data?.available === false && (
+        <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500">
+          <div>Fleet KB vault not found.</div>
+          <code className="text-[11px] text-gray-600">{data.vaultPath}</code>
+        </div>
+      )}
+
+      {/* —— NOTE DETAIL CARD ————————————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {selectedNote && (
+        <aside
+          className="absolute right-4 top-32 z-30 flex max-h-[70vh] w-[400px] flex-col overflow-hidden rounded-xl"
+          style={{ background: "rgba(10,11,15,0.94)", border: panelBorder, backdropFilter: "blur(8px)" }}
+        >
+          <div className="flex items-start gap-2 px-4 pb-3 pt-3" style={{ borderBottom: panelBorder }}>
+            <FileText size={16} className="mt-0.5 shrink-0" style={{ color: selectedNote.category === "decision" ? "#c061f7" : "#ff3b5c" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold leading-snug text-white">{selectedNote.title}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500">
+                {selectedNote.date && <span>{selectedNote.date}</span>}
+                <span className="rounded px-1.5 py-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>{selectedNote.categoryLabel}</span>
+                {selectedNote.agentId && (
+                  <span className="inline-flex items-center gap-1" style={{ color: "#ffd21a" }}>
+                    <Bot size={11} /> {selectedNote.agentId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button onClick={() => setSelectedNodeId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed text-gray-300">
+            {selectedNote.excerpt || selectedNote.body?.slice(0, 600) || "No preview available."}
+
+            {relatedLinks.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500" style={{ fontFamily: "Menlo, monospace" }}>
+                  <Link2 size={11} /> Related neurons · {relatedLinks.length}
+                </div>
+                <div className="flex flex-col gap-1">
+                  {relatedLinks.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => jumpToRelated(r.id)}
+                      title="Jump to this neuron"
+                      className="group flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-gray-300 transition hover:bg-white/5 hover:text-white"
+                      style={{ border: panelBorder }}
+                    >
+                      <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 99, background: r.color, boxShadow: `0 0 6px ${r.color}`, flexShrink: 0 }} />
+                      <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                      <ExternalLink size={11} className="shrink-0 opacity-40 transition group-hover:opacity-90" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onShowKb}
+            className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-200 hover:bg-white/5"
+            style={{ border: panelBorder }}
+          >
+            <ExternalLink size={13} /> Open in Fleet KB reader
+          </button>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export default FleetBrainView;

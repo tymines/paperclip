@@ -1,0 +1,679 @@
+import { Router } from "express";
+import { createHash } from "node:crypto";
+import { and, desc, eq, gte } from "drizzle-orm";
+import type { Db } from "@paperclipai/db";
+import {
+  agents,
+  agentBridgeReplyAttempts,
+  bridgeHealth,
+  roomMessages,
+} from "@paperclipai/db";
+import { ROOM_MESSAGE_HARD_CAP } from "@paperclipai/shared";
+import {
+  roomService,
+  dispatchAgentBridge,
+  heartbeatService,
+  publishLiveEvent,
+} from "../services/index.js";
+import type { AgentBridgeConfig } from "../services/index.js";
+import { conflict, forbidden, notFound, unauthorized, badRequest } from "../errors.js";
+import { logger } from "../middleware/logger.js";
+
+/**
+ * Routes used by external bridged agent runtimes (e.g. OpenClaw, Hermes) to
+ * post replies back into Paperclip rooms. Authentication is per-agent — the
+ * caller must include `Authorization: Bearer <agent.agentBridge.authToken>`
+ * matching the target agent's bridge config. This sidesteps the standard
+ * actor middleware so the bridge daemon does not need a Paperclip-issued
+ * agent API key.
+ */
+export function agentBridgeRoutes(db: Db) {
+  const router = Router();
+  const svc = roomService(db);
+  const heartbeat = heartbeatService(db);
+
+  async function recordAttempt(input: {
+    companyId: string | null;
+    roomId: string | null;
+    agentId: string | null;
+    contentLength: number;
+    outcome: "persisted" | "rejected" | "errored";
+    errorDetail?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }) {
+    try {
+      await db.insert(agentBridgeReplyAttempts).values({
+        companyId: input.companyId ?? undefined,
+        roomId: input.roomId ?? undefined,
+        agentId: input.agentId ?? undefined,
+        contentLength: input.contentLength,
+        outcome: input.outcome,
+        errorDetail: input.errorDetail ?? null,
+        metadata: input.metadata ?? null,
+      });
+    } catch (err) {
+      logger.error({ err }, "failed to record bridge reply attempt");
+    }
+  }
+
+  router.post("/agent-bridge/reply", async (req, res, next) => {
+    let agentIdForLog: string | null = null;
+    let roomIdForLog: string | null = null;
+    let companyIdForLog: string | null = null;
+    let contentLengthForLog = 0;
+
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) {
+        await recordAttempt({
+          companyId: null,
+          roomId: null,
+          agentId: null,
+          contentLength: 0,
+          outcome: "rejected",
+          errorDetail: "missing-bearer-token",
+        });
+        throw unauthorized("Missing bearer token");
+      }
+      const presentedToken = match[1]!.trim();
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const roomId = typeof body.roomId === "string" ? body.roomId : null;
+      const content = typeof body.content === "string" ? body.content.trim() : "";
+      const parentMessageId =
+        typeof body.parentMessageId === "string" && body.parentMessageId.length > 0
+          ? body.parentMessageId
+          : null;
+      agentIdForLog = agentId;
+      roomIdForLog = roomId;
+      contentLengthForLog = content.length;
+
+      if (!agentId || !roomId) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "missing-agentId-or-roomId",
+        });
+        throw badRequest("agentId and roomId are required");
+      }
+      if (content.length === 0) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: 0,
+          outcome: "rejected",
+          errorDetail: "empty-content",
+        });
+        throw badRequest("content must be a non-empty string");
+      }
+
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) {
+        await recordAttempt({
+          companyId: null,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "agent-not-found",
+        });
+        throw notFound("Agent not found");
+      }
+      companyIdForLog = agent.companyId;
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "no-bridge-configured",
+        });
+        throw forbidden("Agent has no bridge configured");
+      }
+      if (bridge.authToken !== presentedToken) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "bridge-token-mismatch",
+        });
+        throw forbidden("Bridge token mismatch");
+      }
+
+      const room = await svc.getById(roomId);
+      if (!room || room.companyId !== agent.companyId) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: "room-not-found-or-wrong-company",
+        });
+        throw notFound("Room not found");
+      }
+
+      const messageCount = await svc.countMessages(roomId);
+      if (messageCount >= ROOM_MESSAGE_HARD_CAP) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "rejected",
+          errorDetail: `hard-cap-${ROOM_MESSAGE_HARD_CAP}`,
+        });
+        throw conflict(
+          `Room has hit the hard message cap (${ROOM_MESSAGE_HARD_CAP}).`,
+          { roomId, messageCount, cap: ROOM_MESSAGE_HARD_CAP },
+        );
+      }
+
+      let message;
+      try {
+        message = await svc.sendMessage({
+          roomId,
+          senderId: agent.id,
+          senderType: "agent",
+          content,
+          messageType: "chat",
+          metadata: { source: "agent-bridge", kind: bridge.kind },
+          parentMessageId,
+        });
+      } catch (insertErr) {
+        const detail = insertErr instanceof Error ? insertErr.message : String(insertErr);
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: `sendMessage threw: ${detail}`,
+        });
+        logger.error(
+          { err: insertErr, roomId, agentId },
+          "agent-bridge sendMessage threw",
+        );
+        return res.status(500).json({
+          error: "Failed to persist bridge reply",
+          detail,
+        });
+      }
+
+      if (!message || !message.id) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: "sendMessage returned no row",
+        });
+        logger.error(
+          { roomId, agentId },
+          "agent-bridge sendMessage returned no row",
+        );
+        return res.status(500).json({
+          error: "Failed to persist bridge reply",
+          detail: "insert returned no row",
+        });
+      }
+
+      // Round-trip verify the row is queryable. Catches phantom inserts where
+      // the driver returns a row but the row never actually committed.
+      const [verifyRow] = await db
+        .select({ id: roomMessages.id })
+        .from(roomMessages)
+        .where(eq(roomMessages.id, message.id))
+        .limit(1);
+      if (!verifyRow) {
+        await recordAttempt({
+          companyId: agent.companyId,
+          roomId,
+          agentId,
+          contentLength: content.length,
+          outcome: "errored",
+          errorDetail: "verify-readback-missing",
+        });
+        logger.error(
+          { roomId, agentId, messageId: message.id },
+          "agent-bridge readback failed — row not queryable after insert",
+        );
+        return res.status(500).json({
+          error: "Bridge reply persisted but readback failed",
+          detail: "verify-readback-missing",
+        });
+      }
+
+      await recordAttempt({
+        companyId: agent.companyId,
+        roomId,
+        agentId,
+        contentLength: content.length,
+        outcome: "persisted",
+        metadata: { messageId: message.id },
+      });
+
+      publishLiveEvent({
+        companyId: agent.companyId,
+        type: "room.message",
+        payload: {
+          roomId,
+          messageId: message.id,
+          senderId: message.senderId,
+          senderType: message.senderType,
+          content: message.content,
+          messageType: message.messageType,
+          parentMessageId: message.parentMessageId,
+          createdAt: message.createdAt,
+        },
+      });
+
+      // Cascade to other room members. Re-uses the same dispatcher used by the
+      // primary message endpoint so bridged agents can address one another.
+      void (async () => {
+        const members = await svc.listMembers(roomId);
+        for (const member of members) {
+          if (!member.agentId) continue;
+          if (member.agentId === agent.id) continue;
+          const handled = await dispatchAgentBridge(db, {
+            agentId: member.agentId,
+            companyId: agent.companyId,
+            roomId,
+            messageId: message.id,
+            messageContent: message.content,
+            senderActorType: "agent",
+            senderActorId: agent.id,
+          }).catch((err) => {
+            logger.warn(
+              { err, roomId, agentId: member.agentId },
+              "cascade dispatch failed",
+            );
+            return false;
+          });
+          if (handled) continue;
+          heartbeat
+            .wakeup(member.agentId, {
+              source: "automation",
+              triggerDetail: "system",
+              reason: "room_message",
+              payload: { roomId, messageId: message.id },
+              requestedByActorType: "agent",
+              requestedByActorId: agent.id,
+              contextSnapshot: {
+                roomId,
+                messageId: message.id,
+                source: "room.message",
+                wakeReason: "room_message",
+              },
+            })
+            .catch((err) =>
+              logger.warn({ err, roomId, agentId: member.agentId }, "wakeup failed"),
+            );
+        }
+      })();
+
+      return res.status(201).json(message);
+    } catch (err) {
+      // Synchronous throws from helpers above already recorded their attempt
+      // before throwing, so we don't double-log here.
+      return next(err);
+    } finally {
+      logger.info(
+        {
+          agentId: agentIdForLog,
+          roomId: roomIdForLog,
+          companyId: companyIdForLog,
+          contentLength: contentLengthForLog,
+        },
+        "agent-bridge reply attempt",
+      );
+    }
+  });
+
+  // ── LIVE agent telemetry (ADDITIVE) ──────────────────────────────────────
+  // The bridge daemon calls this fire-and-forget on each dispatch (status=
+  // "running" + currentTask) and on each reply/turn-complete (status="idle" or
+  // "error", currentTask cleared). It updates the agent's status +
+  // lastHeartbeatAt and stores the human-readable current task in
+  // metadata.currentTask (no schema migration — metadata is an existing jsonb
+  // column). It then publishes an `agent.status` LiveEvent on the company WS
+  // channel so the iOS Roster refreshes live. Authentication reuses the SAME
+  // per-agent bridge token as /agent-bridge/reply. This path never touches the
+  // reply/dispatch flow, so it cannot break normal fleet operation.
+  router.post("/agent-bridge/telemetry", async (req, res) => {
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) throw unauthorized("Missing bearer token");
+      const presentedToken = match[1]!.trim();
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const rawStatus = typeof body.status === "string" ? body.status.trim() : "";
+      // currentTask: string sets/replaces it; null or "" clears it; undefined leaves it.
+      const hasCurrentTask = Object.prototype.hasOwnProperty.call(body, "currentTask");
+      const currentTaskRaw = body.currentTask;
+      const outcome =
+        typeof body.outcome === "string" ? body.outcome : null;
+
+      if (!agentId) throw badRequest("agentId is required");
+
+      // Whitelist statuses the bridge may set, so a bug can't write garbage.
+      const ALLOWED_STATUSES = new Set(["running", "idle", "error"]);
+      const status = ALLOWED_STATUSES.has(rawStatus) ? rawStatus : null;
+      if (!status) throw badRequest("status must be one of running|idle|error");
+
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+          metadata: agents.metadata,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) throw notFound("Agent not found");
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        throw forbidden("Agent has no bridge configured");
+      }
+      if (bridge.authToken !== presentedToken) {
+        throw forbidden("Bridge token mismatch");
+      }
+
+      const now = new Date();
+
+      // Merge currentTask into metadata without disturbing other keys.
+      let nextMetadata: Record<string, unknown> | null = null;
+      let currentTaskForEvent: string | null = null;
+      if (hasCurrentTask) {
+        const base =
+          typeof agent.metadata === "object" &&
+          agent.metadata !== null &&
+          !Array.isArray(agent.metadata)
+            ? { ...(agent.metadata as Record<string, unknown>) }
+            : {};
+        if (typeof currentTaskRaw === "string" && currentTaskRaw.trim().length > 0) {
+          const trimmed = currentTaskRaw.trim().slice(0, 500);
+          base.currentTask = trimmed;
+          currentTaskForEvent = trimmed;
+        } else {
+          // null / "" → clear the field.
+          delete base.currentTask;
+          currentTaskForEvent = null;
+        }
+        nextMetadata = base;
+      } else {
+        // currentTask omitted — surface the existing value in the event only.
+        const existing =
+          typeof agent.metadata === "object" &&
+          agent.metadata !== null &&
+          !Array.isArray(agent.metadata)
+            ? (agent.metadata as Record<string, unknown>).currentTask
+            : null;
+        currentTaskForEvent = typeof existing === "string" ? existing : null;
+      }
+
+      const setPatch: Record<string, unknown> = {
+        status,
+        lastHeartbeatAt: now,
+        updatedAt: now,
+      };
+      if (nextMetadata !== null) setPatch.metadata = nextMetadata;
+
+      const [updated] = await db
+        .update(agents)
+        .set(setPatch)
+        .where(eq(agents.id, agentId))
+        .returning({
+          id: agents.id,
+          companyId: agents.companyId,
+          status: agents.status,
+          lastHeartbeatAt: agents.lastHeartbeatAt,
+        });
+
+      if (updated) {
+        publishLiveEvent({
+          companyId: updated.companyId,
+          type: "agent.status",
+          payload: {
+            agentId: updated.id,
+            status: updated.status,
+            lastHeartbeatAt: updated.lastHeartbeatAt
+              ? new Date(updated.lastHeartbeatAt).toISOString()
+              : null,
+            currentTask: currentTaskForEvent,
+            outcome,
+            source: "agent-bridge-telemetry",
+          },
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        agentId,
+        status: updated?.status ?? status,
+        lastHeartbeatAt: updated?.lastHeartbeatAt
+          ? new Date(updated.lastHeartbeatAt).toISOString()
+          : now.toISOString(),
+        currentTask: currentTaskForEvent,
+      });
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "status" in err
+          ? Number((err as { status?: number }).status) || 500
+          : 500;
+      const message = err instanceof Error ? err.message : "telemetry failed";
+      return res.status(code).json({ error: message });
+    }
+  });
+
+  // ── Phase 2: structural proof-of-work events (ADDITIVE) ──────────────────
+  // The bridge posts a typed `agent.work` event per turn. Unlike /telemetry
+  // (which owns agent.status + the agents row), this path is BROADCAST-ONLY: it
+  // validates the same per-agent bridge token, then republishes the event on
+  // the company WS channel via publishLiveEvent so the app can render proof-of-
+  // work (a turn that fired no mutating tool event is definitionally a
+  // non-change). No DB write, no migration. The discriminator is payload.kind
+  // (turn.started | tool.call | tool.result | turn.completed); proof-of-work is
+  // carried generically as outcome.mutated + a discriminated outcome.artifact,
+  // never a bare commit sha, so non-code project types ride the same wire.
+  const WORK_KINDS = new Set(["turn.started", "tool.call", "tool.result", "turn.completed"]);
+  router.post("/agent-bridge/work", async (req, res) => {
+    try {
+      const header = (req.headers.authorization ?? "").trim();
+      const match = header.match(/^bearer\s+(.+)$/i);
+      if (!match) throw unauthorized("Missing bearer token");
+      const presentedToken = match[1]!.trim();
+
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const agentId = typeof body.agentId === "string" ? body.agentId : null;
+      const roomId = typeof body.roomId === "string" ? body.roomId : null;
+      const turnId = typeof body.turnId === "string" ? body.turnId : null;
+      const kind = typeof body.kind === "string" ? body.kind : "";
+      if (!agentId) throw badRequest("agentId is required");
+      if (!turnId) throw badRequest("turnId is required");
+      if (!WORK_KINDS.has(kind)) {
+        throw badRequest("kind must be one of turn.started|tool.call|tool.result|turn.completed");
+      }
+
+      const [agent] = await db
+        .select({
+          id: agents.id,
+          companyId: agents.companyId,
+          agentBridge: agents.agentBridge,
+        })
+        .from(agents)
+        .where(eq(agents.id, agentId))
+        .limit(1);
+      if (!agent) throw notFound("Agent not found");
+
+      const bridge = agent.agentBridge as AgentBridgeConfig | null;
+      if (!bridge || typeof bridge.authToken !== "string") {
+        throw forbidden("Agent has no bridge configured");
+      }
+      if (bridge.authToken !== presentedToken) {
+        throw forbidden("Bridge token mismatch");
+      }
+
+      // Pass through the optional structured fields untouched; the server adds
+      // createdAt. outcome / tool are opaque to the server (typed app-side).
+      const payload: Record<string, unknown> = {
+        agentId: agent.id,
+        roomId,
+        turnId,
+        kind,
+        createdAt: new Date().toISOString(),
+      };
+      if (body.outcome != null) payload.outcome = body.outcome;
+      if (body.tool != null) payload.tool = body.tool;
+
+      publishLiveEvent({ companyId: agent.companyId, type: "agent.work", payload });
+
+      return res.status(202).json({ ok: true, agentId: agent.id, turnId, kind });
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "status" in err
+          ? Number((err as { status?: number }).status) || 500
+          : 500;
+      const message = err instanceof Error ? err.message : "work event failed";
+      return res.status(code).json({ error: message });
+    }
+  });
+
+  // Synthetic health check — the bridge daemon pings this on an interval to
+  // verify that POST → persist → readback is intact. The daemon compares the
+  // returned id+checksum to detect silent persistence failures.
+  router.post("/agent-bridge/health", async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const token = typeof body.token === "string" ? body.token : "";
+    const testMessage = typeof body.testMessage === "string" ? body.testMessage : "";
+
+    const expected =
+      process.env.PAPERCLIP_BRIDGE_HEALTH_TOKEN ?? "bridge-health-dev-token";
+    if (!token || token !== expected) {
+      return res.status(401).json({ error: "invalid health token" });
+    }
+    if (!testMessage) {
+      return res.status(400).json({ error: "testMessage required" });
+    }
+
+    const checksum = createHash("sha256").update(testMessage).digest("hex");
+    try {
+      const [row] = await db
+        .insert(bridgeHealth)
+        .values({
+          testMessage,
+          checksum,
+          source: "bridge-daemon",
+        })
+        .returning();
+
+      if (!row) {
+        return res.status(500).json({
+          ok: false,
+          error: "insert returned no row",
+        });
+      }
+
+      const [verify] = await db
+        .select()
+        .from(bridgeHealth)
+        .where(eq(bridgeHealth.id, row.id))
+        .limit(1);
+
+      if (!verify) {
+        return res.status(500).json({
+          ok: false,
+          error: "readback missing",
+          insertedId: row.id,
+        });
+      }
+
+      return res.status(200).json({
+        ok: true,
+        id: verify.id,
+        checksum: verify.checksum,
+        testMessage: verify.testMessage,
+        createdAt: verify.createdAt,
+      });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "bridge health check insert failed");
+      return res.status(500).json({ ok: false, error: detail });
+    }
+  });
+
+  // Read-only: recent bridge reply attempts for one agent. Used by the UI panel
+  // on the agent detail page so operators can see when persistence breaks.
+  router.get("/companies/:companyId/agents/:agentId/bridge-attempts", async (req, res) => {
+    const { companyId, agentId } = req.params;
+    const limit = Math.min(
+      Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1),
+      200,
+    );
+
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select()
+      .from(agentBridgeReplyAttempts)
+      .where(
+        and(
+          eq(agentBridgeReplyAttempts.companyId, companyId),
+          eq(agentBridgeReplyAttempts.agentId, agentId),
+        ),
+      )
+      .orderBy(desc(agentBridgeReplyAttempts.createdAt))
+      .limit(limit);
+
+    const last24h = await db
+      .select()
+      .from(agentBridgeReplyAttempts)
+      .where(
+        and(
+          eq(agentBridgeReplyAttempts.companyId, companyId),
+          eq(agentBridgeReplyAttempts.agentId, agentId),
+          gte(agentBridgeReplyAttempts.createdAt, since24h),
+        ),
+      );
+
+    const counts = {
+      total: last24h.length,
+      persisted: last24h.filter((r) => r.outcome === "persisted").length,
+      rejected: last24h.filter((r) => r.outcome === "rejected").length,
+      errored: last24h.filter((r) => r.outcome === "errored").length,
+    };
+    const hasFailures24h = counts.rejected > 0 || counts.errored > 0;
+
+    return res.status(200).json({
+      attempts: rows,
+      last24hCounts: counts,
+      hasFailures24h,
+      lastOutcome: rows[0]?.outcome ?? null,
+    });
+  });
+
+  return router;
+}

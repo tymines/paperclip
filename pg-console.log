@@ -1,0 +1,2 @@
+2026-06-28 16:03:00.574 EDT [45876] FATAL:  lock file "postmaster.pid" already exists
+2026-06-28 16:03:00.574 EDT [45876] HINT:  Is another postmaster (PID 59356) running in data directory "C:/Users/Augi-T1/.paperclip/pg18-data"?

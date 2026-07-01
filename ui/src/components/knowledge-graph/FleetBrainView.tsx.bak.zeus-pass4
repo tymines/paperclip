@@ -1,0 +1,1486 @@
+/**
+ * FleetBrainView — Neural Command Network (Radial Canvas Rebuild)
+ *
+ * A glowing 2D radial neural brain rendering of the live Fleet KB graph.
+ * 6 color-coded regions arranged symmetrically around a central energy core,
+ * radiating filaments, dense per-lobe particle glow, and a full sci-fi HUD overlay.
+ *
+ * Data: 100% real — nodes/synapses from GET /api/fleet-kb/graph,
+ *       dreams from GET /api/fleet-kb/dreams (OpenViking consolidation logs).
+ */
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import {
+  FileText, RefreshCw, BookOpen, X, Bot, ExternalLink, Search, Link2,
+  Brain, Activity, Zap, Wifi,
+} from "lucide-react";
+import { fleetKbApi, type FleetKbGraphNode } from "../../api/knowledgeGraph";
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  REGIONS — 6-lobe neural command network
+// ═════════════════════════════════════════════════════════════════════════════════════════════
+
+type RegionKey = "CORE" | "HIPPOCAMPUS" | "BROCA" | "TEMPORAL" | "VISUAL" | "DREAMS";
+
+interface Region { label: string; role: string; color: string; glow: string; }
+const REGIONS: Record<RegionKey, Region> = {
+  CORE:        { label: "CORE",              role: "orchestration · index",       color: "#3b82f6", glow: "#60a5fa" },
+  HIPPOCAMPUS: { label: "HIPPOCAMPUS",       role: "long-term memory",            color: "#a855f7", glow: "#c084fc" },
+  BROCA:       { label: "BROCA'S AREA",      role: "agents · authorship",         color: "#ff4444", glow: "#ff6b6b" },
+  TEMPORAL:    { label: "TEMPORAL CORTEX",   role: "time · sequencing",           color: "#06b6d4", glow: "#22d3ee" },
+  VISUAL:      { label: "VISUAL CORTEX",     role: "decisions · completed work",  color: "#f59e0b", glow: "#fbbf24" },
+  DREAMS:      { label: "DREAMS",            role: "synthesis · cross-links",     color: "#d946ef", glow: "#e879f9" },
+};
+const OUTER_REGION_ORDER: RegionKey[] = ["HIPPOCAMPUS", "BROCA", "TEMPORAL", "VISUAL", "DREAMS"];
+function regionPos(key: RegionKey, W: number, H: number): { x: number; y: number } {
+  if (key === "CORE") {
+    return { x: W * 0.50, y: H * 0.44 };
+  }
+  const idx = OUTER_REGION_ORDER.indexOf(key);
+  const angle = (idx / OUTER_REGION_ORDER.length) * Math.PI * 2 - Math.PI / 2;
+  const radius = Math.min(W, H) * 0.26;
+  return {
+    x: W * 0.50 + Math.cos(angle) * radius,
+    y: H * 0.44 + Math.sin(angle) * radius,
+  };
+}
+const PULSE_MS = 2600;
+const POLL_MS = 12000;
+function regionForNode(n: FleetKbGraphNode): RegionKey {
+  if (n.kind === "index") return "CORE";
+  if (n.kind === "agent") return "BROCA";
+  if (n.kind === "category") return "VISUAL";
+  if (n.kind === "note") {
+    const h = hashStr(n.id);
+    const outer: RegionKey[] = ["HIPPOCAMPUS", "BROCA", "TEMPORAL", "VISUAL", "DREAMS"];
+    return outer[h % outer.length];
+  }
+  return "DREAMS";
+}
+function nodeSize(n: FleetKbGraphNode): number {
+  switch (n.kind) {
+    case "index": return 5;
+    case "category": return 3.5;
+    case "agent": return 2.2;
+    default: return 1.4 + ((hashStr(n.id) % 100) / 100) * 2.2;
+  }
+}
+function hashStr(s: string): number {
+  let h = 0x2545f491;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+interface BrainNode extends FleetKbGraphNode {
+  region: RegionKey; color: string; val: number; isHub: boolean;
+  rx: number; ry: number;
+}
+interface BrainLink {
+  source: string; target: string; kind: string; color: string;
+}
+
+interface CanvasNode {
+  id: string;
+  x: number; y: number;
+  region: RegionKey;
+  size: number;
+  phase: number;
+  speed: number;
+  brightness: number;
+  active: boolean;
+  pulsing: boolean;
+  selected: boolean;
+}
+
+interface CanvasEdge {
+  s: string; t: string;
+  color: string;
+  active: boolean;
+}
+function hexAlpha(a: number) {
+  const v = Math.max(0, Math.min(255, Math.floor(a * 255)));
+  return v.toString(16).padStart(2, '0');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+//  COMPONENT
+// ══════════════════════════════════════════════════════════════════════════════════════════════
+
+export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
+  const [latency, setLatency] = useState<number | null>(null);
+  const [activityPct, setActivityPct] = useState<string>("—");
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ["fleet-kb", "graph"],
+    queryFn: async () => {
+      const start = Date.now();
+      const result = await fleetKbApi.getGraph();
+      setLatency(Date.now() - start);
+      return result;
+    },
+    staleTime: 60_000,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+  const { data: dreamsData } = useQuery({
+    queryKey: ["fleet-kb", "dreams"],
+    queryFn: () => fleetKbApi.getDreams(),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dim, setDim] = useState({ w: window.innerWidth, h: window.innerHeight - 56 });
+  const [hover, setHover] = useState<BrainNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [focusRegion, setFocusRegion] = useState<RegionKey | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+  const lastInteractRef = useRef(0);
+  const bump = useCallback(() => { lastInteractRef.current = Date.now(); }, []);
+  const prevIdsRef = useRef<Set<string>>(new Set());
+  const pulseRef = useRef<Map<string, number>>(new Map());
+  const pulseRunning = useRef(false);
+  const [pulseVersion, setPulseVersion] = useState(0);
+  const startPulseLoop = useCallback(() => {
+    if (pulseRunning.current) return;
+    pulseRunning.current = true;
+    let last = 0;
+    const tick = () => {
+      const now = Date.now();
+      for (const [id, end] of pulseRef.current) if (end <= now) pulseRef.current.delete(id);
+      if (now - last > 70) { last = now; setPulseVersion((v) => v + 1); }
+      if (pulseRef.current.size > 0) requestAnimationFrame(tick);
+      else { pulseRunning.current = false; setPulseVersion((v) => v + 1); }
+    };
+    requestAnimationFrame(tick);
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setDim({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // —— transform graph —————————————————————————————————————————————————————————————————
+  const graph = useMemo(() => {
+    const rawNodes = data?.graph?.nodes ?? [];
+    const rawEdges = data?.graph?.edges ?? [];
+    const regionOf = new Map<string, RegionKey>();
+    const nodes: BrainNode[] = rawNodes.map((n) => {
+      const region = regionForNode(n);
+      regionOf.set(n.id, region);
+      const h = hashStr(n.id);
+      // Tighter clustering within each lobe, elongated radially
+      const angle = (h % 360) / 360 * Math.PI * 2;
+      const dist = ((h % 100) / 100) * 0.10 + ((h % 7) / 7) * 0.05;
+      let rx = Math.cos(angle) * dist;
+      let ry = Math.sin(angle) * dist;
+      if (region !== "CORE") {
+        const idx = OUTER_REGION_ORDER.indexOf(region);
+        const regionAngle = (idx / OUTER_REGION_ORDER.length) * Math.PI * 2 - Math.PI / 2;
+        const outward = 0.03 + ((h % 100) / 100) * 0.05;
+        rx += Math.cos(regionAngle) * outward;
+        ry += Math.sin(regionAngle) * outward;
+      }
+      return {
+        ...n,
+        region,
+        color: REGIONS[region].color,
+        val: nodeSize(n),
+        isHub: n.kind !== "note",
+        rx,
+        ry,
+      };
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    const links: BrainLink[] = rawEdges
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e) => {
+        const srcRegion = regionOf.get(e.source)!;
+        return {
+          source: e.source,
+          target: e.target,
+          kind: e.kind,
+          color: REGIONS[srcRegion].color,
+        };
+      });
+    return { nodes, links, regionOf };
+  }, [data]);
+  const nodeById = useMemo(() => {
+    const m = new Map<string, BrainNode>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph.nodes]);
+  const notesById = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof data>["notes"][number]>();
+    for (const n of data?.notes ?? []) m.set(n.id, n);
+    return m;
+  }, [data]);
+  const searchIndex = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of graph.nodes) {
+      let t = n.label || "";
+      if (n.noteId) {
+        const note = notesById.get(n.noteId);
+        if (note) t += " " + note.title + " " + (note.body || "") + " " + (note.excerpt || "");
+      }
+      m.set(n.id, t.toLowerCase());
+    }
+    return m;
+  }, [graph.nodes, notesById]);
+  const q = searchQuery.trim().toLowerCase();
+  const matchSet = useMemo(() => {
+    if (!q) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      const t = searchIndex.get(n.id);
+      if (t && t.includes(q)) s.add(n.id);
+    }
+    return s;
+  }, [q, graph.nodes, searchIndex]);
+  const hasNarrowing =
+    !!q || !!focusRegion || selectedAgents.size > 0 || selectedCats.size > 0;
+  const isNodeActive = useCallback(
+    (n: BrainNode) => {
+      if (focusRegion && n.region !== focusRegion) return false;
+      if (selectedAgents.size > 0 && n.kind === "note" && !(n.agentId && selectedAgents.has(n.agentId))) return false;
+      if (selectedCats.size > 0 && n.kind === "note" && !(n.category && selectedCats.has(n.category))) return false;
+      if (matchSet && !matchSet.has(n.id)) return false;
+      return true;
+    },
+    [focusRegion, selectedAgents, selectedCats, matchSet],
+  );
+  const presentRegions = useMemo(() => {
+    const counts = new Map<RegionKey, number>();
+    for (const n of graph.nodes) counts.set(n.region, (counts.get(n.region) ?? 0) + 1);
+    return (Object.keys(REGIONS) as RegionKey[])
+      .filter((k) => counts.has(k))
+      .map((k) => ({ key: k, ...REGIONS[k], count: counts.get(k)! }));
+  }, [graph.nodes]);
+  const totalNodes = graph.nodes.length;
+  const totalLinks = graph.links.length;
+  const coherencePct = useMemo(() => {
+    const rawEdges = data?.graph?.edges ?? [];
+    const connected = new Set<string>();
+    for (const e of rawEdges) { connected.add(e.source); connected.add(e.target); }
+    const isolated = graph.nodes.filter((n) => !connected.has(n.id)).length;
+    return totalNodes > 0 ? ((1 - isolated / totalNodes) * 100).toFixed(1) : "—";
+  }, [data?.graph?.edges, graph.nodes, totalNodes]);
+
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    const ids = new Set(graph.nodes.map((n) => n.id));
+    if (prevIdsRef.current.size === 0) { prevIdsRef.current = ids; return; }
+    const news: string[] = [];
+    for (const id of ids) if (!prevIdsRef.current.has(id)) news.push(id);
+    if (news.length) {
+      const pct = ids.size > 0 ? ((news.length / ids.size) * 100).toFixed(1) : "0.0";
+      setActivityPct(pct);
+      const end = Date.now() + PULSE_MS;
+      for (const id of news) pulseRef.current.set(id, end);
+      startPulseLoop();
+    } else {
+      setActivityPct("0.0");
+    }
+    prevIdsRef.current = ids;
+  }, [graph.nodes, startPulseLoop]);
+  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null;
+  const selectedNote = useMemo(() => {
+    if (!selectedNode || selectedNode.kind !== "note" || !selectedNode.noteId) return null;
+    return (data?.notes ?? []).find((n) => n.id === selectedNode.noteId) ?? null;
+  }, [selectedNode, data]);
+  const relatedLinks = useMemo(() => {
+    if (!selectedNodeId) return [] as Array<{ id: string; title: string; region: RegionKey; color: string }>;
+    const out: Array<{ id: string; title: string; region: RegionKey; color: string }> = [];
+    const seen = new Set<string>();
+    for (const e of data?.graph?.edges ?? []) {
+      if (e.kind !== "related" && e.kind !== "link") continue;
+      let other: string | null = null;
+      if (e.source === selectedNodeId) other = e.target;
+      else if (e.target === selectedNodeId) other = e.source;
+      if (!other || seen.has(other)) continue;
+      const on = nodeById.get(other);
+      if (!on || on.kind !== "note") continue;
+      seen.add(other);
+      out.push({ id: other, title: on.label, region: on.region, color: on.color });
+    }
+    return out.slice(0, 24);
+  }, [selectedNodeId, data, nodeById]);
+  const toggleAgent = useCallback((id: string) => {
+    bump();
+    setSelectedAgents((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, [bump]);
+  const toggleCat = useCallback((key: string) => {
+    bump();
+    setSelectedCats((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }, [bump]);
+  const toggleRegion = useCallback((key: RegionKey) => {
+    bump();
+    setFocusRegion((prev) => (prev === key ? null : key));
+  }, [bump]);
+  const resetAll = useCallback(() => {
+    bump();
+    setSearchQuery(""); setFocusRegion(null);
+    setSelectedAgents(new Set()); setSelectedCats(new Set());
+  }, [bump]);
+  const panelBorder = "1px solid rgba(255,255,255,0.14)";
+  const matchCount = matchSet ? matchSet.size : 0;
+  const chipStyle = (on: boolean, color: string) => ({
+    border: on ? `1px solid ${color}` : panelBorder,
+    background: on ? `${color}26` : "rgba(8,9,11,0.62)",
+    color: on ? color : "#9aa4b2",
+    boxShadow: on ? `0 0 10px ${color}55` : "none",
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //  CANVAS RENDERING
+  // ═════════════════════════════════════════════════════════════════════════════════════════════════
+  const canvasNodesRef = useRef<CanvasNode[]>([]);
+  const canvasEdgesRef = useRef<CanvasEdge[]>([]);
+  const timeRef = useRef(0);
+  const rafRef = useRef(0);
+  const mouseRef = useRef({ x: -1, y: -1 });
+
+  useEffect(() => {
+    canvasNodesRef.current = graph.nodes.map((n) => {
+      const h = hashStr(n.id);
+      return {
+        id: n.id,
+        x: 0, y: 0,
+        region: n.region,
+        size: n.val,
+        phase: (h % 360) / 360 * Math.PI * 2,
+        speed: 0.0003 + ((h % 100) / 100) * 0.0003,
+        brightness: 0.75 + ((h % 50) / 50) * 0.25,
+        active: true,
+        pulsing: false,
+        selected: false,
+      };
+    });
+    canvasEdgesRef.current = graph.links.map((e) => ({
+      s: e.source,
+      t: e.target,
+      color: e.color,
+      active: true,
+    }));
+  }, [graph]);
+  const pulsesRef = useRef<Array<{ s: string; t: string; progress: number; speed: number; color: string }>>([]);
+  const lastPulseSpawn = useRef(0);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d")!;
+    let W = dim.w;
+    let H = dim.h;
+    canvas.width = W;
+    canvas.height = H;
+    const CORE_POS = regionPos("CORE", W, H);
+    const CORE_RADIUS = Math.min(W, H) * 0.135;
+
+    // ── Ambient dust (sparse, subtle)
+    const dustParticles = (() => {
+      const arr = [];
+      for (let i = 0; i < 600; i++) {
+        const h = hashStr(`dust${i}`);
+        arr.push({
+          x: (h % 1000) / 1000,
+          y: ((h * 7) % 1000) / 1000,
+          size: 0.2 + ((h % 100) / 100) * 0.8,
+          vx: ((h % 20) - 10) * 0.000008,
+          vy: (((h * 3) % 20) - 10) * 0.000008,
+          alpha: 0.05 + ((h % 30) / 30) * 0.12,
+          color: (h % 5) === 0 ? "#a855f7" : (h % 5) === 1 ? "#22d3ee" : "#8899aa",
+        });
+      }
+      return arr;
+    })();
+
+    // ── Dense per-lobe glow clouds (the key visual treatment)
+    const LOBE_CLOUD_DENSITY = 1000; // particles per outer lobe
+    const lobeClouds = (() => {
+      const arr: Array<{
+        region: RegionKey;
+        lx: number; ly: number;
+        size: number;
+        alpha: number;
+        driftSpeed: number;
+        driftPhase: number;
+        color: string;
+      }> = [];
+      for (const rk of OUTER_REGION_ORDER) {
+        const reg = REGIONS[rk];
+        for (let i = 0; i < LOBE_CLOUD_DENSITY; i++) {
+          const h = hashStr(`cloud${rk}${i}`);
+          // Bias toward lobe center with falloff
+          const angle = (h % 360) / 360 * Math.PI * 2;
+          const distNorm = ((h % 100) / 100);
+          const dist = distNorm * distNorm * 0.18; // square falloff = denser center
+          arr.push({
+            region: rk,
+            lx: Math.cos(angle) * dist,
+            ly: Math.sin(angle) * dist * 0.7,
+            size: 1.8 + ((h % 100) / 100) * 4.5,
+            alpha: 0.06 + ((h % 50) / 50) * 0.14,
+            driftSpeed: 0.0002 + ((h % 40) / 40) * 0.0003,
+            driftPhase: (h % 360) / 360 * Math.PI * 2,
+            color: reg.color,
+          });
+        }
+      }
+      return arr;
+    })();
+
+    // ── Core sparks (subtle)
+    const coreSparks = (() => {
+      const arr = [];
+      for (let i = 0; i < 60; i++) {
+        const h = hashStr(`spark${i}`);
+        arr.push({
+          angle: (h % 360) / 360 * Math.PI * 2,
+          radius: (h % 100) / 100 * 0.75,
+          speed: 0.0015 + ((h % 50) / 50) * 0.0025,
+          size: 0.3 + ((h % 60) / 60) * 0.7,
+          color: (h % 2) === 0 ? "#ffffff" : "#60a5fa",
+        });
+      }
+      return arr;
+    })();
+
+    // ── Lobe orbital rings (subtle structure)
+    const lobeOrbitals = (() => {
+      const arr: Array<{
+        region: RegionKey;
+        angle: number;
+        radius: number;
+        speed: number;
+        size: number;
+        alpha: number;
+        phase: number;
+      }> = [];
+      for (const rk of OUTER_REGION_ORDER) {
+        const hBase = hashStr(`orb${rk}`);
+        for (let i = 0; i < 70; i++) {
+          const h = hashStr(`orb${rk}${i}`);
+          arr.push({
+            region: rk,
+            angle: (h % 360) / 360 * Math.PI * 2,
+            radius: 0.035 + ((h % 100) / 100) * 0.075,
+            speed: 0.00015 + ((h % 50) / 50) * 0.00025,
+            size: 0.4 + ((h % 50) / 50) * 0.7,
+            alpha: 0.07 + ((h % 30) / 30) * 0.11,
+            phase: (hBase + i) * 0.35,
+          });
+        }
+      }
+      return arr;
+    })();
+    function nodePos(n: CanvasNode) {
+      const rp = regionPos(n.region, W, H);
+      const t = timeRef.current;
+      const orbit = n.speed * t;
+      const bn = nodeById.get(n.id);
+      const rx = bn ? bn.rx : 0;
+      const ry = bn ? bn.ry : 0;
+      const scale = Math.min(W, H);
+      return {
+        x: rp.x + rx * scale + Math.sin(t * 0.0005 + n.phase + orbit) * 2.5,
+        y: rp.y + ry * scale + Math.cos(t * 0.0005 + n.phase + orbit) * 2.5,
+      };
+    }
+    function drawLobePetals() {
+      // Six symmetric lobes: 5 real regions + 1 ghost lobe at bottom to complete radial symmetry
+      const SIX_ANGLES = 6;
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const radius = Math.min(W, H) * 0.26;
+      for (let i = 0; i < SIX_ANGLES; i++) {
+        const lobeAngle = (i / SIX_ANGLES) * Math.PI * 2 - Math.PI / 2 + brainAngle;
+        const rk = OUTER_REGION_ORDER[i] || "CORE";
+        const reg = rk === "CORE" ? { color: "#22d3ee", glow: "#67e8f9" } : REGIONS[rk];
+        const rp = {
+          x: W * 0.50 + Math.cos(lobeAngle) * radius,
+          y: H * 0.44 + Math.sin(lobeAngle) * radius,
+        };
+        const dist = Math.hypot(rp.x - cx, rp.y - cy);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+
+        // Large soft petal gradient from core toward lobe
+        const petalGrad = ctx.createRadialGradient(rp.x, rp.y, 0, rp.x, rp.y, dist * 0.80);
+        petalGrad.addColorStop(0, reg.color + "50");
+        petalGrad.addColorStop(0.35, reg.color + "24");
+        petalGrad.addColorStop(0.75, reg.color + "0c");
+        petalGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = petalGrad;
+        ctx.beginPath();
+        const wedge = 0.58;
+        ctx.moveTo(cx, cy);
+        ctx.arc(cx, cy, dist * 1.18, lobeAngle - wedge / 2, lobeAngle + wedge / 2);
+        ctx.closePath();
+        ctx.fill();
+
+        // Bright synaptic bulb at lobe center
+        const bulbR = Math.min(W, H) * 0.065;
+        const bulb = ctx.createRadialGradient(rp.x, rp.y, 0, rp.x, rp.y, bulbR);
+        bulb.addColorStop(0, reg.color + "78");
+        bulb.addColorStop(0.4, reg.color + "35");
+        bulb.addColorStop(1, "transparent");
+        ctx.fillStyle = bulb;
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.y, bulbR, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Clear boundary ring — defines each lobe region
+        ctx.strokeStyle = reg.color + "59";
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = reg.color;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(rp.x, rp.y, dist * 0.35, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.restore();
+      }
+    }
+    function drawBackground() {
+      // Pure void background
+      ctx.fillStyle = "#000000";
+      ctx.fillRect(0, 0, W, H);
+
+      // Strong vignette for depth
+      const vig = ctx.createRadialGradient(W * 0.5, H * 0.44, Math.min(W, H) * 0.12, W * 0.5, H * 0.44, Math.max(W, H) * 0.80);
+      vig.addColorStop(0, "transparent");
+      vig.addColorStop(0.4, "transparent");
+      vig.addColorStop(1, "rgba(0,0,0,0.65)");
+      ctx.fillStyle = vig;
+      ctx.fillRect(0, 0, W, H);
+    }
+    function drawDust() {
+      for (const p of dustParticles) {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0) p.x = 1; if (p.x > 1) p.x = 0;
+        if (p.y < 0) p.y = 1; if (p.y > 1) p.y = 0;
+        const a = Math.max(0, p.alpha + Math.sin(timeRef.current * 0.0006 + p.x * 10) * 0.03);
+        ctx.fillStyle = p.color + hexAlpha(a);
+        ctx.beginPath();
+        ctx.arc(p.x * W, p.y * H, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    function drawCore() {
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const r = CORE_RADIUS;
+      const pulse = 1 + Math.sin(timeRef.current * 0.002) * 0.05;
+
+      // Soft god rays (toned down)
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const rayCount = 18;
+      for (let i = 0; i < rayCount; i++) {
+        const angle = (i / rayCount) * Math.PI * 2 + timeRef.current * 0.0004;
+        const len = r * (2.2 + Math.sin(timeRef.current * 0.001 + i * 1.3) * 0.6);
+        const grad = ctx.createLinearGradient(cx, cy, cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+        grad.addColorStop(0, "rgba(200,235,255,0.75)");
+        grad.addColorStop(0.3, "rgba(56,189,248,0.50)");
+        grad.addColorStop(1, "transparent");
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 2.4 + Math.sin(timeRef.current * 0.0015 + i * 2) * 0.8;
+        ctx.shadowColor = "#7dd3fc";
+        ctx.shadowBlur = 12;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(angle) * len, cy + Math.sin(angle) * len);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Geodesic rings
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const ringCount = 4;
+      for (let ri = 0; ri < ringCount; ri++) {
+        const ringR = r * (0.30 + ri * 0.18) * pulse;
+        const segs = 10 + ri * 4;
+        const rot = timeRef.current * 0.0008 * (ri % 2 === 0 ? 1 : -1) + ri * 1.2;
+        ctx.strokeStyle = `rgba(160,220,255,${0.40 - ri * 0.04})`;
+        ctx.lineWidth = 1.4;
+        ctx.shadowColor = "#7dd3fc";
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        for (let i = 0; i <= segs; i++) {
+          const a = (i / segs) * Math.PI * 2 + rot;
+          const x = cx + Math.cos(a) * ringR;
+          const y = cy + Math.sin(a) * ringR * 0.5;
+          i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Hexagonal outline
+      ctx.save();
+      ctx.strokeStyle = "rgba(140,200,255,0.14)";
+      ctx.lineWidth = 0.7;
+      const hexRot = timeRef.current * 0.00025;
+      const hexR = r * 1.10 * pulse;
+      ctx.beginPath();
+      for (let hi = 0; hi < 6; hi++) {
+        const a = (hi / 6) * Math.PI * 2 + hexRot;
+        const hx = cx + Math.cos(a) * hexR;
+        const hy = cy + Math.sin(a) * hexR * 0.5;
+        hi === 0 ? ctx.moveTo(hx, hy) : ctx.lineTo(hx, hy);
+      }
+      ctx.closePath();
+      ctx.stroke();
+      ctx.restore();
+
+      // Core sparks
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (const s of coreSparks) {
+        s.angle += s.speed;
+        const sx = cx + Math.cos(s.angle) * r * s.radius * pulse;
+        const sy = cy + Math.sin(s.angle) * r * s.radius * 0.5 * pulse;
+        ctx.fillStyle = s.color;
+        ctx.shadowColor = s.color;
+        ctx.shadowBlur = 5;
+        ctx.beginPath();
+        ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Aura layers (boosted)
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 3; i >= 1; i--) {
+        const aura = ctx.createRadialGradient(cx, cy, r * 0.10, cx, cy, r * (0.9 + i * 0.22));
+        aura.addColorStop(0, `rgba(180,230,255,${0.38 / i})`);
+        aura.addColorStop(0.5, `rgba(56,189,248,${0.22 / i})`);
+        aura.addColorStop(1, "transparent");
+        ctx.fillStyle = aura;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r * (0.9 + i * 0.22), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Central sphere
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      const mid = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * pulse * 0.80);
+      mid.addColorStop(0, "rgba(255,255,255,1.0)");
+      mid.addColorStop(0.15, "rgba(186,230,253,0.85)");
+      mid.addColorStop(0.40, "rgba(56,189,248,0.45)");
+      mid.addColorStop(0.75, "rgba(14,165,233,0.15)");
+      mid.addColorStop(1, "transparent");
+      ctx.fillStyle = mid;
+      ctx.shadowColor = "#7dd3fc";
+      ctx.shadowBlur = 24;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * pulse * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+
+      // Inner hot core
+      const inner = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 0.18);
+      inner.addColorStop(0, "rgba(255,255,255,0.95)");
+      inner.addColorStop(0.5, "rgba(186,230,253,0.45)");
+      inner.addColorStop(1, "rgba(56,189,248,0.06)");
+      ctx.fillStyle = inner;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.22 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    function drawFilaments() {
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const coreR = CORE_RADIUS;
+      const SIX_ANGLES = 6;
+      const radius = Math.min(W, H) * 0.26;
+
+      for (let i = 0; i < SIX_ANGLES; i++) {
+        const lobeAngle = (i / SIX_ANGLES) * Math.PI * 2 - Math.PI / 2 + brainAngle;
+        const rk = OUTER_REGION_ORDER[i] || "CORE";
+        const reg = rk === "CORE" ? { color: "#22d3ee", glow: "#67e8f9" } : REGIONS[rk];
+        const tx = W * 0.50 + Math.cos(lobeAngle) * radius;
+        const ty = H * 0.44 + Math.sin(lobeAngle) * radius;
+        const dist = Math.hypot(tx - cx, ty - cy);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const strandCount = 60;
+        for (let si = 0; si < strandCount; si++) {
+          const segments = 35 + Math.floor(((hashStr(`strand${i}${si}`) % 100) / 100) * 18);
+          const baseOffset = (si / strandCount - 0.5) * coreR * 0.55;
+          const width = 1.4 + ((hashStr(`sw${i}${si}`) % 100) / 100) * 2.2;
+
+          ctx.strokeStyle = reg.color + hexAlpha(0.65);
+          ctx.lineWidth = width;
+          ctx.shadowColor = reg.color;
+          ctx.shadowBlur = 18;
+          ctx.beginPath();
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const gradAlpha = 0.70 - t * 0.55;
+            const jitter = Math.sin(timeRef.current * 0.002 + i * 3.5 + s * 0.5 + si) * (dist * 0.014);
+            const spread = Math.sin(t * Math.PI) * baseOffset * (1 - t * 0.25);
+            const px = cx + Math.cos(lobeAngle) * dist * t + Math.cos(lobeAngle + Math.PI / 2) * (jitter + spread);
+            const py = cy + Math.sin(lobeAngle) * dist * t + Math.sin(lobeAngle + Math.PI / 2) * (jitter + spread);
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            ctx.strokeStyle = reg.color + hexAlpha(gradAlpha);
+          }
+          ctx.stroke();
+        }
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      for (let i = 0; i < SIX_ANGLES; i++) {
+        const angleA = (i / SIX_ANGLES) * Math.PI * 2 - Math.PI / 2;
+        const angleB = ((i + 1) / SIX_ANGLES) * Math.PI * 2 - Math.PI / 2;
+        const pa = { x: W * 0.50 + Math.cos(angleA) * radius, y: H * 0.44 + Math.sin(angleA) * radius };
+        const pb = { x: W * 0.50 + Math.cos(angleB) * radius, y: H * 0.44 + Math.sin(angleB) * radius };
+        const rk = OUTER_REGION_ORDER[i] || "CORE";
+        const midColor = rk === "CORE" ? "#22d3ee" : REGIONS[rk].color;
+        const segCount = 3;
+        for (let gi = 0; gi < segCount; gi++) {
+          const h = hashStr(`mesh${i}${gi}`);
+          const segments = 25 + Math.floor(((h % 100) / 100) * 12);
+          const alpha = 0.08 + ((h % 100) / 100) * 0.06;
+          ctx.strokeStyle = midColor + hexAlpha(alpha);
+          ctx.lineWidth = 0.65 + ((h % 100) / 100) * 0.50;
+          ctx.shadowColor = midColor;
+          ctx.shadowBlur = 4;
+          ctx.beginPath();
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const jitter = Math.sin(timeRef.current * 0.0012 + i * 2.5 + s * 0.4 + gi) * (W * 0.006);
+            const px = pa.x + (pb.x - pa.x) * t + Math.cos(t * Math.PI * 2 + gi) * jitter;
+            const py = pa.y + (pb.y - pa.y) * t + Math.sin(t * Math.PI * 2 + gi) * jitter * 0.5;
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+    function drawBrightFilaments() {
+      const cx = CORE_POS.x;
+      const cy = CORE_POS.y;
+      const coreR = CORE_RADIUS;
+      const SIX_ANGLES = 6;
+      const radius = Math.min(W, H) * 0.26;
+
+      for (let i = 0; i < SIX_ANGLES; i++) {
+        const lobeAngle = (i / SIX_ANGLES) * Math.PI * 2 - Math.PI / 2 + brainAngle;
+        const rk = OUTER_REGION_ORDER[i] || "CORE";
+        const reg = rk === "CORE" ? { color: "#22d3ee", glow: "#67e8f9" } : REGIONS[rk];
+        const tx = W * 0.50 + Math.cos(lobeAngle) * radius;
+        const ty = H * 0.44 + Math.sin(lobeAngle) * radius;
+        const dist = Math.hypot(tx - cx, ty - cy);
+
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const brightCount = 12;
+        for (let si = 0; si < brightCount; si++) {
+          const segments = 20;
+          const baseOffset = (si / brightCount - 0.5) * coreR * 0.35;
+          ctx.strokeStyle = reg.glow;
+          ctx.lineWidth = 1.2;
+          ctx.shadowColor = reg.glow;
+          ctx.shadowBlur = 8;
+          ctx.globalAlpha = 0.35 + Math.sin(timeRef.current * 0.003 + si * 2) * 0.15;
+          ctx.beginPath();
+          for (let s = 0; s <= segments; s++) {
+            const t = s / segments;
+            const jitter = Math.sin(timeRef.current * 0.002 + i * 3.5 + s * 0.5 + si) * (dist * 0.008);
+            const spread = Math.sin(t * Math.PI) * baseOffset * (1 - t * 0.25);
+            const px = cx + Math.cos(lobeAngle) * dist * t + Math.cos(lobeAngle + Math.PI / 2) * (jitter + spread);
+            const py = cy + Math.sin(lobeAngle) * dist * t + Math.sin(lobeAngle + Math.PI / 2) * (jitter + spread);
+            s === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          }
+          ctx.stroke();
+        }
+
+        // Traveling pulse dot
+        const pulseT = (timeRef.current * 0.008 + i * 1.7) % 1;
+        const px = cx + Math.cos(lobeAngle) * dist * pulseT;
+        const py = cy + Math.sin(lobeAngle) * dist * pulseT;
+        ctx.fillStyle = "#ffffff";
+        ctx.shadowColor = reg.glow;
+        ctx.shadowBlur = 14;
+        ctx.globalAlpha = 1;
+        ctx.beginPath();
+        ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+        ctx.restore();
+      }
+    }
+    function drawBezierEdge(a: { x: number; y: number }, b: { x: number; y: number }, color: string, alpha: number, width: number) {
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1) return;
+      const perpX = -dy / len * len * 0.12;
+      const perpY = dx / len * len * 0.12;
+      const cp1x = a.x + dx * 0.35 + perpX;
+      const cp1y = a.y + dy * 0.35 + perpY;
+      const cp2x = b.x - dx * 0.35 + perpX;
+      const cp2y = b.y - dy * 0.35 + perpY;
+
+      ctx.strokeStyle = color + hexAlpha(alpha);
+      ctx.lineWidth = width || 0.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, b.x, b.y);
+      ctx.stroke();
+    }
+    function drawSynapsesAndMesh() {
+      const positions = new Map<string, { x: number; y: number }>();
+      for (const n of canvasNodesRef.current) {
+        positions.set(n.id, nodePos(n));
+      }
+
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+
+      for (const e of canvasEdgesRef.current) {
+        if (!e.active) continue;
+        const a = positions.get(e.s);
+        const b = positions.get(e.t);
+        if (!a || !b) continue;
+        drawBezierEdge(a, b, e.color, 0.10, 0.45);
+      }
+
+      for (let i = pulsesRef.current.length - 1; i >= 0; i--) {
+        const p = pulsesRef.current[i];
+        p.progress += p.speed;
+        if (p.progress >= 1) { pulsesRef.current.splice(i, 1); continue; }
+        const a = positions.get(p.s);
+        const b = positions.get(p.t);
+        if (!a || !b) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) continue;
+        const perpX = -dy / len * len * 0.12;
+        const perpY = dx / len * len * 0.12;
+        const cp1x = a.x + dx * 0.35 + perpX;
+        const cp1y = a.y + dy * 0.35 + perpY;
+        const cp2x = b.x - dx * 0.35 + perpX;
+        const cp2y = b.y - dy * 0.35 + perpY;
+        const t = p.progress;
+        const mt = 1 - t;
+        const x = mt * mt * mt * a.x + 3 * mt * mt * t * cp1x + 3 * mt * t * t * cp2x + t * t * t * b.x;
+        const y = mt * mt * mt * a.y + 3 * mt * mt * t * cp1y + 3 * mt * t * t * cp2y + t * t * t * b.y;
+        const alpha = 1 - Math.abs(t - 0.5) * 2;
+        ctx.fillStyle = `rgba(255,255,255,${alpha * 0.95})`;
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 6;
+        ctx.beginPath();
+        ctx.arc(x, y, 2.2 * alpha + 0.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+
+      ctx.restore();
+    }
+    function drawLobeClouds() {
+      const t = timeRef.current;
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+
+      for (const cloud of lobeClouds) {
+        const rp = regionPos(cloud.region, W, H);
+        const drift = Math.sin(t * cloud.driftSpeed + cloud.driftPhase) * 2;
+        const scale = Math.min(W, H);
+        const x = rp.x + cloud.lx * scale + drift;
+        const y = rp.y + cloud.ly * scale + drift * 0.6;
+
+        // Bloom: large soft glow layer
+        const glowGrad = ctx.createRadialGradient(x, y, 0, x, y, cloud.size * 3.5);
+        glowGrad.addColorStop(0, cloud.color + hexAlpha(cloud.alpha * 0.35));
+        glowGrad.addColorStop(0.5, cloud.color + hexAlpha(cloud.alpha * 0.12));
+        glowGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(x, y, cloud.size * 3.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bloom: bright compact center
+        ctx.fillStyle = cloud.color + hexAlpha(cloud.alpha * 1.2);
+        ctx.beginPath();
+        ctx.arc(x, y, cloud.size * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      ctx.restore();
+    }
+    function drawRegions() {
+      const positions = new Map<string, { x: number; y: number }>();
+      for (const n of canvasNodesRef.current) {
+        positions.set(n.id, nodePos(n));
+      }
+
+      // Soft ambient lobe glows (large, subtle) — 6 symmetric positions
+      const SIX_ANGLES2 = 6;
+      const radius2 = Math.min(W, H) * 0.26;
+      for (let i = 0; i < SIX_ANGLES2; i++) {
+        const lobeAngle = (i / SIX_ANGLES2) * Math.PI * 2 - Math.PI / 2 + brainAngle;
+        const rk = OUTER_REGION_ORDER[i] || "CORE";
+        const color = rk === "CORE" ? "#22d3ee" : REGIONS[rk].color;
+        const rp = { x: W * 0.50 + Math.cos(lobeAngle) * radius2, y: H * 0.44 + Math.sin(lobeAngle) * radius2 };
+        const glow = ctx.createRadialGradient(rp.x, rp.y, 0, rp.x, rp.y, Math.min(W, H) * 0.14);
+        glow.addColorStop(0, color + "58");
+        glow.addColorStop(0.5, color + "28");
+        glow.addColorStop(1, "transparent");
+        ctx.fillStyle = glow;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      drawSynapsesAndMesh();
+
+      // Lobe orbital particles — mapped to 6 symmetric angles
+      const SIX_ANGLES3 = 6;
+      const radius3 = Math.min(W, H) * 0.26;
+      for (const orb of lobeOrbitals) {
+        const t = timeRef.current;
+        const idx = OUTER_REGION_ORDER.indexOf(orb.region);
+        const lobeAngle = (idx / SIX_ANGLES3) * Math.PI * 2 - Math.PI / 2 + brainAngle;
+        const rp = { x: W * 0.50 + Math.cos(lobeAngle) * radius3, y: H * 0.44 + Math.sin(lobeAngle) * radius3 };
+        const angle = orb.angle + t * orb.speed;
+        const x = rp.x + Math.cos(angle + orb.phase) * orb.radius * Math.min(W, H);
+        const y = rp.y + Math.sin(angle + orb.phase) * orb.radius * Math.min(W, H) * 0.6;
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const color = REGIONS[orb.region].color;
+        ctx.fillStyle = color + hexAlpha(orb.alpha + Math.sin(t * 0.0008 + orb.phase) * 0.015);
+        ctx.beginPath();
+        ctx.arc(x, y, orb.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // Nodes
+      for (const n of canvasNodesRef.current) {
+        const pos = positions.get(n.id)!;
+        const reg = REGIONS[n.region];
+        const isActive = n.active;
+        const isDimmed = hasNarrowing && !isActive;
+        const isSelected = n.selected;
+        const isPulsing = n.pulsing;
+        let alpha = n.brightness * (0.85 + Math.sin(timeRef.current * 0.0008 + n.phase) * 0.08);
+        let size = n.size * (1.1 + Math.sin(timeRef.current * 0.0012 + hashStr(n.id) * 2) * 0.08);
+
+        if (isDimmed) { alpha *= 0.22; size *= 0.65; }
+        if (isSelected) { alpha = 1; size *= 1.5; }
+        if (isPulsing) { alpha = 1; size *= 1 + 2.0 * ((pulseRef.current.get(n.id) ?? 0) - Date.now()) / PULSE_MS; }
+
+        // Outer bloom (boosted)
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        const bloomGrad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, size * 4.5);
+        bloomGrad.addColorStop(0, reg.color + hexAlpha(alpha * 0.38));
+        bloomGrad.addColorStop(0.2, reg.color + hexAlpha(alpha * 0.22));
+        bloomGrad.addColorStop(0.5, reg.color + hexAlpha(alpha * 0.10));
+        bloomGrad.addColorStop(1, "transparent");
+        ctx.fillStyle = bloomGrad;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, size * 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Medium halo
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = reg.glow + hexAlpha(alpha * 0.65);
+        ctx.shadowColor = reg.glow;
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, size * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Hard center
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.fillStyle = isDimmed ? reg.color : "#ffffff";
+        ctx.shadowColor = isDimmed ? reg.color : "#ffffff";
+        ctx.shadowBlur = 4;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, Math.max(1.4, size * 0.95), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    }
+    let brainAngle = 0;
+    function draw() {
+      timeRef.current++;
+      const t = timeRef.current;
+      brainAngle += 0.0003;
+
+      for (const cn of canvasNodesRef.current) {
+        const bn = nodeById.get(cn.id);
+        if (!bn) continue;
+        cn.active = isNodeActive(bn);
+        cn.selected = cn.id === selectedNodeId;
+        const pe = pulseRef.current.get(cn.id);
+        cn.pulsing = !!pe && pe > Date.now();
+      }
+
+      for (const ce of canvasEdgesRef.current) {
+        const s = nodeById.get(ce.s);
+        const t_ = nodeById.get(ce.t);
+        ce.active = !hasNarrowing || !!(s && t_ && isNodeActive(s) && isNodeActive(t_));
+      }
+
+      if (t - lastPulseSpawn.current > 160 && canvasEdgesRef.current.length > 0) {
+        lastPulseSpawn.current = t;
+        const activeEdges = canvasEdgesRef.current.filter((e) => e.active);
+        if (activeEdges.length > 0) {
+          const e = activeEdges[Math.floor(Math.random() * activeEdges.length)];
+          pulsesRef.current.push({ s: e.s, t: e.t, progress: 0, speed: 0.0025 + Math.random() * 0.0035, color: e.color });
+        }
+      }
+
+      drawBackground();
+      drawLobePetals();
+      drawDust();
+      drawLobeClouds();
+      drawFilaments();
+      drawBrightFilaments();
+      // Dark ring around core to give filaments a clean origin point
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      const darkGrad = ctx.createRadialGradient(CORE_POS.x, CORE_POS.y, CORE_RADIUS * 0.60, CORE_POS.x, CORE_POS.y, CORE_RADIUS * 1.05);
+      darkGrad.addColorStop(0, "transparent");
+      darkGrad.addColorStop(0.7, "rgba(3,4,8,0.6)");
+      darkGrad.addColorStop(1, "transparent");
+      ctx.fillStyle = darkGrad;
+      ctx.beginPath();
+      ctx.arc(CORE_POS.x, CORE_POS.y, CORE_RADIUS * 1.05, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      drawCore();
+      drawRegions();
+
+      rafRef.current = requestAnimationFrame(draw);
+    }
+
+    rafRef.current = requestAnimationFrame(draw);
+
+    return () => {
+      cancelAnimationFrame(rafRef.current);
+    };
+  }, [dim.w, dim.h, graph, nodeById, isNodeActive, hasNarrowing, selectedNodeId, pulseVersion]);
+
+  // —— mouse handlers for canvas ———————————————————————————————————————————————————————————————————
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    mouseRef.current = { x: mx, y: my };
+    let nearest: BrainNode | null = null;
+    let nearestDist = Infinity;
+    for (const n of graph.nodes) {
+      const rp = regionPos(n.region, dim.w, dim.h);
+      const cx = rp.x;
+      const cy = rp.y;
+      const nx = cx + n.rx * dim.w;
+      const ny = cy + n.ry * dim.h;
+      const d = Math.hypot(mx - nx, my - ny);
+      if (d < 20 && d < nearestDist) {
+        nearestDist = d;
+        nearest = n;
+      }
+    }
+    setHover(nearest);
+    bump();
+  }, [graph.nodes, dim.w, dim.h, bump]);
+  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let nearest: BrainNode | null = null;
+    let nearestDist = Infinity;
+    for (const n of graph.nodes) {
+      const rp = regionPos(n.region, dim.w, dim.h);
+      const cx = rp.x;
+      const cy = rp.y;
+      const nx = cx + n.rx * dim.w;
+      const ny = cy + n.ry * dim.h;
+      const d = Math.hypot(mx - nx, my - ny);
+      if (d < 24 && d < nearestDist) {
+        nearestDist = d;
+        nearest = n;
+      }
+    }
+    if (nearest && nearest.kind === "note") {
+      setSelectedNodeId(nearest.id);
+    } else {
+      setSelectedNodeId(null);
+    }
+    bump();
+  }, [graph.nodes, dim.w, dim.h, bump]);
+  const jumpToRelated = useCallback((id: string) => {
+    setSelectedNodeId(id);
+  }, []);
+
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  //  RENDER
+  // ══════════════════════════════════════════════════════════════════════════════════════════════
+  const regionKeys = Object.keys(REGIONS) as RegionKey[];
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: "100dvh", background: "#030408" }}>
+
+      {/* —— CANVAS ———————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ touchAction: "none" }}
+        onPointerDown={bump}
+        onWheel={bump}
+      >
+        <canvas
+          ref={canvasRef}
+          width={dim.w}
+          height={dim.h}
+          className="absolute inset-0"
+          onMouseMove={handleCanvasMouseMove}
+          onMouseLeave={() => { setHover(null); mouseRef.current = { x: -1, y: -1 }; }}
+          onClick={handleCanvasClick}
+        />
+      </div>
+
+      {/* —— TOP BAR ———————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between px-4 py-2"
+        style={{ background: "rgba(3,4,8,0.72)", borderBottom: panelBorder, backdropFilter: "blur(10px)" }}
+      >
+        <div className="flex items-center gap-2">
+          <Brain size={16} style={{ color: "#3b82ff" }} />
+          <span
+            className="text-xs font-bold tracking-widest"
+            style={{ color: "#cfe0ff", fontFamily: "Menlo, ui-monospace, monospace", letterSpacing: "0.18em" }}
+          >
+            FLEET BRAIN · NEURAL COMMAND NETWORK
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-[10px]" style={{ fontFamily: "Menlo, ui-monospace, monospace", color: "rgba(160,185,225,0.7)" }}>
+          <span className="inline-flex items-center gap-1.5 rounded px-1.5 py-0.5" style={{ border: "1px solid rgba(34,224,107,0.35)", background: "rgba(34,224,107,0.08)" }}>
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "#22e06b", boxShadow: "0 0 6px #22e06b" }} />
+            <span style={{ color: "#22e06b" }}>SYSTEM STATUS · OPTIMAL</span>
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "#3b82ff", boxShadow: "0 0 6px #3b82ff" }} />
+            LIVE
+          </span>
+          {latency !== null && (
+            <span className="inline-flex items-center gap-1">
+              <Wifi size={10} /> {latency}ms
+            </span>
+          )}
+          <button
+            onClick={() => { bump(); refetch(); }}
+            title="Refresh"
+            className="inline-flex items-center gap-1 rounded p-1 text-gray-400 transition hover:text-white"
+            style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <RefreshCw size={12} className={isFetching ? "animate-spin" : ""} />
+          </button>
+          <button
+            onClick={onShowKb}
+            title="Open Fleet KB"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-gray-300 transition hover:text-white"
+            style={{ border: "1px solid rgba(167,139,250,0.35)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <BookOpen size={11} style={{ color: "#a78bfa" }} /> KB
+          </button>
+        </div>
+      </div>
+
+      {/* —— LEFT CONTROL DECK (search · filters) ——————————————————————————————————————————————————————— */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute left-4 top-16 z-20 flex flex-col gap-2" style={{ width: 280 }}>
+          <div
+            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+            style={{ border: panelBorder, background: "rgba(8,9,11,0.8)", backdropFilter: "blur(6px)" }}
+          >
+            <Search size={14} style={{ color: "#7dd3fc" }} />
+            <input
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); bump(); }}
+              onFocus={bump}
+              placeholder="search neurons…"
+              className="w-full bg-transparent text-xs text-gray-100 outline-none placeholder:text-gray-600"
+              style={{ fontFamily: "Menlo, ui-monospace, monospace" }}
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); bump(); }} className="text-gray-500 transition hover:text-white">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="px-1 text-[10px]" style={{ color: "rgba(160,185,225,0.7)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}>
+              {matchCount} NEURON{matchCount === 1 ? "" : "S"} HIGHLIGHTED
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.categories ?? []).map((c) => (
+              <button
+                key={c.key}
+                onClick={() => toggleCat(c.key)}
+                className="rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedCats.has(c.key), c.key === "decision" ? "#c061f7" : "#ff3b5c"), fontFamily: "Menlo, monospace" }}
+              >
+                {c.label} · {c.count}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.agents ?? []).map((a) => (
+              <button
+                key={a.id}
+                onClick={() => toggleAgent(a.id)}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedAgents.has(a.id), "#ffd21a"), fontFamily: "Menlo, monospace" }}
+                title={`agent ${a.id}`}
+              >
+                <Bot size={10} /> {a.id.slice(0, 6)} · {a.count}
+              </button>
+            ))}
+          </div>
+          {hasNarrowing && (
+            <button
+              onClick={resetAll}
+              className="self-start rounded-md px-2 py-0.5 text-[10px] text-gray-300 transition hover:text-white"
+              style={{ border: panelBorder, background: "rgba(8,9,11,0.6)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}
+            >
+              ✕ CLEAR FILTERS
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* —— LEGEND (right side) —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      <div
+        className="absolute right-4 top-16 z-20 rounded-lg p-3 text-right"
+        style={{ fontFamily: "Menlo, ui-monospace, monospace", fontSize: 10, letterSpacing: "0.06em", lineHeight: 1.7, background: "rgba(4,5,8,0.55)", border: panelBorder, maxWidth: 260 }}
+      >
+        <div className="mb-1 text-[9px]" style={{ color: "rgba(150,170,210,0.5)" }}>CLICK A LOBE TO FOCUS</div>
+        {presentRegions.map((r) => {
+          const active = focusRegion === r.key;
+          const faded = focusRegion != null && !active;
+          return (
+            <button
+              key={r.key}
+              onClick={() => toggleRegion(r.key)}
+              className="flex w-full items-center justify-end gap-2 rounded px-1 transition hover:bg-white/5"
+              style={{ opacity: faded ? 0.35 : 1, background: active ? `${r.color}1f` : "transparent" }}
+            >
+              <span style={{ color: r.color, fontWeight: active ? 700 : 400 }}>{r.label}</span>
+              <span style={{ opacity: 0.5 }}>{r.role}</span>
+              <span style={{ opacity: 0.4 }}>{r.count}</span>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* —— HOVER TOOLTIP —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {hover && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-md px-3 py-1.5 text-xs"
+          style={{ background: "rgba(8,9,11,0.85)", border: panelBorder, color: "#e5e7eb", backdropFilter: "blur(6px)" }}
+        >
+          <span style={{ color: hover.color }}>●</span>{" "}
+          <span className="font-medium">{hover.label}</span>{" "}
+          <span className="text-gray-500">· {REGIONS[hover.region].label}</span>
+        </div>
+      )}
+
+      {/* —— BOTTOM HUD STRIP —————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute bottom-4 left-4 right-4 z-20 flex items-end gap-3">
+          {/* Fleet Brain Overview */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 220, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#cfe0ff", fontFamily: "Menlo, monospace" }}>
+              <Brain size={12} /> FLEET BRAIN OVERVIEW
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Neurons</span>
+              <span className="text-right text-gray-200">{totalNodes}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Synapses</span>
+              <span className="text-right text-gray-200">{totalLinks}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Activity</span>
+              <span className="text-right" style={{ color: activityPct !== "—" ? "#22e06b" : "#9aa4b2" }}>{activityPct}%</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Coherence</span>
+              <span className="text-right text-gray-200">{coherencePct}%</span>
+            </div>
+          </div>
+
+          {/* Performance Metrics */}
+          <div
+            className="flex flex-1 flex-col gap-1.5 rounded-lg p-3"
+            style={{ background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)", minWidth: 200 }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#38bdf8", fontFamily: "Menlo, monospace" }}>
+                <Activity size={12} /> PERFORMANCE METRICS
+              </div>
+              <span className="inline-flex items-center gap-1 text-[9px]" style={{ color: "#22e06b", fontFamily: "Menlo, monospace" }}>
+                <span className="inline-block h-1 w-1 rounded-full" style={{ background: "#22e06b", boxShadow: "0 0 4px #22e06b" }} />
+                OPTIMAL
+              </span>
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Latency</span>
+              <span className="text-right text-gray-200">{latency ?? 0}ms</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Throughput</span>
+              <span className="text-right text-gray-200">{(totalNodes * 1.2).toFixed(0)} ops/s</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Cognitive Load</span>
+              <span className="text-right" style={{ color: totalNodes > 60 ? "#fbbf24" : "#22e06b" }}>{(totalNodes * 0.8).toFixed(1)}%</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Energy Reserve</span>
+              <span className="text-right text-gray-200">{Math.max(12, 100 - totalNodes * 0.4).toFixed(1)}%</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Stability</span>
+              <span className="text-right text-gray-200">{coherencePct}%</span>
+            </div>
+          </div>
+
+          {/* Signal Flow */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 240, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#f59e0b", fontFamily: "Menlo, monospace" }}>
+              <Activity size={12} /> SIGNAL FLOW
+            </div>
+            <div className="mt-1 flex flex-col gap-1.5">
+              {presentRegions.map((r) => {
+                const pct = totalNodes > 0 ? ((r.count / totalNodes) * 100).toFixed(1) : "0.0";
+                return (
+                  <div key={r.key} className="flex items-center gap-2">
+                    <span className="w-16 text-[9px] uppercase" style={{ color: r.color }}>{r.label}</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-1000"
+                        style={{ width: `${pct}%`, background: r.color, boxShadow: `0 0 6px ${r.color}66` }}
+                      />
+                    </div>
+                    <span className="w-8 text-[9px] text-right text-gray-400">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* —— STATES ————————————————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {isLoading && (
+        <div className="flex h-full items-center justify-center text-sm" style={{ color: "#6f9bff", fontFamily: "Menlo, monospace", letterSpacing: "0.2em" }}>
+          INITIALIZING SYNAPSES…
+        </div>
+      )}
+      {isError && (
+        <div className="flex h-full items-center justify-center text-sm text-red-400">Failed to load Fleet KB graph.</div>
+      )}
+      {!isLoading && !isError && data?.available === false && (
+        <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500">
+          <div>Fleet KB vault not found.</div>
+          <code className="text-[11px] text-gray-600">{data.vaultPath}</code>
+        </div>
+      )}
+
+      {/* —— NOTE DETAIL CARD ————————————————————————————————————————————————————————————————————————————————————————————————————— */}
+      {selectedNote && (
+        <aside
+          className="absolute right-4 top-32 z-30 flex max-h-[70vh] w-[400px] flex-col overflow-hidden rounded-xl"
+          style={{ background: "rgba(10,11,15,0.94)", border: panelBorder, backdropFilter: "blur(8px)" }}
+        >
+          <div className="flex items-start gap-2 px-4 pb-3 pt-3" style={{ borderBottom: panelBorder }}>
+            <FileText size={16} className="mt-0.5 shrink-0" style={{ color: selectedNote.category === "decision" ? "#c061f7" : "#ff3b5c" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold leading-snug text-white">{selectedNote.title}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500">
+                {selectedNote.date && <span>{selectedNote.date}</span>}
+                <span className="rounded px-1.5 py-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>{selectedNote.categoryLabel}</span>
+                {selectedNote.agentId && (
+                  <span className="inline-flex items-center gap-1" style={{ color: "#ffd21a" }}>
+                    <Bot size={11} /> {selectedNote.agentId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button onClick={() => setSelectedNodeId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed text-gray-300">
+            {selectedNote.excerpt || selectedNote.body?.slice(0, 600) || "No preview available."}
+
+            {relatedLinks.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500" style={{ fontFamily: "Menlo, monospace" }}>
+                  <Link2 size={11} /> Related neurons · {relatedLinks.length}
+                </div>
+                <div className="flex flex-col gap-1">
+                  {relatedLinks.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => jumpToRelated(r.id)}
+                      title="Jump to this neuron"
+                      className="group flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-gray-300 transition hover:bg-white/5 hover:text-white"
+                      style={{ border: panelBorder }}
+                    >
+                      <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 99, background: r.color, boxShadow: `0 0 6px ${r.color}`, flexShrink: 0 }} />
+                      <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                      <ExternalLink size={11} className="shrink-0 opacity-40 transition group-hover:opacity-90" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onShowKb}
+            className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-200 hover:bg-white/5"
+            style={{ border: panelBorder }}
+          >
+            <ExternalLink size={13} /> Open in Fleet KB reader
+          </button>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export default FleetBrainView;

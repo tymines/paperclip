@@ -1,0 +1,1846 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --color-brand-tint: var(--brand-tint, transparent);
+}
+
+/* UI v1 — soft radius on cards/dialogs, sharp on buttons (decision 2),
+   teal accent (decision 3), and per-company tint scaffold (decision 4).
+   Activated via [data-ui-v1="true"] on <html> by InstanceExperimentalSettings
+   so the legacy look stays untouched when the flag is off. */
+:root[data-ui-v1="true"] {
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.625rem;
+  --primary: oklch(0.62 0.13 165);
+  --primary-foreground: oklch(0.15 0.04 165);
+  --ring: oklch(0.62 0.13 165);
+  --chart-1: oklch(0.62 0.13 165);
+}
+
+.dark[data-ui-v1="true"],
+:root[data-ui-v1="true"].dark {
+  --primary: oklch(0.68 0.13 165);
+  --primary-foreground: oklch(0.15 0.04 165);
+  --ring: oklch(0.62 0.13 165);
+  --sidebar-primary: oklch(0.62 0.13 165);
+}
+
+/* UI v2 — ChatGPT-shell sidebar pass 1.
+   Activated via [data-ui-v2="true"] on <html> by useUiV2(). Pass 1 scope is the
+   desktop sidebar shell only: bg, width, workspace pill, nav rows, MORE label,
+   and bottom account chip. Topbar / page content / mobile drawer untouched.
+   Tokens lifted from home-v2-chatgpt-shell.html :root block. */
+:root[data-ui-v2="true"] {
+  --pp-v2-sidebar-bg: #0f1014;
+  --pp-v2-sidebar-bg-2: #121319;
+  --pp-v2-sidebar-line: rgba(255, 255, 255, 0.08);
+  --pp-v2-sidebar-line-strong: rgba(255, 255, 255, 0.14);
+  --pp-v2-sidebar-text: #f4f4f5;
+  --pp-v2-sidebar-muted: #a1a1aa;
+  --pp-v2-sidebar-faint: #71717a;
+  --pp-v2-sidebar-hover-bg: rgba(255, 255, 255, 0.045);
+  --pp-v2-sidebar-selected-bg: rgba(255, 255, 255, 0.07);
+}
+
+/* Pin pane to spec width. !important beats the inline width from the resize
+   logic — pass 1 ships the sidebar at a fixed 228px and skips resize. */
+:root[data-ui-v2="true"] .pp-sidebar-pane-v2 {
+  width: 228px !important;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] {
+  background: var(--pp-v2-sidebar-bg);
+  color: var(--pp-v2-sidebar-text);
+  border-right: 1px solid var(--pp-v2-sidebar-line);
+  padding: 14px;
+  gap: 16px;
+}
+
+/* Workspace switcher pill: wraps SidebarCompanyMenu + Search icon as one chip. */
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] {
+  height: 42px;
+  padding: 0 8px 0 10px;
+  gap: 8px;
+  border: 1px solid var(--pp-v2-sidebar-line);
+  border-radius: 15px;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.025)),
+    var(--pp-v2-sidebar-bg-2);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] button {
+  background: transparent;
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-top="true"] button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Strip the nav stack's own padding so the 14px shell padding is the outer margin. */
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] > nav {
+  padding: 0;
+  gap: 4px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] > nav > div {
+  gap: 4px;
+}
+
+/* Nav rows: 38px tall, 13px rounded, 17px icons. */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] {
+  min-height: 38px;
+  padding: 0 10px;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  color: var(--pp-v2-sidebar-muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"]:hover {
+  color: var(--pp-v2-sidebar-text);
+  background: var(--pp-v2-sidebar-hover-bg);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active {
+  color: var(--pp-v2-sidebar-text);
+  background: var(--pp-v2-sidebar-selected-bg);
+  border-color: var(--pp-v2-sidebar-line);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* Unread badge: red soft pill (Action Queue style from the mockup). */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"] [data-pp-sidebar-badge="true"] {
+  min-width: 22px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: #fee2e2;
+  background: rgba(248, 113, 113, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.25);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* New Issue: white pill button, dark text, subtle shadow. */
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] {
+  min-height: 38px;
+  padding: 0 10px;
+  gap: 10px;
+  border-radius: 13px;
+  color: #09090b;
+  background: #f4f4f5;
+  font-weight: 700;
+  font-size: 13px;
+  margin-bottom: 7px;
+  box-shadow: 0 10px 28px rgba(244, 244, 245, 0.12);
+}
+
+:root[data-ui-v2="true"] [data-pp-new-issue="true"]:hover {
+  color: #09090b;
+  background: #f4f4f5;
+}
+
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] svg {
+  width: 17px;
+  height: 17px;
+}
+
+/* "MORE" section label */
+:root[data-ui-v2="true"] .pp-sidebar-section-label {
+  color: var(--pp-v2-sidebar-faint) !important;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-family: inherit;
+  margin: 16px 0 7px;
+  padding: 0 8px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-shell="true"] .group\/sidebar-section {
+  padding: 0;
+}
+
+/* Bottom account chip: 54px tall, 18px rounded, dark-on-dark surface. */
+:root[data-ui-v2="true"] [data-pp-sidebar-account-row="true"] {
+  background: var(--pp-v2-sidebar-bg);
+  border-top: 1px solid var(--pp-v2-sidebar-line);
+  border-right: 1px solid var(--pp-v2-sidebar-line);
+  padding: 14px;
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"] {
+  min-height: 54px;
+  padding: 9px;
+  gap: 10px;
+  border: 1px solid var(--pp-v2-sidebar-line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"]:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--pp-v2-sidebar-text);
+}
+
+:root[data-ui-v2="true"] [data-pp-sidebar-account-chip="true"] [data-slot="avatar"] {
+  width: 34px;
+  height: 34px;
+  border-radius: 13px;
+}
+
+/* ============================================================
+   UI v2 — pass 2: full app reskin (all pages, gated by enableUiV2).
+   Tokens lifted from home-v2-chatgpt-shell.html and the per-page
+   mockups under /Users/augi/.openclaw/agents/codex/workspace/*v2*.html.
+   Pattern: override shadcn css vars under [data-ui-v2="true"] so every
+   bg-card / border-border / text-muted-foreground utility automatically
+   picks up the dark v2 palette. Page-specific layout tweaks hang off
+   [data-pp-page-v2="<page>"] hooks added to each page's root div.
+   ============================================================ */
+:root[data-ui-v2="true"] {
+  /* v2 base palette (raw) */
+  --pp-v2-bg: #08090b;
+  --pp-v2-bg-2: #0c0d10;
+  --pp-v2-panel: rgba(18, 19, 23, 0.78);
+  --pp-v2-panel-solid: #121318;
+  --pp-v2-panel-strong: #171920;
+  --pp-v2-text: #f4f4f5;
+  --pp-v2-muted: #a1a1aa;
+  --pp-v2-faint: #71717a;
+  --pp-v2-line: rgba(255, 255, 255, 0.08);
+  --pp-v2-line-strong: rgba(255, 255, 255, 0.14);
+  --pp-v2-soft: #27272a;
+  --pp-v2-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --pp-v2-shadow-card: 0 16px 50px rgba(0, 0, 0, 0.18);
+  --pp-v2-danger: #f87171;
+  --pp-v2-warning: #fbbf24;
+  --pp-v2-success: #34d399;
+  --pp-v2-info: #60a5fa;
+  --pp-v2-accent: #a78bfa;
+  --pp-v2-accent-2: #2dd4bf;
+
+  /* Per-agent accents — used by avatar/border tinting on cards */
+  --pp-v2-agent-ceo: #f87171;
+  --pp-v2-agent-cfo: #60a5fa;
+  --pp-v2-agent-cmo: #f0abfc;
+  --pp-v2-agent-content: #facc15;
+  --pp-v2-agent-coo: #fb923c;
+  --pp-v2-agent-cpo: #c4b5fd;
+  --pp-v2-agent-cto: #93c5fd;
+  --pp-v2-agent-intake: #e5e7eb;
+  --pp-v2-agent-openclaw: #22d3ee;
+
+  /* Override shadcn tokens so every utility class picks up v2 colors.
+     This is what makes the rest of the app inherit the dark v2 palette
+     without per-component edits. */
+  --background: #08090b;
+  --foreground: #f4f4f5;
+  --card: rgba(18, 19, 23, 0.62);
+  --card-foreground: #f4f4f5;
+  --popover: #121318;
+  --popover-foreground: #f4f4f5;
+  --primary: #f4f4f5;
+  --primary-foreground: #09090b;
+  --secondary: rgba(255, 255, 255, 0.06);
+  --secondary-foreground: #f4f4f5;
+  --muted: rgba(255, 255, 255, 0.04);
+  --muted-foreground: #a1a1aa;
+  --accent: rgba(255, 255, 255, 0.07);
+  --accent-foreground: #f4f4f5;
+  --destructive: #f87171;
+  --destructive-foreground: #fee2e2;
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.12);
+  --ring: rgba(255, 255, 255, 0.30);
+  --sidebar: #0f1014;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-primary: #f4f4f5;
+  --sidebar-primary-foreground: #09090b;
+  --sidebar-accent: rgba(255, 255, 255, 0.07);
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: rgba(255, 255, 255, 0.30);
+
+  /* v2 radii — bigger and softer than v1 */
+  --radius: 14px;
+  --radius-sm: 11px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+
+  color-scheme: dark;
+}
+
+/* Body & html: radial gradient stack from the canonical mockup. */
+:root[data-ui-v2="true"] body {
+  background:
+    radial-gradient(circle at 12% -10%, rgba(167, 139, 250, 0.16), transparent 34rem),
+    radial-gradient(circle at 94% 4%, rgba(45, 212, 191, 0.12), transparent 31rem),
+    radial-gradient(circle at 54% 105%, rgba(134, 239, 172, 0.08), transparent 34rem),
+    var(--pp-v2-bg);
+  color: var(--pp-v2-text);
+}
+
+/* Main content surface — glass over the gradient. */
+:root[data-ui-v2="true"] main#main-content {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.012), transparent 22%);
+}
+
+/* ============================================================
+   v2 BreadcrumbBar — sticky, blurred, glass topbar.
+   The existing component renders <div class="border-b border-border …">,
+   so we target the first border-b sibling under main column.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-topbar="true"],
+:root[data-ui-v2="true"] [data-pp-topbar-wrap="true"] > div {
+  background: rgba(8, 9, 11, 0.78);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border-bottom: 1px solid var(--pp-v2-line);
+  min-height: 56px;
+}
+
+:root[data-ui-v2="true"] [data-pp-topbar="true"] h1 {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--pp-v2-text);
+}
+
+/* ============================================================
+   Shadcn components, retheme.
+   ============================================================ */
+
+/* Cards */
+:root[data-ui-v2="true"] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.014)),
+    rgba(18, 19, 23, 0.62);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--pp-v2-shadow-card);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="card-header"],
+:root[data-ui-v2="true"] [data-slot="card-content"],
+:root[data-ui-v2="true"] [data-slot="card-footer"] {
+  border-color: var(--pp-v2-line);
+}
+
+/* Buttons — restyle by data-slot. Keep size variants intact. */
+:root[data-ui-v2="true"] [data-slot="button"] {
+  border-radius: 999px;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease, color 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-slot="button"]:hover {
+  transform: translateY(-1px);
+}
+
+/* Default variant becomes the white pill (primary action). */
+:root[data-ui-v2="true"] [data-slot="button"]:not([data-variant]),
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="default"] {
+  background: #f4f4f5;
+  color: #09090b;
+  border: 1px solid transparent;
+  font-weight: 650;
+  box-shadow: 0 10px 30px rgba(244, 244, 245, 0.10);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"]:not([data-variant]):hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="default"]:hover {
+  background: #ffffff;
+  color: #09090b;
+}
+
+/* Outline & ghost & secondary → glass pill */
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="outline"],
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="ghost"],
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="secondary"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="outline"]:hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="ghost"]:hover,
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="secondary"]:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--pp-v2-line-strong);
+  color: var(--pp-v2-text);
+}
+
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="destructive"] {
+  background: rgba(248, 113, 113, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.30);
+  color: #fecaca;
+}
+
+/* Link buttons stay flat */
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="link"] {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+:root[data-ui-v2="true"] [data-slot="button"][data-variant="link"]:hover {
+  transform: none;
+}
+
+/* Inputs / textareas / selects */
+:root[data-ui-v2="true"] [data-slot="input"],
+:root[data-ui-v2="true"] [data-slot="textarea"],
+:root[data-ui-v2="true"] [data-slot="select-trigger"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+  border-radius: 13px;
+}
+
+:root[data-ui-v2="true"] [data-slot="input"]:focus-visible,
+:root[data-ui-v2="true"] [data-slot="textarea"]:focus-visible,
+:root[data-ui-v2="true"] [data-slot="select-trigger"]:focus-visible {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+}
+
+/* Popover / dropdown / dialog / sheet — solid dark panels */
+:root[data-ui-v2="true"] [data-slot="popover-content"],
+:root[data-ui-v2="true"] [data-slot="dropdown-menu-content"],
+:root[data-ui-v2="true"] [data-slot="select-content"],
+:root[data-ui-v2="true"] [data-slot="dialog-content"],
+:root[data-ui-v2="true"] [data-slot="sheet-content"],
+:root[data-ui-v2="true"] [data-slot="command-dialog"],
+:root[data-ui-v2="true"] [data-slot="tooltip-content"] {
+  background: var(--pp-v2-panel-solid);
+  border: 1px solid var(--pp-v2-line-strong);
+  color: var(--pp-v2-text);
+  border-radius: var(--radius-md);
+  box-shadow: var(--pp-v2-shadow);
+}
+
+:root[data-ui-v2="true"] [data-slot="tooltip-content"] {
+  border-radius: 10px;
+  font-size: 11px;
+}
+
+/* Badges — pill style */
+:root[data-ui-v2="true"] [data-slot="badge"] {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-muted);
+  font-weight: 600;
+}
+
+/* Tabs — segmented pill control */
+:root[data-ui-v2="true"] [data-slot="tabs-list"] {
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: 14px;
+  padding: 3px;
+}
+
+:root[data-ui-v2="true"] [data-slot="tabs-trigger"] {
+  border-radius: 11px;
+  color: var(--pp-v2-muted);
+  background: transparent;
+}
+
+:root[data-ui-v2="true"] [data-slot="tabs-trigger"][data-state="active"] {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--pp-v2-text);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.07);
+}
+
+/* Separators get softer */
+:root[data-ui-v2="true"] [data-slot="separator"] {
+  background: var(--pp-v2-line);
+}
+
+/* Table rows */
+:root[data-ui-v2="true"] [data-slot="table"] {
+  color: var(--pp-v2-text);
+}
+:root[data-ui-v2="true"] [data-slot="table"] thead {
+  color: var(--pp-v2-faint);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* Switch / checkbox color tweaks */
+:root[data-ui-v2="true"] [data-slot="switch"][data-state="checked"] {
+  background-color: #f4f4f5;
+}
+:root[data-ui-v2="true"] [data-slot="switch"][data-state="unchecked"] {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+/* PropertiesPanel sidebar */
+:root[data-ui-v2="true"] [data-pp-properties-panel="true"] {
+  background: rgba(8, 9, 11, 0.72);
+  border-left: 1px solid var(--pp-v2-line);
+  backdrop-filter: blur(18px);
+}
+
+/* ============================================================
+   MobileBottomNav — bottom tab bar.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-mobile-bottom-nav="true"] {
+  background: rgba(8, 9, 11, 0.85);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border-top: 1px solid var(--pp-v2-line);
+}
+
+/* ============================================================
+   Home page (data-pp-page-v2="home" — set on <main> by Layout)
+   These rules style descendants only; main keeps its own padding.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-now="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015)),
+    rgba(18, 19, 23, 0.64);
+  box-shadow: var(--pp-v2-shadow-card);
+  padding: 12px 16px;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-now="true"] h1 {
+  font-size: 14px;
+  letter-spacing: -0.015em;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+  background: rgba(18, 19, 23, 0.62);
+  box-shadow: var(--pp-v2-shadow-card);
+  overflow: hidden;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] > section {
+  background: transparent;
+  border-color: var(--pp-v2-line) !important;
+}
+
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-home-grid="true"] .rounded-lg.border {
+  background: rgba(18, 19, 23, 0.78) !important;
+  border-color: var(--pp-v2-line) !important;
+  border-radius: var(--radius-md);
+}
+
+/* AgentStrip card row gets the v2 agent-card look */
+:root[data-ui-v2="true"] [data-pp-page-v2="home"] [data-pp-agent-strip="true"] {
+  padding: 12px;
+  border-bottom: 1px solid var(--pp-v2-line);
+}
+
+/* ============================================================
+   Inbox / Action Queue (data-pp-page-v2="inbox")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] .rounded-md.border,
+:root[data-ui-v2="true"] [data-pp-page-v2="inbox"] .rounded-lg.border {
+  border-radius: var(--radius-md);
+}
+
+/* Issue rows */
+:root[data-ui-v2="true"] [data-pp-issue-row="true"] {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--pp-v2-line);
+  background: rgba(18, 19, 23, 0.62);
+  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
+}
+
+:root[data-ui-v2="true"] [data-pp-issue-row="true"]:hover {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(24, 25, 31, 0.78);
+}
+
+/* ============================================================
+   Issues list
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="issues"] [data-slot="card"] {
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   Fleet / Agents grid (data-pp-page-v2="agents")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="agents"] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+    rgba(12, 13, 16, 0.82);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-lg);
+}
+:root[data-ui-v2="true"] [data-pp-page-v2="agents"] [data-slot="card"]:hover {
+  border-color: var(--pp-v2-line-strong);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.024)),
+    rgba(12, 13, 16, 0.88);
+}
+
+/* ============================================================
+   Issue detail (data-pp-page-v2="issue-detail")
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="issue-detail"] [data-slot="card"] {
+  border-radius: var(--radius-lg);
+}
+
+/* Chat thread bubbles inherit card-ish background */
+:root[data-ui-v2="true"] [data-pp-page-v2="issue-detail"] [data-pp-chat-bubble="true"] {
+  background: rgba(18, 19, 23, 0.72);
+  border: 1px solid var(--pp-v2-line);
+  border-radius: var(--radius-md);
+}
+
+/* ============================================================
+   Rooms list + detail
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2="rooms"] [data-slot="card"],
+:root[data-ui-v2="true"] [data-pp-page-v2="room-detail"] [data-slot="card"] {
+  border-radius: var(--radius-lg);
+}
+
+/* ============================================================
+   Generic page surface — covers projects/work/approvals/goals/
+   routines/social/knowledge-graph/org/agent-detail/settings.
+   ============================================================ */
+:root[data-ui-v2="true"] [data-pp-page-v2] [data-slot="card"] {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.014)),
+    rgba(18, 19, 23, 0.62);
+  border: 1px solid var(--pp-v2-line);
+  color: var(--pp-v2-text);
+}
+
+/* Settings sidebar gets the same dark treatment */
+:root[data-ui-v2="true"] [data-pp-settings-sidebar="true"] {
+  background: var(--pp-v2-bg);
+  border-right: 1px solid var(--pp-v2-line);
+}
+
+/* ============================================================
+   NewIssueDialog — full-bleed on mobile under v2.
+   v1: shadcn defaults keep an inset card with side gutters; the
+   footer can be clipped by the iOS home indicator on smaller phones.
+   v2: dialog fills the viewport on small screens, footer sticks to
+   the bottom with safe-area-inset-bottom so "Discard Draft" and
+   "Create Task" stay tappable above the home indicator.
+   ============================================================ */
+@media (max-width: 639px) {
+  :root[data-ui-v2="true"] [data-pp-new-issue-dialog="true"] {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    top: 0 !important;
+    left: 0 !important;
+    /* Tailwind v4 ships the shadcn Dialog centering via the dedicated
+       `translate` CSS property (not legacy `transform`), so we have to
+       neutralise both — clearing only `transform` leaves the dialog at
+       translate(-50%, -50%) and pushes half of it off-screen on mobile. */
+    transform: none !important;
+    translate: none !important;
+    border-radius: 0 !important;
+    border: 0 !important;
+    padding-bottom: 0 !important;
+  }
+
+  /* Header sits below the iOS status bar / Dynamic Island. We pad the
+     header itself (rather than the dialog root) so the bordered band
+     extends all the way up to the top edge — the breadcrumb + X chips
+     just float lower inside that band. Also enforce a sane minimum
+     header height so the close button has the 44px iOS HIG hit area. */
+  :root[data-ui-v2="true"] [data-pp-new-issue-header="true"] {
+    padding-top: calc(0.625rem + env(safe-area-inset-top));
+    min-height: calc(44px + env(safe-area-inset-top));
+  }
+
+  /* Bump the close (×) and expand/collapse buttons inside the header up to
+     a 44×44 hit area on mobile so they're reliably tappable when sitting
+     just below the Dynamic Island. */
+  :root[data-ui-v2="true"] [data-pp-new-issue-header="true"] button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :root[data-ui-v2="true"] [data-pp-new-issue-footer="true"] {
+    position: sticky;
+    bottom: 0;
+    background: var(--pp-v2-panel-solid);
+    padding-bottom: calc(0.625rem + env(safe-area-inset-bottom));
+    z-index: 1;
+  }
+}
+
+/* Account menu popover overlay */
+:root[data-ui-v2="true"] [data-pp-account-menu="true"] {
+  background: var(--pp-v2-panel-solid);
+  border: 1px solid var(--pp-v2-line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--pp-v2-shadow);
+}
+
+/* Knowledge graph + org chart canvases */
+:root[data-ui-v2="true"] [data-pp-page-v2="knowledge-graph"],
+:root[data-ui-v2="true"] [data-pp-page-v2="org-chart"] {
+  background:
+    radial-gradient(circle at 22% 12%, rgba(167, 139, 250, 0.10), transparent 28rem),
+    radial-gradient(circle at 78% 88%, rgba(45, 212, 191, 0.08), transparent 26rem),
+    transparent;
+}
+
+/* Pre-existing v1 selectors that hardcoded light backgrounds: nudge them
+   to the v2 surface when v2 is active. */
+:root[data-ui-v2="true"] .bg-card {
+  background-color: var(--card) !important;
+}
+
+/* Force StatusBadge / pill chrome inside v2 to be muted */
+:root[data-ui-v2="true"] [data-slot="status-badge"],
+:root[data-ui-v2="true"] [data-pp-status-badge="true"] {
+  border: 1px solid var(--pp-v2-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--pp-v2-muted);
+}
+
+/* Keep checkbox & radio visible on dark */
+:root[data-ui-v2="true"] [data-slot="checkbox"],
+:root[data-ui-v2="true"] [data-slot="radio-group-item"] {
+  border-color: var(--pp-v2-line-strong);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+/* Generic .rounded-{lg,xl} border combos used outside data-slot — soften them. */
+:root[data-ui-v2="true"] [data-pp-page-v2] .rounded-lg.border,
+:root[data-ui-v2="true"] [data-pp-page-v2] .rounded-xl.border {
+  background: rgba(18, 19, 23, 0.62);
+  border-color: var(--pp-v2-line);
+}
+
+/* Hover states using border-border or hover:bg-accent in the dark world */
+:root[data-ui-v2="true"] .hover\:bg-accent\/40:hover,
+:root[data-ui-v2="true"] .hover\:bg-accent\/50:hover {
+  background-color: rgba(255, 255, 255, 0.06) !important;
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --destructive-foreground: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --chip-match-title-bg: oklch(0.97 0.02 265);
+  --chip-match-title-fg: oklch(0.4 0.13 265);
+  --chip-match-title-border: oklch(0.85 0.05 265);
+  --chip-match-comment-bg: oklch(0.97 0.02 145);
+  --chip-match-comment-fg: oklch(0.4 0.10 145);
+  --chip-match-comment-border: oklch(0.85 0.05 145);
+  --chip-match-document-bg: oklch(0.97 0.02 295);
+  --chip-match-document-fg: oklch(0.4 0.10 295);
+  --chip-match-document-border: oklch(0.85 0.05 295);
+  --chip-match-identifier-bg: var(--muted);
+  --chip-match-identifier-fg: var(--muted-foreground);
+  --chip-match-identifier-border: var(--border);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.637 0.237 25.331);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.145 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(0.269 0 0);
+  --sidebar-ring: oklch(0.439 0 0);
+  --chip-match-title-bg: oklch(0.27 0.04 265 / 0.5);
+  --chip-match-title-fg: oklch(0.78 0.10 265);
+  --chip-match-title-border: oklch(0.4 0.06 265);
+  --chip-match-comment-bg: oklch(0.27 0.04 145 / 0.5);
+  --chip-match-comment-fg: oklch(0.78 0.08 145);
+  --chip-match-comment-border: oklch(0.4 0.05 145);
+  --chip-match-document-bg: oklch(0.27 0.04 295 / 0.5);
+  --chip-match-document-fg: oklch(0.78 0.08 295);
+  --chip-match-document-border: oklch(0.4 0.05 295);
+  --chip-match-identifier-bg: var(--muted);
+  --chip-match-identifier-fg: var(--muted-foreground);
+  --chip-match-identifier-border: var(--border);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    height: 100%;
+    -webkit-tap-highlight-color: color-mix(in oklab, var(--foreground) 20%, transparent);
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    height: 100%;
+    overflow: hidden;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  /* Prevent double-tap-to-zoom on interactive elements for mobile */
+  a,
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea,
+  label {
+    touch-action: manipulation;
+  }
+  /* Let font-mono (utilities layer) override for monospace editors */
+  .paperclip-mdxeditor [class*="_placeholder_"],
+  .paperclip-mdxeditor-content {
+    font-family: inherit;
+  }
+}
+
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea,
+  [data-slot="select-trigger"] {
+    min-height: 44px;
+  }
+
+  [data-slot="toggle"] {
+    min-height: 0;
+  }
+}
+
+/* Dark mode scrollbars */
+.dark {
+  color-scheme: dark;
+}
+
+.dark *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark *::-webkit-scrollbar-track {
+  background: oklch(0.205 0 0);
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0);
+  border-radius: 4px;
+}
+
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0);
+}
+
+/* Auto-hide scrollbar: thin, stable gutter with the thumb visible only on hover */
+.scrollbar-auto-hide {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-auto-hide::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+  background: transparent !important;
+}
+.scrollbar-auto-hide::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+.scrollbar-auto-hide::-webkit-scrollbar-thumb {
+  background: transparent !important;
+}
+/* Light mode scrollbar on hover */
+.scrollbar-auto-hide:hover {
+  scrollbar-color: oklch(0.7 0 0) transparent;
+}
+.scrollbar-auto-hide:hover::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+.scrollbar-auto-hide:hover::-webkit-scrollbar-thumb {
+  background: oklch(0.7 0 0) !important;
+  border-radius: 999px !important;
+}
+.scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.6 0 0) !important;
+}
+/* Dark mode scrollbar on hover */
+.dark .scrollbar-auto-hide:hover {
+  scrollbar-color: oklch(0.4 0 0) transparent;
+}
+.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-track {
+  background: transparent !important;
+}
+.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0) !important;
+}
+.dark .scrollbar-auto-hide:hover::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.5 0 0) !important;
+}
+
+/* Fully-hidden scrollbar: zero-width track, no thumb. For carousels where
+   the scrolling affordance is the visible cards themselves. */
+.scrollbar-hide {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Expandable dialog transition for max-width changes */
+[data-slot="dialog-content"] {
+  transition: max-width 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Dashboard activity row entry motion */
+@keyframes dashboard-activity-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.985);
+    filter: blur(4px);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.002);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes dashboard-activity-highlight {
+  0% {
+    box-shadow: inset 2px 0 0 var(--primary);
+    background-color: color-mix(in oklab, var(--accent) 55%, transparent);
+  }
+  100% {
+    box-shadow: inset 0 0 0 transparent;
+    background-color: transparent;
+  }
+}
+
+.activity-row-enter {
+  animation:
+    dashboard-activity-enter 520ms cubic-bezier(0.16, 1, 0.3, 1),
+    dashboard-activity-highlight 920ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-row-enter {
+    animation: none;
+  }
+}
+
+/* Chain-of-thought reasoning line ticker animations.
+   Pure translate, no opacity — the overflow-hidden container clips.
+   Both keyframes share the same easing so the two spans move in lockstep. */
+@keyframes cot-line-slide-in {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+
+@keyframes cot-line-slide-out {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-100%); }
+}
+
+.cot-line-enter {
+  animation: cot-line-slide-in 300ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+.cot-line-exit {
+  animation: cot-line-slide-out 300ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cot-line-enter,
+  .cot-line-exit {
+    animation: none;
+  }
+}
+
+/* Shimmer text effect for active "Working" state — Cursor-style sweep */
+@keyframes shimmer-text-slide {
+  0% { background-position: 100% center; }
+  60% { background-position: 0% center; }
+  100% { background-position: 0% center; }
+}
+
+.shimmer-text {
+  --shimmer-base: var(--foreground);
+  --shimmer-highlight: color-mix(in oklch, var(--foreground) 35%, transparent);
+  background: linear-gradient(
+    90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-base) 40%,
+    var(--shimmer-highlight) 50%,
+    var(--shimmer-base) 60%,
+    var(--shimmer-base) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer-text-slide 2.5s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-text {
+    animation: none;
+    -webkit-text-fill-color: unset;
+    background: none;
+  }
+}
+
+/* MDXEditor theme integration */
+.paperclip-mdxeditor-scope,
+.paperclip-mdxeditor {
+  --baseBase: var(--background);
+  --baseBg: transparent;
+  --baseBgSubtle: color-mix(in oklab, var(--accent) 35%, transparent);
+  --baseLine: var(--border);
+  --baseSolid: var(--muted-foreground);
+  --baseSolidHover: var(--foreground);
+  --baseText: var(--muted-foreground);
+  --baseBorderColor: var(--border);
+  --baseBorder: var(--border);
+  --baseBorderHover: var(--ring);
+  --baseTextContrast: var(--foreground);
+  --baseTextContrastMuted: var(--muted-foreground);
+  --baseTextEmphasis: var(--foreground);
+  --basePageBg: var(--background);
+  --baseRadius: var(--radius);
+  --baseLineHeight: 1.5;
+  --accentBorder: color-mix(in oklab, var(--primary) 35%, var(--border));
+  --accentSolid: var(--primary);
+  --accentSolidHover: var(--primary);
+  --accentLine: color-mix(in oklab, var(--primary) 20%, transparent);
+  --accentBg: var(--accent);
+  --accentBgHover: color-mix(in oklab, var(--accent) 80%, var(--background));
+  --accentBgActive: color-mix(in oklab, var(--accent) 72%, var(--background));
+  --accentText: var(--accent-foreground);
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--foreground);
+}
+
+@media (min-width: 768px) {
+  .paperclip-mdxeditor-scope,
+  .paperclip-mdxeditor {
+    font-size: 0.875rem;
+  }
+}
+
+.paperclip-mdxeditor-scope [class*="_iconButton_"],
+.paperclip-mdxeditor [class*="_iconButton_"] {
+  color: var(--baseText);
+}
+
+.paperclip-mdxeditor-scope [class*="_iconButton_"]:hover,
+.paperclip-mdxeditor [class*="_iconButton_"]:hover {
+  color: var(--baseTextContrast);
+}
+
+.paperclip-mdxeditor .mdxeditor-root-contenteditable {
+  min-height: 2.5rem;
+  padding: 0;
+  line-height: 1.5;
+}
+
+.paperclip-mdxeditor [class*="_contentEditable_"] {
+  padding: 0.375rem 0.625rem !important;
+}
+
+.paperclip-mdxeditor--borderless [class*="_contentEditable_"] {
+  padding: 0 !important;
+}
+
+.paperclip-mdxeditor [class*="_placeholder_"] {
+  font-size: inherit;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+}
+
+.paperclip-mdxeditor-content {
+  font-size: inherit;
+  line-height: inherit;
+  color: inherit;
+}
+
+.paperclip-edit-in-place-content {
+  font-size: 0.9375rem;
+  line-height: 1.75rem;
+}
+
+.paperclip-mdxeditor-content > *:first-child {
+  margin-top: 0;
+}
+
+.paperclip-mdxeditor-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.paperclip-mdxeditor-content p {
+  margin: 0;
+  line-height: inherit;
+}
+
+.paperclip-mdxeditor-content p + p {
+  margin-top: 1.1em;
+}
+
+.paperclip-mdxeditor-content a:not(.paperclip-mention-chip):not(.paperclip-project-mention-chip) {
+  color: color-mix(in oklab, var(--foreground) 76%, #0969da 24%);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.dark .paperclip-mdxeditor-content a:not(.paperclip-mention-chip):not(.paperclip-project-mention-chip) {
+  color: color-mix(in oklab, var(--foreground) 80%, #58a6ff 20%);
+}
+
+.paperclip-mdxeditor-content a.paperclip-mention-chip,
+.paperclip-mdxeditor-content a.paperclip-project-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0 0.1rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  text-decoration: none;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+/* Strip the MDXEditor's default inline-code styling from the text inside chips
+   (the link label otherwise picks up a monospace font + gray tint). */
+.paperclip-mdxeditor-content a.paperclip-mention-chip code,
+.paperclip-mdxeditor-content a.paperclip-project-mention-chip code {
+  font-family: inherit;
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+
+.paperclip-mdxeditor-content a.paperclip-mention-chip::before,
+a.paperclip-mention-chip::before {
+  content: "";
+  flex: none;
+}
+
+.paperclip-mdxeditor-content a.paperclip-mention-chip[data-mention-kind="project"]::before,
+a.paperclip-mention-chip[data-mention-kind="project"]::before {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+  background-color: var(--paperclip-mention-project-color, currentColor);
+}
+
+.paperclip-mdxeditor-content a.paperclip-mention-chip[data-mention-kind="agent"]::before,
+a.paperclip-mention-chip[data-mention-kind="agent"]::before {
+  width: 0.75rem;
+  height: 0.75rem;
+  background-color: currentColor;
+  -webkit-mask-image: var(--paperclip-mention-icon-mask);
+  mask-image: var(--paperclip-mention-icon-mask);
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.paperclip-mdxeditor-content ul,
+.paperclip-mdxeditor-content ol {
+  margin: 1.1em 0;
+  padding-left: 1.6em;
+}
+
+.paperclip-mdxeditor-content ul {
+  list-style: disc;
+}
+
+.paperclip-mdxeditor-content ol {
+  list-style: decimal;
+}
+
+.paperclip-mdxeditor-content li {
+  display: list-item;
+  margin: 0.3em 0;
+  line-height: inherit;
+}
+
+.paperclip-mdxeditor-content li::marker {
+  color: var(--muted-foreground);
+}
+
+.paperclip-mdxeditor-content h1 {
+  margin: 1.4em 0 0.9em;
+  font-size: 1.75em;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.paperclip-mdxeditor-content h2 {
+  margin: 1.3em 0 0.85em;
+  font-size: 1.35em;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.paperclip-mdxeditor-content h3 {
+  margin: 1.2em 0 0.8em;
+  font-size: 1.15em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.paperclip-mdxeditor-content img {
+  max-height: 18rem;
+  border-radius: calc(var(--radius) - 2px);
+}
+
+.paperclip-mdxeditor-content blockquote {
+  margin: 1.2em 0;
+  padding-left: 1em;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+  line-height: inherit;
+}
+
+.paperclip-mdxeditor-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 1em;
+}
+
+.paperclip-mdxeditor-content pre {
+  margin: 0.4rem 0;
+  padding: 0;
+  border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent);
+  border-radius: calc(var(--radius) - 3px);
+  background: #1e1e2e;
+  color: #cdd6f4;
+  overflow-x: auto;
+}
+
+/* Dark theme for CodeMirror code blocks inside the MDXEditor.
+   Overrides the default cm6-theme-basic-light that MDXEditor bundles. */
+.paperclip-mdxeditor .cm-editor {
+  background-color: #1e1e2e !important;
+  color: #cdd6f4 !important;
+  font-size: 1em;
+}
+
+.paperclip-mdxeditor .cm-gutters {
+  background-color: #181825 !important;
+  color: #585b70 !important;
+  border-right: 1px solid #313244 !important;
+}
+
+.paperclip-mdxeditor .cm-activeLineGutter {
+  background-color: #1e1e2e !important;
+}
+
+.paperclip-mdxeditor .cm-activeLine {
+  background-color: color-mix(in oklab, #cdd6f4 5%, transparent) !important;
+}
+
+.paperclip-mdxeditor .cm-cursor,
+.paperclip-mdxeditor .cm-dropCursor {
+  border-left-color: #cdd6f4 !important;
+}
+
+.paperclip-mdxeditor .cm-selectionBackground {
+  background-color: color-mix(in oklab, #89b4fa 25%, transparent) !important;
+}
+
+.paperclip-mdxeditor .cm-focused .cm-selectionBackground {
+  background-color: color-mix(in oklab, #89b4fa 30%, transparent) !important;
+}
+
+.paperclip-mdxeditor .cm-content {
+  caret-color: #cdd6f4;
+}
+
+/* MDXEditor code block language selector – show on hover only */
+.paperclip-mdxeditor-content [class*="_codeMirrorWrapper_"] {
+  position: relative;
+}
+
+.paperclip-mdxeditor-content [class*="_codeMirrorToolbar_"],
+.paperclip-mdxeditor-content [class*="_codeBlockToolbar_"] {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.paperclip-mdxeditor-content [class*="_codeMirrorToolbar_"] select,
+.paperclip-mdxeditor-content [class*="_codeBlockToolbar_"] select {
+  background-color: #313244;
+  color: #cdd6f4;
+  border-color: #45475a;
+}
+
+.paperclip-mdxeditor-content [class*="_codeMirrorWrapper_"]:hover [class*="_codeMirrorToolbar_"],
+.paperclip-mdxeditor-content [class*="_codeMirrorWrapper_"]:hover [class*="_codeBlockToolbar_"],
+.paperclip-mdxeditor-content [class*="_codeMirrorWrapper_"]:focus-within [class*="_codeMirrorToolbar_"],
+.paperclip-mdxeditor-content [class*="_codeMirrorWrapper_"]:focus-within [class*="_codeBlockToolbar_"] {
+  opacity: 1;
+}
+
+/* Rendered markdown code blocks & inline code (prose/MarkdownBody context).
+   Dark theme code blocks with compact sizing.
+   Override prose CSS variables so prose-invert can't revert to defaults. */
+.paperclip-markdown {
+  --tw-prose-pre-bg: #1e1e2e;
+  --tw-prose-pre-code: #cdd6f4;
+  --tw-prose-invert-pre-bg: #1e1e2e;
+  --tw-prose-invert-pre-code: #cdd6f4;
+}
+
+.paperclip-markdown pre {
+  border: 1px solid color-mix(in oklab, var(--foreground) 12%, transparent) !important;
+  border-radius: calc(var(--radius) - 3px) !important;
+  background-color: #1e1e2e !important;
+  color: #cdd6f4 !important;
+  padding: 0.5rem 0.65rem !important;
+  margin: 0.4rem 0 !important;
+  font-size: 1em !important;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.paperclip-markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 1em;
+}
+
+.paperclip-markdown pre code {
+  font-size: inherit;
+  color: inherit;
+  background: none;
+}
+
+/* Copy-to-clipboard button on fenced code blocks */
+.paperclip-markdown-codeblock {
+  position: relative;
+}
+
+.paperclip-markdown-codeblock-copy {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: calc(var(--radius) - 4px);
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  background-color: color-mix(in oklab, var(--muted) 92%, var(--background) 8%);
+  color: var(--muted-foreground);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.12s ease;
+}
+
+.paperclip-markdown-codeblock:hover .paperclip-markdown-codeblock-copy,
+.paperclip-markdown-codeblock-copy:focus-visible,
+.paperclip-markdown-codeblock-copy[data-copied] {
+  opacity: 1;
+}
+
+.paperclip-markdown-codeblock-copy:hover {
+  background-color: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.paperclip-markdown-codeblock-copy[data-copied] {
+  color: var(--primary);
+}
+
+.paperclip-markdown-codeblock-copy[data-failed] {
+  color: var(--destructive);
+}
+
+.paperclip-markdown-codeblock-copy-label {
+  font-weight: 500;
+}
+
+/* Remove backtick pseudo-elements from inline code (prose default adds them) */
+.prose code::before,
+.prose code::after {
+  content: none;
+}
+
+/* Inline code background (not inside a code block) */
+.prose :not(pre) > code {
+  background-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  padding: 0.15em 0.35em;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.dark .prose :not(pre) > code {
+  background-color: #ffffff0f;
+}
+
+.paperclip-markdown {
+  color: var(--foreground);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+}
+
+.paperclip-markdown > :first-child {
+  margin-top: 0;
+}
+
+.paperclip-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.paperclip-markdown :where(p, ul, ol, blockquote, pre, .paperclip-markdown-table-scroll) {
+  margin-top: 0.7rem;
+  margin-bottom: 0.7rem;
+}
+
+.paperclip-markdown :where(ul, ol) {
+  padding-left: 1.15rem;
+}
+
+.paperclip-markdown ul {
+  list-style-type: disc;
+}
+
+.paperclip-markdown ol {
+  list-style-type: decimal;
+}
+
+.paperclip-markdown li {
+  margin: 0.14rem 0;
+  padding-left: 0.2rem;
+}
+
+.paperclip-markdown li > :where(p, ul, ol) {
+  margin-top: 0.3rem;
+  margin-bottom: 0.3rem;
+}
+
+.paperclip-markdown li::marker {
+  color: var(--muted-foreground);
+}
+
+.paperclip-markdown h1,
+.paperclip-markdown h2,
+.paperclip-markdown h3,
+.paperclip-markdown h4 {
+  margin-top: 1.75rem;
+  margin-bottom: 0.45rem;
+  color: var(--foreground);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.paperclip-markdown h1 {
+  font-size: 1.5rem;
+}
+
+.paperclip-markdown h2 {
+  font-size: 1.25rem;
+}
+
+.paperclip-markdown h3 {
+  font-size: 1.05rem;
+}
+
+.paperclip-markdown h4 {
+  font-size: 0.95rem;
+}
+
+.paperclip-markdown :where(strong, b) {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.paperclip-markdown a {
+  color: color-mix(in oklab, var(--foreground) 76%, #0969da 24%);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  cursor: pointer;
+}
+
+.paperclip-markdown a.paperclip-mention-chip {
+  text-decoration: none;
+}
+
+.paperclip-markdown a.paperclip-mention-chip[data-mention-kind="issue"] {
+  border-color: color-mix(in oklab, var(--foreground) 14%, var(--border) 86%);
+  background: color-mix(in oklab, var(--accent) 42%, transparent);
+}
+
+/* Inline issue references in markdown: no pill chrome, just a status icon
+   beside the link label — keeps the pair from splitting across lines. */
+.paperclip-markdown-issue-ref {
+  display: inline;
+  white-space: nowrap;
+}
+
+.dark .paperclip-markdown a {
+  color: color-mix(in oklab, var(--foreground) 80%, #58a6ff 20%);
+}
+
+.paperclip-markdown blockquote {
+  margin-left: 0;
+  padding-left: 0.95rem;
+  border-left: 0.24rem solid color-mix(in oklab, var(--border) 84%, var(--muted-foreground) 16%);
+  color: var(--muted-foreground);
+}
+
+.paperclip-markdown hr {
+  margin: 1.25rem 0;
+  border-color: var(--border);
+}
+
+.paperclip-markdown img {
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.paperclip-markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.paperclip-markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.paperclip-markdown-table-scroll table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+}
+
+.paperclip-markdown-table-scroll :where(th, td) {
+  min-width: 8rem;
+  max-width: 18rem;
+  vertical-align: top;
+}
+
+.paperclip-markdown th {
+  font-weight: 600;
+  text-align: left;
+}
+
+.paperclip-mermaid {
+  margin: 0.5rem 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 3px);
+  background-color: color-mix(in oklab, var(--accent) 35%, transparent);
+  overflow-x: auto;
+}
+
+.paperclip-mermaid svg {
+  display: block;
+  width: max-content;
+  max-width: none;
+  min-width: 100%;
+  height: auto;
+}
+
+.paperclip-mermaid-status {
+  margin: 0 0 0.45rem;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.paperclip-mermaid-status-error {
+  color: var(--destructive);
+}
+
+.paperclip-mermaid-source {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* Mention chips rendered inline in prose (MarkdownBody or inline anchors) */
+a.paperclip-mention-chip,
+a.paperclip-project-mention-chip,
+span.paperclip-mention-chip,
+span.paperclip-project-mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0 0.1rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  text-decoration: none;
+  /* Center the pill on the surrounding x-height so it sits on the text line
+     instead of hanging below it. inline-flex baseline alignment is unreliable
+     across browsers, so use vertical-align: middle for a predictable result.
+     Nudge up 1px so it visually centers with the cap height of the text. */
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+  white-space: nowrap;
+}
+
+/* When the identifier inside a chip is backtick-wrapped in markdown, strip the
+   inline-code monospace/gray styling so the pill label reads cleanly. */
+.paperclip-markdown a.paperclip-mention-chip code,
+.paperclip-markdown a.paperclip-project-mention-chip code,
+.paperclip-markdown span.paperclip-mention-chip code,
+.paperclip-markdown span.paperclip-project-mention-chip code {
+  font-family: inherit;
+  background: none;
+  color: inherit;
+  padding: 0;
+  font-size: inherit;
+}
+
+/* Keep MDXEditor popups above app dialogs, even when they portal to <body>. */
+[class*="_popupContainer_"] {
+  z-index: 81 !important;
+}
+
+[class*="_dialogOverlay_"] {
+  z-index: 80;
+}
+
+[class*="_dialogContent_"],
+[class*="_largeDialogContent_"],
+[class*="_popoverContent_"],
+[class*="_linkDialogPopoverContent_"],
+[class*="_tableColumnEditorPopoverContent_"],
+[class*="_toolbarButtonDropdownContainer_"],
+[class*="_toolbarNodeKindSelectContainer_"] {
+  z-index: 81 !important;
+}
+
+/* ============================================================================
+   DESIGN SYSTEM v1.0 — RE-LOCK  (branch: paperclip-design-polish-20260623)
+   Owner: shared theme + Home + Fleet.
+   Re-locks the drifted v2 palette to the canonical spec and raises polish per
+   UI/UX Pro Max: canonical canvas #06090F, SOLID surfaces #0D131D / #111926,
+   a single restrained blue accent #3B82FF for active/CTA only, calmer canvas
+   glow, stronger surface separation. Appended last so it wins the cascade;
+   fully additive and revertible (delete this block to restore prior look).
+   ============================================================================ */
+:root[data-ui-v2="true"] {
+  /* canonical accent scale */
+  --pp-accent: #3B82FF;
+  --pp-accent-strong: #2f6fe0;
+  --pp-accent-soft: rgba(59, 130, 255, 0.14);
+  --pp-accent-line: rgba(59, 130, 255, 0.42);
+
+  /* canvas + solid surfaces (per locked spec) */
+  --pp-v2-bg: #06090F;
+  --pp-v2-bg-2: #0A0F18;
+  --pp-v2-panel: #0D131D;
+  --pp-v2-panel-solid: #0D131D;
+  --pp-v2-panel-strong: #111926;
+  --pp-v2-line: rgba(255, 255, 255, 0.07);
+  --pp-v2-line-strong: rgba(255, 255, 255, 0.12);
+  --pp-v2-shadow-card: 0 14px 40px rgba(0, 0, 0, 0.28);
+
+  /* shadcn token remap so every utility inherits the re-locked palette */
+  --background: #06090F;
+  --card: #0D131D;
+  --card-foreground: #f4f4f5;
+  --popover: #111926;
+  --primary: #3B82FF;
+  --primary-foreground: #ffffff;
+  --accent: rgba(255, 255, 255, 0.06);
+  --border: rgba(255, 255, 255, 0.07);
+  --input: rgba(255, 255, 255, 0.10);
+  --ring: rgba(59, 130, 255, 0.55);
+  --sidebar: #080C13;
+  --sidebar-border: rgba(255, 255, 255, 0.07);
+}
+
+/* Restrained canvas glow — one cool wash replaces the purple/teal/green stack. */
+:root[data-ui-v2="true"] body {
+  background:
+    radial-gradient(circle at 16% -10%, rgba(59, 130, 255, 0.10), transparent 40rem),
+    radial-gradient(circle at 95% -2%, rgba(59, 130, 255, 0.05), transparent 32rem),
+    var(--pp-v2-bg);
+}
+
+/* Active nav: blue tint + left indicator bar (blue for active, per spec). */
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active {
+  color: #ffffff;
+  background: var(--pp-accent-soft);
+  border-color: var(--pp-accent-line);
+  box-shadow: inset 2px 0 0 var(--pp-accent), inset 0 1px rgba(255, 255, 255, 0.05);
+}
+:root[data-ui-v2="true"] [data-pp-sidebar-nav-item="true"].pp-nav-active svg {
+  color: #93b4ff;
+}
+
+/* Primary sidebar CTA (New Task): solid blue pill (blue for CTA, per spec). */
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] {
+  color: #ffffff;
+  background: var(--pp-accent);
+  box-shadow: 0 10px 26px rgba(59, 130, 255, 0.22);
+}
+:root[data-ui-v2="true"] [data-pp-new-issue="true"]:hover {
+  color: #ffffff;
+  background: var(--pp-accent-strong);
+}
+:root[data-ui-v2="true"] [data-pp-new-issue="true"] svg { color: #ffffff; }

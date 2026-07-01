@@ -1,0 +1,970 @@
+/**
+ * FleetBrainView — Neural Command Network
+ *
+ * A glowing 3D neural brain rendering of the live Fleet KB graph.
+ * 6 color-coded regions, central energy core with radiating filaments,
+ * toned UnrealBloom glow, and a full sci-fi HUD overlay.
+ *
+ * Data: 100% real — nodes/synapses from GET /api/fleet-kb/graph,
+ *       dreams from GET /api/fleet-kb/dreams (OpenViking consolidation logs).
+ */
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import ForceGraph3D from "react-force-graph-3d";
+import * as THREE from "three";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import SpriteText from "three-spritetext";
+import {
+  FileText, RefreshCw, BookOpen, X, Bot, ExternalLink, Search, Link2,
+  Brain, Activity, Zap, Wifi, Signal,
+} from "lucide-react";
+import { fleetKbApi, type FleetKbGraphNode } from "../../api/knowledgeGraph";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  REGIONS — 6-lobe neural command network
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type RegionKey = "CORE" | "HIPPOCAMPUS" | "BROCA" | "TEMPORAL" | "VISUAL" | "DREAMS";
+
+interface Region { label: string; role: string; color: string; }
+
+const REGIONS: Record<RegionKey, Region> = {
+  CORE:        { label: "CORE",              role: "orchestration · index",       color: "#3b82ff" },
+  HIPPOCAMPUS: { label: "HIPPOCAMPUS",       role: "long-term memory",            color: "#a855f7" },
+  BROCA:       { label: "BROCA'S AREA",      role: "agents · authorship",         color: "#ef4444" },
+  TEMPORAL:    { label: "TEMPORAL CORTEX",   role: "time · sequencing",           color: "#06b6d4" },
+  VISUAL:      { label: "VISUAL CORTEX",     role: "decisions · completed work",  color: "#f59e0b" },
+  DREAMS:      { label: "DREAMS",            role: "synthesis · cross-links",     color: "#d946ef" },
+};
+
+const DIM_NODE = "#141823";
+const DIM_LINK = "#0b0e15";
+const PULSE_MS = 2600;
+const IDLE_MS = 2200;
+const POLL_MS = 12000;
+
+function regionForNode(n: FleetKbGraphNode): RegionKey {
+  if (n.kind === "index") return "CORE";
+  if (n.kind === "agent") return "BROCA";
+  if (n.kind === "category") return "VISUAL";
+  if (n.category === "decision") return "VISUAL";
+  if (n.category === "completed") return "VISUAL";
+  if (n.category === "dreams") return "DREAMS";
+  // distribute remaining notes across DREAMS / HIPPOCAMPUS / TEMPORAL
+  if (n.kind === "note") {
+    const h = hashStr(n.id);
+    if (h % 3 === 0) return "HIPPOCAMPUS";
+    if (h % 3 === 1) return "TEMPORAL";
+    return "DREAMS";
+  }
+  return "DREAMS";
+}
+
+function nodeSize(n: FleetKbGraphNode): number {
+  switch (n.kind) {
+    case "index": return 44;
+    case "category": return 26;
+    case "agent": return 12;
+    default: return 2.4 + ((hashStr(n.id) % 100) / 100) * 4.5;
+  }
+}
+
+function hashStr(s: string): number {
+  let h = 0x2545f491;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 16777619) >>> 0; }
+  return h >>> 0;
+}
+
+function edgeRand(a: string, b: string, salt: number): number {
+  return ((hashStr(a + "|" + b + "|" + salt) % 100000) / 100000);
+}
+
+interface BrainNode extends FleetKbGraphNode {
+  region: RegionKey; color: string; val: number; isHub: boolean;
+  x?: number; y?: number; z?: number;
+}
+interface BrainLink {
+  source: string; target: string; kind: string; color: string;
+  particles: number; pwidth: number; pspeed: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
+  // ── latency + stats ─────────────────────────────────────────────────────────
+  const [latency, setLatency] = useState<number | null>(null);
+  const [activityPct, setActivityPct] = useState<string>("—");
+
+  // ── graph query ─────────────────────────────────────────────────────────────
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
+    queryKey: ["fleet-kb", "graph"],
+    queryFn: async () => {
+      const start = Date.now();
+      const result = await fleetKbApi.getGraph();
+      setLatency(Date.now() - start);
+      return result;
+    },
+    staleTime: 60_000,
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: true,
+  });
+
+  // ── dreams query ────────────────────────────────────────────────────────────
+  const { data: dreamsData } = useQuery({
+    queryKey: ["fleet-kb", "dreams"],
+    queryFn: () => fleetKbApi.getDreams(),
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const fgRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dim, setDim] = useState({ w: window.innerWidth, h: window.innerHeight - 56 });
+  const [hover, setHover] = useState<BrainNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  // ── interactive controls ────────────────────────────────────────────────────
+  const [searchQuery, setSearchQuery] = useState("");
+  const [focusRegion, setFocusRegion] = useState<RegionKey | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+
+  // ── interaction clock ───────────────────────────────────────────────────────
+  const lastInteractRef = useRef(0);
+  const bump = useCallback(() => { lastInteractRef.current = Date.now(); }, []);
+
+  // ── pulse bookkeeping ───────────────────────────────────────────────────────
+  const prevIdsRef = useRef<Set<string>>(new Set());
+  const pulseRef = useRef<Map<string, number>>(new Map());
+  const pulseRunning = useRef(false);
+  const [pulseVersion, setPulseVersion] = useState(0);
+
+  const startPulseLoop = useCallback(() => {
+    if (pulseRunning.current) return;
+    pulseRunning.current = true;
+    let last = 0;
+    const tick = () => {
+      const now = Date.now();
+      for (const [id, end] of pulseRef.current) if (end <= now) pulseRef.current.delete(id);
+      if (now - last > 70) { last = now; setPulseVersion((v) => v + 1); }
+      if (pulseRef.current.size > 0) requestAnimationFrame(tick);
+      else { pulseRunning.current = false; setPulseVersion((v) => v + 1); }
+    };
+    requestAnimationFrame(tick);
+  }, []);
+
+  // ── size tracking ───────────────────────────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) setDim({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── transform graph ─────────────────────────────────────────────────────────
+  const graph = useMemo(() => {
+    const rawNodes = data?.graph?.nodes ?? [];
+    const rawEdges = data?.graph?.edges ?? [];
+    const regionOf = new Map<string, RegionKey>();
+    const nodes: BrainNode[] = rawNodes.map((n) => {
+      const region = regionForNode(n);
+      regionOf.set(n.id, region);
+      return {
+        ...n,
+        region,
+        color: REGIONS[region].color,
+        val: nodeSize(n),
+        isHub: n.kind !== "note",
+      };
+    });
+    const ids = new Set(nodes.map((n) => n.id));
+    const links: BrainLink[] = rawEdges
+      .filter((e) => ids.has(e.source) && ids.has(e.target))
+      .map((e, i) => {
+        const r = edgeRand(e.source, e.target, i);
+        const cross = e.kind === "related";
+        const srcRegion = regionOf.get(e.source)!;
+        return {
+          source: e.source,
+          target: e.target,
+          kind: e.kind,
+          color: REGIONS[srcRegion].color,
+          particles: cross ? (r < 0.5 ? 2 : 3) : (r < 0.7 ? 1 : 2),
+          pwidth: cross ? (0.9 + r * 1.6) : (0.6 + r * 1.0),
+          pspeed: 0.004 + r * 0.011,
+        };
+      });
+    return { nodes, links, regionOf };
+  }, [data]);
+
+  // fast lookups
+  const nodeById = useMemo(() => {
+    const m = new Map<string, BrainNode>();
+    for (const n of graph.nodes) m.set(n.id, n);
+    return m;
+  }, [graph.nodes]);
+
+  const notesById = useMemo(() => {
+    const m = new Map<string, NonNullable<typeof data>["notes"][number]>();
+    for (const n of data?.notes ?? []) m.set(n.id, n);
+    return m;
+  }, [data]);
+
+  // search index
+  const searchIndex = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const n of graph.nodes) {
+      let t = n.label || "";
+      if (n.noteId) {
+        const note = notesById.get(n.noteId);
+        if (note) t += " " + note.title + " " + (note.body || "") + " " + (note.excerpt || "");
+      }
+      m.set(n.id, t.toLowerCase());
+    }
+    return m;
+  }, [graph.nodes, notesById]);
+
+  const q = searchQuery.trim().toLowerCase();
+  const matchSet = useMemo(() => {
+    if (!q) return null;
+    const s = new Set<string>();
+    for (const n of graph.nodes) {
+      const t = searchIndex.get(n.id);
+      if (t && t.includes(q)) s.add(n.id);
+    }
+    return s;
+  }, [q, graph.nodes, searchIndex]);
+
+  const hasNarrowing =
+    !!q || !!focusRegion || selectedAgents.size > 0 || selectedCats.size > 0;
+
+  const isNodeActive = useCallback(
+    (n: BrainNode) => {
+      if (focusRegion && n.region !== focusRegion) return false;
+      if (selectedAgents.size > 0 && n.kind === "note" && !(n.agentId && selectedAgents.has(n.agentId))) return false;
+      if (selectedCats.size > 0 && n.kind === "note" && !(n.category && selectedCats.has(n.category))) return false;
+      if (matchSet && !matchSet.has(n.id)) return false;
+      return true;
+    },
+    [focusRegion, selectedAgents, selectedCats, matchSet],
+  );
+
+  // present regions with counts
+  const presentRegions = useMemo(() => {
+    const counts = new Map<RegionKey, number>();
+    for (const n of graph.nodes) counts.set(n.region, (counts.get(n.region) ?? 0) + 1);
+    return (Object.keys(REGIONS) as RegionKey[])
+      .filter((k) => counts.has(k))
+      .map((k) => ({ key: k, ...REGIONS[k], count: counts.get(k)! }));
+  }, [graph.nodes]);
+
+  const totalNodes = graph.nodes.length;
+  const totalLinks = graph.links.length;
+
+  // ── coherence (derived from raw data so we don't depend on mutated links) ───
+  const coherencePct = useMemo(() => {
+    const rawEdges = data?.graph?.edges ?? [];
+    const connected = new Set<string>();
+    for (const e of rawEdges) { connected.add(e.source); connected.add(e.target); }
+    const isolated = graph.nodes.filter((n) => !connected.has(n.id)).length;
+    return totalNodes > 0 ? ((1 - isolated / totalNodes) * 100).toFixed(1) : "—";
+  }, [data?.graph?.edges, graph.nodes, totalNodes]);
+
+  // ── node label sprites ──────────────────────────────────────────────────────
+  const nodeThreeObject = useCallback((node: BrainNode) => {
+    if (!node.isHub) return undefined as unknown as THREE.Object3D;
+    const label = node.kind === "agent" ? (node.label || "agent").slice(0, 14) : node.label;
+    const sprite = new SpriteText(label);
+    sprite.color = node.color;
+    sprite.fontWeight = "700";
+    sprite.fontFace = "Menlo, Consolas, monospace";
+    sprite.textHeight = node.kind === "index" ? 9 : node.kind === "category" ? 8 : 4.5;
+    sprite.backgroundColor = false as unknown as string;
+    sprite.padding = 1.5;
+    sprite.strokeColor = node.color;
+    sprite.strokeWidth = 0.5;
+    sprite.position.set(0, node.kind === "note" ? 6 : 13, 0);
+    return sprite;
+  }, []);
+
+  // ── dynamic accessors ───────────────────────────────────────────────────────
+  const nodeColorFn = useCallback(
+    (n: BrainNode) => {
+      const pe = pulseRef.current.get(n.id);
+      if (pe && pe > Date.now()) return "#ffffff";
+      if (n.id === selectedNodeId) return "#ffffff";
+      if (hasNarrowing && !isNodeActive(n)) return DIM_NODE;
+      return n.color;
+    },
+    [hasNarrowing, isNodeActive, selectedNodeId, pulseVersion],
+  );
+
+  const nodeValFn = useCallback(
+    (n: BrainNode) => {
+      let v = n.val;
+      const pe = pulseRef.current.get(n.id);
+      if (pe) {
+        const rem = pe - Date.now();
+        if (rem > 0) v *= 1 + 2.4 * (rem / PULSE_MS);
+      }
+      if (n.id === selectedNodeId) v *= 1.6;
+      return v;
+    },
+    [selectedNodeId, pulseVersion],
+  );
+
+  const linkColorFn = useCallback(
+    (l: BrainLink) => {
+      if (!hasNarrowing) return l.color;
+      const sid = typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string);
+      const tid = typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string);
+      const s = nodeById.get(sid); const t = nodeById.get(tid);
+      return s && t && isNodeActive(s) && isNodeActive(t) ? l.color : DIM_LINK;
+    },
+    [hasNarrowing, isNodeActive, nodeById],
+  );
+
+  const linkParticlesFn = useCallback(
+    (l: BrainLink) => {
+      if (!hasNarrowing) return l.particles;
+      const sid = typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string);
+      const tid = typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string);
+      const s = nodeById.get(sid); const t = nodeById.get(tid);
+      return s && t && isNodeActive(s) && isNodeActive(t) ? l.particles : 0;
+    },
+    [hasNarrowing, isNodeActive, nodeById],
+  );
+
+  // ── bloom + forces + labels + auto-rotate + energy core ─────────────────────
+  const regionLabelsRef = useRef<THREE.Sprite[]>([]);
+  const coreGroupRef = useRef<THREE.Group | null>(null);
+  const coreRafRef = useRef<number>(0);
+
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    let raf = 0;
+    let rotTimer: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+    let bloomDone = false;
+
+    function buildRegionLabels(scene: THREE.Scene, nodes: BrainNode[]) {
+      for (const s of regionLabelsRef.current) scene.remove(s);
+      regionLabelsRef.current = [];
+      const sums = new Map<RegionKey, { x: number; y: number; z: number; n: number }>();
+      for (const nd of nodes) {
+        if (nd.x == null) continue;
+        const a = sums.get(nd.region) ?? { x: 0, y: 0, z: 0, n: 0 };
+        a.x += nd.x; a.y += nd.y!; a.z += nd.z!; a.n++;
+        sums.set(nd.region, a);
+      }
+      for (const [rk, a] of sums) {
+        if (!a.n) continue;
+        const reg = REGIONS[rk];
+        const st = new SpriteText(reg.label);
+        st.color = reg.color;
+        st.fontWeight = "700";
+        st.fontFace = "Menlo, Consolas, monospace";
+        st.textHeight = 16;
+        st.backgroundColor = false as unknown as string;
+        st.strokeColor = reg.color;
+        st.strokeWidth = 0.4;
+        st.material.opacity = 0.55;
+        st.material.depthWrite = false;
+        (st as unknown as { __rk: RegionKey }).__rk = rk;
+        st.position.set(a.x / a.n, a.y / a.n + 46, a.z / a.n);
+        scene.add(st);
+        regionLabelsRef.current.push(st);
+      }
+    }
+
+    function buildEnergyCore(scene: THREE.Scene) {
+      if (coreGroupRef.current) {
+        scene.remove(coreGroupRef.current);
+        coreGroupRef.current = null;
+      }
+      const group = new THREE.Group();
+
+      // outer glow sphere
+      const outerGeo = new THREE.SphereGeometry(18, 24, 24);
+      const outerMat = new THREE.MeshBasicMaterial({ color: 0x3b82ff, transparent: true, opacity: 0.22 });
+      group.add(new THREE.Mesh(outerGeo, outerMat));
+
+      // inner core
+      const innerGeo = new THREE.SphereGeometry(6, 16, 16);
+      const innerMat = new THREE.MeshBasicMaterial({ color: 0x8ec5ff });
+      group.add(new THREE.Mesh(innerGeo, innerMat));
+
+      // filaments
+      const filamentCount = 10;
+      for (let i = 0; i < filamentCount; i++) {
+        const angle = (i / filamentCount) * Math.PI * 2 + (hashStr(`fil${i}`) % 100) / 200;
+        const r1 = 18 + ((hashStr(`f1${i}`) % 100) / 100) * 22;
+        const r2 = 18 + ((hashStr(`f2${i}`) % 100) / 100) * 28;
+        const y1 = ((hashStr(`fy1${i}`) % 100) / 100 - 0.5) * 24;
+        const y2 = ((hashStr(`fy2${i}`) % 100) / 100 - 0.5) * 30;
+
+        const curve = new THREE.CatmullRomCurve3([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(Math.cos(angle) * r1 * 0.6, y1, Math.sin(angle) * r1 * 0.6),
+          new THREE.Vector3(Math.cos(angle) * r2, y2, Math.sin(angle) * r2),
+        ]);
+        const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(12));
+        const mat = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.18 });
+        group.add(new THREE.Line(geo, mat));
+      }
+
+      scene.add(group);
+      coreGroupRef.current = group;
+
+      const spin = () => {
+        if (!coreGroupRef.current) return;
+        coreGroupRef.current.rotation.y += 0.003;
+        coreGroupRef.current.rotation.x += 0.001;
+        coreRafRef.current = requestAnimationFrame(spin);
+      };
+      coreRafRef.current = requestAnimationFrame(spin);
+    }
+
+    function setup() {
+      if (cancelled) return;
+      const fg = fgRef.current;
+      if (!fg) { raf = requestAnimationFrame(setup); return; }
+      const renderer = fg.renderer?.() as THREE.WebGLRenderer | undefined;
+      const scene = fg.scene?.() as THREE.Scene | undefined;
+      if (!renderer || !scene) { raf = requestAnimationFrame(setup); return; }
+
+      if (!bloomDone) {
+        bloomDone = true;
+        renderer.toneMapping = THREE.ReinhardToneMapping;
+        renderer.toneMappingExposure = 1.15;
+        const composer = (fg as unknown as { postProcessingComposer: () => { addPass: (p: unknown) => void } }).postProcessingComposer();
+        const bloom = new UnrealBloomPass(
+          new THREE.Vector2(dim.w, dim.h),
+          1.2,   // toned-down glow
+          0.85,
+          0.0,
+        );
+        composer.addPass(bloom);
+
+        try {
+          fg.d3Force("charge")?.strength(-135);
+          const linkForce = fg.d3Force("link");
+          if (linkForce) {
+            linkForce.distance((l: BrainLink) => {
+              const ra = graph.regionOf.get(typeof l.source === "object" ? (l.source as BrainNode).id : (l.source as string));
+              const rb = graph.regionOf.get(typeof l.target === "object" ? (l.target as BrainNode).id : (l.target as string));
+              return ra && rb && ra === rb ? 28 : 95;
+            });
+          }
+          fg.d3ReheatSimulation?.();
+        } catch { /* best effort */ }
+
+        const RADIUS = 430;
+        let angle = 0;
+        fg.cameraPosition({ x: 0, y: 50, z: RADIUS });
+        rotTimer = setInterval(() => {
+          if (Date.now() - lastInteractRef.current < IDLE_MS) {
+            const cam = fg.camera?.();
+            if (cam) angle = Math.atan2(cam.position.x, cam.position.z);
+            return;
+          }
+          angle += Math.PI / 1500;
+          fg.cameraPosition({
+            x: RADIUS * Math.sin(angle),
+            y: 110 * Math.sin(angle * 0.35),
+            z: RADIUS * Math.cos(angle),
+          });
+        }, 30);
+      }
+
+      buildEnergyCore(scene);
+      buildRegionLabels(scene, graph.nodes);
+    }
+    raf = requestAnimationFrame(setup);
+    const settle = setTimeout(() => {
+      const fg = fgRef.current; const scene = fg?.scene?.() as THREE.Scene | undefined;
+      if (scene) buildRegionLabels(scene, graph.nodes);
+    }, 4000);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(coreRafRef.current);
+      clearTimeout(settle);
+      if (rotTimer) clearInterval(rotTimer);
+      const scene = fgRef.current?.scene?.() as THREE.Scene | undefined;
+      if (scene) {
+        for (const s of regionLabelsRef.current) scene.remove(s);
+        if (coreGroupRef.current) scene.remove(coreGroupRef.current);
+      }
+      regionLabelsRef.current = [];
+      coreGroupRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graph.nodes.length]);
+
+  // ── focus: fade region labels ───────────────────────────────────────────────
+  useEffect(() => {
+    for (const s of regionLabelsRef.current) {
+      const rk = (s as unknown as { __rk?: RegionKey }).__rk;
+      s.material.opacity = !focusRegion || rk === focusRegion ? 0.55 : 0.08;
+    }
+  }, [focusRegion, pulseVersion]);
+
+  // ── LIVE PULSE ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!graph.nodes.length) return;
+    const ids = new Set(graph.nodes.map((n) => n.id));
+    if (prevIdsRef.current.size === 0) { prevIdsRef.current = ids; return; }
+    const news: string[] = [];
+    for (const id of ids) if (!prevIdsRef.current.has(id)) news.push(id);
+    if (news.length) {
+      const pct = ids.size > 0 ? ((news.length / ids.size) * 100).toFixed(1) : "0.0";
+      setActivityPct(pct);
+      const end = Date.now() + PULSE_MS;
+      for (const id of news) pulseRef.current.set(id, end);
+      startPulseLoop();
+    } else {
+      setActivityPct("0.0");
+    }
+    prevIdsRef.current = ids;
+  }, [graph.nodes, startPulseLoop]);
+
+  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) ?? null : null;
+
+  const selectedNote = useMemo(() => {
+    if (!selectedNode || selectedNode.kind !== "note" || !selectedNode.noteId) return null;
+    return (data?.notes ?? []).find((n) => n.id === selectedNode.noteId) ?? null;
+  }, [selectedNode, data]);
+
+  const relatedLinks = useMemo(() => {
+    if (!selectedNodeId) return [] as Array<{ id: string; title: string; region: RegionKey; color: string }>;
+    const out: Array<{ id: string; title: string; region: RegionKey; color: string }> = [];
+    const seen = new Set<string>();
+    for (const e of data?.graph?.edges ?? []) {
+      if (e.kind !== "related" && e.kind !== "link") continue;
+      let other: string | null = null;
+      if (e.source === selectedNodeId) other = e.target;
+      else if (e.target === selectedNodeId) other = e.source;
+      if (!other || seen.has(other)) continue;
+      const on = nodeById.get(other);
+      if (!on || on.kind !== "note") continue;
+      seen.add(other);
+      out.push({ id: other, title: on.label, region: on.region, color: on.color });
+    }
+    return out.slice(0, 24);
+  }, [selectedNodeId, data, nodeById]);
+
+  // ── camera fly-to ───────────────────────────────────────────────────────────
+  const flyTo = useCallback((id: string) => {
+    const fg = fgRef.current;
+    if (!fg) return;
+    const n = nodeById.get(id) as (BrainNode & { x?: number; y?: number; z?: number }) | undefined;
+    if (!n || n.x == null) return;
+    bump();
+    const dist = 120;
+    const r = 1 + dist / Math.max(1, Math.hypot(n.x, n.y ?? 0, n.z ?? 0));
+    fg.cameraPosition({ x: n.x * r, y: (n.y ?? 0) * r, z: (n.z ?? 0) * r }, n, 1400);
+  }, [nodeById, bump]);
+
+  const handleNodeClick = useCallback((node: BrainNode) => {
+    bump();
+    if (node.kind === "note") setSelectedNodeId(node.id);
+  }, [bump]);
+
+  const jumpToRelated = useCallback((id: string) => {
+    setSelectedNodeId(id);
+    flyTo(id);
+  }, [flyTo]);
+
+  // ── toggles ─────────────────────────────────────────────────────────────────
+  const toggleAgent = useCallback((id: string) => {
+    bump();
+    setSelectedAgents((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  }, [bump]);
+  const toggleCat = useCallback((key: string) => {
+    bump();
+    setSelectedCats((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+  }, [bump]);
+  const toggleRegion = useCallback((key: RegionKey) => {
+    bump();
+    setFocusRegion((prev) => (prev === key ? null : key));
+  }, [bump]);
+  const resetAll = useCallback(() => {
+    bump();
+    setSearchQuery(""); setFocusRegion(null);
+    setSelectedAgents(new Set()); setSelectedCats(new Set());
+  }, [bump]);
+
+  const panelBorder = "1px solid rgba(255,255,255,0.08)";
+  const matchCount = matchSet ? matchSet.size : 0;
+
+  const chipStyle = (on: boolean, color: string) => ({
+    border: on ? `1px solid ${color}` : panelBorder,
+    background: on ? `${color}26` : "rgba(8,9,11,0.62)",
+    color: on ? color : "#9aa4b2",
+    boxShadow: on ? `0 0 10px ${color}55` : "none",
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  RENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  return (
+    <div className="relative w-full overflow-hidden" style={{ height: "100%", background: "#030408" }}>
+
+      {/* ── TOP BAR ─────────────────────────────────────────────────────── */}
+      <div
+        className="absolute left-0 right-0 top-0 z-30 flex items-center justify-between px-4 py-2"
+        style={{ background: "rgba(3,4,8,0.72)", borderBottom: panelBorder, backdropFilter: "blur(10px)" }}
+      >
+        <div className="flex items-center gap-2">
+          <Brain size={16} style={{ color: "#3b82ff" }} />
+          <span
+            className="text-xs font-bold tracking-widest"
+            style={{ color: "#cfe0ff", fontFamily: "Menlo, ui-monospace, monospace", letterSpacing: "0.18em" }}
+          >
+            FLEET BRAIN · NEURAL COMMAND NETWORK
+          </span>
+        </div>
+        <div className="flex items-center gap-4 text-[10px]" style={{ fontFamily: "Menlo, ui-monospace, monospace", color: "rgba(160,185,225,0.7)" }}>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "#22e06b", boxShadow: "0 0 6px #22e06b" }} />
+            LIVE
+          </span>
+          {latency !== null && (
+            <span className="inline-flex items-center gap-1">
+              <Wifi size={10} /> {latency}ms
+            </span>
+          )}
+          <button
+            onClick={() => { bump(); refetch(); }}
+            title="Refresh"
+            className="inline-flex items-center gap-1 rounded p-1 text-gray-400 transition hover:text-white"
+            style={{ border: "1px solid rgba(255,255,255,0.12)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <RefreshCw size={12} className={isFetching ? "animate-spin" : ""} />
+          </button>
+          <button
+            onClick={onShowKb}
+            title="Open Fleet KB"
+            className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-gray-300 transition hover:text-white"
+            style={{ border: "1px solid rgba(167,139,250,0.35)", background: "rgba(8,9,11,0.5)" }}
+          >
+            <BookOpen size={11} style={{ color: "#a78bfa" }} /> KB
+          </button>
+        </div>
+      </div>
+
+      {/* ── LEFT CONTROL DECK (search · filters) ────────────────────────── */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute left-4 top-16 z-20 flex flex-col gap-2" style={{ width: 280 }}>
+          <div
+            className="flex items-center gap-2 rounded-lg px-2.5 py-1.5"
+            style={{ border: panelBorder, background: "rgba(8,9,11,0.8)", backdropFilter: "blur(6px)" }}
+          >
+            <Search size={14} style={{ color: "#7dd3fc" }} />
+            <input
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); bump(); }}
+              onFocus={bump}
+              placeholder="search neurons…"
+              className="w-full bg-transparent text-xs text-gray-100 outline-none placeholder:text-gray-600"
+              style={{ fontFamily: "Menlo, ui-monospace, monospace" }}
+            />
+            {searchQuery && (
+              <button onClick={() => { setSearchQuery(""); bump(); }} className="text-gray-500 transition hover:text-white">
+                <X size={13} />
+              </button>
+            )}
+          </div>
+          {searchQuery && (
+            <div className="px-1 text-[10px]" style={{ color: "rgba(160,185,225,0.7)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}>
+              {matchCount} NEURON{matchCount === 1 ? "" : "S"} HIGHLIGHTED
+            </div>
+          )}
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.categories ?? []).map((c) => (
+              <button
+                key={c.key}
+                onClick={() => toggleCat(c.key)}
+                className="rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedCats.has(c.key), c.key === "decision" ? "#c061f7" : "#ff3b5c"), fontFamily: "Menlo, monospace" }}
+              >
+                {c.label} · {c.count}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {(data?.agents ?? []).map((a) => (
+              <button
+                key={a.id}
+                onClick={() => toggleAgent(a.id)}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition"
+                style={{ ...chipStyle(selectedAgents.has(a.id), "#ffd21a"), fontFamily: "Menlo, monospace" }}
+                title={`agent ${a.id}`}
+              >
+                <Bot size={10} /> {a.id.slice(0, 6)} · {a.count}
+              </button>
+            ))}
+          </div>
+          {hasNarrowing && (
+            <button
+              onClick={resetAll}
+              className="self-start rounded-md px-2 py-0.5 text-[10px] text-gray-300 transition hover:text-white"
+              style={{ border: panelBorder, background: "rgba(8,9,11,0.6)", fontFamily: "Menlo, monospace", letterSpacing: "0.08em" }}
+            >
+              ✕ CLEAR FILTERS
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* ── LEGEND (right side) ─────────────────────────────────────────── */}
+      <div
+        className="absolute right-4 top-16 z-20 rounded-lg p-3 text-right"
+        style={{ fontFamily: "Menlo, ui-monospace, monospace", fontSize: 10, letterSpacing: "0.06em", lineHeight: 1.7, background: "rgba(4,5,8,0.55)", border: panelBorder, maxWidth: 260 }}
+      >
+        <div className="mb-1 text-[9px]" style={{ color: "rgba(150,170,210,0.5)" }}>CLICK A LOBE TO FOCUS</div>
+        {presentRegions.map((r) => {
+          const active = focusRegion === r.key;
+          const faded = focusRegion != null && !active;
+          return (
+            <button
+              key={r.key}
+              onClick={() => toggleRegion(r.key)}
+              className="flex w-full items-center justify-end gap-2 rounded px-1 transition hover:bg-white/5"
+              style={{ opacity: faded ? 0.35 : 1, background: active ? `${r.color}1f` : "transparent" }}
+            >
+              <span style={{ color: r.color, fontWeight: active ? 700 : 400 }}>{r.label}</span>
+              <span style={{ opacity: 0.5 }}>{r.role}</span>
+              <span style={{ opacity: 0.4 }}>{r.count}</span>
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 99, background: r.color, boxShadow: `0 0 8px ${r.color}` }} />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── HOVER TOOLTIP ───────────────────────────────────────────────── */}
+      {hover && (
+        <div
+          className="pointer-events-none absolute left-1/2 top-12 z-20 -translate-x-1/2 rounded-md px-3 py-1.5 text-xs"
+          style={{ background: "rgba(8,9,11,0.85)", border: panelBorder, color: "#e5e7eb", backdropFilter: "blur(6px)" }}
+        >
+          <span style={{ color: hover.color }}>●</span>{" "}
+          <span className="font-medium">{hover.label}</span>{" "}
+          <span className="text-gray-500">· {REGIONS[hover.region].label}</span>
+        </div>
+      )}
+
+      {/* ── BOTTOM HUD STRIP ────────────────────────────────────────────── */}
+      {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+        <div className="absolute bottom-4 left-4 right-4 z-20 flex items-end gap-3">
+          {/* Fleet Brain Overview */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 220, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#cfe0ff", fontFamily: "Menlo, monospace" }}>
+              <Brain size={12} /> FLEET BRAIN OVERVIEW
+            </div>
+            <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Neurons</span>
+              <span className="text-right text-gray-200">{totalNodes}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Synapses</span>
+              <span className="text-right text-gray-200">{totalLinks}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Activity</span>
+              <span className="text-right" style={{ color: activityPct !== "—" ? "#22e06b" : "#9aa4b2" }}>{activityPct}%</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Coherence</span>
+              <span className="text-right text-gray-200">{coherencePct}%</span>
+            </div>
+          </div>
+
+          {/* Dreams */}
+          <div
+            className="flex flex-1 flex-col gap-1.5 rounded-lg p-3"
+            style={{ background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)", minWidth: 200 }}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#d946ef", fontFamily: "Menlo, monospace" }}>
+                <Zap size={12} /> DREAMS
+              </div>
+              <span className="text-[9px]" style={{ color: "rgba(160,185,225,0.5)", fontFamily: "Menlo, monospace" }}>
+                {dreamsData?.date ?? "—"}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-[10px]" style={{ fontFamily: "Menlo, monospace" }}>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Dirs:</span>
+              <span className="text-gray-200">{dreamsData?.dirsConsolidated ?? 0}</span>
+              <span style={{ color: "rgba(160,185,225,0.5)" }}>Failures:</span>
+              <span className={dreamsData && dreamsData.failures > 0 ? "text-red-400" : "text-green-400"}>
+                {dreamsData?.failures ?? 0}
+              </span>
+            </div>
+            <div className="max-h-20 overflow-y-auto text-[10px] leading-relaxed text-gray-400" style={{ fontFamily: "Menlo, monospace" }}>
+              {dreamsData?.content ? (
+                dreamsData.content.slice(0, 360).replace(/\n/g, " ").replace(/\s+/g, " ") + (dreamsData.content.length > 360 ? "…" : "")
+              ) : (
+                <span className="italic opacity-50">No consolidation data available.</span>
+              )}
+            </div>
+          </div>
+
+          {/* Signal Flow */}
+          <div
+            className="flex flex-col gap-1.5 rounded-lg p-3"
+            style={{ width: 240, background: "rgba(4,5,8,0.72)", border: panelBorder, backdropFilter: "blur(8px)" }}
+          >
+            <div className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider" style={{ color: "#f59e0b", fontFamily: "Menlo, monospace" }}>
+              <Activity size={12} /> SIGNAL FLOW
+            </div>
+            <div className="mt-1 flex flex-col gap-1.5">
+              {presentRegions.map((r) => {
+                const pct = totalNodes > 0 ? ((r.count / totalNodes) * 100).toFixed(1) : "0.0";
+                return (
+                  <div key={r.key} className="flex items-center gap-2">
+                    <span className="w-16 text-[9px] uppercase" style={{ color: r.color }}>{r.label}</span>
+                    <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-1000"
+                        style={{ width: `${pct}%`, background: r.color, boxShadow: `0 0 6px ${r.color}66` }}
+                      />
+                    </div>
+                    <span className="w-8 text-[9px] text-right text-gray-400">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── STATES ──────────────────────────────────────────────────────── */}
+      {isLoading && (
+        <div className="flex h-full items-center justify-center text-sm" style={{ color: "#6f9bff", fontFamily: "Menlo, monospace", letterSpacing: "0.2em" }}>
+          INITIALIZING SYNAPSES…
+        </div>
+      )}
+      {isError && (
+        <div className="flex h-full items-center justify-center text-sm text-red-400">Failed to load Fleet KB graph.</div>
+      )}
+      {!isLoading && !isError && data?.available === false && (
+        <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-gray-500">
+          <div>Fleet KB vault not found.</div>
+          <code className="text-[11px] text-gray-600">{data.vaultPath}</code>
+        </div>
+      )}
+
+      {/* ── THE BRAIN ───────────────────────────────────────────────────── */}
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ touchAction: "none" }}
+        onPointerDown={bump}
+        onPointerMove={bump}
+        onWheel={bump}
+      >
+        {!isLoading && !isError && data?.available && graph.nodes.length > 0 && (
+          <ForceGraph3D<BrainNode, BrainLink>
+            ref={fgRef}
+            width={dim.w}
+            height={dim.h}
+            graphData={graph}
+            backgroundColor="#030408"
+            showNavInfo={false}
+            nodeRelSize={4}
+            nodeVal={nodeValFn}
+            nodeColor={nodeColorFn}
+            nodeOpacity={0.92}
+            nodeResolution={12}
+            nodeThreeObjectExtend={true}
+            nodeThreeObject={nodeThreeObject}
+            nodeLabel={(n) => `${n.label} · ${REGIONS[n.region].label}`}
+            linkColor={linkColorFn}
+            linkOpacity={0.16}
+            linkWidth={0.45}
+            linkCurvature={0.22}
+            linkDirectionalParticles={linkParticlesFn}
+            linkDirectionalParticleWidth="pwidth"
+            linkDirectionalParticleSpeed="pspeed"
+            linkDirectionalParticleColor="color"
+            linkDirectionalParticleResolution={6}
+            warmupTicks={60}
+            cooldownTime={9000}
+            onNodeHover={(n) => { setHover((n as BrainNode) ?? null); bump(); }}
+            onNodeClick={(n) => handleNodeClick(n as BrainNode)}
+          />
+        )}
+      </div>
+
+      {/* ── NOTE DETAIL CARD ────────────────────────────────────────────── */}
+      {selectedNote && (
+        <aside
+          className="absolute right-4 top-32 z-30 flex max-h-[70vh] w-[400px] flex-col overflow-hidden rounded-xl"
+          style={{ background: "rgba(10,11,15,0.94)", border: panelBorder, backdropFilter: "blur(8px)" }}
+        >
+          <div className="flex items-start gap-2 px-4 pb-3 pt-3" style={{ borderBottom: panelBorder }}>
+            <FileText size={16} className="mt-0.5 shrink-0" style={{ color: selectedNote.category === "decision" ? "#c061f7" : "#ff3b5c" }} />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold leading-snug text-white">{selectedNote.title}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-gray-500">
+                {selectedNote.date && <span>{selectedNote.date}</span>}
+                <span className="rounded px-1.5 py-0.5" style={{ background: "rgba(255,255,255,0.06)" }}>{selectedNote.categoryLabel}</span>
+                {selectedNote.agentId && (
+                  <span className="inline-flex items-center gap-1" style={{ color: "#ffd21a" }}>
+                    <Bot size={11} /> {selectedNote.agentId.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+            </div>
+            <button onClick={() => setSelectedNodeId(null)} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto px-4 py-3 text-[12px] leading-relaxed text-gray-300">
+            {selectedNote.excerpt || selectedNote.body?.slice(0, 600) || "No preview available."}
+
+            {relatedLinks.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-1.5 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500" style={{ fontFamily: "Menlo, monospace" }}>
+                  <Link2 size={11} /> Related neurons · {relatedLinks.length}
+                </div>
+                <div className="flex flex-col gap-1">
+                  {relatedLinks.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => jumpToRelated(r.id)}
+                      title="Fly to this neuron"
+                      className="group flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] text-gray-300 transition hover:bg-white/5 hover:text-white"
+                      style={{ border: panelBorder }}
+                    >
+                      <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: 99, background: r.color, boxShadow: `0 0 6px ${r.color}`, flexShrink: 0 }} />
+                      <span className="min-w-0 flex-1 truncate">{r.title}</span>
+                      <ExternalLink size={11} className="shrink-0 opacity-40 transition group-hover:opacity-90" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={onShowKb}
+            className="m-3 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs text-gray-200 hover:bg-white/5"
+            style={{ border: panelBorder }}
+          >
+            <ExternalLink size={13} /> Open in Fleet KB reader
+          </button>
+        </aside>
+      )}
+    </div>
+  );
+}
+
+export default FleetBrainView;

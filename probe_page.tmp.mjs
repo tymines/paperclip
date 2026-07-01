@@ -1,0 +1,15 @@
+import { chromium } from '@playwright/test';
+const browser = await chromium.launch({ headless: true, executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+page.setDefaultTimeout(5000);
+page.on('console', m => console.log('CONSOLE', m.type(), m.text()));
+page.on('pageerror', e => console.log('PAGEERROR', e.message));
+await page.goto('http://127.0.0.1:3100/TYL/knowledge-graph', { waitUntil: 'commit', timeout: 15000 });
+await page.waitForTimeout(5000);
+console.log('READY', await page.evaluate(() => document.readyState).catch(e => 'ERR '+e.message));
+console.log('URL', page.url());
+console.log('TITLE_EVAL', await page.evaluate(() => document.title).catch(e => 'ERR '+e.message));
+console.log('TEXT', (await page.evaluate(() => document.body.innerText).catch(e => 'ERR '+e.message)).slice(0,2000));
+console.log('BUTTONS', JSON.stringify(await page.evaluate(() => Array.from(document.querySelectorAll('button')).slice(0,30).map(b => b.textContent?.trim())).catch(e => ['ERR '+e.message])));
+console.log('ROOT', (await page.evaluate(() => document.querySelector('#root')?.innerHTML || '').catch(e => 'ERR '+e.message)).slice(0,1000));
+await browser.close();

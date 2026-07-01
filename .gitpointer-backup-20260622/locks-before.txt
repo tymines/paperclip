@@ -1,0 +1,16 @@
+.git/index.lock
+.git/objects/maintenance.lock
+.git/worktrees/simple-batch2/index.lock
+.git/worktrees/simple-batch2/HEAD.lock
+.git/worktrees/simple-batch3/index.lock
+.git/worktrees/simple-batch3/HEAD.lock
+.git/worktrees/simple-batch1/index.lock
+.git/worktrees/simple-batch1/HEAD.lock
+.git/worktrees/simple-batch1/ORIG_HEAD.lock
+.git/worktrees/appdev-redesign/index.lock
+.git/worktrees/appdev-redesign/HEAD.lock
+.git/refs/heads/paperclip-appdev-redesign.lock
+.git/refs/heads/paperclip-simple-batch1.lock
+.git/refs/heads/paperclip-simple-batch2.lock
+.git/refs/heads/paperclip-simple-batch3.lock
+.git/HEAD.lock
