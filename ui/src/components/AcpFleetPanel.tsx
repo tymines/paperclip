@@ -130,18 +130,11 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[14px] font-semibold" style={{ color: C.text }}>
-                ACP Fleet — self-described capabilities (multi-agent)
-              </span>
-              <span
-                className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-                style={{ background: "rgba(165,110,255,0.14)", color: C.accent }}
-              >
-                Phase 1
+                Canonical Fleet — lean roster
               </span>
             </div>
             <div className="text-[11px]" style={{ color: C.textFaint }}>
-              Each agent&apos;s models &amp; modes built from one ACP handshake · read-only · runs alongside the
-              bridge (no cutover)
+              Built from CANONICAL_FLEET_MODELS + CANONICAL_HOST_MAP · no gateway handshake
             </div>
           </div>
         </div>
@@ -219,10 +212,9 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
               <Users className="h-4 w-4" style={{ color: C.primary }} />
               <strong>{data.agentCount} agents</strong>
               <span style={{ color: C.textMuted }}>
-                self-described from a single ACP handshake — capabilities built from the handshake, not hard-coded
-                adapter config.
+                from canonical lean roster — models from CANONICAL_FLEET_MODELS, hosts from CANONICAL_HOST_MAP.
               </span>
-              <ProvBadge kind="real" />
+              <ProvBadge kind="derived" />
             </div>
 
             {/* per-agent capability cards */}

@@ -28,6 +28,7 @@ import { WebSocket } from "ws";
 import {
   canonicalModelFor,
   hostFor,
+  CANONICAL_FLEET_MODELS,
   type CanonicalModel,
   type HostEntry,
 } from "./canonical-fleet.js";
@@ -628,14 +629,26 @@ export async function readGatewayFleet(
   const openclawHome = opts.openclawHome ?? path.join(os.homedir(), ".openclaw");
   const timeoutMs = opts.timeoutMs ?? 12_000;
 
-  // When skipGateway is true, build the fleet from the canonical DB roster
-  // without opening any WebSocket to the OpenClaw gateway. Requires roster.
+  // ── skipGateway mode: build fleet from canonical maps, no gateway WS ─────
+  // When skipGateway is true, build the fleet from the canonical fleet model
+  // map + host map, WITHOUT opening any WebSocket to the OpenClaw gateway.
+  // If the caller provides a DB roster, it's enriched with canonical models.
+  // If not (the lean agents live only in the static map, not in the Paperclip
+  // agent table), the roster is built from the canonical map keys directly.
+  // This permanently eliminates the "gateway handshake" as a fallback path.
   if (opts.skipGateway) {
-    if (!Array.isArray(opts.roster) || opts.roster.length === 0) {
-      return { ok: false, agentLabel, url, error: "skipGateway requires a non-empty roster", stage: "param" };
-    }
+    // Use the provided DB roster if non-empty; otherwise build from the static
+    // canonical map (so the canonical-db path never depends on the agent table).
+    const effectiveRoster = Array.isArray(opts.roster) && opts.roster.length > 0
+        ? opts.roster
+        : Object.keys(CANONICAL_FLEET_MODELS).map((key) => ({
+            id: "canonical-" + key.replace(/\s+/g, "-"),
+            name: key,
+            role: null,
+            title: null,
+          }));
     const emptyTeam = { capable: true };
-    const agents = buildCanonicalAgentCapabilities(opts.roster, [], emptyTeam);
+    const agents = buildCanonicalAgentCapabilities(effectiveRoster, [], emptyTeam);
     const fleet: AcpFleet = {
       ok: true,
       transport: "canonical-db",
@@ -665,7 +678,7 @@ export async function readGatewayFleet(
       },
       notes: {
         real: [
-          `${agents.length} agents — canonical lean roster from Paperclip DB`,
+          `${agents.length} agents — canonical lean roster from CANONICAL_FLEET_MODELS`,
           "per-agent model from CANONICAL_FLEET_MODELS (derived from fleet config)",
           "host map from CANONICAL_HOST_MAP (derived from fleet config)",
         ],
