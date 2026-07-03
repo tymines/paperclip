@@ -32,7 +32,6 @@ import {
   LayoutGrid,
   List as ListIcon,
   Play,
-  ExternalLink,
   ChevronDown,
   ChevronUp,
   Settings as SettingsIcon,
@@ -1180,14 +1179,6 @@ function PersonaWorkspace({
           </div>
         </div>
 
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium"
-          style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-          View Public Profile
-        </button>
       </div>
 
       {/* Tabs */}
