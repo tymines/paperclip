@@ -480,36 +480,19 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
 
       {mode === "video" ? (
         <div
-          className="flex flex-col gap-3 rounded-xl p-4"
+          className="flex items-center gap-3 rounded-xl p-4"
           style={{ background: DS.surface, border: `1px dashed ${DS.border3}` }}
         >
           <span
-            className="inline-flex w-fit items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide"
+            className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide"
             style={{ color: DS.warning, background: "rgba(244,185,64,0.10)", border: `1px solid rgba(244,185,64,0.3)` }}
           >
             <Server className="h-3 w-3" />
-            Needs endpoint — not wired yet
+            Coming soon
           </span>
-          <p className="text-[12px] leading-relaxed" style={{ color: DS.textMuted }}>
-            Video generation for personas is planned. The controls below preview the
-            intended UI but no generation endpoint is connected — nothing is submitted.
-          </p>
-          <textarea
-            disabled
-            rows={3}
-            placeholder="Describe the motion, camera move, and scene…"
-            className="w-full resize-none rounded-lg p-2.5 text-[13px]"
-            style={{ background: DS.surface2, border: `1px solid ${DS.border}`, color: DS.textFaint }}
-          />
-          <button
-            type="button"
-            disabled
-            className="flex items-center justify-center gap-2 rounded-lg py-2.5 text-[13px] font-semibold opacity-50"
-            style={{ background: DS.surface2, color: DS.textMuted, border: `1px solid ${DS.border}`, cursor: "not-allowed" }}
-          >
-            <Video className="h-4 w-4" />
-            Generate video (disabled)
-          </button>
+          <span className="text-[12px]" style={{ color: DS.textFaint }}>
+            Video generation endpoint not yet wired — the full panel will appear when the backend ships.
+          </span>
         </div>
       ) : (
         <>
