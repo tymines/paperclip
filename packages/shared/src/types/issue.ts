@@ -399,6 +399,14 @@ export interface IssueReviewRequest {
   instructions: string;
 }
 
+export interface IssueVerdict {
+  verdict: "approved" | "needs_changes" | "rejected";
+  reviewerAgentId?: string | null;
+  reviewerComment?: string | null;
+  requestedChanges?: string[];
+  timestamp?: string | null;
+}
+
 export interface IssueExecutionState {
   status: IssueExecutionStateStatus;
   currentStageId: string | null;
@@ -460,6 +468,8 @@ export interface Issue {
   assigneeAdapterOverrides: IssueAssigneeAdapterOverrides | null;
   executionPolicy?: IssueExecutionPolicy | null;
   executionState?: IssueExecutionState | null;
+  iterationCount: number;
+  lastVerdict?: IssueVerdict | null;
   monitorNextCheckAt?: Date | null;
   monitorLastTriggeredAt?: Date | null;
   monitorAttemptCount?: number;
@@ -516,6 +526,7 @@ export interface IssueComment {
   authorType: IssueCommentAuthorType;
   authorAgentId: string | null;
   authorUserId: string | null;
+  authorName: string | null;
   createdByRunId?: string | null;
   derivedAuthorAgentId?: string | null;
   derivedCreatedByRunId?: string | null;

@@ -361,6 +361,7 @@ function authorNameForComment(
   options?: { isSystemNotice?: boolean },
 ) {
   if (comment.resolvedAuthorName) return comment.resolvedAuthorName;
+  if (comment.authorName) return comment.authorName;
   const authorAgentId = effectiveCommentAuthorAgentId(comment);
   if (authorAgentId) {
     return agentMap?.get(authorAgentId)?.name ?? (options?.isSystemNotice ? "Paperclip" : authorAgentId.slice(0, 8));

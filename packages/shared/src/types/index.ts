@@ -192,6 +192,7 @@ export type {
   IssueExecutionStageParticipant,
   IssueExecutionStagePrincipal,
   IssueReviewRequest,
+  IssueVerdict,
   IssueExecutionDecision,
   IssueComment,
   IssueCommentMetadata,

@@ -16,6 +16,7 @@ export const roomMessages = pgTable(
     roomId: uuid("room_id").notNull().references(() => rooms.id, { onDelete: "cascade" }),
     senderId: text("sender_id").notNull(),
     senderType: text("sender_type").notNull(),
+    senderName: text("sender_name"),
     content: text("content").notNull(),
     messageType: text("message_type").notNull().default("chat"),
     metadata: jsonb("metadata").$type<Record<string, unknown>>(),

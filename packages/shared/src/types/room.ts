@@ -26,6 +26,7 @@ export interface RoomMessage {
   roomId: string;
   senderId: string;
   senderType: RoomSenderType;
+  senderName: string | null;
   content: string;
   messageType: RoomMessageType;
   metadata: Record<string, unknown> | null;

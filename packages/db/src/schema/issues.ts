@@ -51,6 +51,14 @@ export const issues = pgTable(
     assigneeAdapterOverrides: jsonb("assignee_adapter_overrides").$type<Record<string, unknown>>(),
     executionPolicy: jsonb("execution_policy").$type<Record<string, unknown>>(),
     executionState: jsonb("execution_state").$type<Record<string, unknown>>(),
+    iterationCount: integer("iteration_count").notNull().default(0),
+    lastVerdict: jsonb("last_verdict").$type<{
+      verdict: "approved" | "needs_changes" | "rejected";
+      reviewerAgentId?: string | null;
+      reviewerComment?: string | null;
+      requestedChanges?: string[];
+      timestamp?: string | null;
+    }>(),
     monitorNextCheckAt: timestamp("monitor_next_check_at", { withTimezone: true }),
     monitorWakeRequestedAt: timestamp("monitor_wake_requested_at", { withTimezone: true }),
     monitorLastTriggeredAt: timestamp("monitor_last_triggered_at", { withTimezone: true }),

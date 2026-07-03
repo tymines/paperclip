@@ -1579,6 +1579,8 @@ const issueListSelect = {
   assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
   executionPolicy: sql<null>`null`,
   executionState: sql<null>`null`,
+  iterationCount: issues.iterationCount,
+  lastVerdict: issues.lastVerdict,
   monitorNextCheckAt: issues.monitorNextCheckAt,
   monitorWakeRequestedAt: issues.monitorWakeRequestedAt,
   monitorLastTriggeredAt: issues.monitorLastTriggeredAt,
@@ -2943,7 +2945,7 @@ export function issueService(db: Db) {
   }
 
   async function resolveCommentAuthorNames<
-    T extends { authorAgentId?: string | null; derivedAuthorAgentId?: string | null; authorType?: string | null },
+    T extends { authorAgentId?: string | null; derivedAuthorAgentId?: string | null; authorType?: string | null; authorName?: string | null },
   >(comments: readonly T[]): Promise<(T & { resolvedAuthorName: string | null })[]> {
     const agentIds = new Set<string>();
     for (const comment of comments) {
@@ -2951,7 +2953,7 @@ export function issueService(db: Db) {
       if (comment.derivedAuthorAgentId) agentIds.add(comment.derivedAuthorAgentId);
     }
     if (agentIds.size === 0) {
-      return comments.map((c) => ({ ...c, resolvedAuthorName: null }));
+      return comments.map((c) => ({ ...c, resolvedAuthorName: c.authorName ?? null }));
     }
     const agentRows = await db
       .select({ id: agents.id, name: agents.name })
@@ -2963,6 +2965,7 @@ export function issueService(db: Db) {
       resolvedAuthorName:
         (comment.authorAgentId ? nameMap.get(comment.authorAgentId) ?? null : null)
         ?? (comment.derivedAuthorAgentId ? nameMap.get(comment.derivedAuthorAgentId) ?? null : null)
+        ?? comment.authorName
         ?? null,
     }));
   }
@@ -5134,6 +5137,21 @@ export function issueService(db: Db) {
       const presentation = issueCommentPresentationSchema.nullable().parse(options?.presentation ?? null);
       const metadata = issueCommentMetadataSchema.nullable().parse(options?.metadata ?? null);
       const createdAt = options?.createdAt ? new Date(options.createdAt) : null;
+
+      // Resolve author name at write time
+      let authorName: string | null = null;
+      if (actor.agentId) {
+        const [agentRow] = await db
+          .select({ name: agents.name })
+          .from(agents)
+          .where(eq(agents.id, actor.agentId))
+          .limit(1);
+        if (agentRow) authorName = agentRow.name;
+      } else if (actor.userId) {
+        // Use the userId as a label — the user's display name is resolved client-side
+        authorName = actor.userId;
+      }
+
       const [comment] = await db
         .insert(issueComments)
         .values({
@@ -5141,6 +5159,7 @@ export function issueService(db: Db) {
           issueId,
           authorAgentId: actor.agentId ?? null,
           authorUserId: actor.userId ?? null,
+          authorName,
           authorType,
           createdByRunId: actor.runId ?? null,
           body: redactedBody,
