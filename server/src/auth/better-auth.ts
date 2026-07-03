@@ -1,8 +1,10 @@
 import type { Request, RequestHandler } from "express";
 import type { IncomingHttpHeaders } from "node:http";
 import { betterAuth } from "better-auth";
+import { emailOTP } from "better-auth/plugins/email-otp";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
+import nodemailer from "nodemailer";
 import type { Db } from "@paperclipai/db";
 import {
   authAccounts,
@@ -102,6 +104,15 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
   const publicUrl = process.env.PAPERCLIP_PUBLIC_URL ?? baseUrl;
   const isHttpOnly = publicUrl ? publicUrl.startsWith("http://") : false;
 
+  const smtpHost = process.env.SMTP_HOST?.trim();
+  const smtpPort = parseInt(process.env.SMTP_PORT?.trim() || "587");
+  const smtpUser = process.env.SMTP_USER?.trim();
+  const smtpPass = process.env.SMTP_PASS?.trim();
+  const smtpFrom = process.env.SMTP_FROM?.trim() || "noreply@paperclip.augiport.com";
+  const otpTransport = smtpHost && smtpUser && smtpPass
+    ? nodemailer.createTransport({ host: smtpHost, port: smtpPort, secure: smtpPort === 465, auth: { user: smtpUser, pass: smtpPass } })
+    : null;
+
   const authConfig = {
     baseURL: baseUrl,
     secret,
@@ -116,10 +127,27 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
       },
     }),
     emailAndPassword: {
-      enabled: true,
-      requireEmailVerification: false,
-      disableSignUp: config.authDisableSignUp,
+      enabled: false,
+      disableSignUp: true,
     },
+    plugins: [
+      emailOTP({
+        disableSignUp: config.authDisableSignUp,
+        sendVerificationOTP: async ({ email, otp, type }) => {
+          if (!otpTransport) {
+            console.log(`[email-otp] Would send OTP ${otp} to ${email} (type: ${type}) — no SMTP configured`);
+            return;
+          }
+          await otpTransport.sendMail({
+            from: smtpFrom,
+            to: email,
+            subject: `Your Paperclip login code: ${otp}`,
+            text: `Your Paperclip login code is: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
+            html: `<p>Your Paperclip login code is: <strong>${otp}</strong></p><p>This code expires in 5 minutes.</p><p>If you didn't request this, you can safely ignore this email.</p>`,
+          });
+        },
+      }),
+    ],
     advanced: buildBetterAuthAdvancedOptions({ disableSecureCookies: isHttpOnly }),
   };
 

@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { rooms, roomMembers, roomMessages } from "@paperclipai/db";
+import { agents, rooms, roomMembers, roomMessages } from "@paperclipai/db";
 
 export function roomService(db: Db) {
   return {
@@ -93,12 +93,24 @@ export function roomService(db: Db) {
         });
     },
 
-    sendMessage: (data: typeof roomMessages.$inferInsert) =>
-      db
+    sendMessage: async (data: typeof roomMessages.$inferInsert) => {
+      // Resolve sender name at write time for agent messages
+      if (data.senderType === "agent" && data.senderId && !data.senderName) {
+        const [agent] = await db
+          .select({ name: agents.name })
+          .from(agents)
+          .where(eq(agents.id, data.senderId))
+          .limit(1);
+        if (agent) {
+          data.senderName = agent.name;
+        }
+      }
+      return db
         .insert(roomMessages)
         .values(data)
         .returning()
-        .then((rows) => rows[0]),
+        .then((rows) => rows[0]);
+    },
 
     countMessages: (roomId: string) =>
       db

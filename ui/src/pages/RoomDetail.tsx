@@ -85,7 +85,7 @@ function MessageBubble({
       (m) => m.agentId === message.senderId || m.userId === message.senderId,
     );
     if (member?.agentId) {
-      return agentMap[member.agentId]?.name ?? "Agent";
+      return agentMap[member.agentId]?.name ?? message.senderName ?? "Agent";
     }
     if (member?.userId) {
       return "You";
@@ -94,6 +94,8 @@ function MessageBubble({
     if (agentMap[message.senderId]) {
       return agentMap[message.senderId].name;
     }
+    // Use the frozen senderName if available
+    if (message.senderName) return message.senderName;
     return message.senderType === "agent" ? "Agent" : "You";
   })();
 

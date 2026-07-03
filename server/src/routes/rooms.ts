@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
+import { agents } from "@paperclipai/db";
+import { eq } from "drizzle-orm";
 import {
   createRoomSchema,
   updateRoomSchema,
@@ -80,7 +82,7 @@ export function roomRoutes(db: Db) {
             const ts = m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt);
             return {
               id: String(m.id),
-              actorName: nameById.get(m.senderId) ?? "Agent",
+              actorName: nameById.get(m.senderId) ?? m.senderName ?? "Agent",
               action: "posted in",
               target: String(m.content ?? "").replace(/\s+/g, " ").slice(0, 100),
               roomName: room.name as string,
@@ -295,10 +297,22 @@ export function roomRoutes(db: Db) {
       );
     }
 
+    // Snapshot the sender's display name so it survives roster changes.
+    let senderName: string | undefined;
+    if (actor.agentId) {
+      const [agent] = await db
+        .select({ name: agents.name })
+        .from(agents)
+        .where(eq(agents.id, actor.agentId))
+        .limit(1);
+      if (agent) senderName = agent.name;
+    }
+
     const message = await svc.sendMessage({
       roomId,
       senderId: actor.actorId,
       senderType: req.body.senderType ?? actor.actorType,
+      senderName,
       content: req.body.content,
       messageType: req.body.messageType,
       metadata: req.body.metadata ?? null,
@@ -312,6 +326,7 @@ export function roomRoutes(db: Db) {
         messageId: message.id,
         senderId: message.senderId,
         senderType: message.senderType,
+        senderName: message.senderName,
         content: message.content,
         messageType: message.messageType,
         parentMessageId: message.parentMessageId,
@@ -341,10 +356,17 @@ export function roomRoutes(db: Db) {
           createdBy: actor.actorId ?? undefined,
         });
         // Acknowledge immediately so the room sees the kickoff.
+        const agentSvc = agentService(db);
+        const [designerAgent] = await agentSvc.list(companyId, {}).then((agents: any[]) =>
+          agents.filter((a: any) => a.name === "Hermes Designer" || a.name === "Designer"),
+        );
+        const designSenderId = designerAgent?.id ?? actor.actorId;
+        const designSenderName = designerAgent?.name ?? "Design";
         const ack = await svc.sendMessage({
           roomId,
-          senderId: "design-agent",
+          senderId: designSenderId,
           senderType: "agent",
+          senderName: designSenderName,
           content: `Working on a ${skill.replace(/-/g, " ")} for "${brief.slice(0, 80)}${brief.length > 80 ? "…" : ""}". Run id: ${run.id}.`,
           messageType: "chat",
           metadata: { designRunId: run.id, kind: "design-ack" },
@@ -358,6 +380,7 @@ export function roomRoutes(db: Db) {
             messageId: ack.id,
             senderId: ack.senderId,
             senderType: ack.senderType,
+            senderName: ack.senderName,
             content: ack.content,
             messageType: ack.messageType,
             parentMessageId: ack.parentMessageId,
@@ -401,8 +424,9 @@ export function roomRoutes(db: Db) {
         }
         const reply = await svc.sendMessage({
           roomId,
-          senderId: "design-agent",
+          senderId: designSenderId,
           senderType: "agent",
+          senderName: designSenderName,
           content: body,
           messageType: "chat",
           metadata,
@@ -416,6 +440,7 @@ export function roomRoutes(db: Db) {
             messageId: reply.id,
             senderId: reply.senderId,
             senderType: reply.senderType,
+            senderName: reply.senderName,
             content: reply.content,
             messageType: reply.messageType,
             parentMessageId: reply.parentMessageId,

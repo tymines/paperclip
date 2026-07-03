@@ -16,6 +16,7 @@ import {
   logActivity,
   secretService,
   issueService,
+  agentService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { replanFromRevision } from "../services/zeus-plan.js";
@@ -88,13 +89,33 @@ export function approvalRoutes(
           )
         : approvalInput.payload;
 
+    // Guard: validate requestedByAgentId references an existing agent
+    // before attempting the insert — otherwise a FK violation returns a
+    // generic 500 instead of a helpful 400.
     const actor = getActorInfo(req);
+    const resolvedRequestedByAgentId: string | null =
+      approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.agentId : null);
+    if (resolvedRequestedByAgentId) {
+      const agentSvc = agentService(db);
+      const agent = await agentSvc.getById(resolvedRequestedByAgentId);
+      if (!agent) {
+        res.status(400).json({
+          error: "Validation error",
+          details: [{
+            code: "custom",
+            message: `requestedByAgentId "${resolvedRequestedByAgentId}" does not reference an existing agent`,
+            path: ["requestedByAgentId"],
+          }],
+        });
+        return;
+      }
+    }
+
     const approval = await svc.create(companyId, {
       ...approvalInput,
       payload: normalizedPayload,
       requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
-      requestedByAgentId:
-        approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.actorId : null),
+      requestedByAgentId: resolvedRequestedByAgentId,
       status: "pending",
       decisionNote: null,
       decidedByUserId: null,
