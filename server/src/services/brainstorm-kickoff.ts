@@ -115,7 +115,10 @@ async function chat(
     // GLM-style reasoning lanes can spend the whole budget in reasoning and
     // return empty content — fall back to the reasoning text so the turn is
     // never silently blank.
-    return (msg.reasoning_content ?? "").trim();
+    const reasoning = (msg.reasoning_content ?? "").trim();
+    if (reasoning) return reasoning;
+    // ponytail: fail-closed — empty response from a gate model is a gate failure
+    throw new Error(`proxy HTTP ${resp.status}: empty response from ${model}`);
   } finally {
     clearTimeout(timer);
   }
@@ -265,6 +268,7 @@ async function postTurn(
     roomId,
     senderId,
     senderType: "agent",
+    senderName: senderId,  // ponytail: senderId IS the display name for these gate agents
     content,
     messageType: "chat",
     metadata: { kind },
