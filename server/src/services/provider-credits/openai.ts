@@ -30,6 +30,9 @@ import { mockSpending } from "./stub-data.js";
 const COSTS_URL = "https://api.openai.com/v1/organization/costs";
 const FETCH_TIMEOUT_MS = 12_000;
 
+// ponytail: EPIPE from broken pipe in bg process kills the server
+const safeWarn = (...args: unknown[]) => { try { console.warn(...args); } catch {} };
+
 interface OpenAICostsPage {
   data?: Array<{
     start_time?: number;
@@ -113,7 +116,7 @@ export const openaiAdapter: ProviderCreditAdapter = {
       };
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/openai] /organization/costs fetch failed, falling back to stub:", err);
+      safeWarn("[provider-credits/openai] /organization/costs fetch failed, falling back to stub:", err);
       return mockSpending(23, from, to);
     }
   },

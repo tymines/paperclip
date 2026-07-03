@@ -1,15 +1,14 @@
 /**
- * Canonical Paperclip fleet model map — LEAN ROSTER (16 agents).
+ * Canonical Paperclip fleet model map — LEAN ROSTER (14 active agents + 3 standalones).
  *
- * Updated 2026-06-30 during the ACP cutover: removed all 14 legacy OpenClaw
- * persona entries (Atlas, Forge, Codex, Coder B, Builder, Vision Coder,
- * Designer, Researcher, Reviewer, Security, Brainstorm, Zeus Brainstorm,
- * Zeus Coding, Zeus Reviewer, Zeus Vision) and added the 9 new Hermes-framework
- * agents. Preserved standalones (Augi, August, Baily AI) + orchestrators
- * (Zeus, Hermes, Ares, Zeus Book Keeper, Zeus Dispatch, Zeus Critic).
+ * Updated 2026-07-01: diversified per-agent model map. Every agent now has an
+ * explicit model/provider assignment so the Fleet UI shows a model on every card.
  *
- * The ACP Fleet panel now builds from this canonical DB map and no longer
- * depends on the OpenClaw gateway handshake (skipGateway=true).
+ * Provider IDs (from Hermes provider_models_cache):
+ *   deepseek   → deepseek-v4-pro, deepseek-v4-flash
+ *   kimi-coding→ kimi-k2.6, kimi-k2.7-code
+ *   zai        → glm-5.2
+ *   gemini     → gemini-2.5-flash
  */
 
 export interface CanonicalModel {
@@ -18,7 +17,7 @@ export interface CanonicalModel {
   /**
    * Substring used to resolve a richer record against the live shared model
    * catalog (models.list). null when the model is not in the gateway catalog
-   * (e.g. MiniMax, Qwen, Codex/GPT, Kimi-Code, remote-peer).
+   * (e.g. Kimi, Z.ai, Qwen, remote-peer).
    */
   catalogMatch: string | null;
   /** One-line provenance for the model choice. */
@@ -37,90 +36,90 @@ export function fleetKey(name: string): string {
 export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
   // ── Orchestrators ──────────────────────────────────────────────────────
   zeus: {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Zeus (Chief of Staff) on Windows = DeepSeek V4 Flash",
+    model: "deepseek/deepseek-v4-pro",
+    catalogMatch: "deepseek-v4-pro",
+    source: "Zeus (Chief of Staff) on Windows = DeepSeek V4 Pro (deepseek)",
   },
   "zeus book keeper": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Zeus Book Keeper on Windows = DeepSeek V4 Flash (fleet memory scribe)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Zeus Book Keeper on Windows = DeepSeek V4 Flash (deepseek)",
   },
   "zeus critic": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Zeus Critic on Windows = DeepSeek V4 Flash (plan adversary)",
+    model: "kimi-coding/kimi-k2.6",
+    catalogMatch: null,
+    source: "Zeus Critic on Windows = Kimi K2.6 (kimi-coding / moonshot)",
   },
   "zeus dispatch": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Zeus Dispatch on Windows = DeepSeek V4 Flash (operations dispatcher)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Zeus Dispatch on Windows = DeepSeek V4 Flash (deepseek)",
   },
   hermes: {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Hermes orchestrator on Box 1 = DeepSeek V4 Flash",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Hermes orchestrator on Box 1 = DeepSeek V4 Flash (deepseek)",
   },
   ares: {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Ares (COO/review boss) on Box 2 = DeepSeek V4 Flash",
+    model: "kimi-coding/kimi-k2.6",
+    catalogMatch: null,
+    source: "Ares (COO/review boss) on Box 2 = Kimi K2.6 (kimi-coding / moonshot)",
   },
 
   // ── Hermes cluster (Box 1, under Hermes) ──────────────────────────────
   "hermes coder 1": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Hermes Coder 1 on Box 1 = DeepSeek V4 Flash (deep-reasoning, P2: kimi-k2.6)",
+    model: "kimi-coding/kimi-k2.7-code",
+    catalogMatch: null,
+    source: "Hermes Coder 1 on Box 1 = Kimi K2.7-Code (kimi-coding / moonshot)",
   },
   "hermes coder 2": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Hermes Coder 2 on Box 1 = DeepSeek V4 Flash (large-context, P2: glm-5.2)",
+    model: "zai/glm-5.2",
+    catalogMatch: null,
+    source: "Hermes Coder 2 on Box 1 = GLM 5.2 (zai / Z.ai)",
   },
   "hermes coder 3": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Hermes Coder 3 on Box 1 = DeepSeek V4 Flash (fast-iteration)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Hermes Coder 3 on Box 1 = DeepSeek V4 Flash (deepseek)",
   },
   "hermes designer": {
-    model: "google/gemini-2.5-flash",
+    model: "gemini/gemini-2.5-flash",
     catalogMatch: "gemini-2.5-flash",
-    source: "Hermes Designer on Box 1 = Gemini 2.5 Flash (vision-capable, replaces GPT-4o)",
+    source: "Hermes Designer on Box 1 = Gemini 2.5 Flash (gemini / Google)",
   },
   "hermes researcher": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Hermes Researcher on Box 1 = DeepSeek V4 Flash (research/recon)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Hermes Researcher on Box 1 = DeepSeek V4 Flash (deepseek)",
   },
 
   // ── Ares cluster (Box 2, under Ares) ──────────────────────────────────
   "ares evidence verifier": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Ares Evidence Verifier on Box 2 = DeepSeek V4 Flash (proof gatekeeper, replaces GPT-4o-mini)",
+    model: "deepseek/deepseek-v4-pro",
+    catalogMatch: "deepseek-v4-pro",
+    source: "Ares Evidence Verifier on Box 2 = DeepSeek V4 Pro (deepseek)",
   },
   "ares reviewer 1": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Ares Reviewer 1 on Box 2 = DeepSeek V4 Flash (depth-focused review, P2: kimi-k2.6)",
+    model: "kimi-coding/kimi-k2.6",
+    catalogMatch: null,
+    source: "Ares Reviewer 1 on Box 2 = Kimi K2.6 (kimi-coding / moonshot)",
   },
   "ares reviewer 2": {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Ares Reviewer 2 on Box 2 = DeepSeek V4 Flash (cross-check review)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Ares Reviewer 2 on Box 2 = DeepSeek V4 Flash (deepseek)",
   },
 
   // ── Standalone agents (preserved) ─────────────────────────────────────
   augi: {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "Augi standalone on Box 1 = DeepSeek V4 Flash",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "Augi standalone on Box 1 = DeepSeek V4 Flash (deepseek)",
   },
   august: {
-    model: "deepseek/deepseek-chat",
-    catalogMatch: "deepseek-chat",
-    source: "August standalone on Box 2 = DeepSeek V4 Flash (fleet ops responder)",
+    model: "deepseek/deepseek-v4-flash",
+    catalogMatch: "deepseek-v4-flash",
+    source: "August standalone on Box 2 = DeepSeek V4 Flash (deepseek)",
   },
   "baily ai": {
     model: "qwen/qwen3-vl-8b",
@@ -137,7 +136,6 @@ export function canonicalModelFor(name: string): CanonicalModel | undefined {
 // ───── Host map ──────────────────────────────────────────────────────────────
 //
 // Maps every Fleet agent to its host machine + parent/main agent.
-// Updated 2026-06-30 for the lean 16-agent roster.
 
 export interface HostEntry {
   /** Display name for the host machine (e.g. AugiAIs-Mini or WindowsAugi). */

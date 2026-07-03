@@ -1427,6 +1427,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           completedAt: null,
           cancelledAt: null,
           hiddenAt: null,
+          iterationCount: 0,
+          lastVerdict: null,
           createdAt: now,
           updatedAt: now,
         };
@@ -1520,6 +1522,8 @@ export function createTestHarness(options: TestHarnessOptions): TestHarness {
           authorAgentId: options?.authorAgentId ?? null,
           authorUserId: null,
           body,
+          authorName: null,
+          resolvedAuthorName: null,
           presentation: null,
           metadata: null,
           createdAt: now,

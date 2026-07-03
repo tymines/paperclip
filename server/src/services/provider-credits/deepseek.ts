@@ -19,6 +19,9 @@ import { mockBalance, mockSpending } from "./stub-data.js";
 const BALANCE_URL = "https://api.deepseek.com/user/balance";
 const FETCH_TIMEOUT_MS = 8_000;
 
+// ponytail: EPIPE from broken pipe in bg process kills the server
+const safeWarn = (...args: unknown[]) => { try { console.warn(...args); } catch {} };
+
 export const deepseekAdapter: ProviderCreditAdapter = {
   meta: {
     // Default-card currency; the live response's `currency` field per
@@ -81,7 +84,7 @@ export const deepseekAdapter: ProviderCreditAdapter = {
     } catch (err) {
       // Log once and fall back so the UI still renders.
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/deepseek] live fetch failed, falling back to stub:", err);
+      safeWarn("[provider-credits/deepseek] live fetch failed, falling back to stub:", err);
       return mockBalance(11);
     }
   },

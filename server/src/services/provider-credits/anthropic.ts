@@ -28,6 +28,9 @@ import { mockSpending } from "./stub-data.js";
 const COST_REPORT_URL = "https://api.anthropic.com/v1/organizations/cost_report";
 const FETCH_TIMEOUT_MS = 12_000;
 
+// ponytail: EPIPE from broken pipe in bg process kills the server
+const safeWarn = (...args: unknown[]) => { try { console.warn(...args); } catch {} };
+
 interface AnthropicCostReport {
   data?: Array<{
     starting_at: string;
@@ -116,7 +119,7 @@ export const anthropicAdapter: ProviderCreditAdapter = {
       };
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/anthropic] cost_report fetch failed, falling back to stub:", err);
+      safeWarn("[provider-credits/anthropic] cost_report fetch failed, falling back to stub:", err);
       return mockSpending(31, from, to);
     }
   },

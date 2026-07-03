@@ -34,6 +34,9 @@ const SUBSCRIPTION_URL = "https://api.elevenlabs.io/v1/user/subscription";
 const CHARACTER_STATS_URL = "https://api.elevenlabs.io/v1/usage/character-stats";
 const FETCH_TIMEOUT_MS = 8_000;
 
+// ponytail: EPIPE from broken pipe in bg process kills the server
+const safeWarn = (...args: unknown[]) => { try { console.warn(...args); } catch {} };
+
 // Published monthly subscription prices (USD) as of 2025/26. Used to
 // project remaining-character quota into USD for the unified dashboard.
 const TIER_USD: Record<string, number> = {
@@ -125,7 +128,7 @@ export const elevenlabsAdapter: ProviderCreditAdapter = {
       return snapshot;
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/elevenlabs] balance fetch failed, falling back to stub:", err);
+      safeWarn("[provider-credits/elevenlabs] balance fetch failed, falling back to stub:", err);
       return mockBalance(13);
     }
   },
@@ -179,7 +182,7 @@ export const elevenlabsAdapter: ProviderCreditAdapter = {
       return report;
     } catch (err) {
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/elevenlabs] spending fetch failed, falling back to stub:", err);
+      safeWarn("[provider-credits/elevenlabs] spending fetch failed, falling back to stub:", err);
       return mockSpending(13, from, to);
     }
   },

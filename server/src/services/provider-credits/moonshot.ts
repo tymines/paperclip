@@ -23,6 +23,9 @@ const BASE_AI = "https://api.moonshot.ai/v1/users/me/balance";
 const BASE_CN = "https://api.moonshot.cn/v1/users/me/balance";
 const FETCH_TIMEOUT_MS = 8_000;
 
+// ponytail: EPIPE from broken pipe in bg process kills the server
+const safeWarn = (...args: unknown[]) => { try { console.warn(...args); } catch {} };
+
 interface MoonshotEnvelope {
   code?: number;
   status?: boolean;
@@ -79,18 +82,18 @@ export const moonshotAdapter: ProviderCreditAdapter = {
           currency = "CNY";
         } catch (errCn) {
           // eslint-disable-next-line no-console
-          console.warn("[provider-credits/moonshot] both .ai and .cn failed:", errCn);
+          safeWarn("[provider-credits/moonshot] both .ai and .cn failed:", errCn);
           return mockBalance(7, "USD");
         }
       } else {
         // eslint-disable-next-line no-console
-        console.warn("[provider-credits/moonshot] live fetch failed, falling back to stub:", errAi);
+        safeWarn("[provider-credits/moonshot] live fetch failed, falling back to stub:", errAi);
         return mockBalance(7, "USD");
       }
     }
     if (!payload || payload.code !== 0 || !payload.data) {
       // eslint-disable-next-line no-console
-      console.warn("[provider-credits/moonshot] non-zero code or missing data; falling back");
+      safeWarn("[provider-credits/moonshot] non-zero code or missing data; falling back");
       return mockBalance(7, currency);
     }
     const result: ProviderBalanceSnapshot = {
