@@ -790,14 +790,6 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
             {newestFirst ? "Newest" : "Oldest"}
             <ChevronDown className="h-3 w-3" />
           </button>
-          <button
-            type="button"
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px]"
-            style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
-          >
-            <Filter className="h-3 w-3" />
-            Filter
-          </button>
           <div className="flex overflow-hidden rounded-lg" style={{ border: `1px solid ${DS.border}` }}>
             {(["grid", "list"] as const).map((v) => {
               const active = view === v;
