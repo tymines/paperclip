@@ -50,6 +50,7 @@ import {
   personaRating,
 } from "@/components/image-studio/PersonaWorkbench";
 import { TrainPersonaModal } from "@/components/image-studio/TrainPersonaModal";
+import { NewPersonaWizard } from "@/components/personas/NewPersonaWizard";
 import { findModel, DEFAULT_MODEL_ID } from "@/components/image-studio/models";
 
 /* -------------------------------------------------------------------------- */
@@ -1273,7 +1274,7 @@ export function ImageStudio() {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
-  const [creatingPersona, setCreatingPersona] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -1312,23 +1313,6 @@ export function ImageStudio() {
     }
     return map;
   }, [jobsQ.data]);
-
-  const createPersonaMut = useMutation({
-    mutationFn: () =>
-      imageStudioApi.createProvider(companyId!, {
-        name: `Persona ${personas.length + 1}`,
-        type: "local_lora",
-        status: "needs_photos",
-      }),
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ["image-studio", "providers", companyId] });
-      setTrainingPersona(res.provider);
-      setCreatingPersona(false);
-    },
-    onError: () => {
-      setCreatingPersona(false);
-    },
-  });
 
   // Default selection: deep-link → first ready → first persona.
   useEffect(() => {
@@ -1379,11 +1363,7 @@ export function ImageStudio() {
         ) : (
           <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-auto-hide">
             <NewPersonaCard
-              onClick={() => {
-                setCreatingPersona(true);
-                createPersonaMut.mutate();
-              }}
-              loading={creatingPersona}
+              onClick={() => setWizardOpen(true)}
             />
             {personas.map((p) => (
               <PersonaRowCard
@@ -1422,6 +1402,8 @@ export function ImageStudio() {
           trainers={trainers}
         />
       )}
+
+      <NewPersonaWizard open={wizardOpen} onOpenChange={setWizardOpen} />
     </div>
   );
 }
