@@ -19,6 +19,7 @@ import {
   formatDatabaseBackupResult,
   runDatabaseBackup,
   authUsers,
+  agents,
   companies,
   companyMemberships,
   instanceUserRoles,
@@ -827,6 +828,21 @@ export async function startServer(): Promise<StartedServer> {
       .catch((err) => {
         logger.error({ err }, "startup heartbeat recovery failed");
       });
+
+    // ponytail: auto-recover process-adapter agents from stale status=error.
+    // Process adapters don't heartbeat — after restart they flash error.
+    // One-shot heal: set them back to idle so fleet roster looks clean.
+    db.update(agents)
+      .set({ status: "idle" } as any)
+      .where(and(eq(agents.adapterType as any, "process"), eq(agents.status as any, "error")))
+      .returning()
+      .then((rows) => {
+        if (rows.length > 0) {
+          logger.info({ count: rows.length, ids: rows.map((r: any) => r.id) },
+            "startup: auto-recovered process-adapter agents (error→idle)");
+        }
+      })
+      .catch(() => { /* best-effort */ });
     setInterval(() => {
       void heartbeat
         .tickTimers(new Date())
