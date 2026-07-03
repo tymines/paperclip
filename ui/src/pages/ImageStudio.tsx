@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   PersonaWorkbench,
+  GenderFilter,
   personaRating,
 } from "@/components/image-studio/PersonaWorkbench";
 import { TrainPersonaModal } from "@/components/image-studio/TrainPersonaModal";
@@ -422,6 +423,8 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
   const [localAdvancedOpen, setLocalAdvancedOpen] = useState(false);
   const advancedOpen = externalAdvancedOpen ?? localAdvancedOpen;
   const [batchId, setBatchId] = useState<string | null>(null);
+  const [recentBatchIds, setRecentBatchIds] = useState<string[]>([]);
+  const [gender, setGender] = useState<"female" | "male">("female");
   const rating = personaRating(persona);
 
   const generateMut = useMutation({
@@ -610,6 +613,14 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
               </div>
             </div>
 
+            {/* Gender filter */}
+            <div>
+              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
+                Gender
+              </span>
+              <GenderFilter value={gender} onChange={setGender} />
+            </div>
+
             {/* Advanced studio — preserves the full existing workbench
                 (structured controls, PhotoShoot, Undresser, template Library). */}
             <button
@@ -644,17 +655,47 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
             Generate
           </button>
           {generateMut.isError && (
-            <p className="text-[12px]" style={{ color: DS.critical }}>
-              {(generateMut.error as Error)?.message ?? "Failed to start generation."}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-[12px]" style={{ color: DS.critical }}>
+                {(generateMut.error as Error)?.message ?? "Failed to start generation."}
+              </p>
+              <button
+                type="button"
+                onClick={() => generateMut.mutate()}
+                className="rounded-md px-2 py-0.5 text-[11px] font-medium"
+                style={{ color: DS.primary, border: `1px solid ${DS.primary}` }}
+              >
+                Retry
+              </button>
+            </div>
           )}
 
           {batchId && (
             <BatchProgress
               personaId={persona.id}
               batchId={batchId}
-              onClear={() => setBatchId(null)}
+              onClear={() => {
+                setRecentBatchIds((prev) => [batchId, ...prev.filter((id) => id !== batchId)].slice(0, 5));
+                setBatchId(null);
+              }}
             />
+          )}
+
+          {recentBatchIds.length > 0 && !batchId && (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]" style={{ color: DS.textFaint }}>
+              <span className="mr-1">Recent:</span>
+              {recentBatchIds.map((bid) => (
+                <button
+                  key={bid}
+                  type="button"
+                  onClick={() => setBatchId(bid)}
+                  className="rounded px-2 py-0.5 font-medium"
+                  style={{ color: DS.primary, border: `1px solid ${DS.border}` }}
+                >
+                  {bid.slice(0, 8)}
+                </button>
+              ))}
+            </div>
           )}
 
           {advancedOpen && (
