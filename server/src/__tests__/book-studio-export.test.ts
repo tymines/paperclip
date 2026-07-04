@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeAll, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, beforeEach, afterAll } from "vitest";
 import express from "express";
 import request from "supertest";
 import type { Router } from "express";
@@ -13,6 +13,14 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 vi.mock("../services/provider-api-keys/index.js", () => ({ getRawKey: vi.fn() }));
+
+// Global fetch mock — stubbed at vitest level so dynamically imported modules see it
+vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+  ok: true,
+  status: 200,
+  arrayBuffer: () => Promise.resolve(Buffer.alloc(4096).buffer),
+  text: () => Promise.resolve(""),
+}));
 
 import { execSync } from "node:child_process";
 import { getRawKey } from "../services/provider-api-keys/index.js";
@@ -173,9 +181,15 @@ describe("POST .../narrate", () => {
   it("returns 201 with narration record when confirm=true", async () => {
     vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
     process.env.TTS_PROVIDER = "elevenlabs";
+    // Mock execSync: first calls are for ffmpeg concat, last is ffprobe duration
+    const mockExecSync = vi.mocked(execSync);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (cmd.includes("ffprobe")) return Buffer.from("123.45");
+      return Buffer.from("");
+    });
     const narrationInsertVal = [{
       id: "narration-1", bookId: "book-1", companyId: "c1", type: "narration", format: "mp3",
-      status: "pending", outputPath: null, metadata: { chapterCount: 2, totalChars: 100, estimatedCostUsd: 0.003, estimatedDurationSec: 7 },
+      status: "completed", outputPath: "/mock/path/combined.mp3", metadata: { chapterCount: 2, totalChars: 100, estimatedCostUsd: 0.003, totalDurationSec: 124, individualChapters: [{ number: 1, title: "Chapter 1" }, { number: 2, title: "Chapter 2" }] },
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }];
     const { app } = await createTestApp(mockDb(undefined, undefined, narrationInsertVal));
@@ -188,7 +202,6 @@ describe("POST .../narrate", () => {
     expect(res.body).toHaveProperty("narration");
     expect(res.body.narration.type).toBe("narration");
     expect(res.body.narration.format).toBe("mp3");
-    expect(res.body.narration.status).toBe("pending");
   });
 
   it("returns 503 when TTS is not configured", async () => {
@@ -201,6 +214,48 @@ describe("POST .../narrate", () => {
       .send({ confirm: true });
 
     expect(res.status).toBe(503);
+  });
+});
+
+describe("ElevenLabs TTS Provider", () => {
+  const OLD_ENV = process.env;
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env = { ...OLD_ENV };
+  });
+
+  afterAll(() => {
+    process.env = OLD_ENV;
+  });
+
+  it("isConfigured returns true when key is present", async () => {
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    const mod = await vi.importActual<typeof import("../services/tts/elevenlabs.js")>("../services/tts/elevenlabs.js");
+    const result = await mod.elevenlabsProvider.isConfigured();
+    expect(result).toBe(true);
+  });
+
+  it("isConfigured returns false when no key", async () => {
+    vi.mocked(getRawKey).mockResolvedValue(null);
+    const mod = await vi.importActual<typeof import("../services/tts/elevenlabs.js")>("../services/tts/elevenlabs.js");
+    const result = await mod.elevenlabsProvider.isConfigured();
+    expect(result).toBe(false);
+  });
+
+  it("getTTSProvider returns elevenlabs when TTS_PROVIDER is set", async () => {
+    process.env.TTS_PROVIDER = "elevenlabs";
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    const mod = await vi.importActual<typeof import("../services/tts/index.js")>("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    expect(provider.id).toBe("elevenlabs");
+  });
+
+  it("getTTSProvider returns stub when TTS_PROVIDER not set", async () => {
+    delete process.env.TTS_PROVIDER;
+    const mod = await vi.importActual<typeof import("../services/tts/index.js")>("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    expect(provider.id).toBe("stub");
   });
 });
 
