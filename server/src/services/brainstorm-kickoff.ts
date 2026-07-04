@@ -298,10 +298,11 @@ async function tryAddAgentMember(
   nameLike: string,
 ): Promise<void> {
   try {
+    // Exact name match — avoids matching archived agents like "Hermes Book Writer".
     const found = await db
       .select({ id: agents.id })
       .from(agents)
-      .where(ilike(agents.name, `%${nameLike}%`))
+      .where(eq(agents.name, nameLike))
       .limit(1);
     const agentId = found[0]?.id;
     if (agentId) await svc.addMember({ roomId, agentId, role: "member" });
@@ -475,9 +476,9 @@ export async function kickoffBrainstorm(
     createdBy: opts.createdBy ?? null,
   });
 
-  // Best-effort agent membership (panel reads by senderId, so this is optional).
-  await tryAddAgentMember(db, svc, room.id, "hermes");
-  await tryAddAgentMember(db, svc, room.id, "brainstorm");
+  // Best-effort agent membership: exact name match to avoid stale/archived agents.
+  await tryAddAgentMember(db, svc, room.id, "Hermes");
+  await tryAddAgentMember(db, svc, room.id, "Zeus Critic");
 
   // Seed the room with the brief.
   await postTurn(
