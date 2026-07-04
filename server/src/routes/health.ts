@@ -153,7 +153,7 @@ export function healthRoutes(
     try {
       await db.execute(sql`SELECT 1`);
       const agentCountResult = await db.execute(sql`SELECT COUNT(*)::int as count FROM agents`);
-      const agentCount = agentCountResult.rows?.[0]?.count ?? 0;
+      const agentCount = [...agentCountResult][0]?.count ?? 0;
       res.json({ status: "ok", agentCount: Number(agentCount) });
     } catch (error) {
       logger.warn({ err: error }, "dbhealth check failed");

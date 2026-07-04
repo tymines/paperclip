@@ -184,6 +184,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     updatedAt: new Date("2026-04-07T00:00:00.000Z"),
     labels: [],
     labelIds: [],
+    iterationCount: 0,
     myLastTouchAt: null,
     lastExternalCommentAt: null,
     lastActivityAt: null,

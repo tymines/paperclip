@@ -60,6 +60,7 @@ function createIssue(index: number, status: IssueStatus): Issue {
     updatedAt: new Date("2026-05-05T00:00:00.000Z"),
     labels: [],
     labelIds: [],
+    iterationCount: 0,
     myLastTouchAt: null,
     lastExternalCommentAt: null,
     lastActivityAt: null,

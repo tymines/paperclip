@@ -102,8 +102,10 @@ function createComment(index: number): IssueChatComment {
       : authorAgentId
         ? plainAssistantBody(index + 1)
         : plainUserBody(index + 1),
+    authorName: null,
     presentation: null,
     metadata: null,
+    authorName: null,
     resolvedAuthorName: null,
     createdAt: atMinute(index),
     updatedAt: atMinute(index),

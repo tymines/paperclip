@@ -82,7 +82,7 @@ export function roomRoutes(db: Db) {
             const ts = m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt);
             return {
               id: String(m.id),
-              actorName: nameById.get(m.senderId) ?? m.senderName ?? "Agent",
+              actorName: m.senderName ?? nameById.get(m.senderId) ?? "Agent",
               action: "posted in",
               target: String(m.content ?? "").replace(/\s+/g, " ").slice(0, 100),
               roomName: room.name as string,

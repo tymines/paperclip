@@ -17,8 +17,31 @@ export const API = {
   dashboard: `${API_PREFIX}/dashboard`,
   sidebarBadges: `${API_PREFIX}/sidebar-badges`,
   sidebarPreferences: `${API_PREFIX}/sidebar-preferences`,
+  books: `${API_PREFIX}/books`,
   invites: `${API_PREFIX}/invites`,
   joinRequests: `${API_PREFIX}/join-requests`,
   members: `${API_PREFIX}/members`,
   admin: `${API_PREFIX}/admin`,
+  bookStudio: {
+    books: (companyId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books`,
+    book: (companyId: string, bookId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}`,
+    characters: (companyId: string, bookId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/characters`,
+    character: (companyId: string, bookId: string, id: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/characters/${id}`,
+    worldLocations: (companyId: string, bookId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/world-locations`,
+    worldLocation: (companyId: string, bookId: string, id: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/world-locations/${id}`,
+    style: (companyId: string, bookId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/style`,
+    styleEntry: (companyId: string, bookId: string, id: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/style/${id}`,
+    outline: (companyId: string, bookId: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/outline`,
+    outlineEntry: (companyId: string, bookId: string, id: string) =>
+      `${API_PREFIX}/companies/${companyId}/book-studio/books/${bookId}/outline/${id}`,
+  },
 } as const;

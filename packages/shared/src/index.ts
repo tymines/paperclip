@@ -283,6 +283,7 @@ export {
 
 export type {
   Company,
+  Book,
   Environment,
   EnvironmentLease,
   EnvironmentProbeResult,
@@ -703,6 +704,10 @@ export type {
   SocialPostListItem,
   SocialAppCredentialPublic,
   SocialAppCredentialTestResult,
+  StoryBibleCharacter,
+  StoryBibleWorldLocation,
+  StoryBibleStyle,
+  StoryBibleOutline,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {
@@ -1136,6 +1141,22 @@ export {
   type PluginStateScopeKey,
   type SetPluginState,
   type ListPluginState,
+  createStoryBibleCharacterSchema,
+  updateStoryBibleCharacterSchema,
+  type CreateStoryBibleCharacter,
+  type UpdateStoryBibleCharacter,
+  createStoryBibleWorldLocationSchema,
+  updateStoryBibleWorldLocationSchema,
+  type CreateStoryBibleWorldLocation,
+  type UpdateStoryBibleWorldLocation,
+  createStoryBibleStyleSchema,
+  updateStoryBibleStyleSchema,
+  type CreateStoryBibleStyle,
+  type UpdateStoryBibleStyle,
+  createStoryBibleOutlineSchema,
+  updateStoryBibleOutlineSchema,
+  type CreateStoryBibleOutline,
+  type UpdateStoryBibleOutline,
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";

@@ -211,10 +211,12 @@ function makeIssue(id: string, isUnreadForMe: boolean): Issue {
     updatedAt: new Date("2026-03-11T00:00:00.000Z"),
     labels: [],
     labelIds: [],
+    iterationCount: 0,
     myLastTouchAt: new Date("2026-03-11T00:00:00.000Z"),
     lastExternalCommentAt: new Date("2026-03-11T01:00:00.000Z"),
     lastActivityAt: new Date("2026-03-11T01:00:00.000Z"),
     isUnreadForMe,
+    iterationCount: 0,
   };
 }
 

@@ -1,648 +1,1228 @@
 /**
- * Book Writing Page — AI-powered book authoring studio.
+ * Book Studio — locked three-pane layout shell for AI-assisted book authoring.
  *
- * Features:
- *   - Chapter management (create, edit, reorder, delete)
- *   - Genre / tone / length selection
- *   - Pipeline start + status polling (every 5s)
- *   - Placeholder panels for narration (ElevenLabs) and image (FAL)
+ * Left pane: Story Bible (Overview, Characters, World & Locations, Style, Outline, Manuscript)
+ * Center pane: Manuscript editor with chapter navigation and toolbar
+ * Right pane: Review Notes with category filters
  *
- * Pattern matches ImageStudio.tsx / AppDev.tsx — tanstack/react-query, CompanyContext.
+ * Layout: grid-cols-[1fr_2fr_1fr] (~25/50/25 split), non-resizable, full-height
  */
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+
+import { useState, useEffect, useCallback } from "react";
 import {
-  Play,
-  Square,
-  SkipForward,
-  RotateCcw,
-  Plus,
-  Trash2,
-  ChevronUp,
-  ChevronDown,
-  Volume2,
-  ImageIcon,
-  Loader2,
   BookOpen,
+  User,
+  MapPin,
+  Palette,
+  List,
+  FileText,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Pause,
+  Play,
+  Pen,
+  MessageSquare,
+  RotateCcw,
+  Download,
   Sparkles,
-  AlertCircle,
-  CheckCircle2,
-  Clock,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Plus,
+  Lock,
+  Unlock,
+  Trash2,
+  Save,
+  Edit3,
 } from "lucide-react";
-import { useCompany } from "../context/CompanyContext";
-import { bookWritingApi, type PipelineStatus } from "../api/bookWriting";
 import { cn } from "@/lib/utils";
 
-// ── Constants ───────────────────────────────────────────────────────────────
+// ── Types ───────────────────────────────────────────────────────────────────
 
-const GENRES = [
-  "Sci-Fi",
-  "Fantasy",
-  "Mystery",
-  "Romance",
-  "Thriller",
-  "Literary",
-  "Historical",
-  "Horror",
-  "Adventure",
-  "Other",
-] as const;
+type StoryBibleTab =
+  | "overview"
+  | "characters"
+  | "world"
+  | "style"
+  | "outline"
+  | "manuscript";
 
-const LENGTHS = [
-  "Short Story (~3k)",
-  "Novella (~20k)",
-  "Novel (~60k)",
-  "Epic (~100k)",
-] as const;
+interface BibleTabDef {
+  id: StoryBibleTab;
+  label: string;
+  icon: React.ReactNode;
+}
 
-const TONES = [
-  "Whimsical",
-  "Gritty",
-  "Academic",
-  "Lyrical",
-  "Minimalist",
-  "Cinematic",
-] as const;
+const BIBLE_TABS: BibleTabDef[] = [
+  { id: "overview", label: "Overview", icon: <BookOpen className="w-3.5 h-3.5" /> },
+  { id: "characters", label: "Characters", icon: <User className="w-3.5 h-3.5" /> },
+  { id: "world", label: "World & Locations", icon: <MapPin className="w-3.5 h-3.5" /> },
+  { id: "style", label: "Style", icon: <Palette className="w-3.5 h-3.5" /> },
+  { id: "outline", label: "Outline", icon: <List className="w-3.5 h-3.5" /> },
+  { id: "manuscript", label: "Manuscript", icon: <FileText className="w-3.5 h-3.5" /> },
+];
 
-const DEFAULT_TONE = "Cinematic";
-const DEFAULT_GENRE = "Sci-Fi";
-const DEFAULT_LENGTH = "Novella (~20k)";
+// ── API data types ──────────────────────────────────────────────────────────
 
-// ── Chapter type ────────────────────────────────────────────────────────────
-
-interface Chapter {
+interface BookData {
   id: string;
+  companyId: string;
+  slug: string;
   title: string;
-  content: string;
-  wordCount: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 10);
+interface CharacterEntity {
+  id: string;
+  bookId: string;
+  name: string;
+  role: string;
+  description: string;
+  voiceCard: Record<string, unknown>;
+  locked: boolean;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-function countWords(text: string): number {
-  return text.trim() ? text.trim().split(/\s+/).length : 0;
+interface WorldLocationEntity {
+  id: string;
+  bookId: string;
+  name: string;
+  description: string;
+  rules: Record<string, unknown>;
+  sensoryNotes: Record<string, unknown>;
+  locked: boolean;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-function phaseLabel(phase: string): string {
-  const labels: Record<string, string> = {
-    idle: "Idle",
-    foundation: "Building Foundation",
-    drafting: "Drafting",
-    revision: "Revising",
-    export: "Exporting",
-    done: "Complete",
-    failed: "Failed",
+interface StyleEntity {
+  id: string;
+  bookId: string;
+  pov: string;
+  tense: string;
+  comps: string;
+  sampleParagraph: string;
+  bannedCliches: string[];
+  locked: boolean;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface OutlineEntity {
+  id: string;
+  bookId: string;
+  chapterNumber: number;
+  title: string;
+  beats: Record<string, unknown>[];
+  locked: boolean;
+  source: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Review Notes (static mock for now) ──────────────────────────────────────
+
+interface Note {
+  id: string;
+  category: string;
+  label: string;
+  description: string;
+}
+
+const REVIEW_NOTES: Note[] = [
+  { id: "1", category: "Canon", label: "Canon conflict — Ch.3 vs Ch.1", description: "Character says they've never been to the coast, but Chapter 1 opens at the seaside." },
+  { id: "2", category: "Voice", label: "Voice drift in dialogue", description: "Mara's dialogue shifts from formal to slang between paragraphs." },
+  { id: "3", category: "Continuity", label: "Timeline gap", description: "Three days pass between Ch.2 and Ch.3 with no explanation." },
+  { id: "4", category: "Structure", label: "Pacing dip in middle", description: "Ch.4 exposition runs 800 words without action or dialogue." },
+  { id: "5", category: "Prose", label: "Overused adverb cluster", description: "Word 'suddenly' appears 12 times in Ch.5 alone." },
+  { id: "6", category: "Canon", label: "Magic system rule broken", description: "Character casts a spell without the required focus object." },
+];
+
+const CATEGORY_COLORS: Record<string, string> = {
+  Canon: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+  Voice: "bg-orange-500/20 text-orange-300 border-orange-500/40",
+  Continuity: "bg-purple-500/20 text-purple-300 border-purple-500/40",
+  Structure: "bg-green-500/20 text-green-300 border-green-500/40",
+  Prose: "bg-red-500/20 text-red-300 border-red-500/40",
+};
+
+const CATEGORY_PILLS = ["Canon", "Voice", "Continuity", "Structure", "Prose"] as const;
+
+const SOURCE_BADGE_COLORS: Record<string, string> = {
+  authored: "bg-green-500/20 text-green-300 border-green-500/40",
+  co_created: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+  imported: "bg-orange-500/20 text-orange-300 border-orange-500/40",
+};
+
+// ── API helpers ─────────────────────────────────────────────────────────────
+
+const API_BASE = "/api";
+
+async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    ...options,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+  }
+  if (res.status === 204) return undefined as unknown as T;
+  return res.json();
+}
+
+// ── Collapsible Section ──────────────────────────────────────────────────────
+
+function CollapsibleSection({
+  title,
+  count,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  count: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-b border-gray-800 last:border-b-0">
+      <button
+        className="flex items-center justify-between w-full px-3 py-2 text-xs font-semibold uppercase tracking-wider text-gray-400 hover:text-gray-200"
+        onClick={() => setOpen(!open)}
+      >
+        <span>
+          {title} <span className="text-gray-600">({count})</span>
+        </span>
+        {open ? (
+          <ChevronUp className="w-3 h-3" />
+        ) : (
+          <ChevronDown className="w-3 h-3" />
+        )}
+      </button>
+      {open && <div className="px-3 pb-3 space-y-2">{children}</div>}
+    </div>
+  );
+}
+
+// ── Source Badge ────────────────────────────────────────────────────────────
+
+function SourceBadge({ source }: { source: string }) {
+  const colors = SOURCE_BADGE_COLORS[source] || "bg-gray-500/20 text-gray-300 border-gray-500/40";
+  return (
+    <span className={cn("inline-block rounded-full border px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider", colors)}>
+      {source}
+    </span>
+  );
+}
+
+// ── Editable Text Field ──────────────────────────────────────────────────────
+
+function EditableField({
+  label,
+  value,
+  onChange,
+  multiline = false,
+  placeholder = "",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  multiline?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <div className="mb-2">
+      <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">{label}</label>
+      {multiline ? (
+        <textarea
+          className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500/50"
+          rows={2}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      ) : (
+        <input
+          className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Character Card ──────────────────────────────────────────────────────────
+
+interface CharacterCardProps {
+  char: CharacterEntity;
+  onUpdate: (id: string, data: Partial<CharacterEntity>) => void;
+  onDelete: (id: string) => void;
+}
+
+function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(char.name);
+  const [editRole, setEditRole] = useState(char.role);
+  const [editDesc, setEditDesc] = useState(char.description);
+  const [deleting, setDeleting] = useState(false);
+
+  const initials = char.name
+    .split(" ")
+    .map((n) => n[0])
+    .join("");
+
+  const handleSave = () => {
+    onUpdate(char.id, { name: editName, role: editRole, description: editDesc });
+    setEditing(false);
   };
-  return labels[phase] ?? phase;
-}
 
-function phaseColor(phase: string): string {
-  const colors: Record<string, string> = {
-    idle: "text-gray-400",
-    foundation: "text-yellow-400",
-    drafting: "text-blue-400",
-    revision: "text-purple-400",
-    export: "text-green-400",
-    done: "text-green-500",
-    failed: "text-red-400",
+  const handleCancel = () => {
+    setEditName(char.name);
+    setEditRole(char.role);
+    setEditDesc(char.description);
+    setEditing(false);
   };
-  return colors[phase] ?? "text-gray-400";
+
+  const handleToggleLock = () => {
+    onUpdate(char.id, { locked: !char.locked });
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
+        <EditableField label="Name" value={editName} onChange={setEditName} />
+        <EditableField label="Role" value={editRole} onChange={setEditRole} />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
+        <div className="flex items-center gap-2 mt-1">
+          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+            <Save className="w-2.5 h-2.5" /> Save
+          </button>
+          <button onClick={handleCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+            <X className="w-2.5 h-2.5" /> Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
+        {initials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-200 truncate">{char.name}</span>
+          <SourceBadge source={char.source} />
+        </div>
+        <div className="text-xs text-gray-500">{char.role}</div>
+        {char.description && (
+          <p className="text-[11px] text-gray-400 mt-1 leading-relaxed line-clamp-2">{char.description}</p>
+        )}
+      </div>
+      <div className="flex flex-col gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={handleToggleLock}
+          className={cn(
+            "rounded p-1",
+            char.locked ? "text-yellow-400 hover:text-yellow-300" : "text-gray-500 hover:text-gray-300",
+          )}
+          title={char.locked ? "Unlock" : "Lock"}
+        >
+          {char.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+        </button>
+        <button
+          onClick={() => setEditing(true)}
+          className="rounded p-1 text-gray-500 hover:text-blue-400"
+          title="Edit"
+        >
+          <Edit3 className="w-3 h-3" />
+        </button>
+        <button
+          onClick={() => setDeleting(true)}
+          className="rounded p-1 text-gray-500 hover:text-red-400"
+          title="Delete"
+        >
+          <Trash2 className="w-3 h-3" />
+        </button>
+      </div>
+
+      {/* Delete confirmation overlay */}
+      {deleting && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
+          <div className="text-center">
+            <p className="text-xs text-gray-300 mb-2">Delete "{char.name}"?</p>
+            <div className="flex gap-2 justify-center">
+              <button
+                onClick={() => { onDelete(char.id); setDeleting(false); }}
+                className="rounded bg-red-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-500"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setDeleting(false)}
+                className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
-// ── Component ───────────────────────────────────────────────────────────────
+// ── World Location Card ─────────────────────────────────────────────────────
+
+interface LocationCardProps {
+  loc: WorldLocationEntity;
+  onUpdate: (id: string, data: Partial<WorldLocationEntity>) => void;
+  onDelete: (id: string) => void;
+}
+
+function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [editName, setEditName] = useState(loc.name);
+  const [editDesc, setEditDesc] = useState(loc.description);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleSave = () => {
+    onUpdate(loc.id, { name: editName, description: editDesc });
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setEditName(loc.name);
+    setEditDesc(loc.description);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
+        <EditableField label="Name" value={editName} onChange={setEditName} />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
+        <div className="flex items-center gap-2 mt-1">
+          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+            <Save className="w-2.5 h-2.5" /> Save
+          </button>
+          <button onClick={handleCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+            <X className="w-2.5 h-2.5" /> Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group relative">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-900/50 text-sm">
+        🏔️
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-gray-200 truncate">{loc.name}</span>
+          <SourceBadge source={loc.source} />
+        </div>
+        {loc.description && (
+          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{loc.description}</p>
+        )}
+      </div>
+      <div className="flex flex-col gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          onClick={() => onUpdate(loc.id, { locked: !loc.locked })}
+          className={cn("rounded p-1", loc.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}
+        >
+          {loc.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+        </button>
+        <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400">
+          <Edit3 className="w-3 h-3" />
+        </button>
+        <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400">
+          <Trash2 className="w-3 h-3" />
+        </button>
+      </div>
+
+      {deleting && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
+          <div className="text-center">
+            <p className="text-xs text-gray-300 mb-2">Delete "{loc.name}"?</p>
+            <div className="flex gap-2 justify-center">
+              <button onClick={() => { onDelete(loc.id); setDeleting(false); }} className="rounded bg-red-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-500">Delete</button>
+              <button onClick={() => setDeleting(false)} className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Style Card ──────────────────────────────────────────────────────────────
+
+interface StyleCardProps {
+  entry: StyleEntity;
+  onUpdate: (id: string, data: Partial<StyleEntity>) => void;
+  onDelete: (id: string) => void;
+}
+
+function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [editPov, setEditPov] = useState(entry.pov);
+  const [editTense, setEditTense] = useState(entry.tense);
+  const [editComps, setEditComps] = useState(entry.comps);
+  const [editSample, setEditSample] = useState(entry.sampleParagraph);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleSave = () => {
+    onUpdate(entry.id, { pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
+        <EditableField label="POV" value={editPov} onChange={setEditPov} />
+        <EditableField label="Tense" value={editTense} onChange={setEditTense} />
+        <EditableField label="Comparisons" value={editComps} onChange={setEditComps} />
+        <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline />
+        <div className="flex items-center gap-2 mt-1">
+          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
+          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group relative">
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-sm font-medium text-gray-200">{entry.pov || "N/A"}</span>
+        <span className="text-gray-600">·</span>
+        <span className="text-xs text-gray-400">{entry.tense || "N/A"}</span>
+        <SourceBadge source={entry.source} />
+      </div>
+      {entry.comps && <p className="text-[11px] text-gray-500 mb-1">Comps: {entry.comps}</p>}
+      {entry.sampleParagraph && (
+        <p className="text-[11px] text-gray-400 italic line-clamp-2">"{entry.sampleParagraph}"</p>
+      )}
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
+          {entry.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+        </button>
+        <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
+        <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+      </div>
+      {deleting && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
+          <div className="text-center">
+            <p className="text-xs text-gray-300 mb-2">Delete this style entry?</p>
+            <div className="flex gap-2 justify-center">
+              <button onClick={() => { onDelete(entry.id); setDeleting(false); }} className="rounded bg-red-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-500">Delete</button>
+              <button onClick={() => setDeleting(false)} className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Outline Card ────────────────────────────────────────────────────────────
+
+interface OutlineCardProps {
+  entry: OutlineEntity;
+  onUpdate: (id: string, data: Partial<OutlineEntity>) => void;
+  onDelete: (id: string) => void;
+}
+
+function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
+  const [editing, setEditing] = useState(false);
+  const [editCh, setEditCh] = useState(String(entry.chapterNumber));
+  const [editTitle, setEditTitle] = useState(entry.title);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleSave = () => {
+    onUpdate(entry.id, { chapterNumber: parseInt(editCh, 10) || 1, title: editTitle });
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
+        <EditableField label="Chapter #" value={editCh} onChange={setEditCh} />
+        <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
+        <div className="flex items-center gap-2 mt-1">
+          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
+          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  const beatCount = Array.isArray(entry.beats) ? entry.beats.length : 0;
+
+  return (
+    <div className="rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group relative">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold text-gray-500">Ch.{entry.chapterNumber}</span>
+        <span className="text-sm font-medium text-gray-200 truncate">{entry.title || "Untitled"}</span>
+        <SourceBadge source={entry.source} />
+      </div>
+      {beatCount > 0 && (
+        <span className="text-[10px] text-gray-600">{beatCount} beat{beatCount > 1 ? "s" : ""}</span>
+      )}
+      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
+          {entry.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+        </button>
+        <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
+        <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+      </div>
+      {deleting && (
+        <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
+          <div className="text-center">
+            <p className="text-xs text-gray-300 mb-2">Delete Ch.{entry.chapterNumber}?</p>
+            <div className="flex gap-2 justify-center">
+              <button onClick={() => { onDelete(entry.id); setDeleting(false); }} className="rounded bg-red-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-500">Delete</button>
+              <button onClick={() => setDeleting(false)} className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Create Form Components ──────────────────────────────────────────────────
+
+function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: string; role: string; description: string }) => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [role, setRole] = useState("");
+  const [desc, setDesc] = useState("");
+  return (
+    <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
+      <EditableField label="Name" value={name} onChange={setName} placeholder="Character name" />
+      <EditableField label="Role" value={role} onChange={setRole} placeholder="e.g. Protagonist" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Brief description" />
+      <div className="flex items-center gap-2 mt-1">
+        <button onClick={() => onSave({ name, role, description: desc })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+          <Plus className="w-2.5 h-2.5" /> Create
+        </button>
+        <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+          <X className="w-2.5 h-2.5" /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: string; description: string }) => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  return (
+    <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
+      <EditableField label="Name" value={name} onChange={setName} placeholder="Location name" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Description" />
+      <div className="flex items-center gap-2 mt-1">
+        <button onClick={() => onSave({ name, description: desc })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+          <Plus className="w-2.5 h-2.5" /> Create
+        </button>
+        <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+          <X className="w-2.5 h-2.5" /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string }) => void; onCancel: () => void }) {
+  const [pov, setPov] = useState("");
+  const [tense, setTense] = useState("");
+  const [comps, setComps] = useState("");
+  const [sample, setSample] = useState("");
+  return (
+    <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
+      <EditableField label="POV" value={pov} onChange={setPov} placeholder="e.g. Third Person Limited" />
+      <EditableField label="Tense" value={tense} onChange={setTense} placeholder="e.g. Past" />
+      <EditableField label="Comparisons" value={comps} onChange={setComps} placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
+      <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline placeholder="A short sample of your prose style" />
+      <div className="flex items-center gap-2 mt-1">
+        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+          <Plus className="w-2.5 h-2.5" /> Create
+        </button>
+        <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+          <X className="w-2.5 h-2.5" /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumber: number; title: string }) => void; onCancel: () => void }) {
+  const [ch, setCh] = useState("1");
+  const [title, setTitle] = useState("");
+  return (
+    <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
+      <EditableField label="Chapter #" value={ch} onChange={setCh} />
+      <EditableField label="Title" value={title} onChange={setTitle} placeholder="Chapter title" />
+      <div className="flex items-center gap-2 mt-1">
+        <button onClick={() => onSave({ chapterNumber: parseInt(ch, 10) || 1, title })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+          <Plus className="w-2.5 h-2.5" /> Create
+        </button>
+        <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
+          <X className="w-2.5 h-2.5" /> Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Component ──────────────────────────────────────────────────────────
 
 export function BookWritingPage() {
-  const { selectedCompanyId } = useCompany();
-  const companyId = selectedCompanyId ?? "";
+  const companySlug = "414c172d-7013-4728-b781-aad604d8e2d7"; // ponytail: hardcoded CID, use CompanyContext when multi-company
+  const [activeBibleTab, setActiveBibleTab] = useState<StoryBibleTab>("overview");
+  const [activeFilterPills, setActiveFilterPills] = useState<Set<string>>(new Set());
 
-  // ── Form state ──────────────────────────────────────────────────────────
-  const [concept, setConcept] = useState("");
-  const [genre, setGenre] = useState<string>(DEFAULT_GENRE);
-  const [length, setLength] = useState<string>(DEFAULT_LENGTH);
-  const [tone, setTone] = useState<string>(DEFAULT_TONE);
-  const [authorName, setAuthorName] = useState("");
+  // Data state
+  const [booksList, setBooksList] = useState<BookData[]>([]);
+  const [activeBook, setActiveBook] = useState<BookData | null>(null);
+  const [characters, setCharacters] = useState<CharacterEntity[]>([]);
+  const [locations, setLocations] = useState<WorldLocationEntity[]>([]);
+  const [styleEntries, setStyleEntries] = useState<StyleEntity[]>([]);
+  const [outlineEntries, setOutlineEntries] = useState<OutlineEntity[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // ── Pipeline state ─────────────────────────────────────────────────────
-  const [activePipelineId, setActivePipelineId] = useState<string | null>(null);
+  // Create panel state
+  const [showCreateCharacter, setShowCreateCharacter] = useState(false);
+  const [showCreateLocation, setShowCreateLocation] = useState(false);
+  const [showCreateStyle, setShowCreateStyle] = useState(false);
+  const [showCreateOutline, setShowCreateOutline] = useState(false);
 
-  // ── Chapter state ───────────────────────────────────────────────────────
-  const [chapters, setChapters] = useState<Chapter[]>([
-    { id: generateId(), title: "Chapter 1", content: "", wordCount: 0 },
-  ]);
-  const [activeChapterId, setActiveChapterId] = useState<string>(
-    chapters[0]?.id ?? "",
-  );
+  // ── Data fetching ──────────────────────────────────────────────────────
 
-  // ── Pipeline status polling ─────────────────────────────────────────────
-  const {
-    data: pipelineStatus,
-    isLoading: statusLoading,
-    error: statusError,
-  } = useQuery<PipelineStatus>({
-    queryKey: ["book-writing", "status", activePipelineId],
-    queryFn: () => bookWritingApi.status(companyId, activePipelineId!),
-    enabled: !!activePipelineId && !!companyId,
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      if (!data || data.phase === "done" || data.phase === "failed") return false;
-      return 5000;
-    },
-  });
+  const fetchData = useCallback(async () => {
+    if (!companySlug) return;
+    setLoading(true);
+    try {
+      const { books: bList } = await apiFetch<{ books: BookData[] }>(
+        `/companies/${companySlug}/book-studio/books`
+      );
+      setBooksList(bList);
+      const book = bList[0] || null;
+      setActiveBook(book);
 
-  // ── Start pipeline mutation ─────────────────────────────────────────────
-  const startMutation = useMutation({
-    mutationFn: () =>
-      bookWritingApi.start(companyId, {
-        concept: concept.trim(),
-        genre,
-        length,
-        tone,
-        authorName: authorName.trim() || undefined,
-      }),
-    onSuccess: (data) => {
-      if (data?.pipelineId) {
-        setActivePipelineId(data.pipelineId);
+      if (book) {
+        const [charsRes, locsRes, styleRes, outlineRes] = await Promise.all([
+          apiFetch<{ characters: CharacterEntity[] }>(
+            `/companies/${companySlug}/book-studio/books/${book.id}/characters`
+          ),
+          apiFetch<{ "world-locations": WorldLocationEntity[] }>(
+            `/companies/${companySlug}/book-studio/books/${book.id}/world-locations`
+          ),
+          apiFetch<{ style: StyleEntity[] }>(
+            `/companies/${companySlug}/book-studio/books/${book.id}/style`
+          ),
+          apiFetch<{ outline: OutlineEntity[] }>(
+            `/companies/${companySlug}/book-studio/books/${book.id}/outline`
+          ),
+        ]);
+        setCharacters(charsRes.characters || []);
+        setLocations(locsRes["world-locations"] || []);
+        setStyleEntries(styleRes.style || []);
+        setOutlineEntries(outlineRes.outline || []);
       }
-    },
-  });
-
-  // ── Cancel pipeline mutation ────────────────────────────────────────────
-  const cancelMutation = useMutation({
-    mutationFn: () => bookWritingApi.cancel(companyId, activePipelineId!),
-    onSuccess: () => {
-      setActivePipelineId(null);
-    },
-  });
-
-  // ── Chapter handlers ────────────────────────────────────────────────────
-  const activeChapter = chapters.find((c) => c.id === activeChapterId);
-
-  const addChapter = () => {
-    const newChapter: Chapter = {
-      id: generateId(),
-      title: `Chapter ${chapters.length + 1}`,
-      content: "",
-      wordCount: 0,
-    };
-    setChapters((prev) => [...prev, newChapter]);
-    setActiveChapterId(newChapter.id);
-  };
-
-  const removeChapter = (id: string) => {
-    if (chapters.length <= 1) return;
-    setChapters((prev) => prev.filter((c) => c.id !== id));
-    if (activeChapterId === id) {
-      const idx = chapters.findIndex((c) => c.id === id);
-      const next = chapters[Math.max(0, idx - 1)];
-      if (next) setActiveChapterId(next.id);
+    } catch (err) {
+      console.error("Failed to load book studio data:", err);
+    } finally {
+      setLoading(false);
     }
+  }, [companySlug]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // ── CRUD helpers ───────────────────────────────────────────────────────
+
+  const API_PREFIX = `/companies/${companySlug}/book-studio/books/${activeBook?.id}`;
+
+  const updateCharacter = async (id: string, data: Partial<CharacterEntity>) => {
+    await apiFetch(`${API_PREFIX}/characters/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    setCharacters((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
   };
 
-  const moveChapter = (id: string, direction: 1 | -1) => {
-    setChapters((prev) => {
-      const idx = prev.findIndex((c) => c.id === id);
-      if (idx === -1) return prev;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= prev.length) return prev;
-      const arr = [...prev];
-      [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
-      return arr;
+  const deleteCharacter = async (id: string) => {
+    await apiFetch(`${API_PREFIX}/characters/${id}`, { method: "DELETE" });
+    setCharacters((prev) => prev.filter((c) => c.id !== id));
+  };
+
+  const createCharacter = async (data: { name: string; role: string; description: string }) => {
+    const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    setCharacters((prev) => [...prev, res.character]);
+    setShowCreateCharacter(false);
+  };
+
+  const updateLocation = async (id: string, data: Partial<WorldLocationEntity>) => {
+    await apiFetch(`${API_PREFIX}/world-locations/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, ...data } : l)));
+  };
+
+  const deleteLocation = async (id: string) => {
+    await apiFetch(`${API_PREFIX}/world-locations/${id}`, { method: "DELETE" });
+    setLocations((prev) => prev.filter((l) => l.id !== id));
+  };
+
+  const createLocation = async (data: { name: string; description: string }) => {
+    const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    setLocations((prev) => [...prev, res["world-location"]]);
+    setShowCreateLocation(false);
+  };
+
+  const updateStyle = async (id: string, data: Partial<StyleEntity>) => {
+    await apiFetch(`${API_PREFIX}/style/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    setStyleEntries((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
+  };
+
+  const deleteStyle = async (id: string) => {
+    await apiFetch(`${API_PREFIX}/style/${id}`, { method: "DELETE" });
+    setStyleEntries((prev) => prev.filter((s) => s.id !== id));
+  };
+
+  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string }) => {
+    const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    setStyleEntries((prev) => [...prev, res["style-entry"]]);
+    setShowCreateStyle(false);
+  };
+
+  const updateOutline = async (id: string, data: Partial<OutlineEntity>) => {
+    await apiFetch(`${API_PREFIX}/outline/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+    setOutlineEntries((prev) => prev.map((o) => (o.id === id ? { ...o, ...data } : o)));
+  };
+
+  const deleteOutline = async (id: string) => {
+    await apiFetch(`${API_PREFIX}/outline/${id}`, { method: "DELETE" });
+    setOutlineEntries((prev) => prev.filter((o) => o.id !== id));
+  };
+
+  const createOutline = async (data: { chapterNumber: number; title: string }) => {
+    const res = await apiFetch<{ "outline-entry": OutlineEntity }>(`${API_PREFIX}/outline`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    setOutlineEntries((prev) => [...prev, res["outline-entry"]]);
+    setShowCreateOutline(false);
+  };
+
+  // ── Derived ────────────────────────────────────────────────────────────
+
+  const togglePill = (pill: string) => {
+    setActiveFilterPills((prev) => {
+      const next = new Set(prev);
+      if (next.has(pill)) next.delete(pill);
+      else next.add(pill);
+      return next;
     });
   };
 
-  const updateChapter = (id: string, fields: Partial<Chapter>) => {
-    setChapters((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              ...fields,
-              wordCount:
-                fields.content !== undefined
-                  ? countWords(fields.content)
-                  : c.wordCount,
-            }
-          : c,
-      ),
-    );
-  };
+  const filteredNotes =
+    activeFilterPills.size === 0
+      ? REVIEW_NOTES
+      : REVIEW_NOTES.filter((n) => activeFilterPills.has(n.category));
 
-  // ── Derived ─────────────────────────────────────────────────────────────
-  const totalWordCount = chapters.reduce((sum, c) => sum + c.wordCount, 0);
-  const isPipelineRunning =
-    pipelineStatus &&
-    pipelineStatus.phase !== "done" &&
-    pipelineStatus.phase !== "failed" &&
-    pipelineStatus.phase !== "idle";
-  const canStart = concept.trim().length > 0 && !startMutation.isPending;
+  // ── Render ─────────────────────────────────────────────────────────────
 
-  // ── Render ──────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full bg-gray-950">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800 shrink-0">
-        <div className="flex items-center gap-3">
-          <BookOpen className="w-5 h-5 text-blue-400" />
-          <h1 className="text-lg font-semibold text-gray-100">
-            Book Writing Studio
-          </h1>
-        </div>
-        <div className="flex items-center gap-2 text-sm text-gray-400">
-          <span className="flex items-center gap-1">
-            <Clock className="w-3.5 h-3.5" />
-            {totalWordCount.toLocaleString()} words
+    <div className="h-full flex flex-col bg-gray-950 text-gray-100">
+      {/* ── Top Bar ────────────────────────────────────────────────────── */}
+      <header className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
+        <div className="flex items-center gap-4">
+          <span className="text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
+            PAPERCLIP
+          </span>
+          <span className="text-gray-700">/</span>
+          <h1 className="text-sm font-semibold text-gray-100">Book Studio</h1>
+          <span className="text-gray-700">·</span>
+          <span className="text-sm text-gray-400 italic">
+            {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>
         </div>
-      </div>
 
-      {/* 3-column layout */}
-      <div className="grid grid-cols-[320px_1fr_280px] gap-5 p-5 flex-1 min-h-0 overflow-hidden">
-        {/* ── LEFT COLUMN: Config + Pipeline + Chapters ───────────────── */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
-          {/* Configuration Card */}
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">
-              Configuration
-            </h3>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Concept</label>
-              <textarea
-                className="w-full rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 resize-none"
-                rows={3}
-                placeholder="Describe your book concept..."
-                value={concept}
-                onChange={(e) => setConcept(e.target.value)}
-                disabled={!!activePipelineId}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Genre</label>
-                <select
-                  className="w-full rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200"
-                  value={genre}
-                  onChange={(e) => setGenre(e.target.value)}
-                  disabled={!!activePipelineId}
-                >
-                  {GENRES.map((g) => (
-                    <option key={g} value={g}>
-                      {g}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Tone</label>
-                <select
-                  className="w-full rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200"
-                  value={tone}
-                  onChange={(e) => setTone(e.target.value)}
-                  disabled={!!activePipelineId}
-                >
-                  {TONES.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Length</label>
-                <select
-                  className="w-full rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200"
-                  value={length}
-                  onChange={(e) => setLength(e.target.value)}
-                  disabled={!!activePipelineId}
-                >
-                  {LENGTHS.map((l) => (
-                    <option key={l} value={l}>
-                      {l}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Author</label>
-                <input
-                  className="w-full rounded-md border border-gray-800 bg-gray-950 px-3 py-2 text-sm text-gray-200 placeholder-gray-500"
-                  placeholder="Optional"
-                  value={authorName}
-                  onChange={(e) => setAuthorName(e.target.value)}
-                  disabled={!!activePipelineId}
-                />
-              </div>
-            </div>
-            <button
-              className={cn(
-                "w-full rounded-md px-4 py-2 text-sm font-medium flex items-center justify-center gap-2",
-                canStart
-                  ? "bg-blue-600 text-white hover:bg-blue-500"
-                  : "bg-gray-800 text-gray-500 cursor-not-allowed",
-              )}
-              onClick={() => startMutation.mutate()}
-              disabled={!canStart}
-            >
-              {startMutation.isPending ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Starting...
-                </>
-              ) : activePipelineId ? (
-                <>
-                  <Play className="w-4 h-4" />
-                  Pipeline Active
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4" />
-                  Write Book
-                </>
-              )}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center rounded-md border border-gray-700 text-xs">
+            <button className="flex items-center gap-1.5 rounded-l-md bg-blue-600/20 px-3 py-1.5 text-blue-300 border-r border-gray-700">
+              <Pen className="w-3 h-3" />
+              Manual
             </button>
-            {activePipelineId && (
+            <button className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-400 hover:text-gray-200">
+              <Sparkles className="w-3 h-3" />
+              Autopilot
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
+            <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+            $24.50 / $50.00
+          </div>
+          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+            <Pause className="w-3 h-3" /> Pause
+          </button>
+          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+            <Play className="w-3 h-3" /> Steer
+          </button>
+          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+            <MessageSquare className="w-3 h-3" /> Review
+          </button>
+          <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5">
+            <Download className="w-3 h-3" /> Export
+          </button>
+        </div>
+      </header>
+
+      {/* ── Three-Pane Layout ──────────────────────────────────────────── */}
+      <div className="grid grid-cols-[1fr_2fr_1fr] flex-1 min-h-0">
+        {/* LEFT PANE — Story Bible */}
+        <aside className="flex flex-col border-r border-gray-800 min-h-0">
+          <div className="flex border-b border-gray-800 shrink-0 overflow-x-auto">
+            {BIBLE_TABS.map((tab) => (
               <button
-                className="w-full rounded-md border border-red-800 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900/30 flex items-center justify-center gap-2"
-                onClick={() => cancelMutation.mutate()}
-                disabled={cancelMutation.isPending}
+                key={tab.id}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-2.5 text-[11px] font-medium whitespace-nowrap border-b-2 transition-colors",
+                  activeBibleTab === tab.id
+                    ? "border-blue-500 text-blue-300"
+                    : "border-transparent text-gray-500 hover:text-gray-300",
+                )}
+                onClick={() => setActiveBibleTab(tab.id)}
               >
-                <Square className="w-4 h-4" />
-                {cancelMutation.isPending ? "Cancelling..." : "Cancel"}
+                {tab.icon}
+                {tab.label}
               </button>
+            ))}
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {/* Overview Tab */}
+            {activeBibleTab === "overview" && (
+              <div className="p-4 space-y-3">
+                <div className="rounded-md border border-gray-800 bg-gray-900/50 p-3">
+                  <h3 className="text-sm font-semibold text-gray-200 mb-1">
+                    {activeBook?.title || "Untitled Book"}
+                  </h3>
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    {loading ? "Loading..." : activeBook ? "A writing project in Book Studio." : "Create a book to get started."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Characters Tab */}
+            {activeBibleTab === "characters" && (
+              <div>
+                {showCreateCharacter && (
+                  <div className="px-4 pt-3">
+                    <CreateCharacterForm
+                      onSave={createCharacter}
+                      onCancel={() => setShowCreateCharacter(false)}
+                    />
+                  </div>
+                )}
+                <div className="px-4 py-2.5 border-b border-gray-800">
+                  <CollapsibleSection title="Characters" count={characters.length}>
+                    {characters.length === 0 ? (
+                      <div className="text-xs text-gray-500 italic py-2">No characters yet. Add your first one.</div>
+                    ) : (
+                      characters.map((c) => (
+                        <div key={c.id} className="relative">
+                          <CharacterCardComponent char={c} onUpdate={updateCharacter} onDelete={deleteCharacter} />
+                        </div>
+                      ))
+                    )}
+                  </CollapsibleSection>
+                </div>
+                <div className="px-4 pb-4 pt-2">
+                  <button
+                    onClick={() => setShowCreateCharacter(true)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                  >
+                    <Plus className="w-3 h-3" /> Add Character
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* World & Locations Tab */}
+            {activeBibleTab === "world" && (
+              <div>
+                {showCreateLocation && (
+                  <div className="px-4 pt-3">
+                    <CreateLocationForm
+                      onSave={createLocation}
+                      onCancel={() => setShowCreateLocation(false)}
+                    />
+                  </div>
+                )}
+                <div className="px-4 py-2.5 border-b border-gray-800">
+                  <CollapsibleSection title="Locations" count={locations.length}>
+                    {locations.length === 0 ? (
+                      <div className="text-xs text-gray-500 italic py-2">No locations yet. Add your first one.</div>
+                    ) : (
+                      locations.map((l) => (
+                        <div key={l.id} className="relative">
+                          <LocationCardComponent loc={l} onUpdate={updateLocation} onDelete={deleteLocation} />
+                        </div>
+                      ))
+                    )}
+                  </CollapsibleSection>
+                </div>
+                <div className="px-4 pb-4 pt-2">
+                  <button
+                    onClick={() => setShowCreateLocation(true)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                  >
+                    <Plus className="w-3 h-3" /> Add Location
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Style Tab */}
+            {activeBibleTab === "style" && (
+              <div>
+                {showCreateStyle && (
+                  <div className="px-4 pt-3">
+                    <CreateStyleForm
+                      onSave={createStyle}
+                      onCancel={() => setShowCreateStyle(false)}
+                    />
+                  </div>
+                )}
+                <div className="px-4 py-2.5 border-b border-gray-800">
+                  <CollapsibleSection title="Style Entries" count={styleEntries.length}>
+                    {styleEntries.length === 0 ? (
+                      <div className="text-xs text-gray-500 italic py-2">No style entries yet. Add your first one.</div>
+                    ) : (
+                      styleEntries.map((s) => (
+                        <div key={s.id} className="relative">
+                          <StyleCardComponent entry={s} onUpdate={updateStyle} onDelete={deleteStyle} />
+                        </div>
+                      ))
+                    )}
+                  </CollapsibleSection>
+                </div>
+                <div className="px-4 pb-4 pt-2">
+                  <button
+                    onClick={() => setShowCreateStyle(true)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                  >
+                    <Plus className="w-3 h-3" /> Add Style Entry
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Outline Tab */}
+            {activeBibleTab === "outline" && (
+              <div>
+                {showCreateOutline && (
+                  <div className="px-4 pt-3">
+                    <CreateOutlineForm
+                      onSave={createOutline}
+                      onCancel={() => setShowCreateOutline(false)}
+                    />
+                  </div>
+                )}
+                <div className="px-4 py-2.5 border-b border-gray-800">
+                  <CollapsibleSection title="Chapters" count={outlineEntries.length}>
+                    {outlineEntries.length === 0 ? (
+                      <div className="text-xs text-gray-500 italic py-2">No outline entries yet. Add your first chapter.</div>
+                    ) : (
+                      outlineEntries.map((o) => (
+                        <div key={o.id} className="relative">
+                          <OutlineCardComponent entry={o} onUpdate={updateOutline} onDelete={deleteOutline} />
+                        </div>
+                      ))
+                    )}
+                  </CollapsibleSection>
+                </div>
+                <div className="px-4 pb-4 pt-2">
+                  <button
+                    onClick={() => setShowCreateOutline(true)}
+                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                  >
+                    <Plus className="w-3 h-3" /> Add Chapter
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Manuscript Tab */}
+            {activeBibleTab === "manuscript" && (
+              <div className="flex items-center justify-center h-full p-8">
+                <div className="text-center">
+                  <div className="text-2xl mb-3 opacity-40">📄</div>
+                  <p className="text-sm text-gray-500">Full manuscript overview</p>
+                  <p className="text-xs text-gray-600 mt-1">Coming soon</p>
+                </div>
+              </div>
             )}
           </div>
+        </aside>
 
-          {/* Pipeline Status Card */}
-          {activePipelineId && (
-            <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-2">
-              <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">
-                Pipeline Status
-              </h3>
-              {statusLoading && (
-                <div className="flex items-center gap-2 text-sm text-gray-400">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  Loading...
-                </div>
-              )}
-              {statusError && (
-                <div className="flex items-center gap-2 text-sm text-red-400">
-                  <AlertCircle className="w-3.5 h-3.5" />
-                  Error fetching status
-                </div>
-              )}
-              {pipelineStatus && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className={cn("text-sm font-medium", phaseColor(pipelineStatus.phase))}>
-                      {phaseLabel(pipelineStatus.phase)}
-                    </span>
-                    {pipelineStatus.estimatedMinutesRemaining > 0 && (
-                      <span className="text-xs text-gray-500">
-                        ~{pipelineStatus.estimatedMinutesRemaining}m remaining
-                      </span>
-                    )}
-                  </div>
-                  {pipelineStatus.phase === "done" && (
-                    <div className="flex items-center gap-1.5 text-sm text-green-500">
-                      <CheckCircle2 className="w-4 h-4" />
-                      Complete
-                    </div>
-                  )}
-                  {pipelineStatus.phase === "failed" && (
-                    <div className="text-sm text-red-400">
-                      {pipelineStatus.error ?? "Unknown error"}
-                    </div>
-                  )}
-                  {pipelineStatus.score !== null && pipelineStatus.score !== undefined && (
-                    <div className="text-xs text-gray-400">
-                      Quality Score: {pipelineStatus.score.toFixed(2)}
-                    </div>
-                  )}
-                  {pipelineStatus.logLines && pipelineStatus.logLines.length > 0 && (
-                    <details className="text-xs">
-                      <summary className="text-gray-500 cursor-pointer">Log</summary>
-                      <div className="mt-1 space-y-0.5 max-h-32 overflow-y-auto">
-                        {pipelineStatus.logLines.map((line, i) => (
-                          <div key={i} className="text-gray-500 font-mono text-[11px]">
-                            {line}
-                          </div>
-                        ))}
-                      </div>
-                    </details>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Chapter List */}
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wider">
-                Chapters
-              </h3>
-              <button
-                className="rounded-md bg-blue-600 text-white p-1.5 hover:bg-blue-500"
-                onClick={addChapter}
-                title="Add chapter"
-              >
-                <Plus className="w-3.5 h-3.5" />
+        {/* CENTER PANE — Manuscript */}
+        <div className="flex flex-col min-h-0">
+          <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
+            <div className="flex items-center gap-3">
+              <button className="rounded-md border border-gray-700 p-1.5 text-gray-400 hover:text-gray-200 hover:border-gray-600">
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <div>
+                <h2 className="text-sm font-semibold text-gray-100">Chapter 1: The Last Bloom</h2>
+                <p className="text-xs text-gray-500">2,340 words · Scene 1 of 4</p>
+              </div>
+              <button className="rounded-md border border-gray-700 p-1.5 text-gray-400 hover:text-gray-200 hover:border-gray-600">
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
-            <div className="space-y-1 max-h-[400px] overflow-y-auto">
-              {chapters.map((ch, idx) => (
-                <div
-                  key={ch.id}
+          </div>
+
+          <div className="flex-1 p-5 overflow-y-auto">
+            <textarea
+              className="w-full h-full rounded-md border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-200 placeholder-gray-600 resize-none leading-relaxed focus:outline-none focus:border-gray-700"
+              placeholder="Write your manuscript here..."
+              defaultValue={`The first petal fell at dawn.\n\nMara watched it spiral down through the amber light of the Ash Garden...`}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 border-t border-gray-800 px-5 py-2.5 shrink-0">
+            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+              <MessageSquare className="w-3 h-3" /> Comment
+            </button>
+            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+              <RotateCcw className="w-3 h-3" /> Rewrite
+            </button>
+            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+              <Sparkles className="w-3 h-3" /> Improve
+            </button>
+            <div className="flex-1" />
+            <span className="text-xs text-gray-600">Auto-saved</span>
+          </div>
+        </div>
+
+        {/* RIGHT PANE — Review Notes */}
+        <aside className="flex flex-col border-l border-gray-800 min-h-0">
+          <div className="px-4 py-3 border-b border-gray-800 shrink-0">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+              Review Notes
+            </h3>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-800 shrink-0">
+            {CATEGORY_PILLS.map((pill) => {
+              const active = activeFilterPills.has(pill);
+              const colorClasses = CATEGORY_COLORS[pill];
+              return (
+                <button
+                  key={pill}
                   className={cn(
-                    "flex items-center gap-2 px-3 py-2 rounded-md cursor-pointer text-sm group",
-                    ch.id === activeChapterId
-                      ? "bg-blue-900/30 border border-blue-800/50"
-                      : "hover:bg-gray-800/50 border border-transparent",
+                    "rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
+                    active
+                      ? colorClasses
+                      : "border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600",
                   )}
-                  onClick={() => setActiveChapterId(ch.id)}
+                  onClick={() => togglePill(pill)}
                 >
-                  <span className="text-xs text-gray-500 w-5 shrink-0">
-                    {idx + 1}.
-                  </span>
-                  <span className="flex-1 truncate text-gray-200">
-                    {ch.title}
-                  </span>
-                  <span className="text-xs text-gray-500 shrink-0">
-                    {ch.wordCount}
-                  </span>
-                  <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 shrink-0">
-                    <button
-                      className="p-0.5 rounded hover:bg-gray-700 text-gray-400"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        moveChapter(ch.id, -1);
-                      }}
-                      disabled={idx === 0}
-                      title="Move up"
-                    >
-                      <ChevronUp className="w-3 h-3" />
-                    </button>
-                    <button
-                      className="p-0.5 rounded hover:bg-gray-700 text-gray-400"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        moveChapter(ch.id, 1);
-                      }}
-                      disabled={idx === chapters.length - 1}
-                      title="Move down"
-                    >
-                      <ChevronDown className="w-3 h-3" />
-                    </button>
-                    <button
-                      className="p-0.5 rounded hover:bg-red-900/50 text-red-400"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        removeChapter(ch.id);
-                      }}
-                      disabled={chapters.length <= 1}
-                      title="Delete chapter"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  {pill}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+            {filteredNotes.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-full p-6 text-center">
+                <div className="text-2xl mb-2 opacity-30">✅</div>
+                <p className="text-xs text-gray-500">No matching notes</p>
+                <p className="text-[10px] text-gray-600 mt-1">Try selecting a different filter</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-800/50">
+                {filteredNotes.map((note) => (
+                  <div key={note.id} className="px-4 py-3 hover:bg-gray-900/30 group">
+                    <div className="flex items-start justify-between gap-2">
+                      <span
+                        className={cn(
+                          "inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 mt-0.5",
+                          CATEGORY_COLORS[note.category],
+                        )}
+                      >
+                        {note.category}
+                      </span>
+                    </div>
+                    <p className="text-xs font-medium text-gray-200 mt-1.5">{note.label}</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">{note.description}</p>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* ── CENTER COLUMN: Chapter Editor ────────────────────────────── */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
-          {activeChapter ? (
-            <>
-              {/* Title */}
-              <input
-                className="w-full rounded-md border border-gray-800 bg-gray-950 px-4 py-2 text-lg font-semibold text-gray-100 placeholder-gray-500"
-                placeholder="Chapter title"
-                value={activeChapter.title}
-                onChange={(e) =>
-                  updateChapter(activeChapter.id, { title: e.target.value })
-                }
-              />
-
-              {/* Content */}
-              <div className="flex-1 flex flex-col">
-                <textarea
-                  className="w-full flex-1 rounded-md border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-200 placeholder-gray-500 resize-none font-mono leading-relaxed min-h-[300px]"
-                  placeholder="Write your chapter content here..."
-                  value={activeChapter.content}
-                  onChange={(e) =>
-                    updateChapter(activeChapter.id, { content: e.target.value })
-                  }
-                />
-                <div className="flex items-center justify-between mt-2 text-xs text-gray-500">
-                  <span>{activeChapter.wordCount.toLocaleString()} words</span>
-                </div>
+                ))}
               </div>
-
-              {/* Generation Controls */}
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  className="rounded-md bg-blue-600 text-white px-4 py-2 text-sm font-medium hover:bg-blue-500 flex items-center gap-1.5"
-                  disabled={!activePipelineId}
-                >
-                  <Play className="w-4 h-4" />
-                  Write Chapter
-                </button>
-                <button
-                  className="rounded-md border border-gray-700 text-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-800 flex items-center gap-1.5"
-                  disabled={!activePipelineId}
-                >
-                  <SkipForward className="w-4 h-4" />
-                  Continue
-                </button>
-                <button
-                  className="rounded-md border border-gray-700 text-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-800 flex items-center gap-1.5"
-                  disabled={!activePipelineId}
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Rewrite
-                </button>
-              </div>
-            </>
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <p className="text-sm text-gray-500">
-                Select or create a chapter to begin editing.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* ── RIGHT COLUMN: Narration + Images ─────────────────────────── */}
-        <div className="flex flex-col gap-4 overflow-y-auto">
-          {/* Narration Preview */}
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wider flex items-center gap-2">
-              <Volume2 className="w-4 h-4" />
-              Narration
-            </h3>
-            <div className="rounded-md border border-dashed border-gray-700 bg-gray-900/50 p-6 text-center">
-              <Volume2 className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-              <p className="text-sm text-gray-500">
-                ElevenLabs narration preview will appear here when a chapter is
-                generated.
-              </p>
-              <p className="text-xs text-gray-600 mt-1">
-                AI voice narration for audio publishing.
-              </p>
-            </div>
-            <button
-              className="w-full rounded-md border border-gray-700 text-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-800 flex items-center justify-center gap-1.5"
-              disabled={!activePipelineId}
-            >
-              <Volume2 className="w-4 h-4" />
-              Generate Narration
-            </button>
+            )}
           </div>
-
-          {/* Image Generation */}
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-gray-200 uppercase tracking-wider flex items-center gap-2">
-              <ImageIcon className="w-4 h-4" />
-              Illustrations
-            </h3>
-            <div className="rounded-md border border-dashed border-gray-700 bg-gray-900/50 p-6 text-center">
-              <ImageIcon className="w-8 h-8 text-gray-600 mx-auto mb-2" />
-              <p className="text-sm text-gray-500">
-                FAL-generated images will appear here.
-              </p>
-              <p className="text-xs text-gray-600 mt-1">
-                Chapter illustrations, cover art, and scene visuals.
-              </p>
-            </div>
-            <button
-              className="w-full rounded-md border border-gray-700 text-gray-300 px-4 py-2 text-sm font-medium hover:bg-gray-800 flex items-center justify-center gap-1.5"
-              disabled={!activePipelineId}
-            >
-              <ImageIcon className="w-4 h-4" />
-              Generate Image
-            </button>
-          </div>
-
-          {/* Output Preview */}
-          {pipelineStatus?.phase === "done" && (
-            <div className="rounded-lg border border-green-800/50 bg-green-950/20 p-4 space-y-2">
-              <h3 className="text-sm font-semibold text-green-400 uppercase tracking-wider">
-                Artifacts
-              </h3>
-              <p className="text-xs text-green-500/80">
-                PDF, ePub, audiobook, and cover art available.
-              </p>
-            </div>
-          )}
-        </div>
+        </aside>
       </div>
+
+      {/* BOTTOM BAR */}
+      <footer className="flex items-center gap-4 border-t border-gray-800 px-5 py-3 shrink-0 bg-gray-950/80 backdrop-blur-sm">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 shrink-0">
+          Rewrite Proposal
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs text-gray-300 truncate">
+            <span className="text-gray-600 line-through mr-2">Mara watched it spiral down through the amber light</span>
+            <span className="text-green-400">Mara watched the petal spiral through amber light</span>
+          </p>
+          <p className="text-[10px] text-gray-600 mt-0.5">Suggested: tighter prose, active voice, removes redundant "down"</p>
+        </div>
+        <button className="rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 flex items-center gap-1.5">
+          <Check className="w-3 h-3" /> Accept
+        </button>
+        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600">
+          Reject
+        </button>
+        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+          <Pen className="w-3 h-3" /> Edit
+        </button>
+      </footer>
     </div>
   );
 }

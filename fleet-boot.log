@@ -1,0 +1,9 @@
+2026-07-03 19:37:37  === fleet-boot start ===
+2026-07-03 19:37:38  PG: already up on 5432 (skip)
+2026-07-03 19:37:38  Server: already up on 3100 (skip)
+2026-07-03 19:37:38  Tunnels: cloudflared count 2 (assume up, skip)
+2026-07-03 19:37:38  === fleet-boot done ===
+2026-07-03 22:25:43  === fleet-boot start ===
+2026-07-03 22:25:44  PG: removed stale postmaster.pid (pid '38620' not alive)
+2026-07-03 22:25:53  PG: waiting for server to start............ done
+2026-07-03 22:25:53  PG: server started

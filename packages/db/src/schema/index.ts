@@ -1,4 +1,9 @@
 export { companies } from "./companies.js";
+export {
+  books,
+  type Book,
+  type NewBook,
+} from "./books.js";
 export { companyLogos } from "./company_logos.js";
 export { authUsers, authSessions, authAccounts, authVerifications } from "./auth.js";
 export { instanceSettings } from "./instance_settings.js";
@@ -162,6 +167,26 @@ export {
   type Prompt,
   type NewPrompt,
 } from "./prompts.js";
+export {
+  storyBibleCharacters,
+  type StoryBibleCharacter,
+  type NewStoryBibleCharacter,
+} from "./story_bible_characters.js";
+export {
+  storyBibleWorldLocations,
+  type StoryBibleWorldLocation,
+  type NewStoryBibleWorldLocation,
+} from "./story_bible_world_locations.js";
+export {
+  storyBibleStyle,
+  type StoryBibleStyle,
+  type NewStoryBibleStyle,
+} from "./story_bible_style.js";
+export {
+  storyBibleOutline,
+  type StoryBibleOutline,
+  type NewStoryBibleOutline,
+} from "./story_bible_outline.js";
 export {
   reels,
   reelScenes,

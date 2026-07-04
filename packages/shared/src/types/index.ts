@@ -1,4 +1,5 @@
 export type { Company } from "./company.js";
+export type { Book } from "./book.js";
 export type {
   Environment,
   EnvironmentLease,
@@ -415,6 +416,20 @@ export type {
   SocialAppCredentialPublic,
   SocialAppCredentialTestResult,
 } from "./social.js";
+export type {
+  StoryBibleCharacter,
+  StoryBibleWorldLocation,
+  StoryBibleStyle,
+  StoryBibleOutline,
+  StoryBibleCharacterCreateInput,
+  StoryBibleCharacterUpdateInput,
+  StoryBibleWorldLocationCreateInput,
+  StoryBibleWorldLocationUpdateInput,
+  StoryBibleStyleCreateInput,
+  StoryBibleStyleUpdateInput,
+  StoryBibleOutlineCreateInput,
+  StoryBibleOutlineUpdateInput,
+} from "./story-bible.js";
 export type {
   JsonSchema,
   PluginJobDeclaration,

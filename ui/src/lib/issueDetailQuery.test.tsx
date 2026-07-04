@@ -51,6 +51,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     completedAt: null,
     cancelledAt: null,
     hiddenAt: null,
+    iterationCount: 0,
     createdAt: now,
     updatedAt: now,
     ...overrides,

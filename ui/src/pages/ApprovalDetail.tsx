@@ -371,7 +371,7 @@ export function ApprovalDetail() {
                 {comment.authorAgentId ? (
                   <Link to={`/agents/${comment.authorAgentId}`} className="hover:underline">
                     <Identity
-                      name={agentNameById.get(comment.authorAgentId) ?? comment.authorAgentId.slice(0, 8)}
+                      name={comment.resolvedAuthorName ?? comment.authorAgentId?.slice(0, 8)}
                       size="sm"
                     />
                   </Link>

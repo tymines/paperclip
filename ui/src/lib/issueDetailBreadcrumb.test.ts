@@ -41,6 +41,7 @@ describe("issueDetailBreadcrumb", () => {
       goalId: null,
       parentId: null,
       title: "Prefilled issue title",
+      iterationCount: 0,
       description: null,
       status: "todo",
       priority: "medium",

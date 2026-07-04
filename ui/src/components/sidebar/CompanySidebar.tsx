@@ -41,10 +41,10 @@ const NAV_ITEMS: NavItem[] = [
     description: "Per-agent skill usage breakdown",
   },
   {
-    label: "Book Writing",
+    label: "Book Studio",
     path: "book-writing",
     icon: "✍️",
-    description: "AI-powered book authoring",
+    description: "AI-powered book studio",
   },
   {
     label: "Settings",

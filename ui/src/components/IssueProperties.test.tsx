@@ -171,6 +171,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     hiddenAt: null,
     labels: [],
     labelIds: [],
+    iterationCount: 0,
     blockedBy: [],
     blocks: [],
     createdAt: new Date("2026-04-06T12:00:00.000Z"),

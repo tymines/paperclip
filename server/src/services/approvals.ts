@@ -1,6 +1,6 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals } from "@paperclipai/db";
+import { approvalComments, approvals, agents } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
@@ -233,7 +233,7 @@ export function approvalService(db: Db) {
     listComments: async (approvalId: string) => {
       const existing = await getExistingApproval(approvalId);
       const { censorUsernameInLogs } = await instanceSettings.getGeneral();
-      return db
+      const comments = await db
         .select()
         .from(approvalComments)
         .where(
@@ -243,7 +243,21 @@ export function approvalService(db: Db) {
           ),
         )
         .orderBy(asc(approvalComments.createdAt))
-        .then((comments) => comments.map((comment) => redactApprovalComment(comment, censorUsernameInLogs)));
+        .then((rows) => rows.map((comment) => redactApprovalComment(comment, censorUsernameInLogs)));
+      // Resolve author names (ponytail: same pattern as resolveCommentAuthorNames for issues)
+      const agentIds = Array.from(new Set(comments.map((c) => c.authorAgentId).filter(Boolean)));
+      const nameMap = new Map<string, string>();
+      if (agentIds.length > 0) {
+        const agentRows = await db
+          .select({ id: agents.id, name: agents.name })
+          .from(agents)
+          .where(inArray(agents.id, agentIds as string[]));
+        for (const a of agentRows) nameMap.set(a.id, a.name);
+      }
+      return comments.map((c) => ({
+        ...c,
+        resolvedAuthorName: c.authorAgentId ? (nameMap.get(c.authorAgentId) ?? null) : null,
+      }));
     },
 
     addComment: async (

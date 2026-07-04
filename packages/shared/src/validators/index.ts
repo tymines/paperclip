@@ -480,3 +480,22 @@ export {
   type CreateSocialPost,
   type UpdateSocialPost,
 } from "./social.js";
+
+export {
+  createStoryBibleCharacterSchema,
+  updateStoryBibleCharacterSchema,
+  type CreateStoryBibleCharacter,
+  type UpdateStoryBibleCharacter,
+  createStoryBibleWorldLocationSchema,
+  updateStoryBibleWorldLocationSchema,
+  type CreateStoryBibleWorldLocation,
+  type UpdateStoryBibleWorldLocation,
+  createStoryBibleStyleSchema,
+  updateStoryBibleStyleSchema,
+  type CreateStoryBibleStyle,
+  type UpdateStoryBibleStyle,
+  createStoryBibleOutlineSchema,
+  updateStoryBibleOutlineSchema,
+  type CreateStoryBibleOutline,
+  type UpdateStoryBibleOutline,
+} from "./story-bible.js";

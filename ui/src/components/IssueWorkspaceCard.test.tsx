@@ -108,6 +108,7 @@ function createIssue(overrides: Partial<Issue> = {}): Issue {
     updatedAt: new Date("2026-04-16T05:30:00.000Z"),
     labels: [],
     labelIds: [],
+    iterationCount: 0,
     currentExecutionWorkspace: null,
     ...overrides,
     workMode: overrides.workMode ?? "standard",

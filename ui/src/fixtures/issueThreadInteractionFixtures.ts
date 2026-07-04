@@ -29,6 +29,7 @@ function createComment(overrides: Partial<IssueChatComment>): IssueChatComment {
     body: "",
     presentation: null,
     metadata: null,
+    authorName: null,
     resolvedAuthorName: null,
     createdAt,
     updatedAt: overrides.updatedAt ?? createdAt,

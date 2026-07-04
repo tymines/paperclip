@@ -39,7 +39,9 @@ import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
 import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
+import { bookStudioRoutes } from "./routes/book-studio.js";
 import { gymRoutes } from "./routes/gym.js";
+import { storyBibleRoutes } from "./routes/story-bible.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
@@ -266,7 +268,9 @@ export async function createApp(
   api.use(instanceSettingsRoutes(db));
   api.use(elevenlabsWebhookSecretRoutes(db));
   api.use(bookWritingRoutes(db));
+  api.use(bookStudioRoutes(db));
   api.use(gymRoutes(db));
+  api.use(storyBibleRoutes(db));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }

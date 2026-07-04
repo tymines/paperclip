@@ -21,6 +21,16 @@ fs.mkdirSync(logDir, { recursive: true });
 
 const logFile = path.join(logDir, "server.log");
 
+// Rotate on startup if >10MB (single-file target grows unbounded otherwise)
+const MAX_LOG_SIZE = 10 * 1024 * 1024;
+if (fs.existsSync(logFile)) {
+  const { size } = fs.statSync(logFile);
+  if (size > MAX_LOG_SIZE) {
+    const ts = new Date().toISOString().replace(/[:.]/g, "-");
+    fs.renameSync(logFile, path.join(logDir, `server.${ts}.log`));
+  }
+}
+
 const sharedOpts = {
   translateTime: "SYS:HH:MM:ss",
   ignore: "pid,hostname",

@@ -746,6 +746,7 @@ export function createIssue(overrides: Partial<Issue> = {}): Issue {
     workProducts: [],
     mentionedProjects: [],
     myLastTouchAt: recent(8),
+    iterationCount: 0,
     lastExternalCommentAt: recent(70),
     lastActivityAt: recent(3),
     isUnreadForMe: true,
