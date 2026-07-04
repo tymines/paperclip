@@ -1,0 +1,235 @@
+name: Merge Train
+
+on:
+  pull_request:
+    branches: [integration]
+  push:
+    branches: [integration]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Queue operation'
+        required: true
+        type: choice
+        options:
+          - process-queue
+
+permissions:
+  contents: read
+
+jobs:
+  # ── CI gate for PRs targeting integration ──
+  # This is the required status check. Runs the REAL build (pnpm -r build)
+  # + full test suite. No per-file-tsc gap.
+  ci:
+    name: CI (build + test)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9.15.4'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (real build — pnpm -r build)
+        run: pnpm build
+
+      - name: Test (full suite)
+        run: pnpm test:run
+
+  # ── Sentry release on merge to integration ──
+  # Tags release = commit SHA, uploads source maps.
+  # Uses SENTRY_AUTH_TOKEN repo secret.
+  # NOTE: SENTRY_ORG and SENTRY_PROJECT should be set as repo variables,
+  #       or overridden in the env below. Defaults: tymines / paperclip.
+  sentry-release:
+    name: Sentry Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9.15.4'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (for source maps)
+        run: pnpm build
+
+      - name: Create Sentry release
+        uses: getsentry/action-release@v1
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'tymines' }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || 'paperclip' }}
+        with:
+          environment: production
+          version: ${{ github.sha }}
+          sourcemaps: './packages/*/dist'
+          url_prefix: '~/assets'
+
+  # ── Merge train queue processor ──
+  # Trigger manually (workflow_dispatch action=process-queue) or on a schedule.
+  # Processes PRs labeled `merge-train:ready` targeting integration,
+  # one at a time, oldest first.
+  #
+  # For each queued PR:
+  #   1. Wait for CI to be green (required check: "CI (build + test)")
+  #   2. Merge via MERGE_TRAIN_PAT
+  #   3. On conflict → remove label, comment on PR, continue to next
+  #
+  # Uses MERGE_TRAIN_PAT (fine-grained PAT: Contents R/W, Actions R/W, PR R/W).
+  merge-queue:
+    name: Process Merge Queue
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'process-queue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write       # for commenting on PRs
+
+    steps:
+      - name: Process merge train queue
+        env:
+          MERGE_TRAIN_PAT: ${{ secrets.MERGE_TRAIN_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          API="https://api.github.com"
+          AUTH="Authorization: Bearer ${MERGE_TRAIN_PAT}"
+          ACCEPT="Accept: application/vnd.github+json"
+          API_VER="X-GitHub-Api-Version: 2022-11-28"
+          LABEL="merge-train:ready"
+          MAX_PR=10
+
+          echo "=== Merge Train Queue Processor ==="
+          echo "Repository: ${REPO}"
+          echo "Target branch: integration"
+
+          # Fetch queued PRs (oldest first)
+          PRS=$(curl -sS -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+            "${API}/repos/${REPO}/pulls?base=integration&state=open&labels=${LABEL}&sort=created&direction=asc&per_page=${MAX_PR}")
+
+          COUNT=$(echo "${PRS}" | jq '. | length')
+          echo "Queue size: ${COUNT} PR(s)"
+
+          if [ "${COUNT}" -eq 0 ]; then
+            echo "Queue is empty. Nothing to do."
+            exit 0
+          fi
+
+          MERGED=0
+          SKIPPED=0
+          FAILED=0
+
+          i=0
+          while [ $i -lt $COUNT ]; do
+            PR_NUM=$(echo "${PRS}" | jq -r ".[$i].number")
+            PR_TITLE=$(echo "${PRS}" | jq -r ".[$i].title")
+            PR_SHA=$(echo "${PRS}" | jq -r ".[$i].head.sha")
+            PR_REF=$(echo "${PRS}" | jq -r ".[$i].head.ref")
+
+            echo ""
+            echo "--- PR #${PR_NUM}: ${PR_TITLE} ---"
+            echo "    head: ${PR_REF} (${PR_SHA:0:7})"
+
+            # Check CI status on the PR head commit
+            CHECKS=$(curl -sS -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+              "${API}/repos/${REPO}/commits/${PR_SHA}/check-runs")
+
+            # Look for our CI check by name pattern
+            CI_CONCLUSION=$(echo "${CHECKS}" | jq -r \
+              '[.check_runs[] | select(.name | test("CI \\(build \\+ test\\)"))] | if length == 0 then "missing" else .[0].conclusion // "pending" end')
+
+            case "${CI_CONCLUSION}" in
+              success)
+                echo "    CI: green"
+                ;;
+              missing|pending|null)
+                echo "    CI: ${CI_CONCLUSION} — skipping (not ready)"
+                SKIPPED=$((SKIPPED + 1))
+                i=$((i + 1))
+                continue
+                ;;
+              *)
+                echo "    CI: ${CI_CONCLUSION} — removing from queue"
+                curl -sS -X DELETE -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+                  "${API}/repos/${REPO}/issues/${PR_NUM}/labels/${LABEL}" > /dev/null
+                FAILED=$((FAILED + 1))
+                i=$((i + 1))
+                continue
+                ;;
+            esac
+
+            # Attempt merge
+            echo "    Merging..."
+            MERGE_RESP=$(curl -sS -X PUT -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+              "${API}/repos/${REPO}/pulls/${PR_NUM}/merge" \
+              -d "{\"merge_method\":\"merge\",\"sha\":\"${PR_SHA}\"}")
+
+            MERGED_OK=$(echo "${MERGE_RESP}" | jq -r '.merged // false')
+
+            if [ "${MERGED_OK}" = "true" ]; then
+              echo "    MERGED ✓"
+              MERGED=$((MERGED + 1))
+            else
+              MERGE_MSG=$(echo "${MERGE_RESP}" | jq -r '.message // "unknown error"')
+              echo "    FAILED: ${MERGE_MSG}"
+
+              # Conflict → remove label + notify
+              if echo "${MERGE_MSG}" | grep -qi 'conflict'; then
+                echo "    Conflict detected — removing from queue, notifying author."
+
+                curl -sS -X DELETE -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+                  "${API}/repos/${REPO}/issues/${PR_NUM}/labels/${LABEL}" > /dev/null
+
+                COMMENT=":steam_locomotive: **Merge train: conflict detected.**
+
+              Merge into \`integration\` failed due to a conflict with the base branch.
+              This PR has been removed from the merge queue.
+
+              **Action required:** rebase onto the latest \`integration\`, resolve conflicts,
+              then re-add the \`merge-train:ready\` label to re-queue."
+
+                curl -sS -X POST -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
+                  "${API}/repos/${REPO}/issues/${PR_NUM}/comments" \
+                  -d "$(jq -n --arg body "${COMMENT}" '{body: $body}')" > /dev/null
+              fi
+              FAILED=$((FAILED + 1))
+            fi
+
+            i=$((i + 1))
+          done
+
+          echo ""
+          echo "=== Merge Train Complete ==="
+          echo "Merged: ${MERGED}  |  Skipped: ${SKIPPED}  |  Failed: ${FAILED}"
