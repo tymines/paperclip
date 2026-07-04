@@ -427,4 +427,23 @@ export const jarvisApi = {
     body: Partial<JarvisCompanySettings>,
   ): Promise<JarvisCompanySettings> =>
     api.patch(`/companies/${companyId}/jarvis/settings`, body),
+
+  /** Archive a room and return its full transcript. */
+  completeRoom: (
+    companyId: string,
+    roomId: string,
+  ): Promise<{
+    ok: boolean;
+    roomId: string;
+    roomName: string;
+    completedAt: string;
+    transcript: {
+      senderId: string;
+      senderName: string | null;
+      senderType: string;
+      content: string;
+      createdAt: string;
+    }[];
+    messageCount: number;
+  }> => api.post(`/companies/${companyId}/jarvis/rooms/${roomId}/complete`, {}),
 };

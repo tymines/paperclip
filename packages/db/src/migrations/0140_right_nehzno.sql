@@ -1,0 +1,1 @@
+ALTER TABLE "rooms" ADD COLUMN "completed_at" timestamp with time zone;
