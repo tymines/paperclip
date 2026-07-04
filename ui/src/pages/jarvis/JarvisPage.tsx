@@ -17,6 +17,8 @@ import {
   Eraser,
   Eye,
   Lightbulb,
+  Loader2,
+  MessageSquare,
   MoreHorizontal,
   Paperclip,
   Mic,
@@ -29,7 +31,7 @@ import {
 } from "lucide-react";
 import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
 import { roomsApi } from "@/api/rooms";
-import type { RoomMessage } from "@paperclipai/shared";
+import type { Room, RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
@@ -266,6 +268,118 @@ function turnsToMessages(turns: JarvisConversationTurn[]): ChatMessage[] {
 /* War Room                                                                   */
 /* ========================================================================== */
 /* -------------------------------------------------------------------------- */
+/* Rooms tab — fold the room list into the War Room.                          */
+/* Reuses roomsApi, same DS tokens as the rest of this page.                  */
+/* -------------------------------------------------------------------------- */
+function WarRoomRoomsList({ companyId }: { companyId: string | null }) {
+  const navigate = useNavigate();
+  const { data: rooms, isLoading } = useQuery({
+    queryKey: ["jarvis", "rooms-tab", companyId],
+    queryFn: () => roomsApi.list(companyId!),
+    enabled: !!companyId,
+  });
+
+  if (!companyId) {
+    return (
+      <div className="px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+        Select a company to view rooms.
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading rooms…
+      </div>
+    );
+  }
+
+  const list = rooms ?? [];
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
+      <div className="mb-4">
+        <h2 className="text-[15px] font-semibold" style={{ color: DS.text }}>
+          Agent Rooms
+        </h2>
+        <p className="mt-0.5 text-[13px]" style={{ color: DS.textMuted }}>
+          Shared spaces where agents collaborate.
+        </p>
+      </div>
+      {list.length === 0 ? (
+        <div
+          className="rounded-xl px-5 py-6 text-[13px]"
+          style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+        >
+          No rooms yet. Create one from the Rooms page to bring agents together.
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {list.map((room) => (
+            <div
+              key={room.id}
+              role="button"
+              tabIndex={0}
+              onClick={() => navigate(`/rooms/${room.id}`)}
+              onKeyDown={(e) => { if (e.key === "Enter") navigate(`/rooms/${room.id}`); }}
+              style={{
+                background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
+                border: `1px solid rgba(255,255,255,0.06)`,
+                borderRadius: 20,
+                boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
+              }}
+              className="cursor-pointer p-5 transition-colors hover:brightness-110"
+            >
+              <div className="flex items-start gap-3">
+                <div
+                  className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                  style={{ background: `${DS.primary}1A`, border: `1px solid ${DS.border2}` }}
+                >
+                  <MessageSquare className="h-4 w-4" style={{ color: DS.primary }} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="truncate text-sm font-semibold" style={{ color: DS.text }}>
+                      {room.name}
+                    </h3>
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                      style={{
+                        background: room.status === "active" ? `${DS.success}1F` : `${DS.textFaint}1F`,
+                        color: room.status === "active" ? DS.success : DS.textFaint,
+                      }}
+                    >
+                      {room.status}
+                    </span>
+                  </div>
+                  {room.description && (
+                    <p className="mt-1 line-clamp-2 text-xs" style={{ color: DS.textMuted }}>
+                      {room.description}
+                    </p>
+                  )}
+                  <div className="mt-3 flex items-center gap-2">
+                    <span
+                      className="rounded-md px-2 py-0.5 text-[11px] font-medium"
+                      style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
+                    >
+                      {room.type}
+                    </span>
+                    <span className="text-[11px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
+                      Created {new Date(room.createdAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Brainstorm — live Zeus <-> Brainstorm planning transcript.               */
 /* Streams the planning room's messages (real room transport). When no        */
 /* planning session is live yet, shows an honest empty state (never faked).   */
@@ -392,7 +506,7 @@ export function JarvisPage() {
   >({});
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
-  const [view, setView] = useState<"chat" | "brainstorm" | "team">("chat");
+  const [view, setView] = useState<"chat" | "brainstorm" | "team" | "rooms" | "live" | "history">("chat");
   // "Clear chat" control — soft-hides the on-screen transcript only.
   const queryClient = useQueryClient();
   const [clearing, setClearing] = useState(false);
@@ -781,6 +895,9 @@ export function JarvisPage() {
               { id: "chat", label: "Conversation" },
               { id: "brainstorm", label: "Brainstorm" },
               { id: "team", label: "Team Mode" },
+              { id: "rooms", label: "Rooms" },
+              { id: "live", label: "Live" },
+              { id: "history", label: "History" },
             ] as const).map((t) => {
               const active = view === t.id;
               return (
@@ -889,6 +1006,16 @@ export function JarvisPage() {
               Select a company to see its team.
             </div>
           )}
+        </div>
+      ) : view === "rooms" ? (
+        <WarRoomRoomsList companyId={selectedCompanyId ?? null} />
+      ) : view === "live" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" style={{ color: DS.textMuted }}>
+          Live Activity — coming in next commit.
+        </div>
+      ) : view === "history" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" style={{ color: DS.textMuted }}>
+          Session History — coming in next commit.
         </div>
       ) : (
         <>
