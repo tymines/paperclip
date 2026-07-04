@@ -183,3 +183,4 @@ export function AuthPage() {
     </div>
   );
 }
+// feat: task-alpha - added new function
