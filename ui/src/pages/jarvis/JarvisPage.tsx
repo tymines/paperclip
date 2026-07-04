@@ -32,6 +32,7 @@ import { roomsApi } from "@/api/rooms";
 import type { RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
 import { LiveActivityFeed } from "./LiveActivityFeed";
+import { Rooms } from "@/pages/Rooms";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useDialogActions } from "@/context/DialogContext";
@@ -393,7 +394,7 @@ export function JarvisPage() {
   >({});
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
-  const [view, setView] = useState<"chat" | "brainstorm" | "live" | "team">("chat");
+  const [view, setView] = useState<"chat" | "brainstorm" | "live" | "team" | "rooms">("chat");
   // "Clear chat" control — soft-hides the on-screen transcript only.
   const queryClient = useQueryClient();
   const [clearing, setClearing] = useState(false);
@@ -566,23 +567,6 @@ export function JarvisPage() {
               detail: "Sent to Ares — fanning the steps out to the team.",
             },
           }));
-        }
-        // Auto-kickoff Brainstorm on successful approval so the planning loop
-        // starts immediately. Reuses the existing kickoff API — fires it
-        // automatically instead of waiting for the two-step button.
-        // ponytail: additive; failures don't roll back the approval.
-        if (r.status !== "failed") {
-          const seedText =
-            `${plan.title}\n` +
-            plan.steps.map((s) => `${s.n}. ${s.label}`).join("\n");
-          void jarvisApi.brainstormKickoff(selectedCompanyId, {
-            title: plan.title,
-            seedText,
-          }).then(() => {
-            setView("brainstorm");
-          }).catch(() => {
-            /* brainstorm is additive; don't roll back approval if kickoff fails */
-          });
         }
         // Reconcile against the REAL delegation row a couple seconds later. The
         // bridge POST is fire-and-forget, so the synchronous ack is optimistic;
@@ -800,6 +784,7 @@ export function JarvisPage() {
               { id: "brainstorm", label: "Brainstorm" },
               { id: "live", label: "Live" },
               { id: "team", label: "Team Mode" },
+              { id: "rooms", label: "Rooms" },
             ] as const).map((t) => {
               const active = view === t.id;
               return (
@@ -900,13 +885,7 @@ export function JarvisPage() {
       {view === "brainstorm" ? (
         <BrainstormPanel companyId={selectedCompanyId ?? null} />
       ) : view === "live" ? (
-        selectedCompanyId ? (
-          <LiveActivityFeed companyId={selectedCompanyId} />
-        ) : (
-          <div className="px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
-            Select a company to view live agent activity.
-          </div>
-        )
+        <LiveActivityFeed companyId={selectedCompanyId ?? ""} />
       ) : view === "team" ? (
         <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Team Mode board">
           {selectedCompanyId ? (
@@ -916,6 +895,10 @@ export function JarvisPage() {
               Select a company to see its team.
             </div>
           )}
+        </div>
+      ) : view === "rooms" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Rooms">
+          <Rooms />
         </div>
       ) : (
         <>
