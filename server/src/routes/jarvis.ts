@@ -398,6 +398,25 @@ export function jarvisRoutes(db: Db) {
         clearedAt,
       });
 
+      // ponytail: fire-and-forget vault write to obsidian-brain so every
+      // ended session lands in Tyler's knowledge base. Blocks nothing.
+      const transcriptText = sessionTurns
+        .map((t, i) => `## Turn ${i + 1}\n**User:** ${t.userTranscript ?? "(empty)"}\n**Zeus:** ${t.agentReply ?? "(empty)"}`)
+        .join("\n\n");
+      if (transcriptText.length > 0) {
+        const vaultTitle = `War Room · ${clearedAt.toISOString().slice(0, 10)} ${clearedAt.toTimeString().slice(0, 5)}`;
+        fetch("http://100.68.190.105:18791/notes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: vaultTitle,
+            content: transcriptText,
+            directory: "War Room",
+            frontmatter: { tags: ["war-room", "session"], date: clearedAt.toISOString() },
+          }),
+        }).catch(() => { /* vault unreachable — non-blocking */ });
+      }
+
       const cleared = await db
         .update(jarvisConversations)
         .set({ clearedAt })
