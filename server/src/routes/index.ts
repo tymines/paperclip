@@ -27,3 +27,4 @@ export { imageStudioRoutes } from "./image-studio.js";
 export { credentialRoutes } from "./credentials.js";
 export { gymRoutes } from "./gym.js";
 export { bookStudioRoutes } from "./book-studio.js";
+export { storyBibleGenerateRoutes } from "./story-bible-generate.js";
