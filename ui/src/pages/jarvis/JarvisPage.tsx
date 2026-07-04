@@ -16,10 +16,7 @@ import {
   Copy,
   Eraser,
   Eye,
-  History,
   Lightbulb,
-  Loader2,
-  MessageSquare,
   MoreHorizontal,
   Paperclip,
   Mic,
@@ -28,14 +25,13 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquarePen,
-  StopCircle,
   X,
 } from "lucide-react";
 import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
 import { roomsApi } from "@/api/rooms";
-import type { Room, RoomMessage } from "@paperclipai/shared";
+import type { RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
-import LiveActivityFeed from "./LiveActivityFeed";
+import { Rooms } from "@/pages/Rooms";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useDialogActions } from "@/context/DialogContext";
@@ -271,118 +267,6 @@ function turnsToMessages(turns: JarvisConversationTurn[]): ChatMessage[] {
 /* War Room                                                                   */
 /* ========================================================================== */
 /* -------------------------------------------------------------------------- */
-/* Rooms tab — fold the room list into the War Room.                          */
-/* Reuses roomsApi, same DS tokens as the rest of this page.                  */
-/* -------------------------------------------------------------------------- */
-function WarRoomRoomsList({ companyId }: { companyId: string | null }) {
-  const navigate = useNavigate();
-  const { data: rooms, isLoading } = useQuery({
-    queryKey: ["jarvis", "rooms-tab", companyId],
-    queryFn: () => roomsApi.list(companyId!),
-    enabled: !!companyId,
-  });
-
-  if (!companyId) {
-    return (
-      <div className="px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
-        Select a company to view rooms.
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading rooms…
-      </div>
-    );
-  }
-
-  const list = rooms ?? [];
-
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-      <div className="mb-4">
-        <h2 className="text-[15px] font-semibold" style={{ color: DS.text }}>
-          Agent Rooms
-        </h2>
-        <p className="mt-0.5 text-[13px]" style={{ color: DS.textMuted }}>
-          Shared spaces where agents collaborate.
-        </p>
-      </div>
-      {list.length === 0 ? (
-        <div
-          className="rounded-xl px-5 py-6 text-[13px]"
-          style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
-        >
-          No rooms yet. Create one from the Rooms page to bring agents together.
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {list.map((room) => (
-            <div
-              key={room.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => navigate(`/rooms/${room.id}`)}
-              onKeyDown={(e) => { if (e.key === "Enter") navigate(`/rooms/${room.id}`); }}
-              style={{
-                background: `linear-gradient(180deg, ${DS.surface2} 0%, ${DS.surface} 100%)`,
-                border: `1px solid rgba(255,255,255,0.06)`,
-                borderRadius: 20,
-                boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
-              }}
-              className="cursor-pointer p-5 transition-colors hover:brightness-110"
-            >
-              <div className="flex items-start gap-3">
-                <div
-                  className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
-                  style={{ background: `${DS.primary}1A`, border: `1px solid ${DS.border2}` }}
-                >
-                  <MessageSquare className="h-4 w-4" style={{ color: DS.primary }} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <h3 className="truncate text-sm font-semibold" style={{ color: DS.text }}>
-                      {room.name}
-                    </h3>
-                    <span
-                      className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
-                      style={{
-                        background: room.status === "active" ? `${DS.success}1F` : `${DS.textFaint}1F`,
-                        color: room.status === "active" ? DS.success : DS.textFaint,
-                      }}
-                    >
-                      {room.status}
-                    </span>
-                  </div>
-                  {room.description && (
-                    <p className="mt-1 line-clamp-2 text-xs" style={{ color: DS.textMuted }}>
-                      {room.description}
-                    </p>
-                  )}
-                  <div className="mt-3 flex items-center gap-2">
-                    <span
-                      className="rounded-md px-2 py-0.5 text-[11px] font-medium"
-                      style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
-                    >
-                      {room.type}
-                    </span>
-                    <span className="text-[11px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
-                      Created {new Date(room.createdAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
 /* Brainstorm — live Zeus <-> Brainstorm planning transcript.               */
 /* Streams the planning room's messages (real room transport). When no        */
 /* planning session is live yet, shows an honest empty state (never faked).   */
@@ -509,44 +393,11 @@ export function JarvisPage() {
   >({});
   const recognitionRef = useRef<unknown>(null);
   // War Room view: the conversation cockpit vs the read-only Team Mode board.
-  const [view, setView] = useState<"chat" | "brainstorm" | "team" | "rooms" | "live" | "history">("chat");
+  const [view, setView] = useState<"chat" | "brainstorm" | "team" | "rooms">("chat");
   // "Clear chat" control — soft-hides the on-screen transcript only.
   const queryClient = useQueryClient();
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-
-  // Toast notification
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
-    setToast({ message, type });
-    setTimeout(() => setToast(null), 4000);
-  }, []);
-
-  // End Session — archive the current Brainstorm room
-  const [endingSession, setEndingSession] = useState(false);
-  const { data: roomsForSession } = useQuery({
-    queryKey: ["jarvis", "brainstorm", "rooms", selectedCompanyId],
-    queryFn: () => roomsApi.list(selectedCompanyId!),
-    enabled: !!selectedCompanyId,
-    refetchInterval: 15000,
-  });
-  const activeRoom = (roomsForSession ?? []).find(
-    (r) => /brainstorm|planning|plan loop|hermes.*plan/i.test(r.name) && r.status === "active"
-  );
-
-  const onEndSession = useCallback(async () => {
-    if (!selectedCompanyId || !activeRoom || endingSession) return;
-    setEndingSession(true);
-    try {
-      await jarvisApi.completeRoom(selectedCompanyId, activeRoom.id);
-      showToast(`Session "${activeRoom.name}" archived to vault`, "success");
-      void queryClient.invalidateQueries({ queryKey: ["jarvis", "brainstorm", "rooms"] });
-    } catch (err) {
-      showToast(`Failed to archive session: ${(err as Error).message}`, "error");
-    } finally {
-      setEndingSession(false);
-    }
-  }, [selectedCompanyId, activeRoom, endingSession, queryClient, showToast]);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "War Room" }]);
@@ -914,19 +765,6 @@ export function JarvisPage() {
         </div>
       </header>
 
-      {/* Toast */}
-      {toast ? (
-        <div
-          className="fixed bottom-6 right-6 z-50 rounded-xl px-4 py-3 text-[13px] font-medium shadow-lg transition-opacity"
-          style={{
-            background: toast.type === "success" ? DS.success : DS.critical,
-            color: "#fff",
-          }}
-        >
-          {toast.message}
-        </div>
-      ) : null}
-
       {/* Centered mode bar */}
       <div
         className="flex shrink-0 items-center justify-center gap-3 px-8 py-3"
@@ -944,7 +782,7 @@ export function JarvisPage() {
               { id: "chat", label: "Conversation" },
               { id: "brainstorm", label: "Brainstorm" },
               { id: "team", label: "Team Mode" },
-              { id: "history", label: "History" },
+              { id: "rooms", label: "Rooms" },
             ] as const).map((t) => {
               const active = view === t.id;
               return (
@@ -1009,20 +847,6 @@ export function JarvisPage() {
               </button>
             )
           ) : null}
-          {(view === "chat" || view === "brainstorm") && activeRoom ? (
-            <button
-              type="button"
-              onClick={() => void onEndSession()}
-              disabled={endingSession}
-              title="Archive this session to the vault"
-              aria-label="End session"
-              className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-50"
-              style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.warning }}
-            >
-              <StopCircle className="h-3.5 w-3.5" />
-              {endingSession ? "Archiving…" : "End Session"}
-            </button>
-          ) : null}
           {isDemo ? (
             <span
               className="rounded-full px-3 py-1 text-[11px] font-medium"
@@ -1068,8 +892,10 @@ export function JarvisPage() {
             </div>
           )}
         </div>
-      ) : view === "history" ? (
-        <HistoryPanel companyId={selectedCompanyId ?? null} />
+      ) : view === "rooms" ? (
+        <div className="min-h-0 flex-1 overflow-y-auto" aria-label="Rooms">
+          <Rooms />
+        </div>
       ) : (
         <>
       {/* Conversation thread (full width) */}
@@ -1751,144 +1577,5 @@ function IconButton({
     >
       {children}
     </button>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* History panel — browse and read archived session transcripts             */
-/* -------------------------------------------------------------------------- */
-function HistoryPanel({ companyId }: { companyId: string | null }) {
-  const [search, setSearch] = useState("");
-  const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
-
-  const { data: rooms } = useQuery({
-    queryKey: ["jarvis", "history", "rooms", companyId],
-    queryFn: () => roomsApi.list(companyId!),
-    enabled: !!companyId,
-  });
-  const archived = (rooms ?? []).filter((r) => r.status === "archived");
-
-  const { data: messagesPage } = useQuery({
-    queryKey: ["jarvis", "history", "messages", companyId, selectedRoomId],
-    queryFn: () => roomsApi.listMessages(companyId!, selectedRoomId!, undefined, 200),
-    enabled: !!companyId && !!selectedRoomId,
-  });
-  const messages = messagesPage?.messages ?? [];
-
-  const filtered = search.trim()
-    ? archived.filter((r) =>
-        r.name.toLowerCase().includes(search.toLowerCase()) ||
-        (r.description ?? "").toLowerCase().includes(search.toLowerCase())
-      )
-    : archived;
-
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" aria-label="Session history">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold" style={{ color: DS.text }}>
-          Session History
-        </h2>
-        <div className="relative">
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search sessions…"
-            className="rounded-lg px-3 py-1.5 text-[13px] outline-none"
-            style={{
-              background: DS.surface2,
-              border: `1px solid ${DS.border2}`,
-              color: DS.text,
-            }}
-          />
-        </div>
-      </div>
-
-      {!companyId ? (
-        <div className="text-[13px]" style={{ color: DS.textMuted }}>
-          Select a company to view session history.
-        </div>
-      ) : selectedRoomId ? (
-        <div>
-          <button
-            type="button"
-            onClick={() => setSelectedRoomId(null)}
-            className="mb-4 flex items-center gap-1.5 text-[12px] font-medium transition-colors hover:opacity-80"
-            style={{ color: DS.primary }}
-          >
-            ← Back to list
-          </button>
-          {messages.length === 0 ? (
-            <div className="text-[13px]" style={{ color: DS.textMuted }}>
-              No messages in this session.
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              {messages.map((m) => (
-                <div
-                  key={m.id}
-                  className="rounded-xl px-4 py-3"
-                  style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}
-                >
-                  <div className="mb-1 flex items-center gap-2">
-                    <span
-                      className="text-[12px] font-semibold"
-                      style={{ color: m.senderType === "agent" ? DS.primary : DS.text }}
-                    >
-                      {m.senderName ?? m.senderId}
-                    </span>
-                    <span className="text-[11px]" style={{ color: DS.textMuted }}>
-                      {new Date(m.createdAt).toLocaleString()}
-                    </span>
-                  </div>
-                  <div className="whitespace-pre-wrap text-[13px] leading-relaxed" style={{ color: DS.text }}>
-                    {m.content}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div
-          className="rounded-xl px-5 py-6 text-[13px]"
-          style={{ background: DS.surface2, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
-        >
-          <div className="flex items-center gap-2" style={{ color: DS.text }}>
-            <History className="h-4 w-4" style={{ color: DS.primary }} />
-            <span className="font-medium">No archived sessions yet</span>
-          </div>
-          <p className="mt-2">
-            End a brainstorming session to archive it here. You can then search and review past sessions.
-          </p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {filtered.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setSelectedRoomId(r.id)}
-              className="rounded-xl px-4 py-3 text-left transition-colors hover:opacity-90"
-              style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}
-            >
-              <div className="flex items-center justify-between">
-                <span className="text-[14px] font-semibold" style={{ color: DS.text }}>
-                  {r.name}
-                </span>
-                <span className="text-[11px]" style={{ color: DS.textFaint, fontFamily: MONO }}>
-                  {r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : ""}
-                </span>
-              </div>
-              {r.description ? (
-                <div className="mt-1 text-[12px]" style={{ color: DS.textMuted }}>
-                  {r.description}
-                </div>
-              ) : null}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }

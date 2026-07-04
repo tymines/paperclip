@@ -1,0 +1,21 @@
+=== DIAG Sat 07/04/2026 15:48:38.81 === 
+--- ports 3100/3103 --- 
+  TCP    0.0.0.0:3100           0.0.0.0:0              LISTENING       22920
+  TCP    0.0.0.0:3103           0.0.0.0:0              LISTENING       39908
+  TCP    100.103.95.73:3100     100.85.82.53:62859     TIME_WAIT       0
+  TCP    127.0.0.1:3100         127.0.0.1:55567        ESTABLISHED     22920
+  TCP    127.0.0.1:50690        127.0.0.1:3100         TIME_WAIT       0
+  TCP    127.0.0.1:50691        127.0.0.1:3100         TIME_WAIT       0
+  TCP    127.0.0.1:50697        127.0.0.1:3100         TIME_WAIT       0
+  TCP    127.0.0.1:50711        127.0.0.1:3100         TIME_WAIT       0
+  TCP    127.0.0.1:55567        127.0.0.1:3100         ESTABLISHED     42180
+--- cloudflared procs --- 
+cloudflared.exe              42180 Console                    1     44,576 K
+cloudflared.exe              44776 Console                    1     41,232 K
+cloudflared.exe              44872 Console                    1     41,108 K
+cloudflared.exe              44352 Console                    1     41,692 K
+cloudflared.exe              30204 Console                    1     41,884 K
+--- health 3100 --- 
+{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false} 
+--- public via tunnel --- 
+HTTP 302 

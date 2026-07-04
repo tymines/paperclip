@@ -1,0 +1,561 @@
+=== RESTART Sat 07/04/2026 15:25:37.28 === 
+Stop-Process : Cannot stop process "node (30212)" because of the following error: Access is denied
+At line:1 char:155
++ ... OwningProcess -Unique | ForEach-Object { Stop-Process -Id $_ -Force }
++                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : CloseError: (System.Diagnostics.Process (node):Process) [Stop-Process], ProcessCommandEx 
+   ception
+    + FullyQualifiedErrorId : CouldNotStopProcess,Microsoft.PowerShell.Commands.StopProcessCommand
+ 
+2026-07-04T19:25:45.998Z WARN [Better Auth]: [better-auth] Base URL could not be determined. Please set a valid base URL using the baseURL config option or the BETTER_AUTH_BASE_URL environment variable. Without this, callbacks and redirects may not work correctly.
+2026-07-04T19:25:45.998Z WARN [Better Auth]: [better-auth] Warning: your BETTER_AUTH_SECRET should be at least 32 characters long for adequate security. Generate one with `npx @better-auth/cli secret` or `openssl rand -base64 32`.
+2026-07-04T19:25:45.999Z WARN [Better Auth]: [better-auth] Warning: your BETTER_AUTH_SECRET appears low-entropy. Use a randomly generated secret for production.
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+
+[36m██████╗  █████╗ ██████╗ ███████╗██████╗  ██████╗██╗     ██╗██████╗ [0m
+[36m██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔════╝██║     ██║██╔══██╗[0m
+[36m██████╔╝███████║██████╔╝█████╗  ██████╔╝██║     ██║     ██║██████╔╝[0m
+[36m██╔═══╝ ██╔══██║██╔═══╝ ██╔══╝  ██╔══██╗██║     ██║     ██║██╔═══╝ [0m
+[36m██║     ██║  ██║██║     ███████╗██║  ██║╚██████╗███████╗██║██║     [0m
+[36m╚═╝     ╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝ ╚═════╝╚══════╝╚═╝╚═╝     [0m
+[34m  ───────────────────────────────────────────────────────[0m
+[2mMode            [0m [33mexternal-postgres[0m  |  [35mstatic-ui[0m
+[2mDeploy          [0m authenticated (private)
+[2mBind            [0m lan [2m(0.0.0.0)[0m
+[2mAuth            [0m [32mready[0m
+[2mServer          [0m 3103 [2m(requested 3100)[0m
+[2mAPI             [0m http://localhost:3103/api [2m(health: http://localhost:3103/api/health)[0m
+[2mUI              [0m http://localhost:3103
+[2mDatabase        [0m postgres://paperclip:***@127.0.0.1:5432/paperclip
+[2mMigrations      [0m already applied
+[2mAgent JWT       [0m [32mset[0m
+[2mHeartbeat       [0m [33mdisabled[0m
+[2mDB Backup       [0m enabled [2m(every 60m, keep 7d)[0m
+[2mBackup Dir      [0m C:\Users\Augi-T1\.paperclip\instances\default\data\backups
+[2mConfig          [0m C:\Users\Augi-T1\.paperclip\instances\default\config.json
+[34m  ───────────────────────────────────────────────────────[0m
+
+[41m[30m  BOARD CLAIM REQUIRED  [0m
+[33mThis instance was previously local_trusted and still has local-board as the only admin.[0m
+[33mSign in with a real user and open this one-time URL to claim ownership:[0m
+[33mhttp://localhost:3103/board-claim/4f5c1ed5bb5ca1bec424e929d120ff8a017bc0fe3ff017c8?code=8c9cd579f6efa9e71b7ba750[0m
+[33mIf you are connecting over Tailscale, replace the host in this URL with your Tailscale IP/MagicDNS name.[0m
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+[15:25:45] [32mINFO[39m: [36mUsing external PostgreSQL via DATABASE_URL/config[39m
+[15:25:45] [32mINFO[39m: [36mAuthenticated mode auth origin configuration[39m [90m{"authBaseUrlMode":"auto","authPublicBaseUrl":null,"trustedOrigins":["https://100.103.95.73","http://100.103.95.73","https://100.103.95.73:3103","http://100.103.95.73:3103","https://paperclip.augiport.com","http://paperclip.augiport.com","https://paperclip.augiport.com:3103","http://paperclip.augiport.com:3103","https://127.0.0.1","http://127.0.0.1","https://127.0.0.1:3103","http://127.0.0.1:3103","https://localhost","http://localhost","https://localhost:3103","http://localhost:3103"],"trustedOriginsSource":{"derived":16,"env":0}}[39m
+[15:25:46] [32mINFO[39m: [36msocial scheduler starting[39m [90m{"worker":"social-scheduler","tickIntervalMs":30000,"batchSize":10}[39m
+[15:25:46] [32mINFO[39m: [36msocial DM poller starting[39m [90m{"worker":"social-dm-poller","tickIntervalMs":60000,"maxResults":50}[39m
+[15:25:46] [32mINFO[39m: [36mplugin job coordinator started — listening to lifecycle events[39m [90m{"service":"plugin-job-coordinator"}[39m
+[15:25:46] [32mINFO[39m: [36mplugin job scheduler started[39m [90m{"service":"plugin-job-scheduler","tickIntervalMs":30000,"maxConcurrentJobs":10}[39m
+[15:25:46] [32mINFO[39m: [36minitializing plugin tool dispatcher[39m [90m{"service":"plugin-tool-dispatcher"}[39m
+[15:25:46] [32mINFO[39m: [36mplugin-dev-watcher: initialized[39m [90m{"service":"plugin-dev-watcher","resolvesInstalledPlugins":true}[39m
+[15:25:46] [32mINFO[39m: [36mplugin-loader: loading all ready plugins[39m [90m{"service":"plugin-loader"}[39m
+[15:25:46] [33mWARN[39m: [36mRequested port is busy; using next free port (requestedPort=3100, selectedPort=3103)[39m
+[15:25:46] [32mINFO[39m: [36mAutomatic database backups enabled[39m [90m{"intervalMinutes":60,"retentionSource":"instance-settings-db","backupDir":"C:\Users\Augi-T1\.paperclip\instances\default\data\backups"}[39m
+[15:25:46] [32mINFO[39m: [36mServer listening on 0.0.0.0:3103[39m
+[15:25:46] [32mINFO[39m: [36mloaded tools from ready plugins[39m [90m{"service":"plugin-tool-dispatcher","readyPlugins":0,"registeredTools":0}[39m
+[15:25:46] [32mINFO[39m: [36mplugin tool dispatcher initialized[39m [90m{"service":"plugin-tool-dispatcher","totalTools":0}[39m
+[15:25:46] [32mINFO[39m: [36mplugin-loader: no ready plugins to load[39m [90m{"service":"plugin-loader"}[39m
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "skill_usage_events" already exists, skipping',
+  file: 'parse_utilcmd.c',
+  line: '210',
+  routine: 'transformCreateStmt'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_skill_id_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_company_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+{
+  severity_local: 'NOTICE',
+  severity: 'NOTICE',
+  code: '42P07',
+  message: 'relation "sue_created_at_idx" already exists, skipping',
+  file: 'index.c',
+  line: '892',
+  routine: 'index_create'
+}
+SERVER EXITED 1 

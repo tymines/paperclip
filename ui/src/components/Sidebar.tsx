@@ -13,7 +13,6 @@ import {
   Repeat,
   GitBranch,
   Settings,
-  MessageSquare,
   Megaphone,
   Home as HomeIcon,
   Hexagon,
@@ -211,7 +210,6 @@ function SidebarLegacy({
       <SidebarAgents />
 
       <SidebarSection label="Collaboration">
-        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
         <SidebarNavItem
           to="/social"
           label="Social"
@@ -301,7 +299,6 @@ function SidebarV1({
         <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
         <SidebarNavItem to="/goals" label="Goals" icon={Target} />
-        <SidebarNavItem to="/rooms" label="Rooms" icon={MessageSquare} />
         <SidebarNavItem
           to="/social"
           label="Social"

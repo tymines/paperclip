@@ -1,0 +1,4 @@
+  TCP    0.0.0.0:3100           0.0.0.0:0              LISTENING       30212
+  TCP    0.0.0.0:3103           0.0.0.0:0              LISTENING       43288
+{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false} 
+{"status":"ok","deploymentMode":"authenticated","bootstrapStatus":"ready","bootstrapInviteActive":false}
