@@ -945,6 +945,15 @@ export async function startServer(): Promise<StartedServer> {
   const { waitForExternalAdapters } = await import("./adapters/registry.js");
   await waitForExternalAdapters();
 
+
+  // Crash diagnostics: log uncaught errors before exit (TYL-278)
+  process.on("uncaughtException", (err) => {
+    console.error("[FATAL] uncaughtException:", err.stack || err.message);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack : String(reason));
+  });
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
