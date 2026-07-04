@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Db } from "@paperclipai/db";
-import { jarvisConversations, companies, companyJarvisSettings } from "@paperclipai/db";
+import { jarvisConversations, companies, companyJarvisSettings, rooms, roomMessages } from "@paperclipai/db";
 import {
   commitAndResetSession,
   archiveSessionAsResource,
@@ -1303,6 +1303,111 @@ export function jarvisRoutes(db: Db) {
       }
       const out = await checkPeerReachable(peer as PeerAgentId);
       res.json(out);
+    },
+  );
+
+  /**
+   * Complete (archive) a Jarvis/Brainstorm room. Sets status=archived,
+   * stamps completed_at, returns the full transcript, and optionally
+   * writes the session to the Obsidian vault via the obsidian-brain API.
+   */
+  router.post(
+    "/companies/:companyId/jarvis/rooms/:roomId/complete",
+    async (req, res) => {
+      const { companyId, roomId } = req.params as { companyId: string; roomId: string };
+      assertCompanyAccess(req, companyId);
+
+      const room = await db
+        .select()
+        .from(rooms)
+        .where(and(eq(rooms.id, roomId), eq(rooms.companyId, companyId)))
+        .then((rows) => rows[0] ?? null);
+
+      if (!room) {
+        res.status(404).json({ error: "Room not found" });
+        return;
+      }
+
+      // Collect the full transcript
+      const messages = await db
+        .select()
+        .from(roomMessages)
+        .where(eq(roomMessages.roomId, roomId))
+        .orderBy(asc(roomMessages.createdAt));
+
+      // Archive the room
+      const now = new Date();
+      await db
+        .update(rooms)
+        .set({ status: "archived", completedAt: now, updatedAt: now })
+        .where(eq(rooms.id, roomId));
+
+      // Log activity
+      const actor = req.actor;
+      void logActivity(db, {
+        companyId,
+        actorType: actor.type,
+        actorId: actor.type === "board" && "userId" in actor ? actor.userId : actor.type === "agent" && "agentId" in actor ? actor.agentId : "unknown",
+        action: "room.completed",
+        entityType: "room",
+        entityId: roomId,
+        details: { name: room.name, messageCount: messages.length },
+      });
+
+      const transcript = messages.map((m) => ({
+        senderId: m.senderId,
+        senderName: m.senderName,
+        senderType: m.senderType,
+        content: m.content,
+        createdAt: m.createdAt,
+      }));
+
+      // Best-effort: POST transcript to obsidian-brain for vault archiving
+      void (async () => {
+        try {
+          const health = await fetch("http://100.68.190.105:18791/health", {
+            signal: AbortSignal.timeout(3000),
+          });
+          if (!health.ok) return;
+
+          const date = now.toISOString().slice(0, 10);
+          const topic = (room.name ?? "session").replace(/[\\/:*?"<>|]/g, "-");
+          const mdTitle = `${date}-${topic}`;
+
+          await fetch("http://100.68.190.105:18791/notes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: mdTitle,
+              content: transcript
+                .map((t) =>
+                  `**${t.senderName ?? t.senderId}** (${t.senderType}) — ${new Date(t.createdAt as Date).toLocaleTimeString()}\n\n${t.content}`
+                )
+                .join("\n\n---\n\n"),
+              directory: "07 - Sessions/Brainstorm",
+              frontmatter: {
+                date: now.toISOString(),
+                room_type: room.type,
+                participants: [],
+                topic,
+              },
+            }),
+            signal: AbortSignal.timeout(5000),
+          });
+          logger.info({ roomId, vaultPath: `07 - Sessions/Brainstorm/${mdTitle}.md` }, "room: vault archive written");
+        } catch {
+          // vault unreachable — non-blocking
+        }
+      })();
+
+      res.json({
+        ok: true,
+        roomId,
+        roomName: room.name,
+        completedAt: now.toISOString(),
+        transcript,
+        messageCount: messages.length,
+      });
     },
   );
 
