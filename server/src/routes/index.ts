@@ -28,3 +28,4 @@ export { credentialRoutes } from "./credentials.js";
 export { gymRoutes } from "./gym.js";
 export { bookStudioRoutes } from "./book-studio.js";
 export { storyBibleGenerateRoutes } from "./story-bible-generate.js";
+export { bookStudioExportRoutes } from "./book-studio-export.js";
