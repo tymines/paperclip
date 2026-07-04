@@ -35,8 +35,14 @@ import {
   Trash2,
   Save,
   Edit3,
+  Camera,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
+import { ChatDrawer } from "@/components/book-studio/ChatDrawer";
+import { ErrorBoundary } from "@/components/book-studio/ErrorBoundary";
+import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
+import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -390,6 +396,13 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
         >
           <Trash2 className="w-3 h-3" />
         </button>
+        <button
+          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
+          title="Coming soon — real image generation in next phase"
+          disabled
+        >
+          <Camera className="w-3 h-3" />
+        </button>
       </div>
 
       {/* Delete confirmation overlay */}
@@ -504,6 +517,13 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400">
           <Trash2 className="w-3 h-3" />
         </button>
+        <button
+          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
+          title="Coming soon — real image generation in next phase"
+          disabled
+        >
+          <Camera className="w-3 h-3" />
+        </button>
       </div>
 
       {deleting && (
@@ -588,6 +608,13 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+        <button
+          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
+          title="Coming soon — real image generation in next phase"
+          disabled
+        >
+          <Camera className="w-3 h-3" />
+        </button>
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -668,6 +695,13 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
+        <button
+          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
+          title="Coming soon — real image generation in next phase"
+          disabled
+        >
+          <Camera className="w-3 h-3" />
+        </button>
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -832,6 +866,22 @@ export function BookWritingPage() {
   const [showCreateStyle, setShowCreateStyle] = useState(false);
   const [showCreateOutline, setShowCreateOutline] = useState(false);
 
+  // Chat drawer state
+  const [isChatOpen, setIsChatOpen] = useState(false);
+
+  // Assisted mode
+  const [assistedMode, setAssistedMode] = useState(false);
+
+  // Focus mode for manuscript editor
+  const [focusMode, setFocusMode] = useState(false);
+
+  // Generate panel per-tab state (ponytail: simple booleans, not a map)
+  const [showGenCharacter, setShowGenCharacter] = useState(false);
+  const [showGenLocation, setShowGenLocation] = useState(false);
+  const [showGenWorldRule, setShowGenWorldRule] = useState(false);
+  const [showGenStyle, setShowGenStyle] = useState(false);
+  const [showGenOutlineBeats, setShowGenOutlineBeats] = useState(false);
+
   // ── Data fetching ──────────────────────────────────────────────────────
 
   const fetchData = useCallback(async () => {
@@ -987,7 +1037,8 @@ export function BookWritingPage() {
   // ── Render ─────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-full flex flex-col bg-gray-950 text-gray-100">
+    <ErrorBoundary>
+      <div className="h-full flex flex-col bg-gray-950 text-gray-100">
       {/* ── Top Bar ────────────────────────────────────────────────────── */}
       <header className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
         <div className="flex items-center gap-4">
@@ -1003,14 +1054,36 @@ export function BookWritingPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* ── Mode toggle: Manual | Assisted | Autopilot ── */}
           <div className="flex items-center rounded-md border border-gray-700 text-xs">
-            <button className="flex items-center gap-1.5 rounded-l-md bg-blue-600/20 px-3 py-1.5 text-blue-300 border-r border-gray-700">
+            <button
+              className={cn(
+                "flex items-center gap-1.5 rounded-l-md px-3 py-1.5 border-r border-gray-700",
+                !assistedMode ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
+              )}
+              onClick={() => setAssistedMode(false)}
+            >
               <Pen className="w-3 h-3" />
               Manual
             </button>
-            <button className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-400 hover:text-gray-200">
+            <button
+              className={cn(
+                "flex items-center gap-1.5 px-3 py-1.5 border-r border-gray-700",
+                assistedMode ? "bg-purple-600/20 text-purple-300" : "text-gray-400 hover:text-gray-200",
+              )}
+              onClick={() => setAssistedMode(true)}
+            >
+              <Sparkles className="w-3 h-3" />
+              Assisted
+            </button>
+            <button
+              className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-600 cursor-not-allowed relative"
+              disabled
+              title="Coming soon"
+            >
               <Sparkles className="w-3 h-3" />
               Autopilot
+              <span className="absolute -top-1.5 -right-1 rounded bg-gray-700 px-1 py-0 text-[8px] text-gray-400 font-medium">Soon</span>
             </button>
           </div>
           <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
@@ -1026,15 +1099,30 @@ export function BookWritingPage() {
           <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
             <MessageSquare className="w-3 h-3" /> Review
           </button>
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="rounded-md border border-purple-700 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-200 hover:border-purple-500 flex items-center gap-1.5"
+          >
+            <Sparkles className="w-3 h-3" /> Brainstorm
+          </button>
           <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5">
             <Download className="w-3 h-3" /> Export
           </button>
         </div>
       </header>
 
+      {/* ── Assisted Mode Suggestion Panel ── */}
+      {assistedMode && activeBook && (
+        <AssistedModePanel
+          bookId={activeBook.id}
+          companySlug={companySlug}
+        />
+      )}
+
       {/* ── Three-Pane Layout ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-[1fr_2fr_1fr] flex-1 min-h-0">
+      <div className={cn("flex-1 min-h-0", focusMode ? "" : "grid grid-cols-[1fr_2fr_1fr]")}>
         {/* LEFT PANE — Story Bible */}
+        {!focusMode && (
         <aside className="flex flex-col border-r border-gray-800 min-h-0">
           {/* ── Readiness Bar ──────────────────────────────────────────────── */}
           <div className="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
@@ -1115,13 +1203,41 @@ export function BookWritingPage() {
                     )}
                   </CollapsibleSection>
                 </div>
-                <div className="px-4 pb-4 pt-2">
-                  <button
-                    onClick={() => setShowCreateCharacter(true)}
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
-                  >
-                    <Plus className="w-3 h-3" /> Add Character
-                  </button>
+                <div className="px-4 pb-4 pt-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowCreateCharacter(true)}
+                      className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                    >
+                      <Plus className="w-3 h-3" /> Add Character
+                    </button>
+                    <button
+                      onClick={() => setShowGenCharacter(!showGenCharacter)}
+                      className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-200 px-3 py-1.5"
+                    >
+                      <Sparkles className="w-3 h-3" /> Generate with AI
+                    </button>
+                  </div>
+                  {showGenCharacter && activeBook && (
+                    <div className="px-1">
+                      <GenerateDraftPanel
+                        entityType="character"
+                        bookId={activeBook.id}
+                        companySlug={companySlug}
+                        onAccept={(draft) => {
+                          createCharacter({
+                            name: (draft.name as string) || "New Character",
+                            role: (draft.role as string) || "",
+                            description: (draft.description as string) || "",
+                            voiceCard: (draft.voiceCard as Record<string, unknown>) || {},
+                            source: "co_created",
+                          });
+                          setShowGenCharacter(false);
+                        }}
+                        onDiscard={() => setShowGenCharacter(false)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1150,13 +1266,41 @@ export function BookWritingPage() {
                     )}
                   </CollapsibleSection>
                 </div>
-                <div className="px-4 pb-4 pt-2">
-                  <button
-                    onClick={() => setShowCreateLocation(true)}
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
-                  >
-                    <Plus className="w-3 h-3" /> Add Location
-                  </button>
+                <div className="px-4 pb-4 pt-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowCreateLocation(true)}
+                      className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                    >
+                      <Plus className="w-3 h-3" /> Add Location
+                    </button>
+                    <button
+                      onClick={() => setShowGenLocation(!showGenLocation)}
+                      className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-200 px-3 py-1.5"
+                    >
+                      <Sparkles className="w-3 h-3" /> Generate with AI
+                    </button>
+                  </div>
+                  {showGenLocation && activeBook && (
+                    <div className="px-1">
+                      <GenerateDraftPanel
+                        entityType="location"
+                        bookId={activeBook.id}
+                        companySlug={companySlug}
+                        onAccept={(draft) => {
+                          createLocation({
+                            name: (draft.name as string) || "New Location",
+                            description: (draft.description as string) || "",
+                            rules: (draft.rules as Record<string, unknown>) || {},
+                            sensoryNotes: (draft.sensoryNotes as Record<string, unknown>) || {},
+                            source: "co_created",
+                          });
+                          setShowGenLocation(false);
+                        }}
+                        onDiscard={() => setShowGenLocation(false)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1185,13 +1329,42 @@ export function BookWritingPage() {
                     )}
                   </CollapsibleSection>
                 </div>
-                <div className="px-4 pb-4 pt-2">
-                  <button
-                    onClick={() => setShowCreateStyle(true)}
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
-                  >
-                    <Plus className="w-3 h-3" /> Add Style Entry
-                  </button>
+                <div className="px-4 pb-4 pt-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowCreateStyle(true)}
+                      className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                    >
+                      <Plus className="w-3 h-3" /> Add Style Entry
+                    </button>
+                    <button
+                      onClick={() => setShowGenStyle(!showGenStyle)}
+                      className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-200 px-3 py-1.5"
+                    >
+                      <Sparkles className="w-3 h-3" /> Generate with AI
+                    </button>
+                  </div>
+                  {showGenStyle && activeBook && (
+                    <div className="px-1">
+                      <GenerateDraftPanel
+                        entityType="style"
+                        bookId={activeBook.id}
+                        companySlug={companySlug}
+                        onAccept={(draft) => {
+                          createStyle({
+                            pov: (draft.pov as string) || "",
+                            tense: (draft.tense as string) || "",
+                            comps: (draft.comps as string) || "",
+                            sampleParagraph: (draft.sampleParagraph as string) || "",
+                            bannedCliches: Array.isArray(draft.bannedCliches) ? (draft.bannedCliches as string[]) : [],
+                            source: "co_created",
+                          });
+                          setShowGenStyle(false);
+                        }}
+                        onDiscard={() => setShowGenStyle(false)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1220,13 +1393,40 @@ export function BookWritingPage() {
                     )}
                   </CollapsibleSection>
                 </div>
-                <div className="px-4 pb-4 pt-2">
-                  <button
-                    onClick={() => setShowCreateOutline(true)}
-                    className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
-                  >
-                    <Plus className="w-3 h-3" /> Add Chapter
-                  </button>
+                <div className="px-4 pb-4 pt-2 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowCreateOutline(true)}
+                      className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 px-3 py-1.5"
+                    >
+                      <Plus className="w-3 h-3" /> Add Chapter
+                    </button>
+                    <button
+                      onClick={() => setShowGenOutlineBeats(!showGenOutlineBeats)}
+                      className="flex items-center gap-1.5 text-xs text-purple-400 hover:text-purple-200 px-3 py-1.5"
+                    >
+                      <Sparkles className="w-3 h-3" /> Generate with AI
+                    </button>
+                  </div>
+                  {showGenOutlineBeats && activeBook && (
+                    <div className="px-1">
+                      <GenerateDraftPanel
+                        entityType="outline-beats"
+                        bookId={activeBook.id}
+                        companySlug={companySlug}
+                        onAccept={(draft) => {
+                          createOutline({
+                            chapterNumber: (draft.chapterNumber as number) || 1,
+                            title: (draft.title as string) || "New Chapter",
+                            beats: Array.isArray(draft.beats) ? (draft.beats as Record<string, unknown>[]) : [],
+                            source: "co_created",
+                          });
+                          setShowGenOutlineBeats(false);
+                        }}
+                        onDiscard={() => setShowGenOutlineBeats(false)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -1236,55 +1436,28 @@ export function BookWritingPage() {
               <div className="flex items-center justify-center h-full p-8">
                 <div className="text-center">
                   <div className="text-2xl mb-3 opacity-40">📄</div>
-                  <p className="text-sm text-gray-500">Full manuscript overview</p>
-                  <p className="text-xs text-gray-600 mt-1">Coming soon</p>
+                  <p className="text-sm text-gray-400">{outlineEntries.length} chapter{outlineEntries.length !== 1 ? "s" : ""} outlined</p>
+                  <p className="text-xs text-gray-600 mt-1">Select a chapter in the editor</p>
                 </div>
               </div>
             )}
           </div>
         </aside>
+        )}
 
         {/* CENTER PANE — Manuscript */}
         <div className="flex flex-col min-h-0">
-          <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
-            <div className="flex items-center gap-3">
-              <button className="rounded-md border border-gray-700 p-1.5 text-gray-400 hover:text-gray-200 hover:border-gray-600">
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-              <div>
-                <h2 className="text-sm font-semibold text-gray-100">Chapter 1: The Last Bloom</h2>
-                <p className="text-xs text-gray-500">2,340 words · Scene 1 of 4</p>
-              </div>
-              <button className="rounded-md border border-gray-700 p-1.5 text-gray-400 hover:text-gray-200 hover:border-gray-600">
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <div className="flex-1 p-5 overflow-y-auto">
-            <textarea
-              className="w-full h-full rounded-md border border-gray-800 bg-gray-950 px-4 py-3 text-sm text-gray-200 placeholder-gray-600 resize-none leading-relaxed focus:outline-none focus:border-gray-700"
-              placeholder="Write your manuscript here..."
-              defaultValue={`The first petal fell at dawn.\n\nMara watched it spiral down through the amber light of the Ash Garden...`}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 border-t border-gray-800 px-5 py-2.5 shrink-0">
-            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-              <MessageSquare className="w-3 h-3" /> Comment
-            </button>
-            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-              <RotateCcw className="w-3 h-3" /> Rewrite
-            </button>
-            <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3" /> Improve
-            </button>
-            <div className="flex-1" />
-            <span className="text-xs text-gray-600">Auto-saved</span>
-          </div>
+          <ManuscriptEditor
+            bookId={activeBook?.id ?? ""}
+            companySlug={companySlug}
+            outlineEntries={outlineEntries}
+            focusMode={focusMode}
+            onToggleFocus={() => setFocusMode(!focusMode)}
+          />
         </div>
 
         {/* RIGHT PANE — Review Notes */}
+        {!focusMode && (
         <aside className="flex flex-col border-l border-gray-800 min-h-0">
           <div className="px-4 py-3 border-b border-gray-800 shrink-0">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
@@ -1342,6 +1515,7 @@ export function BookWritingPage() {
             )}
           </div>
         </aside>
+        )}
       </div>
 
       {/* BOTTOM BAR */}
@@ -1366,7 +1540,19 @@ export function BookWritingPage() {
           <Pen className="w-3 h-3" /> Edit
         </button>
       </footer>
-    </div>
+
+      {/* Chat Drawer Overlay */}
+      {activeBook && (
+        <ChatDrawer
+          bookId={activeBook.id}
+          companySlug={companySlug}
+          isOpen={isChatOpen}
+          onClose={() => setIsChatOpen(false)}
+          activeBookTitle={activeBook.title}
+        />
+      )}
+      </div>
+    </ErrorBoundary>
   );
 }
 

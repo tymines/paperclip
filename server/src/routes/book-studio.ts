@@ -7,6 +7,7 @@ import {
   storyBibleStyle,
   storyBibleOutline,
   storyBibleChatMessages,
+  manuscriptChapters,
 } from "@paperclipai/db";
 import {
   createStoryBibleCharacterSchema,
@@ -452,9 +453,263 @@ export function bookStudioRoutes(db: Db) {
     }),
   );
 
-  // ── Brainstorm Chat ────────────────────────────────────────────────────
+  // ── Manuscript Chapters (upsert by chapterNumber) ────────────────────
 
-  // POST /chat — send a message to the brainstorming AI
+  bookBibleRouter.get("/chapters", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    const rows = await db
+      .select()
+      .from(manuscriptChapters)
+      .where(eq(manuscriptChapters.bookId, bookId))
+      .orderBy(desc(manuscriptChapters.chapterNumber));
+
+    res.json({ chapters: rows });
+  });
+
+  // ponytail: upsert by (bookId, chapterNumber) — no separate create endpoint needed
+  bookBibleRouter.patch("/chapters/:chapterNumber", async (req, res) => {
+    const { companyId, bookId, chapterNumber } = req.params as { companyId: string; bookId: string; chapterNumber: string };
+    assertCompanyAccess(req, companyId);
+
+    const chNum = parseInt(chapterNumber, 10);
+    if (isNaN(chNum)) throw badRequest("chapterNumber must be an integer");
+
+    const { title, content } = (req.body ?? {}) as { title?: string; content?: string };
+
+    const existing = await db
+      .select()
+      .from(manuscriptChapters)
+      .where(and(
+        eq(manuscriptChapters.bookId, bookId),
+        eq(manuscriptChapters.chapterNumber, chNum),
+      ))
+      .then((r) => r[0]);
+
+    if (existing) {
+      const [updated] = await db
+        .update(manuscriptChapters)
+        .set({ title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() })
+        .where(eq(manuscriptChapters.id, existing.id))
+        .returning();
+      res.json({ chapter: updated });
+    } else {
+      const id = randomUUID();
+      const [inserted] = await db
+        .insert(manuscriptChapters)
+        .values({ id, bookId, chapterNumber: chNum, title: title || "", content: content || "" })
+        .returning();
+      res.status(201).json({ chapter: inserted });
+    }
+  });
+
+  // ── Suggest Next (Assisted Mode) ──────────────────────────────────────
+
+// ponytail: inline Gemini call — same pattern as story-bible-generate.ts
+async function callGeminiSimple(prompt: string): Promise<string> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) throw Object.assign(new Error("Gemini API key not configured"), { status: 503 });
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: "You are a creative writing coach. Return ONLY valid JSON, no markdown fences." }] },
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { temperature: 0.9, maxOutputTokens: 1024 },
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw Object.assign(new Error(`Gemini API error (${res.status}): ${body.slice(0, 300)}`), { status: 502 });
+  }
+  const data = await res.json() as any;
+  return data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
+}
+
+bookBibleRouter.post("/suggest-next", async (req, res) => {
+  try {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    const book = await db.select().from(books).where(eq(books.id, bookId)).then(r => r[0]);
+    if (!book) throw notFound("Book not found");
+
+    const [chars, locs, styles, outlines, chapters] = await Promise.all([
+      db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId)),
+      db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId)),
+      db.select().from(storyBibleStyle).where(eq(storyBibleStyle.bookId, bookId)),
+      db.select().from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId)),
+      db.select().from(manuscriptChapters).where(eq(manuscriptChapters.bookId, bookId)),
+    ]);
+
+    const summary = {
+      title: book.title,
+      characters: chars.map(c => `${c.name} (${c.role})`),
+      locations: locs.map(l => l.name),
+      styleEntries: styles.length,
+      outlineChapters: outlines.map(o => `Ch.${o.chapterNumber}: ${o.title}`),
+      manuscriptChapters: chapters.map(c => `Ch.${c.chapterNumber}: ${c.title}`),
+    };
+
+    const prompt = [
+      `You are a creative writing assistant helping with the book "${summary.title}".`,
+      "",
+      "CURRENT BIBLE STATE:",
+      `Characters (${chars.length}): ${summary.characters.join(", ") || "(none)"}`,
+      `Locations (${locs.length}): ${summary.locations.join(", ") || "(none)"}`,
+      `Style entries: ${styles.length}`,
+      `Outline chapters: ${summary.outlineChapters.join(", ") || "(none)"}`,
+      `Manuscript chapters: ${summary.manuscriptChapters.join(", ") || "(none)"}`,
+      "",
+      "Analyze the bible state and suggest the SINGLE most impactful next action. Return JSON:",
+      "{",
+      '  "action": "add_character" | "add_location" | "expand_chapter" | "add_style" | "add_outline",',
+      '  "entityType": "character" | "world-location" | "style" | "outline",',
+      '  "reason": "one-sentence explanation of why this is the best next move",',
+      '  "suggestedData": {',
+      '    "name": "suggested name if adding entity",',
+      '    "role": "suggested role if character",',
+      '    "description": "suggested description",',
+      '    "chapterNumber": 0,',
+      '    "title": "chapter title if outline"',
+      '  }',
+      "}",
+    ].join("\n");
+
+    const raw = await callGeminiSimple(prompt);
+    let parsed: any;
+    try {
+      const m = raw.match(/\{[\s\S]*\}/);
+      parsed = m ? JSON.parse(m[0]) : JSON.parse(raw);
+    } catch {
+      parsed = { action: "add_character", entityType: "character", reason: raw.slice(0, 200) };
+    }
+
+    res.json({
+      action: parsed.action || "add_character",
+      entityType: parsed.entityType || "character",
+      reason: parsed.reason || "No reason provided",
+      suggestedData: parsed.suggestedData || undefined,
+    });
+  } catch (err: any) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ── Review Notes (ponytail: jsonb on books.metadata.reviewNotes) ──────
+
+type ReviewNote = {
+  id: string;
+  chapterNumber?: number;
+  category: string;
+  text: string;
+  startOffset?: number;
+  endOffset?: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+const VALID_CATEGORIES = ["pacing", "character", "plot", "prose", "consistency"];
+
+// GET /review-notes
+bookBibleRouter.get("/review-notes", async (req, res) => {
+  const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+  assertCompanyAccess(req, companyId);
+  const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+  if (!book) throw notFound("Book not found");
+  const notes = (book.metadata?.reviewNotes as ReviewNote[]) ?? [];
+  res.json({ notes });
+});
+
+// POST /review-notes
+bookBibleRouter.post("/review-notes", async (req, res) => {
+  const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+  assertCompanyAccess(req, companyId);
+  const { chapterNumber, category, text, startOffset, endOffset } = req.body ?? {};
+  if (!category || !VALID_CATEGORIES.includes(category)) throw badRequest("Invalid category. Must be one of: " + VALID_CATEGORIES.join(", "));
+  if (!text || typeof text !== "string" || text.trim().length === 0) throw badRequest("text is required");
+
+  const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+  if (!book) throw notFound("Book not found");
+
+  const note: ReviewNote = {
+    id: randomUUID(),
+    chapterNumber: typeof chapterNumber === "number" ? chapterNumber : undefined,
+    category,
+    text: text.trim(),
+    startOffset: typeof startOffset === "number" ? startOffset : undefined,
+    endOffset: typeof endOffset === "number" ? endOffset : undefined,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  const existing = (book.metadata?.reviewNotes as ReviewNote[]) ?? [];
+  await db
+    .update(books)
+    .set({ metadata: { ...(book.metadata as Record<string, unknown>), reviewNotes: [...existing, note] } })
+    .where(eq(books.id, bookId));
+
+  res.status(201).json({ note });
+});
+
+// PATCH /review-notes/:noteId
+bookBibleRouter.patch("/review-notes/:noteId", async (req, res) => {
+  const { companyId, bookId, noteId } = req.params as { companyId: string; bookId: string; noteId: string };
+  assertCompanyAccess(req, companyId);
+
+  const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+  if (!book) throw notFound("Book not found");
+
+  const notes = (book.metadata?.reviewNotes as ReviewNote[]) ?? [];
+  const idx = notes.findIndex((n) => n.id === noteId);
+  if (idx === -1) throw notFound("Note not found");
+
+  const { category, text, chapterNumber, startOffset, endOffset } = req.body ?? {};
+  if (category !== undefined && !VALID_CATEGORIES.includes(category)) throw badRequest("Invalid category");
+
+  notes[idx] = {
+    ...notes[idx],
+    ...(category !== undefined && { category }),
+    ...(text !== undefined && { text: String(text).trim() }),
+    ...(chapterNumber !== undefined && { chapterNumber: typeof chapterNumber === "number" ? chapterNumber : undefined }),
+    ...(startOffset !== undefined && { startOffset: typeof startOffset === "number" ? startOffset : undefined }),
+    ...(endOffset !== undefined && { endOffset: typeof endOffset === "number" ? endOffset : undefined }),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await db
+    .update(books)
+    .set({ metadata: { ...(book.metadata as Record<string, unknown>), reviewNotes: notes } })
+    .where(eq(books.id, bookId));
+
+  res.json({ note: notes[idx] });
+});
+
+// DELETE /review-notes/:noteId
+bookBibleRouter.delete("/review-notes/:noteId", async (req, res) => {
+  const { companyId, bookId, noteId } = req.params as { companyId: string; bookId: string; noteId: string };
+  assertCompanyAccess(req, companyId);
+
+  const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+  if (!book) throw notFound("Book not found");
+
+  const notes = (book.metadata?.reviewNotes as ReviewNote[]) ?? [];
+  const filtered = notes.filter((n) => n.id !== noteId);
+  if (filtered.length === notes.length) throw notFound("Note not found");
+
+  await db
+    .update(books)
+    .set({ metadata: { ...(book.metadata as Record<string, unknown>), reviewNotes: filtered } })
+    .where(eq(books.id, bookId));
+
+  res.status(204).send();
+});
+
+// ── Brainstorm Chat ────────────────────────────────────────────────────
+
+// POST /chat — send a message to the brainstorming AI
   bookBibleRouter.post("/chat", async (req, res) => {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
     assertCompanyAccess(req, companyId);

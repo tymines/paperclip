@@ -4,6 +4,11 @@ export {
   type Book,
   type NewBook,
 } from "./books.js";
+export {
+  manuscriptChapters,
+  type ManuscriptChapter,
+  type NewManuscriptChapter,
+} from "./manuscript_chapters.js";
 export { companyLogos } from "./company_logos.js";
 export { authUsers, authSessions, authAccounts, authVerifications } from "./auth.js";
 export { instanceSettings } from "./instance_settings.js";
