@@ -31,7 +31,7 @@ import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
 import { roomsApi } from "@/api/rooms";
 import type { RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
-import { LiveActivityFeed } from "./LiveActivityFeed";
+import LiveActivityFeed from "./LiveActivityFeed";
 import { Rooms } from "@/pages/Rooms";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
