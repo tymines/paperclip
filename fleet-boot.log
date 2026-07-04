@@ -7,3 +7,15 @@
 2026-07-03 22:25:44  PG: removed stale postmaster.pid (pid '38620' not alive)
 2026-07-03 22:25:53  PG: waiting for server to start............ done
 2026-07-03 22:25:53  PG: server started
+2026-07-04 13:25:13  === fleet-boot start ===
+2026-07-04 13:25:14  PG: removed stale postmaster.pid (pid '3008' not alive)
+2026-07-04 13:25:21  PG: waiting for server to start.......... done
+2026-07-04 13:25:21  PG: server started
+2026-07-04 13:29:22  PG: pg_ctl start issued (exit 0)
+2026-07-04 14:11:05  === fleet-boot start ===
+2026-07-04 14:11:05  PG: already up on 5432 (skip)
+2026-07-04 14:11:05  Server: already up on 3100 (skip)
+2026-07-04 14:11:05  Tunnels: launched paperclip-windows
+2026-07-04 14:11:06  Tunnels: launched augiport-tunnel
+2026-07-04 14:11:12  Tunnels: cloudflared count now 3
+2026-07-04 14:11:12  === fleet-boot done ===

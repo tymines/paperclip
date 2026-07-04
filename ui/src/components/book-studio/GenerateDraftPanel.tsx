@@ -32,6 +32,8 @@ export interface GenerateDraftPanelProps {
   onAccept: (draft: Record<string, unknown>) => void;
   onDiscard: () => void;
   onError?: (err: Error) => void;
+  initialDraft?: Record<string, unknown> | null;
+  showGenerateButton?: boolean;
 }
 
 // ── Entity labels ────────────────────────────────────────────────────────────
@@ -112,7 +114,8 @@ export function GenerateDraftPanel({
 
   const handleAccept = () => {
     if (draft) onAccept(draft);
-    // ponytail: caller handles dismiss + add to list per B2 (keep draft until confirmed)
+    setDraft(null);
+    setState("idle");
   };
 
   const handleDiscard = () => {
@@ -137,7 +140,7 @@ export function GenerateDraftPanel({
             <div className="text-sm font-medium text-gray-200">{(draft as Record<string, unknown>).name as string || "Unnamed"}</div>
             <div className="text-xs text-gray-400">{(draft as Record<string, unknown>).role as string || ""}</div>
             {(draft as Record<string, unknown>).description && (
-              <p className="text-[11px] text-gray-500 leading-relaxed line-clamp-3">
+              <p className="text-[11px] text-gray-500 leading-relaxed max-h-32 overflow-y-auto">
                 {(draft as Record<string, unknown>).description as string}
               </p>
             )}
@@ -149,7 +152,7 @@ export function GenerateDraftPanel({
           <>
             <div className="text-sm font-medium text-gray-200">{(draft as Record<string, unknown>).name as string || "Unnamed"}</div>
             {(draft as Record<string, unknown>).description && (
-              <p className="text-xs text-gray-500 leading-relaxed line-clamp-2">
+              <p className="text-xs text-gray-500 leading-relaxed max-h-28 overflow-y-auto">
                 {(draft as Record<string, unknown>).description as string}
               </p>
             )}

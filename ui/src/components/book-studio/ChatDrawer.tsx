@@ -176,8 +176,8 @@ export function ChatDrawer({
     setSendingDraft(messageId);
     try {
       const res = await apiFetch<Record<string, unknown>>(
-        `/chat/${messageId}/to-draft?entityType=${entityType}`,
-        { method: "POST" },
+        `/companies/${companySlug}/book-studio/books/${bookId}/chat/${messageId}/to-draft`,
+        { method: "POST", body: JSON.stringify({ target: entityType }) },
       );
       onSendToDraft?.(entityType, res);
     } catch (err) {

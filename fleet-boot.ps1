@@ -33,8 +33,15 @@ if (Listening 5432) {
     }
     if ($canStart) {
         try {
-            & $pgctl "-D" $dataDir "-l" $pgLog "-o" "-p 5432" "-w" "-t" "60" "start" 2>&1 | ForEach-Object { Log "PG: $_" }
-            Log "PG: pg_ctl start issued (exit $LASTEXITCODE)"
+            # NOTE (2026-07-04 fix): do NOT pipe pg_ctl output into PowerShell.
+            # postgres inherits the pipe handles and the pipeline blocks for minutes
+            # after pg_ctl exits, wedging this script before the Server/Tunnels steps
+            # (root cause of Paperclip not starting after the 07-03/07-04 crashes).
+            # Run via cmd with file redirection instead; -Wait returns when pg_ctl exits.
+            $pgOut = "C:\Users\Augi-T1\paperclip\pgctl-start.log"
+            $cmdLine = "`"$pgctl`" -D `"$dataDir`" -l `"$pgLog`" -o `"-p 5432`" -w -t 60 start > `"$pgOut`" 2>&1"
+            $p = Start-Process -FilePath "cmd.exe" -ArgumentList '/c', $cmdLine -Wait -PassThru -WindowStyle Hidden
+            Log "PG: pg_ctl start issued (exit $($p.ExitCode)); output in pgctl-start.log"
         } catch {
             Log "PG: start ERROR $($_.Exception.Message)"
         }

@@ -19,6 +19,10 @@ interface Props {
   outlineEntries: OutlineEntry[];
   focusMode: boolean;
   onToggleFocus: () => void;
+  /** ponytail: external chapter jump (e.g. from review note click) */
+  jumpToChapter?: number | null;
+  /** ponytail: select a text range in the active chapter (from review note offset) */
+  highlightRange?: { chapterNumber: number; startOffset: number; endOffset: number } | null;
 }
 
 const API_BASE = "/api";
@@ -49,15 +53,16 @@ function markdownToHtml(md: string): string {
     .join("");
 }
 
-export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus }: Props) {
+export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus, jumpToChapter, highlightRange }: Props) {
   const chapters = [...outlineEntries].sort((a, b) => a.chapterNumber - b.chapterNumber);
-  const [selectedCh, setSelectedCh] = useState(chapters[0]?.chapterNumber ?? null);
+  const [selectedCh, setSelectedCh] = useState<number | null>(chapters[0]?.chapterNumber ?? null);
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${bookId}`;
 
@@ -78,6 +83,23 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       .catch(() => { if (!cancelled) setSaveStatus("error"); });
     return () => { cancelled = true; };
   }, [selectedCh, bookId]);
+
+  // Jump to chapter from external signal (e.g. review note click)
+  useEffect(() => {
+    if (jumpToChapter != null && chapters.some((c) => c.chapterNumber === jumpToChapter)) {
+      setSelectedCh(jumpToChapter);
+    }
+  }, [jumpToChapter]);
+
+  // Highlight text range from external signal (e.g. review note offset click)
+  useEffect(() => {
+    if (!highlightRange || selectedCh !== highlightRange.chapterNumber) return;
+    const ta = textareaRef.current;
+    if (ta && !preview) {
+      ta.focus();
+      ta.setSelectionRange(highlightRange.startOffset, highlightRange.endOffset);
+    }
+  }, [highlightRange, selectedCh]);
 
   // Autosave on content/title change (2s debounce)
   const save = useCallback(async (text: string, t: string) => {
@@ -161,6 +183,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
           />
         ) : (
           <textarea
+            ref={textareaRef}
             className="w-full h-full resize-none bg-gray-950 px-5 py-4 text-sm text-gray-200 placeholder-gray-600 leading-relaxed focus:outline-none font-mono"
             placeholder="Write your manuscript here..."
             value={content}

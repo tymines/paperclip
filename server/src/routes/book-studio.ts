@@ -404,6 +404,34 @@ export function bookStudioRoutes(db: Db) {
     res.status(201).json({ book: inserted });
   });
 
+  // PATCH /api/companies/:cid/book-studio/books/:bookId — update book metadata
+  router.patch("/companies/:companyId/book-studio/books/:bookId", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    const { title, metadata } = req.body ?? {};
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof title === "string" && title.trim()) updates.title = title.trim();
+    if (typeof metadata === "object" && metadata !== null) {
+      // ponytail: shallow-merge metadata to preserve reviewNotes etc.
+      const [existing] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+      if (!existing) throw notFound("Book not found");
+      updates.metadata = { ...(existing.metadata as Record<string, unknown>), ...(metadata as Record<string, unknown>) };
+    }
+
+    if (!updates.title && !updates.metadata) throw badRequest("title or metadata required");
+
+    const [updated] = await db
+      .update(books)
+      .set(updates)
+      .where(eq(books.id, bookId))
+      .returning();
+
+    if (!updated) throw notFound("Book not found");
+
+    res.json({ book: updated });
+  });
+
   // ── Story Bible Entity CRUD (nested under /companies/:cid/book-studio/books/:bookId) ──
 
   const bookBibleRouter = Router({ mergeParams: true });
@@ -581,8 +609,12 @@ bookBibleRouter.post("/suggest-next", async (req, res) => {
     const raw = await callGeminiSimple(prompt);
     let parsed: any;
     try {
-      const m = raw.match(/\{[\s\S]*\}/);
-      parsed = m ? JSON.parse(m[0]) : JSON.parse(raw);
+      // Handle markdown fences and extract JSON
+      const jsonMatch = raw.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+      const source = jsonMatch ? jsonMatch[1] : raw;
+      const start = source.indexOf("{");
+      const end = source.lastIndexOf("}");
+      parsed = start !== -1 && end !== -1 ? JSON.parse(source.slice(start, end + 1)) : JSON.parse(raw);
     } catch {
       parsed = { action: "add_character", entityType: "character", reason: raw.slice(0, 200) };
     }

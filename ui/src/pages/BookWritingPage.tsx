@@ -36,6 +36,9 @@ import {
   Save,
   Edit3,
   Camera,
+  AlertTriangle,
+  Loader2,
+  FileDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
@@ -43,6 +46,7 @@ import { ChatDrawer } from "@/components/book-studio/ChatDrawer";
 import { ErrorBoundary } from "@/components/book-studio/ErrorBoundary";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
+import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -133,33 +137,7 @@ interface OutlineEntity {
   updatedAt: string;
 }
 
-// ── Review Notes (static mock for now) ──────────────────────────────────────
-
-interface Note {
-  id: string;
-  category: string;
-  label: string;
-  description: string;
-}
-
-const REVIEW_NOTES: Note[] = [
-  { id: "1", category: "Canon", label: "Canon conflict — Ch.3 vs Ch.1", description: "Character says they've never been to the coast, but Chapter 1 opens at the seaside." },
-  { id: "2", category: "Voice", label: "Voice drift in dialogue", description: "Mara's dialogue shifts from formal to slang between paragraphs." },
-  { id: "3", category: "Continuity", label: "Timeline gap", description: "Three days pass between Ch.2 and Ch.3 with no explanation." },
-  { id: "4", category: "Structure", label: "Pacing dip in middle", description: "Ch.4 exposition runs 800 words without action or dialogue." },
-  { id: "5", category: "Prose", label: "Overused adverb cluster", description: "Word 'suddenly' appears 12 times in Ch.5 alone." },
-  { id: "6", category: "Canon", label: "Magic system rule broken", description: "Character casts a spell without the required focus object." },
-];
-
-const CATEGORY_COLORS: Record<string, string> = {
-  Canon: "bg-blue-500/20 text-blue-300 border-blue-500/40",
-  Voice: "bg-orange-500/20 text-orange-300 border-orange-500/40",
-  Continuity: "bg-purple-500/20 text-purple-300 border-purple-500/40",
-  Structure: "bg-green-500/20 text-green-300 border-green-500/40",
-  Prose: "bg-red-500/20 text-red-300 border-red-500/40",
-};
-
-const CATEGORY_PILLS = ["Canon", "Voice", "Continuity", "Structure", "Prose"] as const;
+// ── Review Notes — now handled by ReviewNotesPanel component ─────────────
 
 const SOURCE_BADGE_COLORS: Record<string, string> = {
   authored: "bg-green-500/20 text-green-300 border-green-500/40",
@@ -844,12 +822,80 @@ function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumbe
   );
 }
 
+// ── Overview Editor (inline, no separate file) ───────────────────────────
+
+function OverviewEditor({
+  book,
+  loading,
+  onUpdate,
+}: {
+  book: BookData | null;
+  loading: boolean;
+  onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => void;
+}) {
+  const [editTitle, setEditTitle] = useState("");
+  const [editDesc, setEditDesc] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+
+  // Latch initial values from book on first load
+  if (book && !initialized) {
+    setEditTitle(book.title || "");
+    setEditDesc((book.metadata?.description as string) || "");
+    setInitialized(true);
+  }
+
+  // Reset when book changes
+  useEffect(() => {
+    if (book) {
+      setEditTitle(book.title || "");
+      setEditDesc((book.metadata?.description as string) || "");
+      setInitialized(true);
+    }
+  }, [book?.id]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onUpdate({ title: editTitle, metadata: { description: editDesc } });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="p-4 text-xs text-gray-500">Loading...</div>;
+  if (!book) return <div className="p-4 text-xs text-gray-500">Create a book to get started.</div>;
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="rounded-md border border-gray-800 bg-gray-900/50 p-3 space-y-3">
+        <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
+        <EditableField
+          label="Description / Premise"
+          value={editDesc}
+          onChange={setEditDesc}
+          multiline
+          placeholder="What's this book about?"
+        />
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1 rounded bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50"
+        >
+          {saving ? "Saving..." : "Save Changes"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function BookWritingPage() {
   const companySlug = "414c172d-7013-4728-b781-aad604d8e2d7"; // ponytail: hardcoded CID, use CompanyContext when multi-company
   const [activeBibleTab, setActiveBibleTab] = useState<StoryBibleTab>("overview");
-  const [activeFilterPills, setActiveFilterPills] = useState<Set<string>>(new Set());
+  const [jumpToChapter, setJumpToChapter] = useState<number | null>(null);
+  const [highlightRange, setHighlightRange] = useState<{ chapterNumber: number; startOffset: number; endOffset: number } | null>(null);
 
   // Data state
   const [booksList, setBooksList] = useState<BookData[]>([]);
@@ -881,6 +927,16 @@ export function BookWritingPage() {
   const [showGenWorldRule, setShowGenWorldRule] = useState(false);
   const [showGenStyle, setShowGenStyle] = useState(false);
   const [showGenOutlineBeats, setShowGenOutlineBeats] = useState(false);
+
+  // Export modal
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+
+  // Consistency check
+  const [checkingConsistency, setCheckingConsistency] = useState(false);
+  const [consistencyFindings, setConsistencyFindings] = useState<Array<{
+    severity: string; category: string; description: string; suggestion: string;
+  }> | null>(null);
 
   // ── Data fetching ──────────────────────────────────────────────────────
 
@@ -944,11 +1000,11 @@ export function BookWritingPage() {
   };
 
   const createCharacter = async (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters`, {
+    const res = await apiFetch<CharacterEntity>(`${API_PREFIX}/characters`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setCharacters((prev) => [...prev, res.character]);
+    setCharacters((prev) => [...prev, res]);
     setShowCreateCharacter(false);
   };
 
@@ -966,11 +1022,11 @@ export function BookWritingPage() {
   };
 
   const createLocation = async (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations`, {
+    const res = await apiFetch<WorldLocationEntity>(`${API_PREFIX}/world-locations`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setLocations((prev) => [...prev, res["world-location"]]);
+    setLocations((prev) => [...prev, res]);
     setShowCreateLocation(false);
   };
 
@@ -988,11 +1044,11 @@ export function BookWritingPage() {
   };
 
   const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => {
-    const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
+    const res = await apiFetch<StyleEntity>(`${API_PREFIX}/style`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setStyleEntries((prev) => [...prev, res["style-entry"]]);
+    setStyleEntries((prev) => [...prev, res]);
     setShowCreateStyle(false);
   };
 
@@ -1018,21 +1074,71 @@ export function BookWritingPage() {
     setShowCreateOutline(false);
   };
 
-  // ── Derived ────────────────────────────────────────────────────────────
-
-  const togglePill = (pill: string) => {
-    setActiveFilterPills((prev) => {
-      const next = new Set(prev);
-      if (next.has(pill)) next.delete(pill);
-      else next.add(pill);
-      return next;
-    });
+  const updateBook = async (data: { title?: string; metadata?: Record<string, unknown> }) => {
+    if (!activeBook) return;
+    const res = await apiFetch<{ book: BookData }>(
+      `/companies/${companySlug}/book-studio/books/${activeBook.id}`,
+      { method: "PATCH", body: JSON.stringify(data) },
+    );
+    setActiveBook(res.book);
+    setBooksList((prev) => prev.map((b) => (b.id === res.book.id ? res.book : b)));
   };
 
-  const filteredNotes =
-    activeFilterPills.size === 0
-      ? REVIEW_NOTES
-      : REVIEW_NOTES.filter((n) => activeFilterPills.has(n.category));
+  // ── Chat-to-draft state ──────────────────────────────────────────────────
+  const [chatDraft, setChatDraft] = useState<{ entityType: string; data: Record<string, unknown> } | null>(null);
+  const [showChatDraftPanel, setShowChatDraftPanel] = useState(false);
+
+  // ── Export handlers ──────────────────────────────────────────────────────
+
+  const handleExportMarkdown = async () => {
+    if (!activeBook) return;
+    setExportingFormat("markdown");
+    try {
+      const res = await fetch(
+        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/export/markdown`,
+      );
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${activeBook.slug || "book"}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Markdown export failed:", err);
+    } finally {
+      setExportingFormat(null);
+    }
+  };
+
+  const handleCheckConsistency = async () => {
+    if (!activeBook) return;
+    setCheckingConsistency(true);
+    setConsistencyFindings(null);
+    try {
+      const res = await fetch(
+        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/check-consistency`,
+        { method: "POST", headers: { "Content-Type": "application/json" } },
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Check failed (${res.status})`);
+      setConsistencyFindings(data.findings || []);
+    } catch (err) {
+      console.error("Consistency check failed:", err);
+      setConsistencyFindings([{ severity: "error", category: "System", description: String(err), suggestion: "Try again later" }]);
+    } finally {
+      setCheckingConsistency(false);
+    }
+  };
+
+  // ── Severity badge colors ───────────────────────────────────────────────
+
+  const severityColors: Record<string, string> = {
+    error: "bg-red-500/20 text-red-300 border-red-500/40",
+    warning: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+    info: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+  };
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -1079,7 +1185,7 @@ export function BookWritingPage() {
             <button
               className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-600 cursor-not-allowed relative"
               disabled
-              title="Coming soon"
+              title="Coming soon — Assisted mode first"
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
@@ -1105,7 +1211,19 @@ export function BookWritingPage() {
           >
             <Sparkles className="w-3 h-3" /> Brainstorm
           </button>
-          <button className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5">
+          <button
+            onClick={() => {
+              setConsistencyFindings(null);
+              setShowExportModal(true);
+            }}
+            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 flex items-center gap-1.5"
+          >
+            <AlertTriangle className="w-3 h-3" /> Check Consistency
+          </button>
+          <button
+            onClick={() => setShowExportModal(true)}
+            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5"
+          >
             <Download className="w-3 h-3" /> Export
           </button>
         </div>
@@ -1167,16 +1285,11 @@ export function BookWritingPage() {
           <div className="flex-1 overflow-y-auto">
             {/* Overview Tab */}
             {activeBibleTab === "overview" && (
-              <div className="p-4 space-y-3">
-                <div className="rounded-md border border-gray-800 bg-gray-900/50 p-3">
-                  <h3 className="text-sm font-semibold text-gray-200 mb-1">
-                    {activeBook?.title || "Untitled Book"}
-                  </h3>
-                  <p className="text-xs text-gray-400 leading-relaxed">
-                    {loading ? "Loading..." : activeBook ? "A writing project in Book Studio." : "Create a book to get started."}
-                  </p>
-                </div>
-              </div>
+              <OverviewEditor
+                book={activeBook}
+                loading={loading}
+                onUpdate={updateBook}
+              />
             )}
 
             {/* Characters Tab */}
@@ -1453,68 +1566,19 @@ export function BookWritingPage() {
             outlineEntries={outlineEntries}
             focusMode={focusMode}
             onToggleFocus={() => setFocusMode(!focusMode)}
+            jumpToChapter={jumpToChapter}
+            highlightRange={highlightRange}
           />
         </div>
 
         {/* RIGHT PANE — Review Notes */}
-        {!focusMode && (
-        <aside className="flex flex-col border-l border-gray-800 min-h-0">
-          <div className="px-4 py-3 border-b border-gray-800 shrink-0">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
-              Review Notes
-            </h3>
-          </div>
-
-          <div className="flex flex-wrap gap-1.5 px-4 py-3 border-b border-gray-800 shrink-0">
-            {CATEGORY_PILLS.map((pill) => {
-              const active = activeFilterPills.has(pill);
-              const colorClasses = CATEGORY_COLORS[pill];
-              return (
-                <button
-                  key={pill}
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[10px] font-medium transition-colors",
-                    active
-                      ? colorClasses
-                      : "border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600",
-                  )}
-                  onClick={() => togglePill(pill)}
-                >
-                  {pill}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex-1 overflow-y-auto">
-            {filteredNotes.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full p-6 text-center">
-                <div className="text-2xl mb-2 opacity-30">✅</div>
-                <p className="text-xs text-gray-500">No matching notes</p>
-                <p className="text-[10px] text-gray-600 mt-1">Try selecting a different filter</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-800/50">
-                {filteredNotes.map((note) => (
-                  <div key={note.id} className="px-4 py-3 hover:bg-gray-900/30 group">
-                    <div className="flex items-start justify-between gap-2">
-                      <span
-                        className={cn(
-                          "inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 mt-0.5",
-                          CATEGORY_COLORS[note.category],
-                        )}
-                      >
-                        {note.category}
-                      </span>
-                    </div>
-                    <p className="text-xs font-medium text-gray-200 mt-1.5">{note.label}</p>
-                    <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">{note.description}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </aside>
+        {!focusMode && activeBook && (
+          <ReviewNotesPanel
+            bookId={activeBook.id}
+            companySlug={companySlug}
+            onSelectChapter={(ch) => setJumpToChapter(ch)}
+            onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
+          />
         )}
       </div>
 
@@ -1551,8 +1615,162 @@ export function BookWritingPage() {
           activeBookTitle={activeBook.title}
         />
       )}
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <ExportModalContent
+          activeBook={activeBook}
+          companySlug={companySlug}
+          exportingFormat={exportingFormat}
+          consistencyFindings={consistencyFindings}
+          checkingConsistency={checkingConsistency}
+          onClose={() => setShowExportModal(false)}
+          onExportMarkdown={handleExportMarkdown}
+          onCheckConsistency={handleCheckConsistency}
+          severityColors={severityColors}
+        />
+      )}
       </div>
     </ErrorBoundary>
+  );
+}
+
+// ── Export Modal (inline, no separate file) ──────────────────────────────────
+
+interface ExportModalContentProps {
+  activeBook: BookData | null;
+  companySlug: string;
+  exportingFormat: string | null;
+  consistencyFindings: Array<{ severity: string; category: string; description: string; suggestion: string }> | null;
+  checkingConsistency: boolean;
+  onClose: () => void;
+  onExportMarkdown: () => void;
+  onCheckConsistency: () => void;
+  severityColors: Record<string, string>;
+}
+
+const EXPORT_FORMATS = [
+  { key: "markdown", label: "Markdown", ext: ".md", active: true, hint: null },
+  { key: "epub", label: "EPUB", ext: ".epub", active: false, hint: "Install epub-gen npm package to enable" },
+  { key: "pdf", label: "PDF", ext: ".pdf", active: false, hint: "Install pandoc to enable" },
+  { key: "audiobook", label: "Audiobook", ext: ".mp3", active: false, hint: "Set TTS_API_KEY to enable" },
+] as const;
+
+function ExportModalContent({
+  activeBook,
+  exportingFormat,
+  consistencyFindings,
+  checkingConsistency,
+  onClose,
+  onExportMarkdown,
+  onCheckConsistency,
+  severityColors,
+}: ExportModalContentProps) {
+  const handleOverlayClick = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget) onClose();
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      onClick={handleOverlayClick}
+    >
+      <div className="absolute inset-0 bg-black/50" />
+      <div className="relative w-[540px] max-h-[80vh] bg-gray-950 border border-gray-700 rounded-lg shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between border-b border-gray-800 px-5 py-4 shrink-0">
+          <h2 className="text-sm font-semibold text-gray-200">Export &amp; Consistency Check</h2>
+          <button onClick={onClose} className="rounded p-1 text-gray-500 hover:text-gray-300">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Export Formats</h3>
+            <div className="space-y-2">
+              {EXPORT_FORMATS.map((fmt) => (
+                <div
+                  key={fmt.key}
+                  className={cn(
+                    "flex items-center justify-between rounded-md border px-4 py-3",
+                    fmt.active ? "border-gray-700 bg-gray-900/50" : "border-gray-800 bg-gray-900/30 opacity-60",
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <FileDown className={cn("w-4 h-4", fmt.active ? "text-blue-400" : "text-gray-600")} />
+                    <div>
+                      <span className="text-sm font-medium text-gray-200">{fmt.label}</span>
+                      <span className="text-xs text-gray-500 ml-1.5">{fmt.ext}</span>
+                    </div>
+                  </div>
+                  {fmt.active ? (
+                    <button
+                      onClick={onExportMarkdown}
+                      disabled={exportingFormat === "markdown"}
+                      className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      {exportingFormat === "markdown" ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Download className="w-3 h-3" />
+                      )}
+                      {exportingFormat === "markdown" ? "Downloading..." : "Download"}
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-gray-500 cursor-default" title={fmt.hint ?? undefined}>
+                      Coming soon
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Bible Consistency</h3>
+            <button
+              onClick={onCheckConsistency}
+              disabled={checkingConsistency || !activeBook}
+              className="rounded-md border border-amber-700 px-4 py-2 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 disabled:opacity-50 flex items-center gap-2"
+            >
+              {checkingConsistency ? <Loader2 className="w-3 h-3 animate-spin" /> : <AlertTriangle className="w-3 h-3" />}
+              {checkingConsistency ? "Checking..." : "Check Consistency"}
+            </button>
+
+            {consistencyFindings !== null && (
+              <div className="mt-3 space-y-2">
+                {consistencyFindings.length === 0 ? (
+                  <div className="rounded-md border border-green-500/30 bg-green-500/5 px-4 py-3 text-xs text-green-300">
+                    ✅ No consistency issues found. Manuscript matches the story bible.
+                  </div>
+                ) : (
+                  consistencyFindings.map((f, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "rounded-md border px-4 py-3",
+                        f.severity === "error" ? "border-red-500/30 bg-red-500/5"
+                          : f.severity === "warning" ? "border-amber-500/30 bg-amber-500/5"
+                          : "border-blue-500/30 bg-blue-500/5",
+                      )}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-medium", severityColors[f.severity] || severityColors.info)}>
+                          {f.severity}
+                        </span>
+                        <span className="text-[10px] text-gray-500">{f.category}</span>
+                      </div>
+                      <p className="text-xs text-gray-300">{f.description}</p>
+                      {f.suggestion && <p className="text-[11px] text-gray-500 mt-1 italic">→ {f.suggestion}</p>}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
