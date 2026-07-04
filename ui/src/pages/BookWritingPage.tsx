@@ -161,6 +161,27 @@ const SOURCE_BADGE_COLORS: Record<string, string> = {
   imported: "bg-orange-500/20 text-orange-300 border-orange-500/40",
 };
 
+const SOURCE_OPTIONS = [
+  { value: "authored", label: "Authored" },
+  { value: "co_created", label: "Co-Created" },
+  { value: "imported", label: "Imported" },
+] as const;
+
+const READINESS_TARGETS = { characters: 3, locations: 3, outline: 5 } as const;
+
+// ── Helper: safe JSON parse / stringify ──────────────────────────────────────
+
+function safeJsonParse(s: string): Record<string, unknown> {
+  if (!s.trim()) return {};
+  try { const v = JSON.parse(s); return typeof v === "object" && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : {}; }
+  catch { return {}; }
+}
+
+function safeJsonStringify(v: Record<string, unknown>): string {
+  try { return JSON.stringify(v, null, 2); }
+  catch { return "{}"; }
+}
+
 // ── API helpers ─────────────────────────────────────────────────────────────
 
 const API_BASE = "/api";
@@ -274,6 +295,8 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
   const [editName, setEditName] = useState(char.name);
   const [editRole, setEditRole] = useState(char.role);
   const [editDesc, setEditDesc] = useState(char.description);
+  const [editVoiceCard, setEditVoiceCard] = useState(safeJsonStringify(char.voiceCard));
+  const [editSource, setEditSource] = useState(char.source || "authored");
   const [deleting, setDeleting] = useState(false);
 
   const initials = char.name
@@ -282,7 +305,10 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
     .join("");
 
   const handleSave = () => {
-    onUpdate(char.id, { name: editName, role: editRole, description: editDesc });
+    onUpdate(char.id, {
+      name: editName, role: editRole, description: editDesc,
+      voiceCard: safeJsonParse(editVoiceCard), source: editSource,
+    });
     setEditing(false);
   };
 
@@ -290,6 +316,8 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
     setEditName(char.name);
     setEditRole(char.role);
     setEditDesc(char.description);
+    setEditVoiceCard(safeJsonStringify(char.voiceCard));
+    setEditSource(char.source || "authored");
     setEditing(false);
   };
 
@@ -303,6 +331,13 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
         <EditableField label="Name" value={editName} onChange={setEditName} />
         <EditableField label="Role" value={editRole} onChange={setEditRole} />
         <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
+        <EditableField label="Voice Card (JSON)" value={editVoiceCard} onChange={setEditVoiceCard} multiline placeholder="{}" />
+        <div className="mb-2">
+          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
+            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
         <div className="flex items-center gap-2 mt-1">
           <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
             <Save className="w-2.5 h-2.5" /> Save
@@ -395,16 +430,25 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
   const [editDesc, setEditDesc] = useState(loc.description);
+  const [editRules, setEditRules] = useState(safeJsonStringify(loc.rules));
+  const [editSensory, setEditSensory] = useState(safeJsonStringify(loc.sensoryNotes));
+  const [editSource, setEditSource] = useState(loc.source || "authored");
   const [deleting, setDeleting] = useState(false);
 
   const handleSave = () => {
-    onUpdate(loc.id, { name: editName, description: editDesc });
+    onUpdate(loc.id, {
+      name: editName, description: editDesc,
+      rules: safeJsonParse(editRules), sensoryNotes: safeJsonParse(editSensory), source: editSource,
+    });
     setEditing(false);
   };
 
   const handleCancel = () => {
     setEditName(loc.name);
     setEditDesc(loc.description);
+    setEditRules(safeJsonStringify(loc.rules));
+    setEditSensory(safeJsonStringify(loc.sensoryNotes));
+    setEditSource(loc.source || "authored");
     setEditing(false);
   };
 
@@ -413,6 +457,14 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Name" value={editName} onChange={setEditName} />
         <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
+        <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline placeholder="{}" />
+        <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline placeholder="{}" />
+        <div className="mb-2">
+          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
+            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
         <div className="flex items-center gap-2 mt-1">
           <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
             <Save className="w-2.5 h-2.5" /> Save
@@ -483,10 +535,16 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
   const [editTense, setEditTense] = useState(entry.tense);
   const [editComps, setEditComps] = useState(entry.comps);
   const [editSample, setEditSample] = useState(entry.sampleParagraph);
+  const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
+  const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
 
   const handleSave = () => {
-    onUpdate(entry.id, { pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample });
+    onUpdate(entry.id, {
+      pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample,
+      bannedCliches: editCliches.split(",").map((s) => s.trim()).filter(Boolean),
+      source: editSource,
+    });
     setEditing(false);
   };
 
@@ -497,6 +555,13 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
         <EditableField label="Tense" value={editTense} onChange={setEditTense} />
         <EditableField label="Comparisons" value={editComps} onChange={setEditComps} />
         <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline />
+        <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} placeholder="suddenly, very unique" />
+        <div className="mb-2">
+          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
+            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
         <div className="flex items-center gap-2 mt-1">
           <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
@@ -551,10 +616,17 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
   const [editing, setEditing] = useState(false);
   const [editCh, setEditCh] = useState(String(entry.chapterNumber));
   const [editTitle, setEditTitle] = useState(entry.title);
+  const [editBeats, setEditBeats] = useState(JSON.stringify(entry.beats || [], null, 2));
+  const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
 
   const handleSave = () => {
-    onUpdate(entry.id, { chapterNumber: parseInt(editCh, 10) || 1, title: editTitle });
+    let beats: Record<string, unknown>[] = [];
+    try { const p = JSON.parse(editBeats); if (Array.isArray(p)) beats = p; } catch { /* use empty */ }
+    onUpdate(entry.id, {
+      chapterNumber: parseInt(editCh, 10) || 1, title: editTitle,
+      beats, source: editSource,
+    });
     setEditing(false);
   };
 
@@ -563,6 +635,13 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Chapter #" value={editCh} onChange={setEditCh} />
         <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
+        <EditableField label="Beats (JSON array)" value={editBeats} onChange={setEditBeats} multiline placeholder="[]" />
+        <div className="mb-2">
+          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
+            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
         <div className="flex items-center gap-2 mt-1">
           <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
@@ -607,17 +686,26 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
 
 // ── Create Form Components ──────────────────────────────────────────────────
 
-function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: string; role: string; description: string }) => void; onCancel: () => void }) {
+function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [desc, setDesc] = useState("");
+  const [voiceCard, setVoiceCard] = useState("{}");
+  const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Character name" />
       <EditableField label="Role" value={role} onChange={setRole} placeholder="e.g. Protagonist" />
       <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Brief description" />
+      <EditableField label="Voice Card (JSON)" value={voiceCard} onChange={setVoiceCard} multiline placeholder="{}" />
+      <div className="mb-2">
+        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+        <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
+          {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ name, role, description: desc })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+        <button onClick={() => onSave({ name, role, description: desc, voiceCard: safeJsonParse(voiceCard), source })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -628,15 +716,26 @@ function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: stri
   );
 }
 
-function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: string; description: string }) => void; onCancel: () => void }) {
+function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+  const [rules, setRules] = useState("{}");
+  const [sensory, setSensory] = useState("{}");
+  const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Location name" />
       <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Description" />
+      <EditableField label="Rules (JSON)" value={rules} onChange={setRules} multiline placeholder="{}" />
+      <EditableField label="Sensory Notes (JSON)" value={sensory} onChange={setSensory} multiline placeholder="{}" />
+      <div className="mb-2">
+        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+        <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
+          {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ name, description: desc })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+        <button onClick={() => onSave({ name, description: desc, rules: safeJsonParse(rules), sensoryNotes: safeJsonParse(sensory), source })} disabled={!name.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -647,19 +746,28 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   );
 }
 
-function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string }) => void; onCancel: () => void }) {
+function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => void; onCancel: () => void }) {
   const [pov, setPov] = useState("");
   const [tense, setTense] = useState("");
   const [comps, setComps] = useState("");
   const [sample, setSample] = useState("");
+  const [cliches, setCliches] = useState("");
+  const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="POV" value={pov} onChange={setPov} placeholder="e.g. Third Person Limited" />
       <EditableField label="Tense" value={tense} onChange={setTense} placeholder="e.g. Past" />
       <EditableField label="Comparisons" value={comps} onChange={setComps} placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
       <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline placeholder="A short sample of your prose style" />
+      <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} placeholder="suddenly, very unique" />
+      <div className="mb-2">
+        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+        <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
+          {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample, bannedCliches: cliches.split(",").map((s) => s.trim()).filter(Boolean), source })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -670,15 +778,28 @@ function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; t
   );
 }
 
-function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumber: number; title: string }) => void; onCancel: () => void }) {
+function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumber: number; title: string; beats: Record<string, unknown>[]; source: string }) => void; onCancel: () => void }) {
   const [ch, setCh] = useState("1");
   const [title, setTitle] = useState("");
+  const [beats, setBeats] = useState("[]");
+  const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Chapter #" value={ch} onChange={setCh} />
       <EditableField label="Title" value={title} onChange={setTitle} placeholder="Chapter title" />
+      <EditableField label="Beats (JSON array)" value={beats} onChange={setBeats} multiline placeholder="[]" />
+      <div className="mb-2">
+        <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
+        <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
+          {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+      </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ chapterNumber: parseInt(ch, 10) || 1, title })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+        <button onClick={() => {
+          let parsed: Record<string, unknown>[] = [];
+          try { const p = JSON.parse(beats); if (Array.isArray(p)) parsed = p; } catch { /* use empty */ }
+          onSave({ chapterNumber: parseInt(ch, 10) || 1, title, beats: parsed, source });
+        }} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -772,7 +893,7 @@ export function BookWritingPage() {
     setCharacters((prev) => prev.filter((c) => c.id !== id));
   };
 
-  const createCharacter = async (data: { name: string; role: string; description: string }) => {
+  const createCharacter = async (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => {
     const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -794,7 +915,7 @@ export function BookWritingPage() {
     setLocations((prev) => prev.filter((l) => l.id !== id));
   };
 
-  const createLocation = async (data: { name: string; description: string }) => {
+  const createLocation = async (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => {
     const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -816,7 +937,7 @@ export function BookWritingPage() {
     setStyleEntries((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string }) => {
+  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => {
     const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -838,7 +959,7 @@ export function BookWritingPage() {
     setOutlineEntries((prev) => prev.filter((o) => o.id !== id));
   };
 
-  const createOutline = async (data: { chapterNumber: number; title: string }) => {
+  const createOutline = async (data: { chapterNumber: number; title: string; beats: Record<string, unknown>[]; source: string }) => {
     const res = await apiFetch<{ "outline-entry": OutlineEntity }>(`${API_PREFIX}/outline`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -915,6 +1036,28 @@ export function BookWritingPage() {
       <div className="grid grid-cols-[1fr_2fr_1fr] flex-1 min-h-0">
         {/* LEFT PANE — Story Bible */}
         <aside className="flex flex-col border-r border-gray-800 min-h-0">
+          {/* ── Readiness Bar ──────────────────────────────────────────────── */}
+          <div className="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
+            <div className={cn("flex items-center gap-1", characters.length >= READINESS_TARGETS.characters ? "text-green-400" : "text-yellow-400")}>
+              <User className="w-3 h-3" />
+              <span>Characters {characters.length}/{READINESS_TARGETS.characters}</span>
+            </div>
+            <span className="text-gray-700">|</span>
+            <div className={cn("flex items-center gap-1", locations.length >= READINESS_TARGETS.locations ? "text-green-400" : "text-yellow-400")}>
+              <MapPin className="w-3 h-3" />
+              <span>Locations {locations.length}/{READINESS_TARGETS.locations}</span>
+            </div>
+            <span className="text-gray-700">|</span>
+            <div className={cn("flex items-center gap-1", styleEntries.length >= 1 ? "text-green-400" : "text-red-400")}>
+              <Palette className="w-3 h-3" />
+              <span>Style {styleEntries.length >= 1 ? "✓" : "✗"}</span>
+            </div>
+            <span className="text-gray-700">|</span>
+            <div className={cn("flex items-center gap-1", outlineEntries.length >= READINESS_TARGETS.outline ? "text-green-400" : "text-yellow-400")}>
+              <List className="w-3 h-3" />
+              <span>Outline {outlineEntries.length}/{READINESS_TARGETS.outline}</span>
+            </div>
+          </div>
           <div className="flex border-b border-gray-800 shrink-0 overflow-x-auto">
             {BIBLE_TABS.map((tab) => (
               <button
