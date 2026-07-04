@@ -41,6 +41,7 @@ import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
 import { bookStudioRoutes } from "./routes/book-studio.js";
 import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
+import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-generate.js";
 import { gymRoutes } from "./routes/gym.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -271,6 +272,7 @@ export async function createApp(
   api.use(bookWritingRoutes(db));
   api.use(bookStudioRoutes(db));
   api.use(storyBibleGenerateRoutes(db));
+  api.use(bookStudioImageGenerateRoutes(db));
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   if (opts.databaseBackupService) {
