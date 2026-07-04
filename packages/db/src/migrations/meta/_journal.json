@@ -967,6 +967,13 @@
       "when": 1783135428873,
       "tag": "0137_magical_caretaker",
       "breakpoints": true
+    },
+    {
+      "idx": 138,
+      "version": "7",
+      "when": 1785000000000,
+      "tag": "0138_story_bible_chat_messages",
+      "breakpoints": true
     }
   ]
 }

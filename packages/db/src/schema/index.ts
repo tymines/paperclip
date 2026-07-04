@@ -188,6 +188,11 @@ export {
   type NewStoryBibleOutline,
 } from "./story_bible_outline.js";
 export {
+  storyBibleChatMessages,
+  type StoryBibleChatMessage,
+  type NewStoryBibleChatMessage,
+} from "./story_bible_chat_messages.js";
+export {
   reels,
   reelScenes,
   reelTemplates,

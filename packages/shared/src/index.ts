@@ -708,6 +708,11 @@ export type {
   StoryBibleWorldLocation,
   StoryBibleStyle,
   StoryBibleOutline,
+  StoryBibleChatMessage,
+  SendChatMessageRequest,
+  ChatMessageResponse,
+  DraftEntityType,
+  ToDraftResponse,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {
@@ -1157,6 +1162,10 @@ export {
   updateStoryBibleOutlineSchema,
   type CreateStoryBibleOutline,
   type UpdateStoryBibleOutline,
+  sendChatMessageSchema,
+  toDraftQuerySchema,
+  type SendChatMessage,
+  type ToDraftQuery,
 } from "./validators/index.js";
 
 export { API_PREFIX, API } from "./api.js";

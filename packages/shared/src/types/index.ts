@@ -429,6 +429,12 @@ export type {
   StoryBibleStyleUpdateInput,
   StoryBibleOutlineCreateInput,
   StoryBibleOutlineUpdateInput,
+  StoryBibleChatMessage,
+  SendChatMessageRequest,
+  ChatMessageResponse,
+  DraftEntityType,
+  ToDraftQuery,
+  ToDraftResponse,
 } from "./story-bible.js";
 export type {
   JsonSchema,

@@ -117,3 +117,35 @@ export interface StoryBibleOutlineUpdateInput {
   locked?: boolean;
   source?: string;
 }
+
+// ── Chat Message ────────────────────────────────────────────────────────────
+
+export interface StoryBibleChatMessage {
+  id: string;
+  bookId: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export interface SendChatMessageRequest {
+  message: string;
+}
+
+export interface ChatMessageResponse {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+}
+
+export type DraftEntityType = "character" | "world-location" | "style" | "outline";
+
+export interface ToDraftQuery {
+  target: DraftEntityType;
+}
+
+export interface ToDraftResponse {
+  entityType: DraftEntityType;
+  draft: Record<string, unknown>;
+}

@@ -498,4 +498,8 @@ export {
   updateStoryBibleOutlineSchema,
   type CreateStoryBibleOutline,
   type UpdateStoryBibleOutline,
+  sendChatMessageSchema,
+  toDraftQuerySchema,
+  type SendChatMessage,
+  type ToDraftQuery,
 } from "./story-bible.js";

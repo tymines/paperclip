@@ -6,6 +6,7 @@ import {
   storyBibleWorldLocations,
   storyBibleStyle,
   storyBibleOutline,
+  storyBibleChatMessages,
 } from "@paperclipai/db";
 import {
   createStoryBibleCharacterSchema,
@@ -16,8 +17,10 @@ import {
   updateStoryBibleStyleSchema,
   createStoryBibleOutlineSchema,
   updateStoryBibleOutlineSchema,
+  sendChatMessageSchema,
+  toDraftQuerySchema,
 } from "@paperclipai/shared";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -25,6 +28,7 @@ import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
 import { logActivity } from "../services/index.js";
+import { callBrainstormChat } from "../services/brainstorm-chat.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -447,6 +451,125 @@ export function bookStudioRoutes(db: Db) {
       updateSchema: updateStoryBibleOutlineSchema,
     }),
   );
+
+  // ── Brainstorm Chat ────────────────────────────────────────────────────
+
+  // POST /chat — send a message to the brainstorming AI
+  bookBibleRouter.post("/chat", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    // Validate body
+    const parsed = sendChatMessageSchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+    const { message } = parsed.data;
+
+    // Load full bible
+    const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+    if (!book) throw notFound("Book not found");
+
+    const characters = await db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId));
+    const locations = await db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId));
+    const styles = await db.select().from(storyBibleStyle).where(eq(storyBibleStyle.bookId, bookId));
+    const outlines = await db.select().from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId));
+
+    // Load prior history (last 50 messages)
+    const history = await db.select()
+      .from(storyBibleChatMessages)
+      .where(eq(storyBibleChatMessages.bookId, bookId))
+      .orderBy(desc(storyBibleChatMessages.createdAt))
+      .limit(50);
+
+    // Persist user message
+    const [userMsg] = await db.insert(storyBibleChatMessages).values({
+      bookId, role: "user", content: message,
+    }).returning();
+
+    // Call Gemini
+    const bibleContext = {
+      bookTitle: book.title,
+      characters: characters.map(c => ({ name: c.name, role: c.role, description: c.description })),
+      locations: locations.map(l => ({ name: l.name, description: l.description })),
+      styles: styles.map(s => ({ pov: s.pov, tense: s.tense, comps: s.comps, sampleParagraph: s.sampleParagraph })),
+      outlines: outlines.map(o => ({ chapterNumber: o.chapterNumber, title: o.title, beats: o.beats as Record<string, unknown>[] })),
+    };
+    const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
+    historyEntries.push({ role: "user", content: message });
+
+    let reply: string;
+    try {
+      const result = await callBrainstormChat(bibleContext, historyEntries, message);
+      if (!result) throw new Error("Empty reply from LLM");
+      reply = result;
+    } catch (err) {
+      // Still persist user message so history isn't lost
+      res.status(503).json({ error: "AI service temporarily unavailable", messageId: userMsg.id });
+      return;
+    }
+
+    // Persist assistant reply
+    const [assistantMsg] = await db.insert(storyBibleChatMessages).values({
+      bookId, role: "assistant", content: reply,
+    }).returning();
+
+    res.json({
+      reply,
+      messageId: assistantMsg.id,
+      userMessageId: userMsg.id,
+    });
+  });
+
+  // GET /chat — fetch chat messages for a book
+  bookBibleRouter.get("/chat", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    const messages = await db.select()
+      .from(storyBibleChatMessages)
+      .where(eq(storyBibleChatMessages.bookId, bookId))
+      .orderBy(desc(storyBibleChatMessages.createdAt))
+      .limit(200);
+
+    res.json({ messages });
+  });
+
+  // POST /chat/:messageId/to-draft — convert an assistant message into a draft entity
+  bookBibleRouter.post("/chat/:messageId/to-draft", async (req, res) => {
+    const { companyId, bookId, messageId } = req.params as { companyId: string; bookId: string; messageId: string };
+    assertCompanyAccess(req, companyId);
+
+    // Parse query target
+    const parsed = toDraftQuerySchema.safeParse(req.body);
+    if (!parsed.success) throw badRequest(parsed.error.message);
+    const { target } = parsed.data;
+
+    // Load the message
+    const [msg] = await db.select()
+      .from(storyBibleChatMessages)
+      .where(and(
+        eq(storyBibleChatMessages.id, messageId),
+        eq(storyBibleChatMessages.bookId, bookId),
+      ))
+      .limit(1);
+    if (!msg) throw notFound("Message not found");
+    if (msg.role !== "assistant") throw badRequest("Can only draft from assistant messages");
+
+    // Build draft shape matching the create-input for the target entity type
+    const draft: Record<string, unknown> = (() => {
+      switch (target) {
+        case "character":
+          return { name: "", role: "", description: msg.content.slice(0, 500), voiceCard: {}, source: "co_created" } as Record<string, unknown>;
+        case "world-location":
+          return { name: "", description: msg.content.slice(0, 500), rules: {}, sensoryNotes: {}, source: "co_created" } as Record<string, unknown>;
+        case "style":
+          return { pov: "", tense: "", comps: "", sampleParagraph: msg.content.slice(0, 500), bannedCliches: [], source: "co_created" } as Record<string, unknown>;
+        case "outline":
+          return { chapterNumber: 1, title: "", beats: [{ description: msg.content.slice(0, 2000) }], source: "co_created" } as Record<string, unknown>;
+      }
+    })();
+
+    res.json({ entityType: target, draft, sourceMessageId: messageId });
+  });
 
   router.use("/companies/:companyId/book-studio/books/:bookId", bookBibleRouter);
 
