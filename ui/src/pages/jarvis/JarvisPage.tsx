@@ -33,6 +33,7 @@ import { jarvisApi, type JarvisConversationTurn } from "@/api/jarvis";
 import { roomsApi } from "@/api/rooms";
 import type { Room, RoomMessage } from "@paperclipai/shared";
 import TeamModeBoard from "./TeamModeBoard";
+import LiveActivityFeed from "./LiveActivityFeed";
 import { useCompany } from "@/context/CompanyContext";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useDialogActions } from "@/context/DialogContext";
@@ -1010,9 +1011,13 @@ export function JarvisPage() {
       ) : view === "rooms" ? (
         <WarRoomRoomsList companyId={selectedCompanyId ?? null} />
       ) : view === "live" ? (
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" style={{ color: DS.textMuted }}>
-          Live Activity — coming in next commit.
-        </div>
+        selectedCompanyId ? (
+          <LiveActivityFeed companyId={selectedCompanyId} />
+        ) : (
+          <div className="px-8 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+            Select a company to view live agent activity.
+          </div>
+        )
       ) : view === "history" ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6" style={{ color: DS.textMuted }}>
           Session History — coming in next commit.
