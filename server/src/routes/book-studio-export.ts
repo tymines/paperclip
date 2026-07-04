@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { books, storyBibleOutline, bookExports } from "@paperclipai/db";
 import { eq, desc } from "drizzle-orm";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, renameSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -174,7 +174,81 @@ export function bookStudioExportRoutes(db: Db) {
         });
       }
 
-      // Stubbed generation — record as pending
+      // ── Real TTS generation ────────────────────────────────────────
+      const exportId = randomUUID();
+      const narrationDir = path.join(EXPORT_DIR, book.slug, "narrations", exportId);
+      const tempDir = narrationDir + ".tmp";
+      mkdirSync(tempDir, { recursive: true });
+
+      const chapterBuffers: Buffer[] = [];
+      const individualChapters: Record<string, { filename: string; durationSec: number }> = {};
+      let totalDurationSec = 0;
+
+      for (const ch of chapters) {
+        const chText = [
+          ch.title ? `${ch.title}.` : "",
+          Array.isArray(ch.beats) ? beatToText(ch.beats) : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const chTitle = ch.title || `Chapter ${ch.chapterNumber}`;
+        const result = await tts.generateNarration(chText, chTitle);
+        chapterBuffers.push(result.audioBuffer);
+
+        const chFilename = `chapter-${ch.chapterNumber}.mp3`;
+        writeFileSync(path.join(tempDir, chFilename), result.audioBuffer);
+
+        individualChapters[ch.chapterNumber] = {
+          filename: chFilename,
+          durationSec: result.durationSec,
+        };
+        totalDurationSec += result.durationSec;
+      }
+
+      // ── Concatenate chapters via ffmpeg (fallback: raw concat) ─────
+      const concatLines = chapters
+        .map((ch) => `file 'chapter-${ch.chapterNumber}.mp3'`)
+        .join("\n");
+      writeFileSync(path.join(tempDir, "concat.txt"), concatLines, "utf-8");
+
+      let combinedPath = path.join(tempDir, "combined.mp3");
+      let ffmpegSucceeded = false;
+      try {
+        execSync(
+          `ffmpeg -f concat -safe 0 -i concat.txt -c copy combined.mp3`,
+          { cwd: tempDir, timeout: 30000, stdio: "pipe" },
+        );
+        ffmpegSucceeded = true;
+      } catch {
+        // Fallback: raw concatenation
+        writeFileSync(combinedPath, Buffer.concat(chapterBuffers));
+      }
+
+      // ── Probe duration via ffprobe ─────────────────────────────────
+      let ffprobeDuration = 0;
+      if (ffmpegSucceeded) {
+        try {
+          const durationOut = execSync(
+            `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 combined.mp3`,
+            { cwd: tempDir, timeout: 10000, stdio: "pipe" },
+          );
+          ffprobeDuration = parseFloat(durationOut.toString().trim()) || 0;
+        } catch {
+          ffprobeDuration = totalDurationSec;
+        }
+      } else {
+        ffprobeDuration = totalDurationSec;
+      }
+
+      // ── Clean up and finalize ──────────────────────────────────────
+      try {
+        execSync(`rm -f "${path.join(tempDir, "concat.txt")}"`, { timeout: 5000 });
+      } catch { /* ignore */ }
+
+      // Ensure combined.mp3 exists at the final path
+      const finalCombinedPath = path.join(narrationDir, "combined.mp3");
+      renameSync(tempDir, narrationDir);
+
       const [inserted] = await db
         .insert(bookExports)
         .values({
@@ -182,12 +256,14 @@ export function bookStudioExportRoutes(db: Db) {
           companyId,
           type: "narration",
           format: "mp3",
-          status: "pending",
+          status: "completed",
+          outputPath: finalCombinedPath,
           metadata: {
             chapterCount: chapters.length,
             totalChars,
             estimatedCostUsd,
-            estimatedDurationSec,
+            totalDurationSec: ffprobeDuration,
+            individualChapters,
           },
         })
         .returning();
@@ -224,6 +300,42 @@ export function bookStudioExportRoutes(db: Db) {
         .orderBy(desc(bookExports.createdAt));
 
       res.json({ exports: rows });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET .../narration-audio ──────────────────────────────────────────
+  router.get("/companies/:companyId/book-studio/narration-audio/:bookSlug/:exportId/:filename", async (req, res, next) => {
+    try {
+      const { companyId, bookSlug, exportId, filename } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      const filePath = path.join(EXPORT_DIR, bookSlug, "narrations", exportId, filename);
+
+      // Safety: prevent directory traversal
+      const resolved = path.resolve(filePath);
+      const expectedPrefix = path.resolve(path.join(EXPORT_DIR, bookSlug, "narrations", exportId));
+      if (!resolved.startsWith(expectedPrefix)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      if (!existsSync(resolved)) {
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      const ext = path.extname(filename).toLowerCase();
+      const mimeTypes: Record<string, string> = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".ogg": "audio/ogg",
+      };
+      const contentType = mimeTypes[ext] || "application/octet-stream";
+
+      const data = readFileSync(resolved);
+      res.set("Content-Type", contentType);
+      res.set("Content-Length", String(data.length));
+      res.send(data);
     } catch (err) {
       next(err);
     }
