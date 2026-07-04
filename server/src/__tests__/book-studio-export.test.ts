@@ -17,6 +17,35 @@ vi.mock("../services/provider-api-keys/index.js", () => ({ getRawKey: vi.fn() })
 import { execSync } from "node:child_process";
 import { getRawKey } from "../services/provider-api-keys/index.js";
 
+// ── Global fetch mock ─────────────────────────────────────────────────
+
+let mockFetchResponse: Response | null = null;
+
+beforeEach(() => {
+  mockFetchResponse = null;
+});
+
+function mockElevenLabsResponse(data: Buffer, status = 200) {
+  mockFetchResponse = new Response(data, {
+    status,
+    headers: { "Content-Type": "audio/mpeg" },
+  });
+}
+
+function mockElevenLabsError(status: number, body?: string) {
+  mockFetchResponse = new Response(body ?? "Error", {
+    status,
+    headers: { "Content-Type": "text/plain" },
+  });
+}
+
+global.fetch = vi.fn(async (_url: string, _opts?: RequestInit) => {
+  if (mockFetchResponse) return mockFetchResponse;
+  return new Response(Buffer.alloc(0), { status: 200 });
+}) as unknown as typeof global.fetch;
+
+// ── Helper: mock DB query builder ─────────────────────────────────────
+
 /** Thenable chain for Drizzle queries. */
 function q<T>(val: T): any {
   const p = Promise.resolve(val);
@@ -92,6 +121,7 @@ async function createTestApp(mockDbInstance?: any) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.BOOK_EXPORT_DIR;
 });
 
 describe("POST .../export", () => {
@@ -173,9 +203,20 @@ describe("POST .../narrate", () => {
   it("returns 201 with narration record when confirm=true", async () => {
     vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
     process.env.TTS_PROVIDER = "elevenlabs";
+    // Mock fetch to return valid mp3 audio data for ElevenLabs API calls
+    mockElevenLabsResponse(Buffer.from("fake-mp3-data"));
+    // Mock execSync for ffmpeg (concat succeeds) and ffprobe (duration probe)
+    vi.mocked(execSync)
+      .mockReturnValueOnce(Buffer.from("")) // ffmpeg concat
+      .mockReturnValueOnce(Buffer.from("42.500")); // ffprobe duration
+
     const narrationInsertVal = [{
       id: "narration-1", bookId: "book-1", companyId: "c1", type: "narration", format: "mp3",
-      status: "pending", outputPath: null, metadata: { chapterCount: 2, totalChars: 100, estimatedCostUsd: 0.003, estimatedDurationSec: 7 },
+      status: "completed", outputPath: "/tmp/paperclip/book-exports/echo-of-stone/narrations/uuid/combined.mp3",
+      metadata: {
+        chapterCount: 2, totalChars: 100, estimatedCostUsd: 0.003,
+        totalDurationSec: 42.5, individualChapters: {},
+      },
       createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     }];
     const { app } = await createTestApp(mockDb(undefined, undefined, narrationInsertVal));
@@ -188,7 +229,7 @@ describe("POST .../narrate", () => {
     expect(res.body).toHaveProperty("narration");
     expect(res.body.narration.type).toBe("narration");
     expect(res.body.narration.format).toBe("mp3");
-    expect(res.body.narration.status).toBe("pending");
+    expect(res.body.narration.status).toBe("completed");
   });
 
   it("returns 503 when TTS is not configured", async () => {
@@ -275,6 +316,62 @@ describe("GET .../exports", () => {
     expect(res.status).toBe(200);
     expect(res.body.exports).toHaveLength(1);
     expect(res.body.exports[0].id).toBe("exp-1");
+  });
+});
+
+describe("ElevenLabs TTS provider", () => {
+  beforeAll(() => {
+    process.env.TTS_PROVIDER = "elevenlabs";
+  });
+
+  it("isConfigured() returns true when key is set", async () => {
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    const mod = await import("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    expect(await provider.isConfigured()).toBe(true);
+  });
+
+  it("isConfigured() returns false when key is null", async () => {
+    vi.mocked(getRawKey).mockResolvedValue(null);
+    const mod = await import("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    expect(await provider.isConfigured()).toBe(false);
+  });
+
+  it("generateNarration() calls ElevenLabs API with correct headers and returns audioBuffer", async () => {
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    mockElevenLabsResponse(Buffer.from("mp3-data"));
+
+    const mod = await import("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    const result = await provider.generateNarration("Hello world", "Test Chapter");
+
+    expect(result.audioBuffer).toBeDefined();
+    expect(result.audioBuffer.length).toBeGreaterThan(0);
+    expect(result.audioUrl).toContain("narration-audio");
+  });
+
+  it("throws on 401 API error", async () => {
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    mockElevenLabsError(401, "Unauthorized");
+
+    const mod = await import("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    await expect(provider.generateNarration("Hello", "Chapter 1")).rejects.toThrow("401");
+  });
+
+  it("retries on 429 and eventually throws", async () => {
+    vi.mocked(getRawKey).mockResolvedValue("sk-ele...test");
+    // Return 429 for all retries
+    const resp429 = new Response("Rate limited", {
+      status: 429,
+      headers: { "Content-Type": "text/plain" },
+    });
+    (global.fetch as any).mockResolvedValue(resp429);
+
+    const mod = await import("../services/tts/index.js");
+    const provider = mod.getTTSProvider();
+    await expect(provider.generateNarration("Hello", "Chapter 1")).rejects.toThrow(/rate/i);
   });
 });
 
