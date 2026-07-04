@@ -1,5 +1,6 @@
 /// <reference path="./types/express.d.ts" />
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import "./pc-log.js"; // unbuffered crash-safe log + EPIPE guard
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -91,16 +92,27 @@ export interface StartedServer {
   databaseUrl: string;
 }
 
-// Global rejection/exception handlers to prevent silent crashes
+// Global rejection/exception handlers to prevent silent crashes.
+// ponytail: --trace-warnings flag would add stack traces to promise rejections
+// but doubles GC pressure under concurrent load. Consider enabling in dev only:
+//   NODE_OPTIONS="--trace-warnings" pnpm dev
 process.on("unhandledRejection", (reason: unknown) => {
-  const crashLog = `[${new Date().toISOString()}] UNHANDLED REJECTION: ${reason instanceof Error ? reason.stack : String(reason)}\n`;
+  const stack = reason instanceof Error ? reason.stack : String(reason);
+  const crashLog = `[${new Date().toISOString()}] UNHANDLED REJECTION: ${stack}\n`;
+  // ponytail: sync writes to crash-safe logs — pino buffer won't be flushed yet
   try { writeFileSync("/tmp/paperclip-crash.log", crashLog, { flag: "a" }); } catch {}
+  try { writeFileSync("/tmp/pc-server.log", crashLog, { flag: "a" }); } catch {}
   logger.error({ err: reason }, "Unhandled promise rejection");
 });
 process.on("uncaughtException", (error: Error) => {
   const crashLog = `[${new Date().toISOString()}] UNCAUGHT EXCEPTION: ${error.stack}\n`;
   try { writeFileSync("/tmp/paperclip-crash.log", crashLog, { flag: "a" }); } catch {}
-  logger.error({ err: error }, "Uncaught exception");
+  try { writeFileSync("/tmp/pc-server.log", crashLog, { flag: "a" }); } catch {}
+  // Flush pino transport before crashing — buffered entries are lost otherwise
+  try { logger.flush(); } catch {}
+  logger.error({ err: error }, "Uncaught exception — exiting");
+  // Ensure the pino transport has a tick to drain before process.exit
+  setImmediate(() => process.exit(1));
 });
 
 export async function startServer(): Promise<StartedServer> {
@@ -945,15 +957,6 @@ export async function startServer(): Promise<StartedServer> {
   const { waitForExternalAdapters } = await import("./adapters/registry.js");
   await waitForExternalAdapters();
 
-
-  // Crash diagnostics: log uncaught errors before exit (TYL-278)
-  process.on("uncaughtException", (err) => {
-    console.error("[FATAL] uncaughtException:", err.stack || err.message);
-    process.exit(1);
-  });
-  process.on("unhandledRejection", (reason) => {
-    console.error("[FATAL] unhandledRejection:", reason instanceof Error ? reason.stack : String(reason));
-  });
   await new Promise<void>((resolveListen, rejectListen) => {
     const onError = (err: Error) => {
       server.off("error", onError);
