@@ -87,3 +87,15 @@ export const updateStoryBibleOutlineSchema = z.object({
 
 export type CreateStoryBibleOutline = z.infer<typeof createStoryBibleOutlineSchema>;
 export type UpdateStoryBibleOutline = z.infer<typeof updateStoryBibleOutlineSchema>;
+
+// ── Chat Message ────────────────────────────────────────────────────────────
+
+export const sendChatMessageSchema = z.object({
+  message: z.string().min(1).max(10000),
+});
+export type SendChatMessage = z.infer<typeof sendChatMessageSchema>;
+
+export const toDraftQuerySchema = z.object({
+  target: z.enum(["character", "world-location", "style", "outline"]),
+});
+export type ToDraftQuery = z.infer<typeof toDraftQuerySchema>;
