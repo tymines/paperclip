@@ -1,0 +1,31 @@
+loop:
+  id: string                # e.g. L3.execute
+  owner: agent              # who runs the body (zeus|hermes|worker.*|ares|critic|watchdog|tyler)
+  trigger:                  # what starts an activation
+    kind: cron|heartbeat|event|manual
+    spec: string            # cron expr / event name / channel
+    session: isolated|main  # OpenClaw session mode (isolated strongly preferred)
+  state:
+    board_states: [..]      # states this loop may read/transition
+    files: [..]             # external state it reads/writes (task file, plan, lessons)
+  budget:
+    max_iterations: int
+    max_tokens: int
+    max_wall_clock_s: int
+    max_usd: float
+  verify:
+    deterministic: [cmd..]  # exit-0 commands; the reward signal
+    protected: [glob..]     # files the worker may NOT modify (anti reward-hacking)
+    judge: agent|null       # independent evaluator for the subjective remainder
+  no_progress:
+    window: int             # compare last N failure signatures
+    signature: cmd|hash     # how to compute the signature (e.g. sorted failing-test list)
+  exits:
+    success: transition     # e.g. -> review
+    blocked: transition     # e.g. -> gate  (with BLOCKED bundle)
+    escalate: loop_id       # who inherits (Tier ladder)
+  proof:
+    bundle_schema: path     # existing fleet proof-bundle schema
+    iteration_stamped: true
+  autonomy: manual|assisted|autopilot   # per-loop dial position
+  events: [..]              # typed events emitted on the JSON-RPC wire
