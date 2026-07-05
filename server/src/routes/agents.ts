@@ -3256,7 +3256,7 @@ export function agentRoutes(
 
     const row = await recovery.recordWatchdogDecision({
       runId: existing.id,
-      actor: req.actor,
+      actor: req.actor as any,
       decision: decision as "snooze" | "continue" | "dismissed_false_positive",
       evaluationIssueId,
       reason,

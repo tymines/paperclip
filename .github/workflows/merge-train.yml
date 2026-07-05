@@ -214,11 +214,11 @@ jobs:
 
                 COMMENT=":steam_locomotive: **Merge train: conflict detected.**
 
-              Merge into \`integration\` failed due to a conflict with the base branch.
-              This PR has been removed from the merge queue.
+            Merge into \`integration\` failed due to a conflict with the base branch.
+            This PR has been removed from the merge queue.
 
-              **Action required:** rebase onto the latest \`integration\`, resolve conflicts,
-              then re-add the \`merge-train:ready\` label to re-queue."
+            **Action required:** rebase onto the latest \`integration\`, resolve conflicts,
+            then re-add the \`merge-train:ready\` label to re-queue."
 
                 curl -sS -X POST -H "${AUTH}" -H "${ACCEPT}" -H "${API_VER}" \
                   "${API}/repos/${REPO}/issues/${PR_NUM}/comments" \
