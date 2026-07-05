@@ -278,8 +278,6 @@ export async function createApp(
   api.use(storyBibleGenerateRoutes(db));
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const { createServer: createViteServer } = await import("vite");
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   if (opts.databaseBackupService) {
