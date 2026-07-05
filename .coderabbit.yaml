@@ -1,0 +1,7 @@
+# CodeRabbit auto-review configuration for tymines/paperclip fork.
+# Upstream targets default branch only; our merge-train targets integration.
+reviews:
+  auto_review:
+    base_branches:
+      - integration
+      - master
