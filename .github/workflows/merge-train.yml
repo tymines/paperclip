@@ -22,7 +22,7 @@ jobs:
   # + full test suite. No per-file-tsc gap.
   ci:
     name: CI (build + test)
-    if: github.event_name == 'pull_request' && github.base_ref == 'integration'
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
