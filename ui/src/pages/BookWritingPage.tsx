@@ -39,6 +39,8 @@ import {
   AlertTriangle,
   Loader2,
   FileDown,
+  Volume2,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
@@ -1026,6 +1028,11 @@ export function BookWritingPage() {
 
   // Consistency check
   const [checkingConsistency, setCheckingConsistency] = useState(false);
+
+  // Narration state
+  const [narrating, setNarrating] = useState(false);
+  const [narrateEstimate, setNarrateEstimate] = useState<{ chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number } | null>(null);
+  const [narrateComplete, setNarrateComplete] = useState<{ exportId: string; combinedPath: string } | null>(null);
   const [consistencyFindings, setConsistencyFindings] = useState<Array<{
     severity: string; category: string; description: string; suggestion: string;
   }> | null>(null);
@@ -1182,6 +1189,34 @@ export function BookWritingPage() {
 
   // ── Export handlers ──────────────────────────────────────────────────────
 
+  const handleNarrateEstimate = async () => {
+    if (!activeBook) return;
+    setNarrating(true);
+    try {
+      const res = await apiFetch<{ estimate: { chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number }; requiresConfirm: boolean }>(
+        `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      if (res.estimate) setNarrateEstimate(res.estimate);
+    } catch { /* handled by UI */ }
+    setNarrating(false);
+  };
+
+  const handleNarrateConfirm = async () => {
+    if (!activeBook) return;
+    setNarrating(true);
+    setNarrateEstimate(null);
+    try {
+      const res = await apiFetch<{ narration: { id: string; outputPath: string; metadata: Record<string, unknown> } }>(
+        `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
+        { method: "POST", body: JSON.stringify({ confirm: true }) },
+      );
+      const slug = activeBook.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? "";
+      setNarrateComplete({ exportId: res.narration.id, combinedPath: `/companies/${companySlug}/book-studio/narration-audio/${slug}/${res.narration.id}/combined.mp3` });
+    } catch { /* handled by UI */ }
+    setNarrating(false);
+  };
+
   const handleExportMarkdown = async () => {
     if (!activeBook) return;
     setExportingFormat("markdown");
@@ -1313,12 +1348,60 @@ export function BookWritingPage() {
             <AlertTriangle className="w-3 h-3" /> Check Consistency
           </button>
           <button
+            onClick={handleNarrateEstimate}
+            disabled={narrating}
+            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
+            {narrating ? "Generating…" : "Narrate Book"}
+          </button>
+          <button
             onClick={() => setShowExportModal(true)}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5"
           >
             <Download className="w-3 h-3" /> Export
           </button>
         </div>
+
+        {/* Narrate cost-confirm dialog */}
+        {narrateEstimate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateEstimate(null)} />
+            <div className="relative w-96 bg-gray-950 border border-gray-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-200">Generate Audiobook?</h3>
+              <div className="space-y-1 text-xs text-gray-400">
+                <div className="flex justify-between"><span>Chapters:</span><span className="text-gray-200">{narrateEstimate.chapters}</span></div>
+                <div className="flex justify-between"><span>Characters:</span><span className="text-gray-200">{narrateEstimate.totalChars.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>Est. duration:</span><span className="text-gray-200">{Math.ceil(narrateEstimate.estimatedDurationSec / 60)} min</span></div>
+                <div className="flex justify-between"><span>Est. cost:</span><span className="text-green-400">${narrateEstimate.estimatedCostUsd}</span></div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => setNarrateEstimate(null)} className="flex-1 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Cancel</button>
+                <button onClick={handleNarrateConfirm} disabled={narrating} className="flex-1 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  Generate (${narrateEstimate.estimatedCostUsd})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Narrate complete dialog */}
+        {narrateComplete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateComplete(null)} />
+            <div className="relative w-96 bg-gray-950 border border-gray-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-200">Audiobook Ready!</h3>
+              <div className="flex gap-2">
+                <a href={`/api${narrateComplete.combinedPath}`} target="_blank" rel="noreferrer" className="flex-1 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 flex items-center justify-center gap-1.5">
+                  <Play className="w-3 h-3" /> Download MP3
+                </a>
+                <button onClick={() => setNarrateComplete(null)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </header>
 
       {/* ── Assisted Mode Suggestion Panel ── */}
