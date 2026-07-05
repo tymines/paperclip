@@ -19,6 +19,7 @@ import {
 import { getRawKey } from "../services/provider-api-keys/index.js";
 import { getCapabilitySnapshot } from "../services/jarvis-capabilities.js";
 import { logger } from "../middleware/logger.js";
+import { logActivity } from "../services/index.js";
 import {
   calendarUpcoming,
   remindersOpen,
@@ -1365,8 +1366,8 @@ export function jarvisRoutes(db: Db) {
       const actor = req.actor;
       void logActivity(db, {
         companyId,
-        actorType: actor.type,
-        actorId: actor.type === "board" && "userId" in actor ? actor.userId : actor.type === "agent" && "agentId" in actor ? actor.agentId : "unknown",
+        actorType: actor.type as "user" | "agent" | "system" | "plugin",
+        actorId: (actor.type === "board" && "userId" in actor ? actor.userId : actor.type === "agent" && "agentId" in actor ? actor.agentId : "unknown") as string,
         action: "room.completed",
         entityType: "room",
         entityId: roomId,
