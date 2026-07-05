@@ -180,23 +180,31 @@ export function bookStudioExportRoutes(db: Db) {
       const tempDir = narrationDir + ".tmp";
       mkdirSync(tempDir, { recursive: true });
 
+      // Pre-compute non-empty chapters once for both narration loop and concat building
+      const nonEmptyChapters = chapters.filter(ch => {
+        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        return text.trim().length > 0;
+      });
+
       const chapterBuffers: Buffer[] = [];
       let totalDurationSec = 0;
 
-      for (const ch of chapters) {
-        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
-        if (!text.trim()) continue;
+      for (const ch of nonEmptyChapters) {
         const chTitle = ch.title || `Chapter ${ch.chapterNumber}`;
-        const result = await tts.generateNarration(text, chTitle);
+        const result = await tts.generateNarration(
+          Array.isArray(ch.beats) ? beatToText(ch.beats) : "",
+          chTitle,
+        );
         const chPath = path.join(tempDir, `chapter-${ch.chapterNumber}.mp3`);
         writeFileSync(chPath, result.audioBuffer);
         chapterBuffers.push(result.audioBuffer);
       }
 
-      // Concatenate all chapters into combined.mp3 using ffmpeg concat demuxer
-      const concatList = chapterBuffers.map((_, i) =>
-        `file 'chapter-${i + 1}.mp3'`
-      ).join("\n");
+      // Concatenate all chapters into combined.mp3 using ffmpeg concat demuxer.
+      // Build concat list from chapterNumber so gapped/non-sequential chapters work.
+      const concatList = nonEmptyChapters
+        .map(ch => `file 'chapter-${ch.chapterNumber}.mp3'`)
+        .join("\n");
       writeFileSync(path.join(tempDir, "concat.txt"), concatList);
       const combinedPath = path.join(tempDir, "combined.mp3");
       try {
@@ -277,9 +285,12 @@ export function bookStudioExportRoutes(db: Db) {
       const { companyId, bookSlug, exportId, filename } = req.params;
       assertCompanyAccess(req, companyId);
 
-      // Directory traversal protection
-      if (filename.includes("..") || filename.includes("/") || bookSlug.includes("..")) {
-        throw badRequest("Invalid path");
+      // Directory traversal protection — use path.resolve + startsWith for robust
+      // protection against encoded (%2e%2e) and alternative-separator (..\\..) attacks.
+      const resolvedPath = path.resolve(EXPORT_DIR, bookSlug, "narrations", exportId, filename);
+      const expectedPrefix = path.resolve(EXPORT_DIR, bookSlug, "narrations", exportId);
+      if (!resolvedPath.startsWith(expectedPrefix)) {
+        return res.status(403).json({ error: "Forbidden" });
       }
 
       const filePath = path.join(EXPORT_DIR, bookSlug, "narrations", exportId, filename);
