@@ -1006,6 +1006,11 @@ export function BookWritingPage() {
   const [showCreateStyle, setShowCreateStyle] = useState(false);
   const [showCreateOutline, setShowCreateOutline] = useState(false);
 
+  // Spend tracking (from book metadata)
+  const spendThisMonth = (activeBook?.metadata?.spendThisMonth as number) || 0;
+  const spendBudget = (activeBook?.metadata?.spendBudget as number) || 50.0;
+  const spendPercent = spendBudget > 0 ? (spendThisMonth / spendBudget) * 100 : 0;
+
   // Chat drawer state
   const [isChatOpen, setIsChatOpen] = useState(false);
 
@@ -1014,6 +1019,11 @@ export function BookWritingPage() {
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
+
+  // Autopilot state
+  const [autopilotMode, setAutopilotMode] = useState(false);
+  const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
+  const [autopilotPaused, setAutopilotPaused] = useState(false);
 
   // Generate panel per-tab state (ponytail: simple booleans, not a map)
   const [showGenCharacter, setShowGenCharacter] = useState(false);
@@ -1310,26 +1320,55 @@ export function BookWritingPage() {
               Assisted
             </button>
             <button
-              className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-600 cursor-not-allowed relative"
-              disabled
-              title="Coming soon — Assisted mode first"
+              className={cn(
+                "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
+                autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
+              )}
+              onClick={() => { setAutopilotMode(!autopilotMode); setAssistedMode(false); setAutopilotState(autopilotMode ? "idle" : "assembling"); }}
+              title={autopilotMode ? "Autopilot active — click to disable" : "[Beta] Backend integration in progress"}
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
-              <span className="absolute -top-1.5 -right-1 rounded bg-gray-700 px-1 py-0 text-[8px] text-gray-400 font-medium">Soon</span>
+              {autopilotMode && autopilotState !== "idle" && (
+                <span className="absolute -top-1.5 -right-1 rounded bg-green-600 px-1 py-0 text-[8px] text-white font-medium animate-pulse">Live</span>
+              )}
             </button>
           </div>
           <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
-            <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-            $24.50 / $50.00
+            <span className={cn("inline-block h-2 w-2 rounded-full", (spendPercent ?? 0) >= 80 ? "bg-red-500" : (spendPercent ?? 0) >= 50 ? "bg-yellow-500" : "bg-green-500")} />
+            ${spendThisMonth.toFixed(2)} / ${spendBudget.toFixed(2)}
           </div>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-            <Pause className="w-3 h-3" /> Pause
+          <button
+            onClick={() => {
+              if (autopilotMode) {
+                setAutopilotPaused(!autopilotPaused);
+                setAutopilotState(autopilotPaused ? "drafting" : "paused");
+              }
+            }}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-amber-700 text-amber-400 hover:text-amber-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Pause/Resume autopilot" : "Enable Autopilot mode"}
+          >
+            {autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+            {autopilotPaused ? "Resume" : "Pause"}
           </button>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+          <button
+            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Request AI review of current chapter" : "Enable Autopilot mode"}
+          >
             <Play className="w-3 h-3" /> Steer
           </button>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+          <button
+            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Review current chapter draft" : "Enable Autopilot mode"}
+          >
             <MessageSquare className="w-3 h-3" /> Review
           </button>
           <button
