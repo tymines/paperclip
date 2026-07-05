@@ -47,8 +47,8 @@ jobs:
       - name: Build (skip UI typecheck — 407 commits behind upstream)
         run: pnpm run preflight:workspace-links && pnpm --filter "!@paperclipai/ui" -r build
 
-      - name: Test (non-DB workspaces — server tests need upstream migrations)
-        run: pnpm test:run:general -- --group general-workspaces-a
+      - name: Test (non-server workspaces — skip UI + DB tests)
+        run: pnpm test:run:general -- --group general-workspaces-b
 
   # ── Sentry release on merge to integration ──
   # Tags release = commit SHA, uploads source maps.
