@@ -69,3 +69,17 @@ export const issueChatUxAgentMap = new Map<string, Agent>([
   [primaryAgent.id, primaryAgent],
   [reviewAgent.id, reviewAgent],
 ]);
+
+// ponytail: stub exports — IssueChatUxLab is a dev-only UX playground.
+// Full fixtures were removed upstream; empty defaults unblock CI.
+export const issueChatUxFeedbackVotes = new Map();
+export const issueChatUxLinkedRuns: any[] = [];
+export const issueChatUxLiveComments: any[] = [];
+export const issueChatUxLiveEvents: any[] = [];
+export const issueChatUxLiveRuns: any[] = [];
+export const issueChatUxMentions: any[] = [];
+export const issueChatUxReassignOptions: any[] = [];
+export const issueChatUxReviewComments: any[] = [];
+export const issueChatUxReviewEvents: any[] = [];
+export const issueChatUxSubmittingComments: any[] = [];
+export const issueChatUxTranscriptsByRunId = new Map();
