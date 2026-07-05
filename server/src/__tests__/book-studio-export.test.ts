@@ -18,29 +18,38 @@ import { execSync } from "node:child_process";
 import { getRawKey } from "../services/provider-api-keys/index.js";
 
 // ── Global fetch mock ─────────────────────────────────────────────────
+// Store raw response data, NOT Response objects — each fetch call builds
+// a FRESH Response from the stored data so `arrayBuffer()` body consumption
+// by one call doesn't poison the next (the narrate route makes ~2 fetch calls).
 
-let mockFetchResponse: Response | null = null;
+type MockFetchState = { data: Buffer; status: number; contentType: string } | null;
+let mockFetchState: MockFetchState = null;
 
 beforeEach(() => {
-  mockFetchResponse = null;
+  mockFetchState = null;
 });
 
 function mockElevenLabsResponse(data: Buffer, status = 200) {
-  mockFetchResponse = new Response(data, {
-    status,
-    headers: { "Content-Type": "audio/mpeg" },
-  });
+  mockFetchState = { data, status, contentType: "audio/mpeg" };
 }
 
 function mockElevenLabsError(status: number, body?: string) {
-  mockFetchResponse = new Response(body ?? "Error", {
-    status,
-    headers: { "Content-Type": "text/plain" },
-  });
+  mockFetchState = { data: Buffer.from(body ?? "Error"), status, contentType: "text/plain" };
 }
 
+/**
+ * Helper: builds a fresh Response from the stored state so body consumption
+ * is isolated per call. Does NOT override vi.fn() state — tests that call
+ * (global.fetch as any).mockResolvedValue(...) replace the implementation
+ * for that call, which vi.clearAllMocks() resets in the beforeEach below.
+ */
 global.fetch = vi.fn(async (_url: string, _opts?: RequestInit) => {
-  if (mockFetchResponse) return mockFetchResponse;
+  if (mockFetchState) {
+    return new Response(mockFetchState.data, {
+      status: mockFetchState.status,
+      headers: { "Content-Type": mockFetchState.contentType },
+    });
+  }
   return new Response(Buffer.alloc(0), { status: 200 });
 }) as unknown as typeof global.fetch;
 
