@@ -456,3 +456,8 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+export type {
+  AppDevApp, AppDevBlueprint, AppDevBuildStage, AppDevBuild,
+  AppDevReleaseVersion, AppDevListAppsResponse, AppDevBlueprintsResponse,
+  AppDevBuildsResponse, AppDevReleasesResponse,
+} from "./app-dev.js";
