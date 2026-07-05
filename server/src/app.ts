@@ -34,6 +34,7 @@ import { activityRoutes } from "./routes/activity.js";
 import { jarvisRoutes } from "./routes/jarvis.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
+import { gymRoutes } from "./routes/gym.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
@@ -235,6 +236,7 @@ export async function createApp(
   api.use(jarvisRoutes(db));
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));
+  api.use(gymRoutes(db));
   api.use(knowledgeGraphRoutes(db));
   api.use(roomRoutes(db));
   api.use(agentBridgeRoutes(db));
