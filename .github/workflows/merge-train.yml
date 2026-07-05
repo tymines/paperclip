@@ -2,7 +2,6 @@ name: Merge Train
 
 on:
   pull_request:
-    branches: [integration]
   push:
     branches: [integration]
   workflow_dispatch:
@@ -23,7 +22,7 @@ jobs:
   # + full test suite. No per-file-tsc gap.
   ci:
     name: CI (build + test)
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.base_ref == 'integration'
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
