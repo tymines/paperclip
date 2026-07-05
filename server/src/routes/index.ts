@@ -30,3 +30,4 @@ export { bookStudioRoutes } from "./book-studio.js";
 export { storyBibleGenerateRoutes } from "./story-bible-generate.js";
 export { bookStudioChapterGenRoutes } from "./book-studio-chapter-gen.js";
 export { bookStudioExportRoutes } from "./book-studio-export.js";
+export { bookStudioAutopilotRoutes } from "./book-studio-autopilot.js";

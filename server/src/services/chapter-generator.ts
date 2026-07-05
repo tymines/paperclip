@@ -130,7 +130,7 @@ async function callAnthropic(systemPrompt: string, userPrompt: string): Promise<
  * Provider priority: Gemini (primary) → DeepSeek (fallback) → Anthropic (last resort).
  * OpenAI is NOT in this chain (hard-banned).
  */
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
+export async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
   // Level 1 — Gemini (primary, per Tyler's directive)
   const geminiKey = await getRawKey("gemini").catch(() => null);
   if (geminiKey) {

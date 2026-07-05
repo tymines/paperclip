@@ -43,6 +43,7 @@ import { bookStudioRoutes } from "./routes/book-studio.js";
 import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
 import { bookStudioExportRoutes } from "./routes/book-studio-export.js";
 import { bookStudioChapterGenRoutes } from "./routes/book-studio-chapter-gen.js";
+import { bookStudioAutopilotRoutes } from "./routes/book-studio-autopilot.js";
 import { gymRoutes } from "./routes/gym.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -275,6 +276,7 @@ export async function createApp(
   api.use(storyBibleGenerateRoutes(db));
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
+  api.use(bookStudioAutopilotRoutes(db));
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   if (opts.databaseBackupService) {
