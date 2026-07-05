@@ -11,6 +11,7 @@ import {
 } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { logger } from "../middleware/logger.js";
+import { logActivity } from "../services/index.js";
 import {
   conceptImageStatus,
   resolveConceptImageGenerator,
@@ -346,6 +347,75 @@ export function appDevRoutes(db: Db) {
       unversionedCount: unversioned,
       versions,
     });
+  });
+
+  // PATCH /companies/:companyId/app-dev/apps/:appId — update app metadata.
+  router.patch("/companies/:companyId/app-dev/apps/:appId", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const appId = req.params.appId as string;
+    assertCompanyAccess(req, companyId);
+
+    const app = await getApp(companyId, appId);
+    if (!app) {
+      res.status(404).json({ error: "App not found" });
+      return;
+    }
+
+    const { name, tagline, accent, repo } = req.body || {};
+    const update: Record<string, unknown> = {};
+
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim()) {
+        res.status(422).json({ error: "name must be a non-empty string" });
+        return;
+      }
+      update.name = name.trim();
+    }
+
+    if (tagline !== undefined) {
+      update.tagline = typeof tagline === "string" ? tagline.trim() : null;
+    }
+
+    if (accent !== undefined) {
+      if (accent !== null && !/^#[0-9a-fA-F]{6}$/.test(accent)) {
+        res.status(422).json({ error: "accent must be a hex color (e.g. #3B82FF) or null" });
+        return;
+      }
+      update.accent = accent;
+    }
+
+    if (repo !== undefined) {
+      update.repo = typeof repo === "string" ? repo.trim() || null : null;
+    }
+
+    if (Object.keys(update).length === 0) {
+      res.status(422).json({ error: "No valid fields to update" });
+      return;
+    }
+
+    update.updatedAt = new Date();
+
+    const [updated] = await db
+      .update(appDevApps)
+      .set(update)
+      .where(and(eq(appDevApps.companyId, companyId), eq(appDevApps.id, appId)))
+      .returning();
+
+    if (!updated) {
+      res.status(500).json({ error: "Update failed" });
+      return;
+    }
+
+    await logActivity(db, {
+      companyId,
+      actorType: "user",
+      actorId: (req.actor as Record<string, unknown> | null)?.userId as string ?? "board",
+      action: "app_dev_update_app",
+      entityType: "app_dev_app",
+      entityId: appId,
+    });
+
+    res.json({ apps: [updated] });
   });
 
   // POST /companies/:companyId/app-dev/design-chat/stream — Gemini 2.5 Flash (SSE).
