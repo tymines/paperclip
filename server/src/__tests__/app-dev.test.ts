@@ -67,6 +67,28 @@ function makeBlueprintRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
+// ── Mock DB builder ────────────────────────────────────────
+
+/**
+ * Build a mock Drizzle query chain where `where()` returns a thenable
+ * that also supports `.orderBy()` and `.limit()` — matching Drizzle's
+ * actual API where `where()` is chainable AND awaitable.
+ */
+function mockChain<T = unknown>(results: T) {
+  const thenable = Promise.resolve(results);
+  return Object.assign(thenable, {
+    orderBy: vi.fn(() => Promise.resolve(results)),
+    limit: vi.fn(() => Promise.resolve(results)),
+    where: vi.fn(() => mockChain(results)),
+  });
+}
+
+function mockFullChain<T = unknown>(results: T) {
+  return {
+    from: vi.fn(() => mockChain(results)),
+  };
+}
+
 // ── App builder ────────────────────────────────────────────
 async function createApp(
   actor: Record<string, unknown>,
@@ -92,11 +114,6 @@ const DEFAULT_ACTOR = {
   companyIds: [COMPANY_ID],
 };
 
-// Helper to make a basic thenable (Promise-like) object
-function resolveLater<T>(value: T) {
-  return Promise.resolve(value);
-}
-
 // ── Suite ──────────────────────────────────────────────────
 describe("App Dev Studio routes", () => {
   let mockDb: Record<string, unknown>;
@@ -114,13 +131,8 @@ describe("App Dev Studio routes", () => {
   // ── GET /apps ───────────────────────────────────────────
   describe("GET /companies/:companyId/app-dev/apps", () => {
     it("returns apps list for a company", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => Promise.resolve([makeAppRow()])),
-          })),
-        })),
-      })) as any;
+      // ensureApps reads issues; main query reads appDevApps + issues + approvals
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow()]));
       mockDb.insert = vi.fn(() => ({
         values: vi.fn(() => ({
           onConflictDoNothing: vi.fn(() => Promise.resolve([])),
@@ -138,11 +150,13 @@ describe("App Dev Studio routes", () => {
   // ── GET /blueprints ─────────────────────────────────────
   describe("GET /companies/:companyId/app-dev/blueprints", () => {
     it("returns blueprint catalog", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          orderBy: vi.fn(() => resolveLater([makeBlueprintRow()])),
+      // ensureApps calls select first; blueprint route calls its own select
+      mockDb.select = vi.fn(() => mockFullChain([makeBlueprintRow()]));
+      mockDb.insert = vi.fn(() => ({
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn(() => Promise.resolve([])),
         })),
-      }));
+      })) as any;
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app).get(`/api/companies/${COMPANY_ID}/app-dev/blueprints`);
@@ -154,18 +168,13 @@ describe("App Dev Studio routes", () => {
   // ── GET /apps/:appId/builds ─────────────────────────────
   describe("GET /companies/:companyId/app-dev/apps/:appId/builds", () => {
     it("returns pipeline stages and builds", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => resolveLater([])),
-          })),
-        })),
-      }));
+      // ensureApps + main query both via select
+      mockDb.select = vi.fn(() => mockFullChain([]));
       mockDb.insert = vi.fn(() => ({
         values: vi.fn(() => ({
-          onConflictDoNothing: vi.fn(() => resolveLater([])),
+          onConflictDoNothing: vi.fn(() => Promise.resolve([])),
         })),
-      }));
+      })) as any;
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app).get(
@@ -181,18 +190,12 @@ describe("App Dev Studio routes", () => {
   // ── GET /apps/:appId/releases ───────────────────────────
   describe("GET /companies/:companyId/app-dev/apps/:appId/releases", () => {
     it("returns version-grouped feedback", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => resolveLater([makeAppRow()])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow({ feedbackOriginId: "testapp" })]));
       mockDb.insert = vi.fn(() => ({
         values: vi.fn(() => ({
-          onConflictDoNothing: vi.fn(() => resolveLater([])),
+          onConflictDoNothing: vi.fn(() => Promise.resolve([])),
         })),
-      }));
+      })) as any;
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app).get(
@@ -207,19 +210,12 @@ describe("App Dev Studio routes", () => {
     });
 
     it("returns 404 for missing app", async () => {
-      // getApp returns null because byKey select returns empty
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([]));
       mockDb.insert = vi.fn(() => ({
         values: vi.fn(() => ({
-          onConflictDoNothing: vi.fn(() => resolveLater([])),
+          onConflictDoNothing: vi.fn(() => Promise.resolve([])),
         })),
-      }));
+      })) as any;
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app).get(
@@ -257,20 +253,12 @@ describe("App Dev Studio routes", () => {
   // ── PATCH /apps/:appId ─────────────────────────────────
   describe("PATCH /companies/:companyId/app-dev/apps/:appId", () => {
     it("updates app name successfully", async () => {
-      // getApp returns the app row
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([makeAppRow()])),
-          })),
-        })),
-      }));
+      // getApp calls select; PATCH handler calls update
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow()]));
       mockDb.update = vi.fn(() => ({
         set: vi.fn(() => ({
           where: vi.fn(() => ({
-            returning: vi.fn(() =>
-              resolveLater([makeAppRow({ name: "New Name" })]),
-            ),
+            returning: vi.fn(() => Promise.resolve([makeAppRow({ name: "New Name" })])),
           })),
         })),
       }));
@@ -284,13 +272,7 @@ describe("App Dev Studio routes", () => {
     });
 
     it("validates accent color (422 on invalid hex)", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([makeAppRow()])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow()]));
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app)
@@ -301,13 +283,7 @@ describe("App Dev Studio routes", () => {
     });
 
     it("returns 404 on missing app", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([]));
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app)
@@ -318,17 +294,11 @@ describe("App Dev Studio routes", () => {
     });
 
     it("logs activity on successful patch", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([makeAppRow()])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow()]));
       mockDb.update = vi.fn(() => ({
         set: vi.fn(() => ({
           where: vi.fn(() => ({
-            returning: vi.fn(() => resolveLater([makeAppRow({ name: "Updated" })])),
+            returning: vi.fn(() => Promise.resolve([makeAppRow({ name: "Updated" })])),
           })),
         })),
       }));
@@ -349,13 +319,7 @@ describe("App Dev Studio routes", () => {
     });
 
     it("returns 422 on empty body", async () => {
-      mockDb.select = vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            limit: vi.fn(() => resolveLater([makeAppRow()])),
-          })),
-        })),
-      }));
+      mockDb.select = vi.fn(() => mockFullChain([makeAppRow()]));
       app = await createApp(DEFAULT_ACTOR, mockDb);
 
       const res = await request(app)
