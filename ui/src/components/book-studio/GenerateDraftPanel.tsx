@@ -97,7 +97,7 @@ export function GenerateDraftPanel({
       const route = generateRoute(entityType);
       const res = await apiFetch<{ draft: Record<string, unknown> }>(
         `/companies/${companySlug}/book-studio/books/${bookId}${route}`,
-        { method: "POST", body: JSON.stringify({ context: prompt }), signal: controller.signal },
+        { method: "POST", body: JSON.stringify({ prompt }), signal: controller.signal },
       );
       setDraft(res.draft);
       setState("draft");
