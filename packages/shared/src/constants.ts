@@ -1126,3 +1126,12 @@ export const PLUGIN_BRIDGE_ERROR_CODES = [
   "UNKNOWN",
 ] as const;
 export type PluginBridgeErrorCode = (typeof PLUGIN_BRIDGE_ERROR_CODES)[number];
+
+export const APP_DEV_PATHS = {
+  apps: (companyId: string) => `/companies/${companyId}/app-dev/apps`,
+  blueprints: (companyId: string) => `/companies/${companyId}/app-dev/blueprints`,
+  app: (companyId: string, appId: string) => `/companies/${companyId}/app-dev/apps/${appId}`,
+  builds: (companyId: string, appKey: string) => `/companies/${companyId}/app-dev/apps/${appKey}/builds`,
+  releases: (companyId: string, appKey: string) => `/companies/${companyId}/app-dev/apps/${appKey}/releases`,
+  designChatStream: (companyId: string) => `/companies/${companyId}/app-dev/design-chat/stream`,
+};
