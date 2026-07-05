@@ -1,54 +1,11 @@
 import { api } from "./client";
-
-export interface AppDevApp {
-  id: string;
-  key: string;
-  name: string;
-  tagline: string | null;
-  kind: "cockpit" | "app";
-  accent: string | null;
-  repo: string | null;
-  feedbackOriginId: string | null;
-  feedbackCount: number;
-  openFeedback: number;
-  latestVersion: string | null;
-  pendingApprovals: number;
-}
-
-export interface AppDevBlueprint {
-  id: string;
-  category: string;
-  name: string;
-  description: string | null;
-  icon: string | null;
-  starterStack: string[] | null;
-  sortOrder: number;
-}
-
-export interface AppDevBuildStage {
-  stage: string;
-  agentId: string;
-  agentName: string;
-  agentStatus: string;
-  latestRunStatus: string | null;
-  progress: number | null;
-}
-export interface AppDevBuild {
-  runId: string;
-  stage: string;
-  agentName: string;
-  status: string;
-  progress: number;
-  commit: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  createdAt: string;
-}
-
-export interface AppDevReleaseVersion {
-  version: number;
-  items: { id: string; title: string; kind: string; status: string }[];
-}
+import type {
+  AppDevApp,
+  AppDevBlueprint,
+  AppDevBuildStage,
+  AppDevBuild,
+  AppDevReleaseVersion,
+} from "@paperclipai/shared";
 
 export const appDevApi = {
   listApps: (companyId: string) =>
