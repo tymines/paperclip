@@ -48,6 +48,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { createServer: createViteServer } = await import("vite");
 import { gymRoutes } from "./routes/gym.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
+import { influencerStudioRoutes } from "./routes/influencer-studio.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
@@ -280,6 +281,7 @@ export async function createApp(
   api.use(bookStudioChapterGenRoutes(db));
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
+  api.use(influencerStudioRoutes(db, {}));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
