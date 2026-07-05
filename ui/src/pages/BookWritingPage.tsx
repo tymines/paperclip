@@ -183,6 +183,45 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// ── CameraButton helper ────────────────────────────────────────────────────────
+
+function CameraButton({ onClick, loading, title }: { onClick: () => void; loading: boolean; title: string }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className={loading ? "rounded p-1 text-blue-400" : "rounded p-1 text-gray-500 hover:text-blue-400"}
+      title={loading ? "Generating…" : title}
+    >
+      {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
+    </button>
+  );
+}
+
+async function generateBookImage(
+  companySlug: string,
+  endpointType: string,
+  prompt: string,
+  bookSlug: string,
+  apiFetch: (url: string, opts?: RequestInit) => Promise<unknown>,
+): Promise<string | null> {
+  const prefix = `/companies/${companySlug}/book-studio/generate`;
+  // Submit
+  const res = await apiFetch(`${prefix}/${endpointType}`, {
+    method: "POST",
+    body: JSON.stringify({ prompt, bookSlug, aspectRatio: "1:1" }),
+  }) as { predictionId: string; status: string };
+  if (!res.predictionId) return null;
+  // Poll (max 60s)
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const poll = await apiFetch(`${prefix}/poll/${res.predictionId}`) as { status: string; imageUrl?: string };
+    if (poll.status === "completed" && poll.imageUrl) return poll.imageUrl;
+    if (poll.status === "failed") return null;
+  }
+  return null;
+}
+
 // ── Collapsible Section ──────────────────────────────────────────────────────
 
 function CollapsibleSection({
@@ -270,11 +309,14 @@ function EditableField({
 
 interface CharacterCardProps {
   char: CharacterEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<CharacterEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps) {
+function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(char.name);
   const [editRole, setEditRole] = useState(char.role);
@@ -282,6 +324,19 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
   const [editVoiceCard, setEditVoiceCard] = useState(safeJsonStringify(char.voiceCard));
   const [editSource, setEditSource] = useState(char.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl } });
+        // Show the image inline via a re-render (card reads char.metadata.imageUrl)
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const initials = char.name
     .split(" ")
@@ -374,13 +429,11 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
         >
           <Trash2 className="w-3 h-3" />
         </button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("image", `Character portrait of ${char.name}${char.role ? `, ${char.role}` : ""}${char.description ? `. ${char.description}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate image for ${char.name}`}
+        />
       </div>
 
       {/* Delete confirmation overlay */}
@@ -413,11 +466,14 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
 
 interface LocationCardProps {
   loc: WorldLocationEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<WorldLocationEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
+function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
   const [editDesc, setEditDesc] = useState(loc.description);
@@ -425,6 +481,18 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
   const [editSensory, setEditSensory] = useState(safeJsonStringify(loc.sensoryNotes));
   const [editSource, setEditSource] = useState(loc.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(loc.id, { metadata: { ...((loc.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     onUpdate(loc.id, {
@@ -495,13 +563,11 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400">
           <Trash2 className="w-3 h-3" />
         </button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("image", `Scene of ${loc.name}${loc.description ? `: ${loc.description.slice(0, 80)}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate image for ${loc.name}`}
+        />
       </div>
 
       {deleting && (
@@ -523,11 +589,14 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
 
 interface StyleCardProps {
   entry: StyleEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<StyleEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
+function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: StyleCardProps) {
   const [editing, setEditing] = useState(false);
   const [editPov, setEditPov] = useState(entry.pov);
   const [editTense, setEditTense] = useState(entry.tense);
@@ -536,6 +605,18 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
   const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     onUpdate(entry.id, {
@@ -586,13 +667,11 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("cover", `Book cover: ${entry.pov || "N/A"} ${entry.tense || ""}${entry.comps ? `, comps: ${entry.comps}` : ""}`)}
+          loading={imageGenerating}
+          title="Generate book cover"
+        />
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -613,17 +692,32 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
 
 interface OutlineCardProps {
   entry: OutlineEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<OutlineEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
+function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: OutlineCardProps) {
   const [editing, setEditing] = useState(false);
   const [editCh, setEditCh] = useState(String(entry.chapterNumber));
   const [editTitle, setEditTitle] = useState(entry.title);
   const [editBeats, setEditBeats] = useState(JSON.stringify(entry.beats || [], null, 2));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     let beats: Record<string, unknown>[] = [];
@@ -673,13 +767,11 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("scene-illustration", `Scene illustration for chapter ${entry.chapterNumber}: ${entry.title || "Untitled"}${entry.beats && Array.isArray(entry.beats) && entry.beats.length > 0 ? `. Beats: ${JSON.stringify((entry.beats as Record<string, unknown>[]).slice(0, 2))}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate illustration for Ch.${entry.chapterNumber}`}
+        />
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -1310,7 +1402,7 @@ export function BookWritingPage() {
                     ) : (
                       characters.map((c) => (
                         <div key={c.id} className="relative">
-                          <CharacterCardComponent char={c} onUpdate={updateCharacter} onDelete={deleteCharacter} />
+                          <CharacterCardComponent char={c} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateCharacter} onDelete={deleteCharacter} />
                         </div>
                       ))
                     )}
@@ -1373,7 +1465,7 @@ export function BookWritingPage() {
                     ) : (
                       locations.map((l) => (
                         <div key={l.id} className="relative">
-                          <LocationCardComponent loc={l} onUpdate={updateLocation} onDelete={deleteLocation} />
+                          <LocationCardComponent loc={l} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateLocation} onDelete={deleteLocation} />
                         </div>
                       ))
                     )}
@@ -1436,7 +1528,7 @@ export function BookWritingPage() {
                     ) : (
                       styleEntries.map((s) => (
                         <div key={s.id} className="relative">
-                          <StyleCardComponent entry={s} onUpdate={updateStyle} onDelete={deleteStyle} />
+                          <StyleCardComponent entry={s} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateStyle} onDelete={deleteStyle} />
                         </div>
                       ))
                     )}
@@ -1500,7 +1592,7 @@ export function BookWritingPage() {
                     ) : (
                       outlineEntries.map((o) => (
                         <div key={o.id} className="relative">
-                          <OutlineCardComponent entry={o} onUpdate={updateOutline} onDelete={deleteOutline} />
+                          <OutlineCardComponent entry={o} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateOutline} onDelete={deleteOutline} />
                         </div>
                       ))
                     )}
