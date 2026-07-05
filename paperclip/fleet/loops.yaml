@@ -1,0 +1,210 @@
+# ============================================================
+# OUROBOROS LOOP REGISTRY — AugiAI fleet
+# Version: 1.0  (2026-07-03)
+# Every loop in the fleet MUST be declared here.
+# The loop controller refuses to run undeclared loops.
+# Companion to: OUROBOROS-LOOP-ENGINEERING-SPEC.md
+# ============================================================
+
+meta:
+  registry_version: "1.0"
+  event_wire: "jsonrpc"            # existing Factory-style typed-event wire
+  board: "fleet/board"             # single source of truth (spine)
+  proof_bundle_schema: "fleet/schemas/proof-bundle.json"   # existing schema
+  verdict_schema: "fleet/schemas/ares-verdict.json"        # new (OURO-4)
+  alarm_channel: "#ai-tech-new"    # C0AEQPEETJL
+  slash_commands_bare: true        # fleet invariant
+  session_recovery: "bootout-edit-bootstrap"   # never edit-then-kickstart
+
+defaults:
+  trigger: { session: isolated }
+  proof:  { bundle_schema: "fleet/schemas/proof-bundle.json", iteration_stamped: true }
+  no_progress: { window: 2, signature: "sorted-failing-checks-sha256" }
+  budget: { max_tokens: 200000, max_wall_clock_s: 3600, max_usd: 2.00 }
+  events: [loop.start, loop.iteration, loop.verify, loop.exit]
+
+# ------------------------------------------------------------
+# Risk classes → autonomy floors (Law 10: enforced by controller,
+# not by souls). "manual" can never be lowered by any loop config.
+# ------------------------------------------------------------
+risk_classes:
+  worktree_reversible:   autopilot
+  merge_to_main:         assisted
+  schema_migration:      manual
+  prod_deploy:           manual
+  external_comms:        manual
+  spend:                 manual
+  august_config:         manual        # NEVER without Tyler's explicit approval
+  soul_or_skill_edit:    manual
+
+loops:
+
+  # ----------------------------------------------------------
+  L0.mission:
+    owner: zeus
+    trigger: { kind: manual, spec: "tyler:#ai-tech-new", session: main }
+    state:
+      board_states: [backlog, ready]
+      files: [fleet/BACKLOG.md]
+    budget: { max_iterations: 1, max_tokens: 60000, max_wall_clock_s: 1800, max_usd: 1.00 }
+    verify: { deterministic: [], judge: tyler }
+    exits: { success: "backlog->ready", blocked: "->gate", escalate: null }
+    autonomy: manual
+    events: [loop.start, plan.updated, loop.exit]
+
+  # ----------------------------------------------------------
+  L1.discovery:
+    owner: hermes
+    trigger:
+      kind: cron
+      spec: "*/30 * * * *"                # plus heartbeat pulse
+      session: isolated                    # fresh session + light context
+    state:
+      board_states: [backlog, ready, gate]
+      files: [HEARTBEAT.md, fleet/board]
+    budget: { max_iterations: 1, max_tokens: 30000, max_wall_clock_s: 300, max_usd: 0.10 }
+    verify:
+      deterministic: ["fleet/bin/board-lint"]   # findings must be valid board entries
+      judge: null
+    exits: { success: "->ready|->gate", blocked: "->gate", escalate: null }
+    autonomy: autopilot                    # discovery only surfaces; never executes
+    notes: "No-op runs archive silently. Risky findings land in gate, not ready."
+
+  # ----------------------------------------------------------
+  L2.dispatch:
+    owner: hermes
+    trigger: { kind: event, spec: "board.ready", session: isolated }
+    state:
+      board_states: [ready, dispatched]
+      files: [fleet/board, fleet/fleet.yaml]
+    budget: { max_iterations: 1, max_tokens: 40000, max_wall_clock_s: 600, max_usd: 0.20 }
+    verify:
+      deterministic: ["fleet/bin/meow-check"]   # fits one fresh window at assigned tier?
+      judge: null
+    exits:
+      success: "ready->dispatched"          # + worktree opened + lease granted
+      blocked: "ready->rework"              # MEOW fail => re-chunk before assignment
+      escalate: L0.mission
+    autonomy: autopilot
+    lease: { ttl_from: budget.max_wall_clock_s_of_L3, one_writer_per_tree: true }
+    effort_scaling:                          # explicit heuristics (Anthropic lesson)
+      trivial_fix: { workers: 1, tier: flash }
+      breadth_task: { workers: parallel, tier: flash }
+      coupled_refactor: { workers: 1, tier: per-matrix, sequential: true }
+
+  # ----------------------------------------------------------
+  L3.execute:
+    owner: worker.*                          # DeepSeek Flash / Kimi / GLM / Codex per matrix
+    trigger: { kind: event, spec: "board.dispatched", session: isolated }  # FRESH per iteration
+    state:
+      board_states: [dispatched, executing, review, rework]
+      files: [task.md, plan.md, lessons.md, proofs/last.json]   # disk, never transcript
+    budget: { max_iterations: 3, max_tokens: 500000, max_wall_clock_s: 5400, max_usd: 5.00 }
+    verify:
+      deterministic: ["make test", "make lint", "make typecheck"]   # per-repo override
+      protected: ["tests/**", "fleet/schemas/**", ".github/**"]     # anti reward-hacking
+      judge: null                           # judgment belongs to L4
+    no_progress: { window: 2, signature: "sorted-failing-checks-sha256" }
+    exits:
+      success: "executing->review"          # controller-validated bundle required
+      blocked: "executing->blocked"         # BLOCKED bundle: tried/failed/hypotheses/next
+      escalate: L5.revision
+    autonomy: autopilot                     # inside leased worktree only
+    invariants:
+      - commit_every_iteration: true        # revertible (existing control invariant)
+      - worker_never_transitions_state: true
+      - compaction_event: "warn->watchdog"  # smell: chunk too big
+
+  # ----------------------------------------------------------
+  L4.review:
+    owner: ares
+    trigger: { kind: event, spec: "board.review", session: isolated }
+    state:
+      board_states: [review, gate, rework, merged]
+      files: [diff.patch, proofs/*.json, task.md]   # GROUND TRUTH ONLY — never summaries
+    budget: { max_iterations: 1, max_tokens: 120000, max_wall_clock_s: 1200, max_usd: 1.00 }
+    verify:
+      deterministic: ["fleet/bin/verdict-lint"]     # verdict must match schema
+      judge: critic                                  # gate-class items only
+    exits:
+      success: "review->gate|review->merged"        # per autonomy floor of risk class
+      blocked: "review->rework"                     # revise(tier, reasons, failing_checks)
+      escalate: L5.revision
+    autonomy: assisted
+    modes:
+      full: "first pass"
+      delta: "tier-1 returns: changed hunks + previously failing checks only"
+
+  # ----------------------------------------------------------
+  L5.revision:                               # the tiered ladder, hardened
+    owner: hermes
+    trigger: { kind: event, spec: "board.rework", session: isolated }
+    state:
+      board_states: [rework]
+      files: [fleet/board]
+    budget: { max_iterations: 3, max_tokens: 0, max_wall_clock_s: 0, max_usd: 0 }  # meta-loop: caps cycles, not tokens
+    tiers:
+      t1: { action: "same worker fix", review: delta, model_escalation: false }
+      t2: { action: "hermes re-chunk",  review: full,  model_escalation: false }
+      t3: { action: "zeus replan + full critic gate", review: full, model_escalation: true }
+    delta_requirement: true                  # identical failure signature => skip budget, escalate NOW
+    hard_cap: 3
+    counter: "rework(i) on single state"     # existing invariant, kept
+    exits: { success: "->executing", blocked: "->gate", escalate: L0.mission }
+    autonomy: autopilot
+
+  # ----------------------------------------------------------
+  L6.gate:
+    owner: tyler
+    trigger: { kind: event, spec: "board.gate", session: main }
+    state:
+      board_states: [gate, merged, rework, backlog]
+      files: [fleet/board]
+    budget: { max_iterations: 1, max_tokens: 0, max_wall_clock_s: 604800, max_usd: 0 }
+    verify: { deterministic: [], judge: tyler }
+    exits: { success: "gate->merged", blocked: "gate->rework|gate->backlog", escalate: null }
+    autonomy: manual
+    placement_rule: "gates by blast radius & reversibility, never by effort"
+    interface: "#ai-tech-new approve/deny; AugiMissionControl mirror"
+
+  # ----------------------------------------------------------
+  L7.retro:
+    owner: scribe.deepseek-flash
+    trigger: { kind: cron, spec: "0 9 * * 1", session: isolated }   # Mondays 09:00
+    state:
+      board_states: [merged, retro]
+      files: [lessons.md, metrics/weekly.json, souls/*]
+    budget: { max_iterations: 1, max_tokens: 80000, max_wall_clock_s: 1800, max_usd: 0.50 }
+    verify:
+      deterministic: ["fleet/bin/soul-diet-check --max-chars 40000"]  # hold the diet
+      judge: tyler                                                     # soul edits: manual, always
+    exits: { success: "->gate (proposed edits) + report posted", blocked: "->gate", escalate: null }
+    autonomy: assisted        # report autopilot; soul/skill application manual (risk class)
+    per_task_hook: "on terminal state, worker appends 3-5 lines to lessons.md"  # Reflexion
+
+  # ----------------------------------------------------------
+  L8.watchdog:
+    owner: watchdog            # deterministic — NO LLM in critical path
+    trigger: { kind: cron, spec: "*/10 * * * *", session: isolated }
+    state:
+      board_states: ["*"]
+      files: [fleet/board, ~/.openclaw/cron/jobs.json]
+    budget: { max_iterations: 1, max_tokens: 0, max_wall_clock_s: 120, max_usd: 0 }
+    checks:
+      - lease_reclaim: "expired => reclaim worktree, ->rework, alarm"
+      - ledger_audit: "openclaw tasks list/audit for stuck lanes"
+      - denial_parse: "SYSTEM_RUN_DENIED|UNAVAILABLE wrappers => flip false-green, alarm"
+      - budget_alarms: "per-loop burn vs threshold => alarm"
+      - wedge_recovery: "detect wedge => launchctl bootout -> edit sessions.json -> bootstrap"
+      - kill_switch: "fleet budget breach | denial storm => pause L2+L3 activations"
+    exits: { success: "noop|actions-logged", blocked: "alarm-only", escalate: L6.gate }
+    autonomy: autopilot
+    events: [watchdog.reclaim, watchdog.flip, watchdog.alarm, watchdog.kill, watchdog.recover]
+
+# ------------------------------------------------------------
+# Board state machine (reference — enforced by controller)
+# backlog -> ready -> dispatched -> executing -> review -> gate -> merged -> retro
+#                         ^             |           |
+#                         |             v           v
+#                         +---------- rework(i) <---+          blocked -> gate
+# ------------------------------------------------------------

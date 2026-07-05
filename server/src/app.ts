@@ -41,8 +41,11 @@ import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
 import { bookStudioRoutes } from "./routes/book-studio.js";
 import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
-import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-generate.js";
 import { bookStudioExportRoutes } from "./routes/book-studio-export.js";
+import { bookStudioChapterGenRoutes } from "./routes/book-studio-chapter-gen.js";
+// Company import/export payloads can inline full portable packages.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { createServer: createViteServer } = await import("vite");
 import { gymRoutes } from "./routes/gym.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -273,8 +276,10 @@ export async function createApp(
   api.use(bookWritingRoutes(db));
   api.use(bookStudioRoutes(db));
   api.use(storyBibleGenerateRoutes(db));
-  api.use(bookStudioImageGenerateRoutes(db));
   api.use(bookStudioExportRoutes(db));
+  api.use(bookStudioChapterGenRoutes(db));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const { createServer: createViteServer } = await import("vite");
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   if (opts.databaseBackupService) {
