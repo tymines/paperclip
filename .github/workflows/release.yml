@@ -1,9 +1,10 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - master
+  # ponytail: push-to-master disabled — no canary/npm env on this fork
+  # push:
+  #   branches:
+  #     - master
   workflow_dispatch:
     inputs:
       source_ref:
