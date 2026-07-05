@@ -1,13 +1,44 @@
-# ponytail: disabled — manual e2e only; no automated trigger needed on fork.
-# Original workflow preserved in git history. Re-enable by reverting this commit.
-name: E2E Tests (disabled)
+name: E2E Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      skip_llm:
+        description: "Skip LLM-dependent assertions (default: true)"
+        type: boolean
+        default: true
 
 jobs:
-  noop:
-    if: false
+  e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PAPERCLIP_E2E_SKIP_LLM: ${{ inputs.skip_llm && 'true' || 'false' }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - run: exit 0
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: npx playwright install --with-deps chromium
+
+      - name: Run e2e tests
+        run: pnpm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report/
+            tests/e2e/test-results/
+          retention-days: 14
