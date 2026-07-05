@@ -346,4 +346,3 @@ export function AsciiArtAnimation() {
     />
   );
 }
-// feat: task-bravo - added new component

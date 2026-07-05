@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [integration]
+  schedule:
+    - cron: '*/5 * * * *'   # autonomous daemon: tick every 5 min
   workflow_dispatch:
     inputs:
       action:
@@ -47,15 +49,12 @@ jobs:
       - name: Build (skip UI typecheck — 407 commits behind upstream)
         run: pnpm run preflight:workspace-links && pnpm --filter "!@paperclipai/ui" -r build
 
-      - name: Test (full suite — pre-existing failures from 407-commit gap)
+      - name: Test (full suite)
         run: pnpm test:run:general -- --group general-workspaces-b
-        continue-on-error: true
 
   # ── Sentry release on merge to integration ──
   # Tags release = commit SHA, uploads source maps.
   # Uses SENTRY_AUTH_TOKEN repo secret.
-  # NOTE: SENTRY_ORG and SENTRY_PROJECT should be set as repo variables,
-  #       or overridden in the env below. Defaults: tymines / paperclip.
   sentry-release:
     name: Sentry Release
     if: github.event_name == 'push' && github.ref == 'refs/heads/integration'
@@ -84,8 +83,7 @@ jobs:
         run: pnpm run preflight:workspace-links && pnpm --filter "!@paperclipai/ui" -r build
 
       - name: Create Sentry release
-        # ponytail: skip if auth not configured (fork, not upstream)
-        if: false
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
         uses: getsentry/action-release@v1
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -98,7 +96,7 @@ jobs:
           url_prefix: '~/assets'
 
   # ── Merge train queue processor ──
-  # Trigger manually (workflow_dispatch action=process-queue) or on a schedule.
+  # Runs every 5 min (schedule) OR manually (workflow_dispatch).
   # Processes PRs labeled `merge-train:ready` targeting integration,
   # one at a time, oldest first.
   #
@@ -110,7 +108,7 @@ jobs:
   # Uses MERGE_TRAIN_PAT (fine-grained PAT: Contents R/W, Actions R/W, PR R/W).
   merge-queue:
     name: Process Merge Queue
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'process-queue'
+    if: (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'process-queue') || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
