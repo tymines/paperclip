@@ -1,6 +1,5 @@
 import { getRawKey } from "../services/provider-api-keys/index.js";
 
-const DEFAULT_MODEL = "gpt-4o-mini";
 const MAX_RETRIES = 2;
 
 interface GenerateDraftInput {
@@ -23,70 +22,148 @@ interface GeneratedChapter {
 }
 
 /**
- * Calls an LLM (via OpenAI-compatible API) to generate chapter content.
- * Uses `openai` key from provider-api-keys, with fallback to `anthropic`.
+ * Calls Gemini API via Google Generative Language endpoint.
+ * Gemini is the primary (Tyler's preferred) model for chapter generation.
+ */
+async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
+  const key = await getRawKey("gemini");
+  if (!key) throw new Error("Gemini not configured");
+
+  const resp = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.8,
+          maxOutputTokens: 4096,
+        },
+      }),
+    },
+  );
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    throw new Error(`Gemini API error (${resp.status}): ${errBody}`);
+  }
+  const data = await resp.json() as any;
+  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+}
+
+/**
+ * Calls DeepSeek API (OpenAI-compatible endpoint, NOT OpenAI).
+ * DeepSeek is the first fallback — same API shape as OpenAI but different provider.
+ */
+async function callDeepSeek(systemPrompt: string, userPrompt: string): Promise<string> {
+  const key = await getRawKey("deepseek");
+  if (!key) throw new Error("DeepSeek not configured");
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch("https://api.deepseek.com/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "deepseek-chat",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.8,
+          max_tokens: 4096,
+        }),
+      });
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => "");
+        throw new Error(`DeepSeek API error (${resp.status}): ${errBody}`);
+      }
+      const data = await resp.json() as any;
+      return data.choices?.[0]?.message?.content ?? "";
+    } catch (err) {
+      if (attempt === MAX_RETRIES) throw err;
+      await new Promise(r => setTimeout(r, 1000 * attempt));
+    }
+  }
+  throw new Error("DeepSeek failed after max retries");
+}
+
+/**
+ * Calls Anthropic API as the final fallback.
+ */
+async function callAnthropic(systemPrompt: string, userPrompt: string): Promise<string> {
+  const key = await getRawKey("anthropic");
+  if (!key) throw new Error("Anthropic not configured");
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+  });
+  if (!resp.ok) {
+    const errBody = await resp.text().catch(() => "");
+    throw new Error(`Anthropic API error (${resp.status}): ${errBody}`);
+  }
+  const data = await resp.json() as any;
+  return data.content?.[0]?.text ?? "";
+}
+
+/**
+ * Calls an LLM to generate chapter content.
+ * Provider priority: Gemini (primary) → DeepSeek (fallback) → Anthropic (last resort).
+ * OpenAI is NOT in this chain (hard-banned).
  */
 async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-  // Try OpenAI first
-  const openaiKey = await getRawKey("openai").catch(() => null);
-  if (openaiKey) {
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${openaiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: DEFAULT_MODEL,
-            messages: [
-              { role: "system", content: systemPrompt },
-              { role: "user", content: userPrompt },
-            ],
-            temperature: 0.8,
-            max_tokens: 4096,
-          }),
-        });
-        if (!resp.ok) {
-          const errBody = await resp.text().catch(() => "");
-          throw new Error(`OpenAI API error (${resp.status}): ${errBody}`);
-        }
-        const data = await resp.json() as any;
-        return data.choices?.[0]?.message?.content ?? "";
-      } catch (err) {
-        if (attempt === MAX_RETRIES) throw err;
-        await new Promise(r => setTimeout(r, 1000 * attempt));
-      }
+  // Level 1 — Gemini (primary, per Tyler's directive)
+  const geminiKey = await getRawKey("gemini").catch(() => null);
+  if (geminiKey) {
+    try {
+      return await callGemini(systemPrompt, userPrompt);
+    } catch (err) {
+      console.warn("[chapter-generator] Gemini failed, trying DeepSeek:", err);
     }
   }
 
-  // Fallback to Anthropic
+  // Level 2 — DeepSeek (non-OpenAI fallback)
+  const deepseekKey = await getRawKey("deepseek").catch(() => null);
+  if (deepseekKey) {
+    try {
+      return await callDeepSeek(systemPrompt, userPrompt);
+    } catch (err) {
+      console.warn("[chapter-generator] DeepSeek failed, trying Anthropic:", err);
+    }
+  }
+
+  // Level 3 — Anthropic (last resort)
   const anthropicKey = await getRawKey("anthropic").catch(() => null);
   if (anthropicKey) {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-    if (!resp.ok) {
-      const errBody = await resp.text().catch(() => "");
-      throw new Error(`Anthropic API error (${resp.status}): ${errBody}`);
+    try {
+      return await callAnthropic(systemPrompt, userPrompt);
+    } catch (err) {
+      console.warn("[chapter-generator] Anthropic also failed:", err);
     }
-    const data = await resp.json() as any;
-    return data.content?.[0]?.text ?? "";
   }
 
-  throw new Error("No LLM API key configured. Set 'openai' or 'anthropic' in provider API keys.");
+  throw new Error(
+    "No LLM API key configured. Set 'gemini', 'deepseek', or 'anthropic' in provider API keys.",
+  );
 }
 
 /**
