@@ -254,6 +254,7 @@ export async function createApp(
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));
   api.use(promptsRoutes(db));
+  api.use(gymRoutes(db));
   api.use(knowledgeGraphRoutes(db));
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
