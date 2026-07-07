@@ -50,6 +50,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { SocialAccountPublic, SocialPostListItem, SocialPlatform } from "@paperclipai/shared";
 import { XLogoIcon } from "../components/social/x-icon";
 import type { SocialDmRow } from "../api/social";
+import { imageStudioApi, type SocialPost, type ContentIdea } from "../api/imageStudio";
 
 // ── Platform helpers ──────────────────────────────────────────────────────────
 
@@ -507,6 +508,12 @@ export function Social() {
     enabled: !!selectedCompanyId,
   });
 
+  const { data: draftsData, isLoading: draftsLoading } = useQuery({
+    queryKey: ["influencer", "drafts", selectedCompanyId],
+    queryFn: () => imageStudioApi.listDrafts(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
   // Mutations
   const createPostMutation = useMutation({
     mutationFn: (data: Record<string, unknown>) =>
@@ -635,6 +642,88 @@ export function Social() {
       {/* Posts tab */}
       {tab === "posts" && (
         <>
+          {/* Influencer Drafts panel */}
+          {draftsLoading && (
+            <div className="flex items-center justify-center py-8">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+            </div>
+          )}
+          {!draftsLoading && draftsData && draftsData.drafts.length > 0 && (
+            <div
+              style={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: "var(--radius)",
+              }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+                <FileText className="h-4 w-4 text-primary" />
+                <h3 className="text-sm font-semibold">Influencer Drafts</h3>
+                <span className="ml-auto text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                  {draftsData.drafts.length}
+                </span>
+              </div>
+              <div className="divide-y divide-border">
+                {draftsData.drafts.map((draft) => {
+                  const personaName =
+                    (draft.metadata as Record<string, unknown> | null)?.personaId
+                      ? `Persona: ${String((draft.metadata as Record<string, unknown>).personaId).slice(0, 8)}...`
+                      : "Influencer Studio";
+                  const draftStatusBadge = STATUS_BADGES[draft.status] ?? { label: draft.status, variant: "secondary" as const };
+                  return (
+                    <div key={draft.id} className="px-4 py-3 hover:bg-accent/30 transition-colors">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm line-clamp-2 leading-snug">
+                            {draft.content.slice(0, 80)}
+                            {draft.content.length > 80 ? "..." : ""}
+                          </p>
+                          <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                            <span className="text-[11px] text-muted-foreground">
+                              {personaName}
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">·</span>
+                            <span className="text-[11px] text-muted-foreground">
+                              {new Date(draft.createdAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                        <Badge
+                          variant={draftStatusBadge.variant}
+                          className="text-[10px] px-1.5 shrink-0 mt-0.5"
+                        >
+                          {draftStatusBadge.label}
+                        </Badge>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {!draftsLoading && draftsData && draftsData.drafts.length === 0 && (
+            <div
+              style={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                borderRadius: "var(--radius)",
+              }}
+              className="overflow-hidden"
+            >
+              <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Influencer Drafts</h3>
+                <span className="ml-auto text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                  0
+                </span>
+              </div>
+              <div className="px-4 py-6 text-center">
+                <p className="text-xs text-muted-foreground">No AI-generated drafts yet.</p>
+              </div>
+            </div>
+          )}
+
           {posts && posts.length === 0 && (
             <EmptyState
               icon={Share2}

@@ -75,6 +75,29 @@ export interface AttributeControl {
 
 export type Selections = Record<string, string>;
 
+export interface ContentIdea {
+  title: string;
+  caption: string;
+  suggestedHashtags: string[];
+}
+
+export interface SocialPost {
+  id: string;
+  companyId: string;
+  title: string | null;
+  content: string;
+  postType: string;
+  status: string;
+  scheduledAt: string | null;
+  publishedAt: string | null;
+  mediaUrls: string[];
+  tags: string[];
+  metadata: Record<string, unknown> | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PromptConflict {
   controlKey: string;
   controlLabel: string;
@@ -596,4 +619,28 @@ export const imageStudioApi = {
     api.delete<{ template: PromptTemplate }>(
       `/image-studio/prompt-templates/${id}`,
     ),
+
+  /** Generate AI content ideas for a persona */
+  generateContent: (companyId: string, personaId: string, body: { topic: string; count?: number }) =>
+    api.post<{ ideas: ContentIdea[] }>(
+      `/companies/${companyId}/image-studio/personas/${personaId}/generate-content`,
+      body,
+    ),
+
+  /** Schedule a draft social post for a persona */
+  schedulePost: (companyId: string, personaId: string, body: { caption: string; imagePath?: string; scheduledAt?: string }) =>
+    api.post<{ post: SocialPost }>(
+      `/companies/${companyId}/image-studio/personas/${personaId}/schedule-post`,
+      body,
+    ),
+
+  /** List drafts for a company, optional persona filter */
+  listDrafts: (companyId: string, personaId?: string) => {
+    const params = new URLSearchParams();
+    if (personaId) params.set("personaId", personaId);
+    const qs = params.toString();
+    return api.get<{ drafts: SocialPost[] }>(
+      `/companies/${companyId}/influencer/drafts${qs ? `?${qs}` : ""}`,
+    );
+  },
 };
