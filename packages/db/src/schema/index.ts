@@ -215,9 +215,4 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
-export {
-  gymEvalSuites,
-  gymEvalRuns,
-  gymPromptCandidates,
-  gymAgentProfiles,
-} from "./gym.js";
+
