@@ -3,7 +3,7 @@ name: Merge Train
 on:
   pull_request:
   push:
-    branches: [integration]
+    branches: [integration, 'merge-queue/**']
   workflow_dispatch:
     inputs:
       action:
@@ -44,10 +44,56 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Lint
+        run: pnpm -r lint
+
       - name: Build (real build — pnpm -r build)
         run: pnpm build
 
       - name: Test (full suite)
+        run: pnpm test:run
+
+  # ── CI gate for merge-queue/** push branches ──
+  # Triggered by merge-train-tick.py pushing a branch as merge-queue/<id>.
+  # Runs the same checks as the PR CI gate. On completion, the tick script
+  # polls this run's conclusion to decide merge vs report.
+  merge-queue-ci:
+    name: CI (merge-queue)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/merge-queue/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '9.15.4'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Lint
+        run: pnpm -r lint
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
         run: pnpm test:run
 
   # ── Sentry release on merge to integration ──

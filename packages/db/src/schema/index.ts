@@ -51,6 +51,8 @@ export { socialAppCredentials } from "./social_app_credentials.js";
 export { socialDms, jarvisAlerts } from "./social_dms.js";
 export { bulkUploadDrafts, bulkUploads } from "./bulk_upload_drafts.js";
 export { issues } from "./issues.js";
+export { railEvents } from "./rail_events.js";
+export { railConfig } from "./rail_config.js";
 export { issueRecoveryActions } from "./issue_recovery_actions.js";
 export { issueReferenceMentions } from "./issue_reference_mentions.js";
 export { issueRelations } from "./issue_relations.js";
@@ -213,3 +215,9 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
+export {
+  gymEvalSuites,
+  gymEvalRuns,
+  gymPromptCandidates,
+  gymAgentProfiles,
+} from "./gym.js";

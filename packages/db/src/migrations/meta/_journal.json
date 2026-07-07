@@ -988,6 +988,20 @@
       "when": 1783200214342,
       "tag": "0140_right_nehzno",
       "breakpoints": true
+    },
+    {
+      "idx": 141,
+      "version": "7",
+      "when": 1783348774053,
+      "tag": "0141_fair_puppet_master",
+      "breakpoints": true
+    },
+    {
+      "idx": 142,
+      "version": "7",
+      "when": 1783399740139,
+      "tag": "0142_aberrant_professor_monster",
+      "breakpoints": true
     }
   ]
 }
