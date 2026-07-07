@@ -20,6 +20,7 @@ const GymPage = lazy(() => import("@/pages/GymPage").then((m) => ({ default: m.G
 const SkillsCatalog = lazy(() =>
   import("@/pages/SkillsCatalog").then((m) => ({ default: m.SkillsCatalog })),
 );
+const WorldViewPage = lazy(() => import("@/pages/WorldView").then((m) => ({ default: m.WorldView })));
 
 // Placeholder loading component
 function PageLoading() {
@@ -66,6 +67,13 @@ export function CompanyRouter() {
         <Route path="gym" element={
           <Suspense fallback={<PageLoading />}>
             <GymPage />
+          </Suspense>
+        } />
+
+        {/* World View — Global Intelligence */}
+        <Route path="world-view" element={
+          <Suspense fallback={<PageLoading />}>
+            <WorldViewPage />
           </Suspense>
         } />
 

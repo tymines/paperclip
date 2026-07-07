@@ -24,7 +24,7 @@ import { logger } from "../middleware/logger.js";
 
 const COLLECTOR_BASE = (
   process.env.WORLDVIEW_COLLECTOR_URL ||
-  "http://augibot2s-mac-mini.tail1537c5.ts.net:8788"
+  "http://localhost:8788"
 ).replace(/\/+$/, "");
 
 // Whitelist: public route segment -> upstream collector path. Read-only.
