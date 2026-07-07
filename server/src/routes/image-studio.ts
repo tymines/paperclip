@@ -1548,6 +1548,9 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
 
   // ── Influencer Studio: Gemini content generation ──────────────────────
 
+  // Simple in-memory rate limiting: 10 generations per persona per 60s
+  const contentGenRateMap = new Map<string, { count: number; windowStart: number }>();
+
   // POST /companies/:companyId/image-studio/personas/:personaId/generate-content
   // Body: { topic: string, count?: number }
   // Uses Gemini to generate social media post ideas matching the persona's style.
@@ -1567,6 +1570,21 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
         .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
         .limit(1);
       if (!persona) throw notFound("Persona not found");
+
+      // Rate limit: 10 generations per persona per 60-second sliding window
+      const now = Date.now();
+      const entry = contentGenRateMap.get(personaId);
+      if (entry && now - entry.windowStart < 60_000) {
+        entry.count++;
+        if (entry.count > 10) {
+          const retryAfter = Math.ceil((entry.windowStart + 60_000 - now) / 1000);
+          res.setHeader("Retry-After", String(retryAfter));
+          res.status(429).json({ error: "Content generation rate limit exceeded. Try again shortly." });
+          return;
+        }
+      } else {
+        contentGenRateMap.set(personaId, { count: 1, windowStart: now });
+      }
 
       const ideas = await generateContentIdeas(
         { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },

@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { serviceUnavailable } from '../../errors.js';
 
 export interface PersonaProfile {
   name: string;
@@ -24,11 +25,11 @@ export async function generateContentIdeas(
 ): Promise<ContentIdea[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    throw new Error('Gemini API key not configured — set GEMINI_API_KEY in environment');
+    throw serviceUnavailable('Gemini API key not configured — set GEMINI_API_KEY in environment');
   }
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: process.env.GEMINI_MODEL ?? 'gemini-2.0-flash',
     generationConfig: {
       responseMimeType: 'application/json',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
