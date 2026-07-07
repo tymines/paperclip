@@ -8,7 +8,7 @@
  * Layout: grid-cols-[1fr_2fr_1fr] (~25/50/25 split), non-resizable, full-height
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   BookOpen,
   User,
@@ -39,6 +39,8 @@ import {
   AlertTriangle,
   Loader2,
   FileDown,
+  Volume2,
+  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
@@ -183,6 +185,45 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// ── CameraButton helper ────────────────────────────────────────────────────────
+
+function CameraButton({ onClick, loading, title }: { onClick: () => void; loading: boolean; title: string }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className={loading ? "rounded p-1 text-blue-400" : "rounded p-1 text-gray-500 hover:text-blue-400"}
+      title={loading ? "Generating…" : title}
+    >
+      {loading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Camera className="w-3 h-3" />}
+    </button>
+  );
+}
+
+async function generateBookImage(
+  companySlug: string,
+  endpointType: string,
+  prompt: string,
+  bookSlug: string,
+  apiFetch: (url: string, opts?: RequestInit) => Promise<unknown>,
+): Promise<string | null> {
+  const prefix = `/companies/${companySlug}/book-studio/generate`;
+  // Submit
+  const res = await apiFetch(`${prefix}/${endpointType}`, {
+    method: "POST",
+    body: JSON.stringify({ prompt, bookSlug, aspectRatio: "1:1" }),
+  }) as { predictionId: string; status: string };
+  if (!res.predictionId) return null;
+  // Poll (max 60s)
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const poll = await apiFetch(`${prefix}/poll/${res.predictionId}`) as { status: string; imageUrl?: string };
+    if (poll.status === "completed" && poll.imageUrl) return poll.imageUrl;
+    if (poll.status === "failed") return null;
+  }
+  return null;
+}
+
 // ── Collapsible Section ──────────────────────────────────────────────────────
 
 function CollapsibleSection({
@@ -270,11 +311,14 @@ function EditableField({
 
 interface CharacterCardProps {
   char: CharacterEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<CharacterEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps) {
+function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(char.name);
   const [editRole, setEditRole] = useState(char.role);
@@ -282,6 +326,19 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
   const [editVoiceCard, setEditVoiceCard] = useState(safeJsonStringify(char.voiceCard));
   const [editSource, setEditSource] = useState(char.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl } });
+        // Show the image inline via a re-render (card reads char.metadata.imageUrl)
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const initials = char.name
     .split(" ")
@@ -374,13 +431,11 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
         >
           <Trash2 className="w-3 h-3" />
         </button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("image", `Character portrait of ${char.name}${char.role ? `, ${char.role}` : ""}${char.description ? `. ${char.description}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate image for ${char.name}`}
+        />
       </div>
 
       {/* Delete confirmation overlay */}
@@ -413,11 +468,14 @@ function CharacterCardComponent({ char, onUpdate, onDelete }: CharacterCardProps
 
 interface LocationCardProps {
   loc: WorldLocationEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<WorldLocationEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
+function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
   const [editDesc, setEditDesc] = useState(loc.description);
@@ -425,6 +483,18 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
   const [editSensory, setEditSensory] = useState(safeJsonStringify(loc.sensoryNotes));
   const [editSource, setEditSource] = useState(loc.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(loc.id, { metadata: { ...((loc.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     onUpdate(loc.id, {
@@ -495,13 +565,11 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400">
           <Trash2 className="w-3 h-3" />
         </button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("image", `Scene of ${loc.name}${loc.description ? `: ${loc.description.slice(0, 80)}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate image for ${loc.name}`}
+        />
       </div>
 
       {deleting && (
@@ -523,11 +591,14 @@ function LocationCardComponent({ loc, onUpdate, onDelete }: LocationCardProps) {
 
 interface StyleCardProps {
   entry: StyleEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<StyleEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
+function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: StyleCardProps) {
   const [editing, setEditing] = useState(false);
   const [editPov, setEditPov] = useState(entry.pov);
   const [editTense, setEditTense] = useState(entry.tense);
@@ -536,6 +607,18 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
   const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     onUpdate(entry.id, {
@@ -586,13 +669,11 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("cover", `Book cover: ${entry.pov || "N/A"} ${entry.tense || ""}${entry.comps ? `, comps: ${entry.comps}` : ""}`)}
+          loading={imageGenerating}
+          title="Generate book cover"
+        />
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -613,17 +694,32 @@ function StyleCardComponent({ entry, onUpdate, onDelete }: StyleCardProps) {
 
 interface OutlineCardProps {
   entry: OutlineEntity;
+  bookId: string;
+  companySlug: string;
+  bookSlug: string;
   onUpdate: (id: string, data: Partial<OutlineEntity>) => void;
   onDelete: (id: string) => void;
 }
 
-function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
+function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: OutlineCardProps) {
   const [editing, setEditing] = useState(false);
   const [editCh, setEditCh] = useState(String(entry.chapterNumber));
   const [editTitle, setEditTitle] = useState(entry.title);
   const [editBeats, setEditBeats] = useState(JSON.stringify(entry.beats || [], null, 2));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
+  const [imageGenerating, setImageGenerating] = useState(false);
+
+  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+    setImageGenerating(true);
+    try {
+      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
+      if (imageUrl) {
+        onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl } });
+      }
+    } catch { /* noop */ }
+    setImageGenerating(false);
+  };
 
   const handleSave = () => {
     let beats: Record<string, unknown>[] = [];
@@ -673,13 +769,11 @@ function OutlineCardComponent({ entry, onUpdate, onDelete }: OutlineCardProps) {
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
-        <button
-          className="rounded p-1 text-gray-600 hover:text-gray-400 cursor-not-allowed"
-          title="Coming soon — real image generation in next phase"
-          disabled
-        >
-          <Camera className="w-3 h-3" />
-        </button>
+        <CameraButton
+          onClick={() => handleImageGenerate("scene-illustration", `Scene illustration for chapter ${entry.chapterNumber}: ${entry.title || "Untitled"}${entry.beats && Array.isArray(entry.beats) && entry.beats.length > 0 ? `. Beats: ${JSON.stringify((entry.beats as Record<string, unknown>[]).slice(0, 2))}` : ""}`)}
+          loading={imageGenerating}
+          title={`Generate illustration for Ch.${entry.chapterNumber}`}
+        />
       </div>
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -912,6 +1006,11 @@ export function BookWritingPage() {
   const [showCreateStyle, setShowCreateStyle] = useState(false);
   const [showCreateOutline, setShowCreateOutline] = useState(false);
 
+  // Spend tracking (from book metadata)
+  const spendThisMonth = (activeBook?.metadata?.spendThisMonth as number) || 0;
+  const spendBudget = (activeBook?.metadata?.spendBudget as number) || 50.0;
+  const spendPercent = spendBudget > 0 ? (spendThisMonth / spendBudget) * 100 : 0;
+
   // Chat drawer state
   const [isChatOpen, setIsChatOpen] = useState(false);
 
@@ -920,6 +1019,17 @@ export function BookWritingPage() {
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
+
+  // Autopilot state
+  const [autopilotMode, setAutopilotMode] = useState(false);
+  const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
+  const [autopilotPaused, setAutopilotPaused] = useState(false);
+  const [showGuidanceInput, setShowGuidanceInput] = useState(false);
+  const [guidanceText, setGuidanceText] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [autopilotPhase, setAutopilotPhase] = useState("");
+  const [autopilotCurrentChapter, setAutopilotCurrentChapter] = useState(0);
+  const [autopilotTotalChapters, setAutopilotTotalChapters] = useState(0);
 
   // Generate panel per-tab state (ponytail: simple booleans, not a map)
   const [showGenCharacter, setShowGenCharacter] = useState(false);
@@ -934,6 +1044,11 @@ export function BookWritingPage() {
 
   // Consistency check
   const [checkingConsistency, setCheckingConsistency] = useState(false);
+
+  // Narration state
+  const [narrating, setNarrating] = useState(false);
+  const [narrateEstimate, setNarrateEstimate] = useState<{ chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number } | null>(null);
+  const [narrateComplete, setNarrateComplete] = useState<{ exportId: string; combinedPath: string } | null>(null);
   const [consistencyFindings, setConsistencyFindings] = useState<Array<{
     severity: string; category: string; description: string; suggestion: string;
   }> | null>(null);
@@ -1088,7 +1203,153 @@ export function BookWritingPage() {
   const [chatDraft, setChatDraft] = useState<{ entityType: string; data: Record<string, unknown> } | null>(null);
   const [showChatDraftPanel, setShowChatDraftPanel] = useState(false);
 
+  // ── Autopilot handlers ───────────────────────────────────────────────────
+
+  const getAutopilotBase = () => {
+    if (!activeBook) return "";
+    return `/companies/${companySlug}/book-studio/books/${activeBook.id}/autopilot`;
+  };
+
+  const handleAutopilotToggle = async () => {
+    if (!activeBook) return;
+    if (autopilotMode) {
+      // Turning OFF: pause, clear polling, reset state
+      setAutopilotMode(false);
+      setAssistedMode(false);
+      try {
+        await apiFetch(`${getAutopilotBase()}/pause`, { method: "POST" });
+      } catch (err) {
+        console.error("Failed to pause autopilot:", err);
+      }
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      setAutopilotState("idle");
+      setAutopilotPaused(false);
+      setAutopilotPhase("");
+      setAutopilotCurrentChapter(0);
+      setAutopilotTotalChapters(0);
+    } else {
+      // Turning ON: start loop, begin polling
+      setAutopilotMode(true);
+      setAssistedMode(false);
+      try {
+        const res = await apiFetch<{ autopilot: { status: string; phase: string; paused: boolean } }>(
+          `${getAutopilotBase()}/start`,
+          { method: "POST", body: JSON.stringify({ budgetCents: 500, iterationCapPerChapter: 3 }) },
+        );
+        if (res.autopilot) {
+          setAutopilotState(res.autopilot.status as "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused");
+          setAutopilotPhase(res.autopilot.phase || "");
+          setAutopilotPaused(res.autopilot.paused || false);
+        }
+      } catch (err) {
+        console.error("Failed to start autopilot:", err);
+        setAutopilotMode(false);
+        return;
+      }
+      // Start polling every 5s
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = setInterval(async () => {
+        try {
+          const statusRes = await apiFetch<{ autopilot: { status: string; phase: string; currentChapter: number; totalChapters: number; paused: boolean } }>(
+            `${getAutopilotBase()}/status`,
+          );
+          if (statusRes.autopilot) {
+            setAutopilotState(statusRes.autopilot.status as any);
+            setAutopilotPhase(statusRes.autopilot.phase || "");
+            setAutopilotCurrentChapter(statusRes.autopilot.currentChapter || 0);
+            setAutopilotTotalChapters(statusRes.autopilot.totalChapters || 0);
+            setAutopilotPaused(statusRes.autopilot.paused || false);
+          }
+        } catch {
+          // Silently handle poll errors
+        }
+      }, 5000);
+    }
+  };
+
+  const handleAutopilotPauseResume = async () => {
+    if (!activeBook) return;
+    try {
+      if (autopilotPaused) {
+        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
+          `${getAutopilotBase()}/resume`,
+          { method: "POST" },
+        );
+        if (res.autopilot) {
+          setAutopilotState(res.autopilot.status as any);
+          setAutopilotPaused(res.autopilot.paused || false);
+        }
+      } else {
+        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
+          `${getAutopilotBase()}/pause`,
+          { method: "POST" },
+        );
+        if (res.autopilot) {
+          setAutopilotState(res.autopilot.status as any);
+          setAutopilotPaused(res.autopilot.paused || false);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to pause/resume autopilot:", err);
+    }
+  };
+
+  const handleAutopilotSteer = async () => {
+    if (!activeBook || !guidanceText.trim()) return;
+    try {
+      await apiFetch(`${getAutopilotBase()}/steer`, {
+        method: "POST",
+        body: JSON.stringify({ guidance: guidanceText.trim() }),
+      });
+      setShowGuidanceInput(false);
+      setGuidanceText("");
+    } catch (err) {
+      console.error("Failed to steer autopilot:", err);
+    }
+  };
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
   // ── Export handlers ──────────────────────────────────────────────────────
+
+  const handleNarrateEstimate = async () => {
+    if (!activeBook) return;
+    setNarrating(true);
+    try {
+      const res = await apiFetch<{ estimate: { chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number }; requiresConfirm: boolean }>(
+        `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      if (res.estimate) setNarrateEstimate(res.estimate);
+    } catch { /* handled by UI */ }
+    setNarrating(false);
+  };
+
+  const handleNarrateConfirm = async () => {
+    if (!activeBook) return;
+    setNarrating(true);
+    setNarrateEstimate(null);
+    try {
+      const res = await apiFetch<{ narration: { id: string; outputPath: string; metadata: Record<string, unknown> } }>(
+        `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
+        { method: "POST", body: JSON.stringify({ confirm: true }) },
+      );
+      const slug = activeBook.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? "";
+      setNarrateComplete({ exportId: res.narration.id, combinedPath: `/companies/${companySlug}/book-studio/narration-audio/${slug}/${res.narration.id}/combined.mp3` });
+    } catch { /* handled by UI */ }
+    setNarrating(false);
+  };
 
   const handleExportMarkdown = async () => {
     if (!activeBook) return;
@@ -1183,26 +1444,87 @@ export function BookWritingPage() {
               Assisted
             </button>
             <button
-              className="flex items-center gap-1.5 rounded-r-md px-3 py-1.5 text-gray-600 cursor-not-allowed relative"
-              disabled
-              title="Coming soon — Assisted mode first"
+              className={cn(
+                "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
+                autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
+              )}
+              onClick={handleAutopilotToggle}
+              title={autopilotMode ? "Autopilot active — click to disable" : "Enable Autopilot mode"}
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
-              <span className="absolute -top-1.5 -right-1 rounded bg-gray-700 px-1 py-0 text-[8px] text-gray-400 font-medium">Soon</span>
+              {autopilotMode && autopilotState !== "idle" && (
+                <span className="absolute -top-1.5 -right-1 rounded bg-green-600 px-1 py-0 text-[8px] text-white font-medium animate-pulse">Live</span>
+              )}
             </button>
           </div>
+          {/* Autopilot status display */}
+          {autopilotMode && autopilotState !== "idle" && (
+            <span className="text-[11px] text-green-400/80 bg-green-600/10 rounded-md px-2 py-1 border border-green-700/30">
+              {autopilotPaused ? (
+                "⏸ Autopilot: Paused"
+              ) : (
+                <>Autopilot: {autopilotPhase || autopilotState}{autopilotCurrentChapter > 0 ? ` — Ch.${autopilotCurrentChapter}/${autopilotTotalChapters || "?"}` : ""}</>
+              )}
+            </span>
+          )}
           <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
-            <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-            $24.50 / $50.00
+            <span className={cn("inline-block h-2 w-2 rounded-full", (spendPercent ?? 0) >= 80 ? "bg-red-500" : (spendPercent ?? 0) >= 50 ? "bg-yellow-500" : "bg-green-500")} />
+            ${spendThisMonth.toFixed(2)} / ${spendBudget.toFixed(2)}
           </div>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-            <Pause className="w-3 h-3" /> Pause
+          <button
+            onClick={handleAutopilotPauseResume}
+            disabled={!autopilotMode}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-amber-700 text-amber-400 hover:text-amber-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Pause/Resume autopilot" : "Enable Autopilot mode"}
+          >
+            {autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+            {autopilotPaused ? "Resume" : "Pause"}
           </button>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-            <Play className="w-3 h-3" /> Steer
-          </button>
-          <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
+          {showGuidanceInput && autopilotMode ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={guidanceText}
+                onChange={(e) => setGuidanceText(e.target.value)}
+                placeholder="Type guidance for the AI..."
+                className="rounded-md border border-purple-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 w-48 focus:outline-none focus:border-purple-500"
+                onKeyDown={(e) => { if (e.key === "Enter") handleAutopilotSteer(); }}
+              />
+              <button
+                onClick={handleAutopilotSteer}
+                disabled={!guidanceText.trim()}
+                className="rounded-md bg-purple-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-purple-600 disabled:opacity-50"
+              >
+                Submit
+              </button>
+              <button
+                onClick={() => { setShowGuidanceInput(false); setGuidanceText(""); }}
+                className="rounded-md border border-gray-700 px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { if (autopilotMode) setShowGuidanceInput(!showGuidanceInput); }}
+              className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+                autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+              )}
+              title={autopilotMode ? "Send steering guidance to autopilot" : "Enable Autopilot mode"}
+            >
+              <MessageSquare className="w-3 h-3" /> Steer
+            </button>
+          )}
+          <button
+            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Review current chapter draft" : "Enable Autopilot mode"}
+          >
             <MessageSquare className="w-3 h-3" /> Review
           </button>
           <button
@@ -1221,12 +1543,60 @@ export function BookWritingPage() {
             <AlertTriangle className="w-3 h-3" /> Check Consistency
           </button>
           <button
+            onClick={handleNarrateEstimate}
+            disabled={narrating}
+            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
+            {narrating ? "Generating…" : "Narrate Book"}
+          </button>
+          <button
             onClick={() => setShowExportModal(true)}
             className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-500 flex items-center gap-1.5"
           >
             <Download className="w-3 h-3" /> Export
           </button>
         </div>
+
+        {/* Narrate cost-confirm dialog */}
+        {narrateEstimate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateEstimate(null)} />
+            <div className="relative w-96 bg-gray-950 border border-gray-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-200">Generate Audiobook?</h3>
+              <div className="space-y-1 text-xs text-gray-400">
+                <div className="flex justify-between"><span>Chapters:</span><span className="text-gray-200">{narrateEstimate.chapters}</span></div>
+                <div className="flex justify-between"><span>Characters:</span><span className="text-gray-200">{narrateEstimate.totalChars.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>Est. duration:</span><span className="text-gray-200">{Math.ceil(narrateEstimate.estimatedDurationSec / 60)} min</span></div>
+                <div className="flex justify-between"><span>Est. cost:</span><span className="text-green-400">${narrateEstimate.estimatedCostUsd}</span></div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <button onClick={() => setNarrateEstimate(null)} className="flex-1 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Cancel</button>
+                <button onClick={handleNarrateConfirm} disabled={narrating} className="flex-1 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50 flex items-center justify-center gap-1.5">
+                  {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                  Generate (${narrateEstimate.estimatedCostUsd})
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Narrate complete dialog */}
+        {narrateComplete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateComplete(null)} />
+            <div className="relative w-96 bg-gray-950 border border-gray-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-gray-200">Audiobook Ready!</h3>
+              <div className="flex gap-2">
+                <a href={`/api${narrateComplete.combinedPath}`} target="_blank" rel="noreferrer" className="flex-1 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 flex items-center justify-center gap-1.5">
+                  <Play className="w-3 h-3" /> Download MP3
+                </a>
+                <button onClick={() => setNarrateComplete(null)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </header>
 
       {/* ── Assisted Mode Suggestion Panel ── */}
@@ -1310,7 +1680,7 @@ export function BookWritingPage() {
                     ) : (
                       characters.map((c) => (
                         <div key={c.id} className="relative">
-                          <CharacterCardComponent char={c} onUpdate={updateCharacter} onDelete={deleteCharacter} />
+                          <CharacterCardComponent char={c} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateCharacter} onDelete={deleteCharacter} />
                         </div>
                       ))
                     )}
@@ -1373,7 +1743,7 @@ export function BookWritingPage() {
                     ) : (
                       locations.map((l) => (
                         <div key={l.id} className="relative">
-                          <LocationCardComponent loc={l} onUpdate={updateLocation} onDelete={deleteLocation} />
+                          <LocationCardComponent loc={l} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateLocation} onDelete={deleteLocation} />
                         </div>
                       ))
                     )}
@@ -1436,7 +1806,7 @@ export function BookWritingPage() {
                     ) : (
                       styleEntries.map((s) => (
                         <div key={s.id} className="relative">
-                          <StyleCardComponent entry={s} onUpdate={updateStyle} onDelete={deleteStyle} />
+                          <StyleCardComponent entry={s} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateStyle} onDelete={deleteStyle} />
                         </div>
                       ))
                     )}
@@ -1500,7 +1870,7 @@ export function BookWritingPage() {
                     ) : (
                       outlineEntries.map((o) => (
                         <div key={o.id} className="relative">
-                          <OutlineCardComponent entry={o} onUpdate={updateOutline} onDelete={deleteOutline} />
+                          <OutlineCardComponent entry={o} bookId={activeBook?.id ?? ""} companySlug={companySlug} bookSlug={activeBook?.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? ""} onUpdate={updateOutline} onDelete={deleteOutline} />
                         </div>
                       ))
                     )}
