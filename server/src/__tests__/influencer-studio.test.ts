@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { randomUUID } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Router } from "express";
 
 // Mock the services
 vi.mock("../services/influencer-studio/content-generator.js", () => ({
@@ -13,80 +13,104 @@ vi.mock("../services/index.js", () => ({
   logActivity: vi.fn(),
 }));
 
-function createMockDb() {
-  const mockQuery = {
-    limit: vi.fn().mockReturnThis(),
-    orderBy: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-  };
-  const mockSelect = {
-    from: vi.fn().mockReturnValue(mockQuery),
-  };
-  const mockInsert = {
-    values: vi.fn().mockReturnThis(),
-    returning: vi.fn().mockResolvedValue([]),
-  };
-  return {
-    mockDb: {
-      select: vi.fn().mockReturnValue(mockSelect),
-      insert: vi.fn().mockReturnValue(mockInsert),
+// ── Mock DB ───────────────────────────────────────────────────────────────
+function q<T>(val: T): any {
+  const p = Promise.resolve(val);
+  const chain: Record<string, any> = Object.assign(
+    (resolve: any, _reject?: any) => p.then(resolve),
+    {
+      then: p.then.bind(p),
+      catch: p.catch.bind(p),
+      finally: p.finally.bind(p),
     },
-    mockQuery,
-    mockInsert,
+  );
+  for (const method of [
+    "select", "from", "where", "orderBy", "limit",
+    "values", "set", "returning", "insert", "update", "delete",
+  ]) {
+    chain[method] = () => chain;
+  }
+  return chain;
+}
+
+function createMockDb() {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => q([]),
+          orderBy: () => q([]),
+        }),
+      }),
+    }),
+    insert: () => ({
+      values: () => ({
+        returning: () => q([]),
+      }),
+    }),
   };
 }
 
-function makeApp(routesFn, mockDb, opts?) {
+// ── Build test apps ───────────────────────────────────────────────────────
+
+interface MockDb {
+  select: () => any;
+  insert: () => any;
+}
+
+async function createImageStudioApp(mockDb: MockDb) {
+  const mod = await import("../routes/image-studio.js");
+  const router: Router = mod.imageStudioRoutes(mockDb);
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
+  app.use((req: any, _res: any, next: any) => {
     req.actor = { actorType: "board", actorId: "test-board-user", agentId: null };
     next();
   });
-  app.use(routesFn(mockDb, opts));
-  return app;
+  app.use(router);
+  return { app };
 }
 
-describe("Influencer Studio Routes", () => {
-  let imageStudioRoutesFn;
-  let influencerStudioRoutesFn;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doUnmock("../routes/image-studio.js");
-    vi.doUnmock("../routes/influencer-studio.js");
-
-    const routes = await vi.importActual("../routes/image-studio.js");
-    const infRoutes = await vi.importActual("../routes/influencer-studio.js");
-    imageStudioRoutesFn = routes.imageStudioRoutes;
-    influencerStudioRoutesFn = infRoutes.influencerStudioRoutes;
+async function createInfluencerStudioApp(mockDb: MockDb) {
+  const mod = await import("../routes/influencer-studio.js");
+  const router: Router = mod.influencerStudioRoutes(mockDb);
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res: any, next: any) => {
+    req.actor = { actorType: "board", actorId: "test-board-user", agentId: null };
+    next();
   });
+  app.use(router);
+  return { app };
+}
 
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+describe("Influencer Studio Routes", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   describe("POST generate-content", () => {
     it("returns 400 when topic is missing", async () => {
-      const { mockDb } = createMockDb();
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/generate-content")
         .send({});
       expect(res.status).toBe(400);
     });
 
     it("returns 400 when topic is empty", async () => {
-      const { mockDb } = createMockDb();
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/generate-content")
         .send({ topic: "" });
       expect(res.status).toBe(400);
     });
 
     it("returns 404 when persona doesn't exist", async () => {
-      const { mockDb, mockQuery } = createMockDb();
-      mockQuery.limit.mockResolvedValue([]);
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/generate-content")
         .send({ topic: "fashion" });
       expect(res.status).toBe(404);
@@ -95,47 +119,58 @@ describe("Influencer Studio Routes", () => {
 
   describe("POST schedule-post", () => {
     it("returns 400 when caption is missing", async () => {
-      const { mockDb } = createMockDb();
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/schedule-post")
         .send({});
       expect(res.status).toBe(400);
     });
 
     it("returns 400 when caption is empty", async () => {
-      const { mockDb } = createMockDb();
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/schedule-post")
         .send({ caption: "" });
       expect(res.status).toBe(400);
     });
 
     it("returns 404 when persona doesn't exist", async () => {
-      const { mockDb, mockQuery } = createMockDb();
-      mockQuery.limit.mockResolvedValue([]);
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(createMockDb());
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/schedule-post")
         .send({ caption: "Hello world" });
       expect(res.status).toBe(404);
     });
 
     it("creates social_post with status='draft'", async () => {
-      const { mockDb, mockQuery, mockInsert } = createMockDb();
-      mockQuery.limit.mockResolvedValue([{ id: "p1" }]);
-      const fakePost = {
-        id: randomUUID(),
-        companyId: "test-company",
-        content: "Hello world",
-        postType: "text",
-        status: "draft",
-        mediaUrls: [],
-        metadata: { personaId: "p1", source: "influencer-studio" },
-        createdBy: "test-board-user",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      const mockDb = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              // Persona lookup: return a found persona
+              limit: () => q([{ id: "p1" }]),
+            }),
+          }),
+        }),
+        insert: () => ({
+          values: () => ({
+            returning: () => q([{
+              id: randomUUID(),
+              companyId: "test-company",
+              content: "Hello world",
+              postType: "text",
+              status: "draft",
+              mediaUrls: [],
+              metadata: { personaId: "p1", source: "influencer-studio" },
+              createdBy: "test-board-user",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            }]),
+          }),
+        }),
       };
-      mockInsert.returning.mockResolvedValue([fakePost]);
-      const res = await request(makeApp(imageStudioRoutesFn, mockDb))
+      const { app } = await createImageStudioApp(mockDb);
+      const res = await request(app)
         .post("/companies/test-company/image-studio/personas/p1/schedule-post")
         .send({ caption: "Hello world" });
       expect(res.status).toBe(201);
@@ -147,30 +182,41 @@ describe("Influencer Studio Routes", () => {
 
   describe("GET /influencer/drafts", () => {
     it("returns empty array when no drafts exist", async () => {
-      const { mockDb, mockQuery } = createMockDb();
-      mockQuery.orderBy.mockResolvedValue([]);
-      const res = await request(makeApp(influencerStudioRoutesFn, mockDb))
+      const { app } = await createInfluencerStudioApp(createMockDb());
+      const res = await request(app)
         .get("/companies/test-company/influencer/drafts");
       expect(res.status).toBe(200);
       expect(res.body.drafts).toEqual([]);
     });
 
     it("filters by personaId when provided", async () => {
-      const { mockDb, mockQuery } = createMockDb();
-      const fakeDraft = {
-        id: randomUUID(),
-        companyId: "test-company",
-        content: "Filtered post",
-        postType: "text",
-        status: "draft",
-        mediaUrls: [],
-        metadata: { personaId: "specific-persona", source: "influencer-studio" },
-        createdBy: "test-board-user",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      const mockDb = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              orderBy: () => q([{
+                id: randomUUID(),
+                companyId: "test-company",
+                content: "Filtered post",
+                postType: "text",
+                status: "draft",
+                mediaUrls: [],
+                metadata: { personaId: "specific-persona", source: "influencer-studio" },
+                createdBy: "test-board-user",
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+              }]),
+            }),
+          }),
+        }),
+        insert: () => ({
+          values: () => ({
+            returning: () => q([]),
+          }),
+        }),
       };
-      mockQuery.orderBy.mockResolvedValue([fakeDraft]);
-      const res = await request(makeApp(influencerStudioRoutesFn, mockDb))
+      const { app } = await createInfluencerStudioApp(mockDb);
+      const res = await request(app)
         .get("/companies/test-company/influencer/drafts?personaId=specific-persona");
       expect(res.status).toBe(200);
       expect(res.body.drafts).toHaveLength(1);
