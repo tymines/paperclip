@@ -4,15 +4,11 @@ import { logger } from "../middleware/logger.js";
 /**
  * World View proxy (additive, read-only).
  *
- * The World View tab needs feed data from August's host-portable
- * `worldview-collector` (services/worldview-collector), which listens on the
- * tailnet at `augibot2s-mac-mini.tail1537c5.ts.net:8788`. That host is only
- * reachable over Tailscale — a phone on cellular hitting the PUBLIC Paperclip
- * origin (paperclip.augiport.com) cannot reach it directly.
- *
- * Box 1 IS on the tailnet, so the server fetches the collector over Tailscale
- * and returns the JSON to the browser SAME-ORIGIN. The client therefore only
- * ever talks to the public Paperclip origin via `/api/worldview/*`.
+ * The World View tab needs feed data from the
+ * `worldview-collector` (services/worldview-collector), which runs as a launchd
+ * service on Box 1 at `http://localhost:8788`. The server proxies collector
+ * responses to the browser SAME-ORIGIN, so the client only ever talks to the
+ * public Paperclip origin via `/api/worldview/*`.
  *
  * Mounted OUTSIDE the guarded `/api` router (like the webhook receivers) so the
  * passthrough needs no Paperclip session/board handshake. It is read-only: only
