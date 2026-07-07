@@ -1550,6 +1550,16 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
 
   // Simple in-memory rate limiting: 10 generations per persona per 60s
   const contentGenRateMap = new Map<string, { count: number; windowStart: number }>();
+  // Periodic TTL cleanup — purge entries older than 60s so the map doesn't grow unbounded
+  const RATE_LIMIT_TTL_MS = 60_000;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of contentGenRateMap) {
+      if (now - entry.windowStart >= RATE_LIMIT_TTL_MS) {
+        contentGenRateMap.delete(key);
+      }
+    }
+  }, RATE_LIMIT_TTL_MS).unref();
 
   // POST /companies/:companyId/image-studio/personas/:personaId/generate-content
   // Body: { topic: string, count?: number }
