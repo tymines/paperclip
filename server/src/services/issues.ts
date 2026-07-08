@@ -1594,6 +1594,9 @@ const issueListSelect = {
   completedAt: issues.completedAt,
   cancelledAt: issues.cancelledAt,
   hiddenAt: issues.hiddenAt,
+  worktreePath: issues.worktreePath,
+  branchName: issues.branchName,
+  leaseExpiresAt: issues.leaseExpiresAt,
   createdAt: issues.createdAt,
   updatedAt: issues.updatedAt,
 };

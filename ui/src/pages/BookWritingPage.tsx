@@ -8,7 +8,7 @@
  * Layout: grid-cols-[1fr_2fr_1fr] (~25/50/25 split), non-resizable, full-height
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   BookOpen,
   User,
@@ -1024,12 +1024,6 @@ export function BookWritingPage() {
   const [autopilotMode, setAutopilotMode] = useState(false);
   const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
   const [autopilotPaused, setAutopilotPaused] = useState(false);
-  const [showGuidanceInput, setShowGuidanceInput] = useState(false);
-  const [guidanceText, setGuidanceText] = useState("");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [autopilotPhase, setAutopilotPhase] = useState("");
-  const [autopilotCurrentChapter, setAutopilotCurrentChapter] = useState(0);
-  const [autopilotTotalChapters, setAutopilotTotalChapters] = useState(0);
 
   // Generate panel per-tab state (ponytail: simple booleans, not a map)
   const [showGenCharacter, setShowGenCharacter] = useState(false);
@@ -1203,124 +1197,6 @@ export function BookWritingPage() {
   const [chatDraft, setChatDraft] = useState<{ entityType: string; data: Record<string, unknown> } | null>(null);
   const [showChatDraftPanel, setShowChatDraftPanel] = useState(false);
 
-  // ── Autopilot handlers ───────────────────────────────────────────────────
-
-  const getAutopilotBase = () => {
-    if (!activeBook) return "";
-    return `/companies/${companySlug}/book-studio/books/${activeBook.id}/autopilot`;
-  };
-
-  const handleAutopilotToggle = async () => {
-    if (!activeBook) return;
-    if (autopilotMode) {
-      // Turning OFF: pause, clear polling, reset state
-      setAutopilotMode(false);
-      setAssistedMode(false);
-      try {
-        await apiFetch(`${getAutopilotBase()}/pause`, { method: "POST" });
-      } catch (err) {
-        console.error("Failed to pause autopilot:", err);
-      }
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      setAutopilotState("idle");
-      setAutopilotPaused(false);
-      setAutopilotPhase("");
-      setAutopilotCurrentChapter(0);
-      setAutopilotTotalChapters(0);
-    } else {
-      // Turning ON: start loop, begin polling
-      setAutopilotMode(true);
-      setAssistedMode(false);
-      try {
-        const res = await apiFetch<{ autopilot: { status: string; phase: string; paused: boolean } }>(
-          `${getAutopilotBase()}/start`,
-          { method: "POST", body: JSON.stringify({ budgetCents: 500, iterationCapPerChapter: 3 }) },
-        );
-        if (res.autopilot) {
-          setAutopilotState(res.autopilot.status as "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused");
-          setAutopilotPhase(res.autopilot.phase || "");
-          setAutopilotPaused(res.autopilot.paused || false);
-        }
-      } catch (err) {
-        console.error("Failed to start autopilot:", err);
-        setAutopilotMode(false);
-        return;
-      }
-      // Start polling every 5s
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        try {
-          const statusRes = await apiFetch<{ autopilot: { status: string; phase: string; currentChapter: number; totalChapters: number; paused: boolean } }>(
-            `${getAutopilotBase()}/status`,
-          );
-          if (statusRes.autopilot) {
-            setAutopilotState(statusRes.autopilot.status as any);
-            setAutopilotPhase(statusRes.autopilot.phase || "");
-            setAutopilotCurrentChapter(statusRes.autopilot.currentChapter || 0);
-            setAutopilotTotalChapters(statusRes.autopilot.totalChapters || 0);
-            setAutopilotPaused(statusRes.autopilot.paused || false);
-          }
-        } catch {
-          // Silently handle poll errors
-        }
-      }, 5000);
-    }
-  };
-
-  const handleAutopilotPauseResume = async () => {
-    if (!activeBook) return;
-    try {
-      if (autopilotPaused) {
-        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
-          `${getAutopilotBase()}/resume`,
-          { method: "POST" },
-        );
-        if (res.autopilot) {
-          setAutopilotState(res.autopilot.status as any);
-          setAutopilotPaused(res.autopilot.paused || false);
-        }
-      } else {
-        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
-          `${getAutopilotBase()}/pause`,
-          { method: "POST" },
-        );
-        if (res.autopilot) {
-          setAutopilotState(res.autopilot.status as any);
-          setAutopilotPaused(res.autopilot.paused || false);
-        }
-      }
-    } catch (err) {
-      console.error("Failed to pause/resume autopilot:", err);
-    }
-  };
-
-  const handleAutopilotSteer = async () => {
-    if (!activeBook || !guidanceText.trim()) return;
-    try {
-      await apiFetch(`${getAutopilotBase()}/steer`, {
-        method: "POST",
-        body: JSON.stringify({ guidance: guidanceText.trim() }),
-      });
-      setShowGuidanceInput(false);
-      setGuidanceText("");
-    } catch (err) {
-      console.error("Failed to steer autopilot:", err);
-    }
-  };
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, []);
-
   // ── Export handlers ──────────────────────────────────────────────────────
 
   const handleNarrateEstimate = async () => {
@@ -1448,8 +1324,8 @@ export function BookWritingPage() {
                 "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
                 autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={handleAutopilotToggle}
-              title={autopilotMode ? "Autopilot active — click to disable" : "Enable Autopilot mode"}
+              onClick={() => { setAutopilotMode(!autopilotMode); setAssistedMode(false); setAutopilotState(autopilotMode ? "idle" : "assembling"); }}
+              title={autopilotMode ? "Autopilot active — click to disable" : "[Beta] Backend integration in progress"}
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
@@ -1458,23 +1334,17 @@ export function BookWritingPage() {
               )}
             </button>
           </div>
-          {/* Autopilot status display */}
-          {autopilotMode && autopilotState !== "idle" && (
-            <span className="text-[11px] text-green-400/80 bg-green-600/10 rounded-md px-2 py-1 border border-green-700/30">
-              {autopilotPaused ? (
-                "⏸ Autopilot: Paused"
-              ) : (
-                <>Autopilot: {autopilotPhase || autopilotState}{autopilotCurrentChapter > 0 ? ` — Ch.${autopilotCurrentChapter}/${autopilotTotalChapters || "?"}` : ""}</>
-              )}
-            </span>
-          )}
           <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
             <span className={cn("inline-block h-2 w-2 rounded-full", (spendPercent ?? 0) >= 80 ? "bg-red-500" : (spendPercent ?? 0) >= 50 ? "bg-yellow-500" : "bg-green-500")} />
             ${spendThisMonth.toFixed(2)} / ${spendBudget.toFixed(2)}
           </div>
           <button
-            onClick={handleAutopilotPauseResume}
-            disabled={!autopilotMode}
+            onClick={() => {
+              if (autopilotMode) {
+                setAutopilotPaused(!autopilotPaused);
+                setAutopilotState(autopilotPaused ? "drafting" : "paused");
+              }
+            }}
             className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
               autopilotMode ? "border-amber-700 text-amber-400 hover:text-amber-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
             )}
@@ -1483,41 +1353,15 @@ export function BookWritingPage() {
             {autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
             {autopilotPaused ? "Resume" : "Pause"}
           </button>
-          {showGuidanceInput && autopilotMode ? (
-            <div className="flex items-center gap-1.5">
-              <input
-                type="text"
-                value={guidanceText}
-                onChange={(e) => setGuidanceText(e.target.value)}
-                placeholder="Type guidance for the AI..."
-                className="rounded-md border border-purple-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 w-48 focus:outline-none focus:border-purple-500"
-                onKeyDown={(e) => { if (e.key === "Enter") handleAutopilotSteer(); }}
-              />
-              <button
-                onClick={handleAutopilotSteer}
-                disabled={!guidanceText.trim()}
-                className="rounded-md bg-purple-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-purple-600 disabled:opacity-50"
-              >
-                Submit
-              </button>
-              <button
-                onClick={() => { setShowGuidanceInput(false); setGuidanceText(""); }}
-                className="rounded-md border border-gray-700 px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => { if (autopilotMode) setShowGuidanceInput(!showGuidanceInput); }}
-              className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
-                autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
-              )}
-              title={autopilotMode ? "Send steering guidance to autopilot" : "Enable Autopilot mode"}
-            >
-              <MessageSquare className="w-3 h-3" /> Steer
-            </button>
-          )}
+          <button
+            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
+            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+            )}
+            title={autopilotMode ? "Request AI review of current chapter" : "Enable Autopilot mode"}
+          >
+            <Play className="w-3 h-3" /> Steer
+          </button>
           <button
             onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
             className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",

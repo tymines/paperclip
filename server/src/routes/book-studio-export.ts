@@ -1,376 +1,329 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { books, manuscriptChapters, storyBibleCharacters, storyBibleWorldLocations, storyBibleStyle, storyBibleOutline } from "@paperclipai/db";
-import { eq, asc } from "drizzle-orm";
+import { books, storyBibleOutline, bookExports } from "@paperclipai/db";
+import { eq, desc } from "drizzle-orm";
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { assertCompanyAccess } from "./authz.js";
-import { notFound } from "../errors.js";
+import path from "node:path";
+import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { badRequest, notFound, serviceUnavailable } from "../errors.js";
+import { logActivity } from "../services/index.js";
+import { getTTSProvider } from "../services/tts/index.js";
+import { beatToText } from "../utils/beatToText.js";
 
-const TEMP_DIR = process.env.TEMP || "/tmp";
-const VAULT_ROOT =
-  process.env.BOOK_STUDIO_VAULT_ROOT ||
-  "F:\\Augi Vault\\09 - Book Studio\\Books";
-
-function buildMarkdown(title: string, chapters: { chapterNumber: number; title: string | null; content: string }[]): string {
-  const lines = [`# ${title}`, ""];
-  for (const c of chapters) {
-    const heading = c.title ? `## Chapter ${c.chapterNumber}: ${c.title}` : `## Chapter ${c.chapterNumber}`;
-    lines.push(heading, "", c.content || "", "");
-  }
-  return lines.join("\n");
-}
+const EXPORT_DIR = process.env.BOOK_EXPORT_DIR || path.join(process.env.HOME || "/tmp", "paperclip", "book-exports");
 
 export function bookStudioExportRoutes(db: Db) {
   const router = Router();
 
-  // ── 1. Markdown export ──────────────────────────────────────────────────
-  // GET /companies/:companyId/book-studio/books/:bookId/export/markdown
-  router.get(
-    "/companies/:companyId/book-studio/books/:bookId/export/markdown",
-    async (req, res, next) => {
-      try {
-        const { companyId, bookId } = req.params as { companyId: string; bookId: string };
-        assertCompanyAccess(req, companyId);
+  // ── POST .../export ──────────────────────────────────────────────────
+  router.post("/companies/:companyId/book-studio/books/:bookId/export", async (req, res, next) => {
+    try {
+      const { companyId, bookId } = req.params;
+      assertCompanyAccess(req, companyId);
 
-        const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-        if (!book) throw notFound("Book not found");
-
-        const chapters = await db
-          .select()
-          .from(manuscriptChapters)
-          .where(eq(manuscriptChapters.bookId, bookId))
-          .orderBy(asc(manuscriptChapters.chapterNumber));
-
-        const md = buildMarkdown(book.title, chapters);
-
-        // ponytail: vault write-through (best-effort)
-        try {
-          const vaultDir = path.join(VAULT_ROOT, book.slug, "export");
-          if (!existsSync(vaultDir)) mkdirSync(vaultDir, { recursive: true });
-          writeFileSync(path.join(vaultDir, `${book.slug}.md`), md, "utf-8");
-        } catch {
-          // vault may be unavailable — continue with download
-        }
-
-        res.setHeader("Content-Type", "text/markdown; charset=utf-8");
-        res.setHeader("Content-Disposition", `attachment; filename="${book.slug}.md"`);
-        res.send(md);
-      } catch (err) {
-        next(err);
+      const { format } = req.body || {};
+      if (!format || !["pdf", "epub"].includes(format)) {
+        throw badRequest("format must be 'pdf' or 'epub'");
       }
-    },
-  );
 
-  // ── 2. EPUB export ──────────────────────────────────────────────────────
-  // POST /companies/:companyId/book-studio/books/:bookId/export/epub
-  // ponytail: epub-gen npm not installed; skip until needed
-  router.post(
-    "/companies/:companyId/book-studio/books/:bookId/export/epub",
-    async (req, res, next) => {
-      try {
-        assertCompanyAccess(req, req.params.companyId);
-        res.status(503).json({ error: "EPUB not available — install epub-gen npm package" });
-      } catch (err) {
-        next(err);
+      const book = await db
+        .select({ id: books.id, title: books.title, slug: books.slug })
+        .from(books)
+        .where(eq(books.id, bookId))
+        .then((r) => r[0]);
+
+      if (!book) throw notFound("Book not found");
+
+      // Load chapters
+      const chapters = await db
+        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
+        .from(storyBibleOutline)
+        .where(eq(storyBibleOutline.bookId, bookId))
+        .orderBy(storyBibleOutline.chapterNumber);
+
+      // Assemble markdown
+      const mdLines = [`# ${book.title}`, ""];
+      for (const ch of chapters) {
+        mdLines.push(`## ${ch.title || `Chapter ${ch.chapterNumber}`}`);
+        mdLines.push("");
+        if (Array.isArray(ch.beats) && ch.beats.length > 0) {
+          mdLines.push(beatToText(ch.beats));
+        } else {
+          mdLines.push("*[Chapter content pending]*");
+        }
+        mdLines.push("");
       }
-    },
-  );
+      const markdown = mdLines.join("\n");
 
-  // ── 3. PDF export ───────────────────────────────────────────────────────
-  // POST /companies/:companyId/book-studio/books/:bookId/export/pdf
-  // ponytail: shell-out to pandoc; skip if not on PATH
-  router.post(
-    "/companies/:companyId/book-studio/books/:bookId/export/pdf",
-    async (req, res, next) => {
-      try {
-        const { companyId, bookId } = req.params as { companyId: string; bookId: string };
-        assertCompanyAccess(req, companyId);
+      // Write to exports dir
+      const outDir = path.join(EXPORT_DIR, book.slug);
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
-        // Check pandoc
-        let pandocOk = false;
-        try {
-          execSync("pandoc --version", { stdio: "ignore", timeout: 3000 });
-          pandocOk = true;
-        } catch {
-          // pandoc not found
-        }
+      const exportId = randomUUID();
+      const isPandocFormat = ["pdf", "epub"].includes(format);
+      let finalPath: string;
+      let pandocUsed = false;
 
-        if (!pandocOk) {
-          res.status(503).json({ error: "install pandoc for PDF export" });
-          return;
-        }
-
-        const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-        if (!book) throw notFound("Book not found");
-
-        const chapters = await db
-          .select()
-          .from(manuscriptChapters)
-          .where(eq(manuscriptChapters.bookId, bookId))
-          .orderBy(asc(manuscriptChapters.chapterNumber));
-
-        const md = buildMarkdown(book.title, chapters);
-
-        // ponytail: temp files — delete after send
-        const tmpDir = path.join(TEMP_DIR, "paperclip-exports");
-        if (!existsSync(tmpDir)) mkdirSync(tmpDir, { recursive: true });
-        const jobId = randomUUID();
-        const mdPath = path.join(tmpDir, `${book.slug}-${jobId}.md`);
-        const pdfPath = path.join(tmpDir, `${book.slug}-${jobId}.pdf`);
-        writeFileSync(mdPath, md, "utf-8");
+      if (isPandocFormat) {
+        // Write temp markdown
+        const mdPath = path.join(outDir, `${exportId}.md`);
+        writeFileSync(mdPath, markdown, "utf-8");
 
         try {
-          execSync(`pandoc "${mdPath}" -o "${pdfPath}" --pdf-engine=xelatex`, {
-            timeout: 60000,
+          const ext = format === "pdf" ? "pdf" : "epub";
+          finalPath = path.join(outDir, `${exportId}.${ext}`);
+          execSync(`pandoc "${mdPath}" -o "${finalPath}" -f markdown -t ${ext}`, {
+            timeout: 30000,
             stdio: "pipe",
           });
-        } catch (e: any) {
-          res.status(500).json({ error: "PDF generation failed", detail: String(e?.stderr || e?.message || "unknown") });
-          return;
+          pandocUsed = true;
+          // Clean up temp md
+          try { execSync(`rm "${mdPath}"`); } catch {}
+        } catch {
+          // Pandoc failure: save the markdown as fallback
+          finalPath = mdPath;
         }
-
-        res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", `attachment; filename="${book.slug}.pdf"`);
-        res.sendFile(pdfPath);
-      } catch (err) {
-        next(err);
+      } else {
+        finalPath = path.join(outDir, `${exportId}.md`);
+        writeFileSync(finalPath, markdown, "utf-8");
       }
-    },
-  );
 
-  // ── 4. Audiobook TTS ────────────────────────────────────────────────────
-  // POST /companies/:companyId/book-studio/books/:bookId/export/audiobook
-  // ponytail: shell-out to a script, poll state file
-  router.post(
-    "/companies/:companyId/book-studio/books/:bookId/export/audiobook",
-    async (req, res, next) => {
-      try {
-        const { companyId, bookId } = req.params as { companyId: string; bookId: string };
-        assertCompanyAccess(req, companyId);
+      const metadata: Record<string, unknown> = {
+        chapterCount: chapters.length,
+        format,
+        pandocUsed,
+      };
 
-        const ttsApiKey = process.env.TTS_API_KEY;
-        if (!ttsApiKey) {
-          res.status(503).json({ error: "TTS not configured" });
-          return;
-        }
-
-        const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-        if (!book) throw notFound("Book not found");
-
-        const chapters = await db
-          .select()
-          .from(manuscriptChapters)
-          .where(eq(manuscriptChapters.bookId, bookId))
-          .orderBy(asc(manuscriptChapters.chapterNumber));
-
-        const jobId = randomUUID();
-        const stateDir = path.join(TEMP_DIR, "paperclip-tts-jobs");
-        if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
-
-        // Write chapter list
-        const chaptersPath = path.join(stateDir, `${jobId}-chapters.json`);
-        writeFileSync(
-          chaptersPath,
-          JSON.stringify(
-            chapters.map((c) => ({
-              chapterNumber: c.chapterNumber,
-              title: c.title,
-              content: c.content,
-            })),
-          ),
-          "utf-8",
-        );
-
-        // Write state file
-        const statePath = path.join(stateDir, `${jobId}.json`);
-        const state = {
-          jobId,
+      const [inserted] = await db
+        .insert(bookExports)
+        .values({
           bookId,
-          bookTitle: book.title,
-          status: "queued",
-          chapterCount: chapters.length,
-          createdAt: new Date().toISOString(),
-        };
-        writeFileSync(statePath, JSON.stringify(state), "utf-8");
+          companyId,
+          type: "export",
+          format,
+          status: "completed",
+          outputPath: finalPath,
+          metadata,
+        })
+        .returning();
 
-        // ponytail: fire-and-forget shell-out to external script
-        const ttsScript = process.env.TTS_SCRIPT || "paperclip-tts";
-        try {
-          execSync(`"${ttsScript}" "${jobId}" "${chaptersPath}" "${statePath}"`, {
-            stdio: "ignore",
-            timeout: 5000,
-            env: { ...process.env, TTS_API_KEY: ttsApiKey },
-            windowsHide: true,
-          });
-        } catch {
-          // script may not exist — job stays queued
-        }
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "book.exported",
+        entityType: "book_export",
+        entityId: inserted.id,
+        details: { bookId, format, pandocUsed, chapterCount: chapters.length },
+      });
 
-        res.status(202).json(state);
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
+      res.status(201).json({ export: inserted });
+    } catch (err) {
+      next(err);
+    }
+  });
 
-  // ── Audiobook job status poll ──────────────────────────────────────────
-  // GET /companies/:companyId/book-studio/books/:bookId/export/audiobook/:jobId
-  router.get(
-    "/companies/:companyId/book-studio/books/:bookId/export/audiobook/:jobId",
-    async (req, res, next) => {
-      try {
-        assertCompanyAccess(req, req.params.companyId);
-        const { jobId } = req.params;
-        const stateDir = path.join(TEMP_DIR, "paperclip-tts-jobs");
-        const statePath = path.join(stateDir, `${jobId}.json`);
+  // ── POST .../narrate ────────────────────────────────────────────────
+  router.post("/companies/:companyId/book-studio/books/:bookId/narrate", async (req, res, next) => {
+    try {
+      const { companyId, bookId } = req.params;
+      assertCompanyAccess(req, companyId);
 
-        if (!existsSync(statePath)) {
-          throw notFound("Job not found");
-        }
+      const tts = getTTSProvider();
+      const configured = await tts.isConfigured();
+      if (!configured) throw serviceUnavailable("TTS is not configured");
 
-        const state = JSON.parse(readFileSync(statePath, "utf-8"));
-        res.json(state);
-      } catch (err) {
-        next(err);
-      }
-    },
-  );
+      const book = await db
+        .select({ id: books.id, title: books.title, slug: books.slug })
+        .from(books)
+        .where(eq(books.id, bookId))
+        .then((r) => r[0]);
 
-  // ── Consistency check ──────────────────────────────────────────────────
-  // POST /companies/:companyId/book-studio/books/:bookId/check-consistency
-  // ponytail: inline Gemini call (~25 lines), no new service file
-  const GEMINI_MODEL = "gemini-2.5-pro";
-  const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+      if (!book) throw notFound("Book not found");
 
-  router.post(
-    "/companies/:companyId/book-studio/books/:bookId/check-consistency",
-    async (req, res, next) => {
-      try {
-        const { companyId, bookId } = req.params as { companyId: string; bookId: string };
-        assertCompanyAccess(req, companyId);
+      const chapters = await db
+        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
+        .from(storyBibleOutline)
+        .where(eq(storyBibleOutline.bookId, bookId))
+        .orderBy(storyBibleOutline.chapterNumber);
 
-        const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-        if (!book) throw notFound("Book not found");
+      const totalChars = chapters.reduce((sum, ch) => {
+        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        return sum + text.length + (ch.title?.length || 0);
+      }, 0);
 
-        // Load full bible + manuscript
-        const [characters, locations, styles, outlines, chapters] = await Promise.all([
-          db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId)),
-          db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId)),
-          db.select().from(storyBibleStyle).where(eq(storyBibleStyle.bookId, bookId)),
-          db.select().from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId)),
-          db.select().from(manuscriptChapters).where(eq(manuscriptChapters.bookId, bookId)).orderBy(asc(manuscriptChapters.chapterNumber)),
-        ]);
+      const estimatedCostUsd = Number(((totalChars / 1000) * 0.03).toFixed(4)); // ~$0.03/1K chars
+      const estimatedDurationSec = Math.ceil(totalChars / 15); // ~15 chars/sec TTS
 
-        // Build context for Gemini
-        const parts: string[] = [];
-        parts.push(`Book: "${book.title}"\n`);
-
-        if (characters.length > 0) {
-          parts.push("CHARACTERS:");
-          for (const c of characters) parts.push(`- ${c.name} (${c.role}): ${c.description}`);
-          parts.push("");
-        }
-        if (locations.length > 0) {
-          parts.push("LOCATIONS:");
-          for (const l of locations) parts.push(`- ${l.name}: ${l.description}`);
-          parts.push("");
-        }
-        if (styles.length > 0) {
-          parts.push("STYLE:");
-          for (const s of styles) parts.push(`- POV: ${s.pov}, Tense: ${s.tense}, Comps: ${s.comps}, Banned: ${(s.bannedCliches || []).join(", ")}`);
-          parts.push("");
-        }
-        if (outlines.length > 0) {
-          parts.push("OUTLINE:");
-          for (const o of outlines) {
-            const bc = Array.isArray(o.beats) ? o.beats.length : 0;
-            parts.push(`- Ch.${o.chapterNumber}: ${o.title} (${bc} beats)`);
-          }
-          parts.push("");
-        }
-        if (chapters.length > 0) {
-          parts.push("MANUSCRIPT:");
-          for (const ch of chapters) {
-            const preview = (ch.content || "").slice(0, 1500);
-            parts.push(`- Chapter ${ch.chapterNumber}${ch.title ? `: ${ch.title}` : ""}: ${preview}`);
-          }
-          parts.push("");
-        }
-
-        const bibleText = parts.join("\n");
-
-        // Call Gemini
-        const apiKey = process.env.GOOGLE_API_KEY;
-        if (!apiKey) {
-          res.status(503).json({ error: "Gemini API key not configured" });
-          return;
-        }
-
-        const systemInstruction = [
-          "You are a story editor checking a manuscript against its story bible for consistency issues.",
-          "Find contradictions, character inconsistencies, world-building rule breaks, style violations, and plot holes.",
-          "Return ONLY a valid JSON array of findings. Each finding has: severity (\"info\"|\"warning\"|\"error\"), category (string), description (string), suggestion (string).",
-          "If the manuscript is consistent with the bible, return an empty array [].",
-          "Do NOT include markdown code fences or any explanation — return raw JSON array.",
-        ].join("\n");
-
-        const userMessage = [
-          "STORY BIBLE:",
-          bibleText,
-          "",
-          "Check the manuscript for consistency with the story bible. List every issue found.",
-        ].join("\n");
-
-        const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-        const geminiRes = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: systemInstruction }] },
-            contents: [{ parts: [{ text: userMessage }] }],
-            generationConfig: { temperature: 0.4, maxOutputTokens: 2048 },
-          }),
+      const confirm = req.body?.confirm === true;
+      if (!confirm) {
+        return res.json({
+          estimate: {
+            chapters: chapters.length,
+            totalChars,
+            estimatedCostUsd,
+            estimatedDurationSec,
+          },
+          requiresConfirm: true,
+          narration: null,
         });
-
-        if (!geminiRes.ok) {
-          const detail = await geminiRes.text().catch(() => "");
-          res.status(502).json({ error: `Gemini API error (${geminiRes.status}): ${detail.slice(0, 300)}` });
-          return;
-        }
-
-        const data = await geminiRes.json() as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
-        const rawText = data.candidates?.[0]?.content?.parts?.map(p => p.text ?? "").join("") ?? "";
-
-        // Parse JSON array from response
-        let findings: Record<string, unknown>[] = [];
-        try {
-          const json = JSON.parse(rawText);
-          findings = Array.isArray(json) ? json : [];
-        } catch {
-          // Try extracting from markdown code fence
-          const m = rawText.match(/```(?:json)?\s*(\[[\s\S]*?\])\s*```/);
-          if (m) {
-            try { const p = JSON.parse(m[1]); findings = Array.isArray(p) ? p : []; } catch { /* fall through */ }
-          }
-        }
-
-        // Normalize each finding
-        const normalized = findings.map((f: Record<string, unknown>) => ({
-          severity: f.severity || "info",
-          category: f.category || "General",
-          description: f.description || "",
-          suggestion: f.suggestion || "",
-        }));
-
-        res.json({ findings: normalized, count: normalized.length });
-      } catch (err) {
-        next(err);
       }
-    },
-  );
+
+      // Real ElevenLabs generation
+      const exportId = randomUUID();
+      const narrationDir = path.join(EXPORT_DIR, book.slug, "narrations", exportId);
+      const tempDir = narrationDir + ".tmp";
+      mkdirSync(tempDir, { recursive: true });
+
+      // Pre-compute non-empty chapters once for both narration loop and concat building
+      const nonEmptyChapters = chapters.filter(ch => {
+        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        return text.trim().length > 0;
+      });
+
+      const chapterBuffers: Buffer[] = [];
+      let totalDurationSec = 0;
+
+      for (const ch of nonEmptyChapters) {
+        const chTitle = ch.title || `Chapter ${ch.chapterNumber}`;
+        const result = await tts.generateNarration(
+          Array.isArray(ch.beats) ? beatToText(ch.beats) : "",
+          chTitle,
+        );
+        const chPath = path.join(tempDir, `chapter-${ch.chapterNumber}.mp3`);
+        writeFileSync(chPath, result.audioBuffer);
+        chapterBuffers.push(result.audioBuffer);
+      }
+
+      // Concatenate all chapters into combined.mp3 using ffmpeg concat demuxer.
+      // Build concat list from chapterNumber so gapped/non-sequential chapters work.
+      const concatList = nonEmptyChapters
+        .map(ch => `file 'chapter-${ch.chapterNumber}.mp3'`)
+        .join("\n");
+      writeFileSync(path.join(tempDir, "concat.txt"), concatList);
+      const combinedPath = path.join(tempDir, "combined.mp3");
+      try {
+        execSync(
+          `ffmpeg -f concat -safe 0 -i concat.txt -c copy combined.mp3`,
+          { cwd: tempDir, stdio: "pipe", timeout: 30000 },
+        );
+      } catch {
+        // Fallback: raw concat if ffmpeg fails
+        writeFileSync(combinedPath, Buffer.concat(chapterBuffers));
+      }
+
+      // Get actual duration from ffprobe
+      try {
+        const dur = execSync(
+          `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 combined.mp3`,
+          { cwd: tempDir, stdio: "pipe", timeout: 10000 },
+        ).toString().trim();
+        totalDurationSec = Math.ceil(parseFloat(dur) || 0);
+      } catch { /* use 0 */ }
+
+      // Clean up temp concat file
+      try { rmSync(path.join(tempDir, "concat.txt")); } catch {}
+
+      // Finalize: rename temp → final
+      if (existsSync(narrationDir)) rmSync(narrationDir, { recursive: true });
+      try { execSync(`mv "${tempDir}" "${narrationDir}"`, { stdio: "pipe" }); } catch {
+        // fs.renameSync fallback
+        const fs = await import("node:fs");
+        fs.renameSync(tempDir, narrationDir);
+      }
+
+      // Insert narration record as completed
+      const [inserted] = await db
+        .insert(bookExports)
+        .values({
+          bookId,
+          companyId,
+          type: "narration",
+          format: "mp3",
+          status: "completed",
+          outputPath: path.join(narrationDir, "combined.mp3"),
+          metadata: {
+            chapterCount: chapters.length,
+            totalChars,
+            estimatedCostUsd,
+            totalDurationSec,
+            individualChapters: chapters.map(ch => ({
+              number: ch.chapterNumber,
+              title: ch.title || `Chapter ${ch.chapterNumber}`,
+            })),
+          },
+        })
+        .returning();
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "book.narrated",
+        entityType: "book_narration",
+        entityId: inserted.id,
+        details: { bookId, chapterCount: chapters.length, totalChars, estimatedCostUsd, totalDurationSec },
+      });
+
+      res.status(201).json({ narration: inserted });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET .../narration-audio/:bookSlug/:exportId/:filename ────────────
+  router.get("/companies/:companyId/book-studio/narration-audio/:bookSlug/:exportId/:filename", async (req, res, next) => {
+    try {
+      const { companyId, bookSlug, exportId, filename } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      // Directory traversal protection — use path.resolve + startsWith for robust
+      // protection against encoded (%2e%2e) and alternative-separator (..\\..) attacks.
+      const resolvedPath = path.resolve(EXPORT_DIR, bookSlug, "narrations", exportId, filename);
+      const expectedPrefix = path.resolve(EXPORT_DIR, bookSlug, "narrations", exportId);
+      if (!resolvedPath.startsWith(expectedPrefix)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const filePath = path.join(EXPORT_DIR, bookSlug, "narrations", exportId, filename);
+      if (!existsSync(filePath)) {
+        return res.status(404).json({ error: "Audio file not found" });
+      }
+
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = ext === ".mp3" ? "audio/mpeg" : "application/octet-stream";
+      res.setHeader("Content-Type", contentType);
+      res.send(readFileSync(filePath));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET .../exports ─────────────────────────────────────────────────
+  router.get("/companies/:companyId/book-studio/books/:bookId/exports", async (req, res, next) => {
+    try {
+      const { companyId, bookId } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      const rows = await db
+        .select()
+        .from(bookExports)
+        .where(eq(bookExports.bookId, bookId))
+        .orderBy(desc(bookExports.createdAt));
+
+      res.json({ exports: rows });
+    } catch (err) {
+      next(err);
+    }
+  });
 
   return router;
 }

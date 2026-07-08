@@ -7,13 +7,6 @@ import { assertCompanyAccess } from "./authz.js";
 import { logActivity } from "../services/index.js";
 
 export function gymRoutes(db: Db) {
-import { eq, and, desc } from "drizzle-orm";
-import type { Db } from "@paperclipai/db";
-import { gymEvalSuites, gymEvalRuns, gymPromptCandidates, gymAgentProfiles } from "@paperclipai/db";
-import { assertCompanyAccess } from "./authz.js";
-import { logActivity } from "../services/index.js";
-
-export function gymRoutes(db: Db) {
   const router = Router();
 
   // GET /companies/:companyId/gym/suites
@@ -182,7 +175,6 @@ export function gymRoutes(db: Db) {
         .orderBy(desc(gymEvalRuns.completedAt)).limit(20);
       res.json({ profile, recentRuns });
     } catch (err) { next(err); }
->>>>>>> 16829257c (feat(gym): add agent self-evolution toolkit backend — 4 tables, 8 endpoints, Gemini scoring, vitest)
   });
 
   return router;

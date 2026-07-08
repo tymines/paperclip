@@ -59,3 +59,5 @@ tests/release-smoke/playwright-report/
 .claude/worktrees/
 .herenow
 cli/vitest.config.ts
+.gitignore
+book-exports/

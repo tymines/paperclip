@@ -1,0 +1,7 @@
+# CodeRabbit configuration for tymines/paperclip fork
+# Auto-review PRs targeting the merge-train integration branch.
+reviews:
+  auto_review:
+    base_branches:
+      - integration
+      - master

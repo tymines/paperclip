@@ -482,6 +482,9 @@ export interface Issue {
   completedAt: Date | null;
   cancelledAt: Date | null;
   hiddenAt: Date | null;
+  worktreePath?: string | null;
+  branchName?: string | null;
+  leaseExpiresAt?: Date | null;
   labelIds?: string[];
   labels?: IssueLabel[];
   blockedBy?: IssueRelationIssueSummary[];

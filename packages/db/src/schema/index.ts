@@ -204,6 +204,11 @@ export {
   type NewStoryBibleChatMessage,
 } from "./story_bible_chat_messages.js";
 export {
+  bookExports,
+  type BookExport,
+  type NewBookExport,
+} from "./book_exports.js";
+export {
   reels,
   reelScenes,
   reelTemplates,
