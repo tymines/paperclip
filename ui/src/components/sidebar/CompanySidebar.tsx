@@ -35,6 +35,12 @@ const NAV_ITEMS: NavItem[] = [
     description: "Agent training and evolution",
   },
   {
+    label: "World View",
+    path: "world-view",
+    icon: "🌍",
+    description: "Global situational awareness and intelligence",
+  },
+  {
     label: "Skills",
     path: "skills",
     icon: "🧠",
