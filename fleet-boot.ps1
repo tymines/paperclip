@@ -157,6 +157,45 @@ if (Listening 3100) {
     Log "Server: listening after start = $(Listening 3100)"
 }
 
+# 3.5) PHASE 3 — BOOT-TIME RECONCILIATION GUARD (2026-07-07)
+# Runs AFTER server is up. Checks company_skills, NULL company_ids, data integrity.
+# Non-fatal: alerts on drift but doesn't abort boot.
+if (Listening 3100) {
+    $psql = "C:\Users\Augi-T1\AppData\Local\hermes\hermes-agent\venv\Lib\site-packages\pgserver\pginstall\bin\psql.exe"
+    if (Test-Path $psql) {
+        try {
+            $skillCount = & $psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -t -A -c "SELECT COUNT(*) FROM company_skills;" 2>$null
+            $nullCats = & $psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -t -A -c "SELECT COUNT(*) FROM prompt_categories WHERE company_id IS NULL;" 2>$null
+            $nullBps = & $psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -t -A -c "SELECT COUNT(*) FROM app_dev_blueprints WHERE company_id IS NULL;" 2>$null
+            $nullProvs = & $psql -h 127.0.0.1 -p 54329 -U paperclip -d paperclip -t -A -c "SELECT COUNT(*) FROM image_providers WHERE company_id IS NULL;" 2>$null
+            
+            $warnings = @()
+            if ([int]$skillCount -lt 8) { $warnings += "company_skills=$skillCount (expected >=8)" }
+            if ([int]$nullCats -gt 0) { $warnings += "prompt_categories with NULL company_id=$nullCats" }
+            if ([int]$nullBps -gt 0) { $warnings += "app_dev_blueprints with NULL company_id=$nullBps" }
+            if ([int]$nullProvs -gt 0) { $warnings += "image_providers with NULL company_id=$nullProvs" }
+            
+            if ($warnings.Count -gt 0) {
+                $warnMsg = ":warning: RECONCILIATION DRIFT: " + ($warnings -join "; ")
+                Log "RECONCILE: $warnMsg"
+                $slackUrl = $env:FLEET_SLACK_WEBHOOK_URL
+                if ($slackUrl) {
+                    try {
+                        $body = @{text=$warnMsg} | ConvertTo-Json -Compress
+                        Invoke-RestMethod -Uri $slackUrl -Method Post -Body $body -ContentType "application/json" -TimeoutSec 10
+                    } catch { Log "RECONCILE: Slack alert FAILED" }
+                }
+            } else {
+                Log "RECONCILE: All checks pass — skills=$skillCount, NULL_ids=0"
+            }
+        } catch {
+            Log "RECONCILE: query ERROR: $($_.Exception.Message)"
+        }
+    } else {
+        Log "RECONCILE: psql not found — skipping"
+    }
+}
+
 # 3+4) cloudflared tunnels: paperclip-windows + augiport
 $cfCount = (Get-Process cloudflared -ErrorAction SilentlyContinue | Measure-Object).Count
 if ($cfCount -ge 2) {
