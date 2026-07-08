@@ -15,6 +15,7 @@ import {
   type PersonaGeneration,
   type GenerationSource,
   type GenerationJob,
+  type ContentIdea,
 } from "../api/imageStudio";
 import { useCompany } from "../context/CompanyContext";
 import { useSearchParams } from "@/lib/router";
@@ -28,6 +29,9 @@ import {
   Loader2,
   CheckCircle2,
   Cloud,
+  MessageSquare,
+  Send,
+  TriangleAlert,
   Filter,
   LayoutGrid,
   List as ListIcon,
@@ -1153,6 +1157,327 @@ function SettingsTab({
   );
 }
 
+/* Influencer Studio — Content generation + draft scheduling tab */
+function ContentPanel({
+  persona,
+  companyId,
+}: {
+  persona: ImageProvider;
+  companyId: string;
+  status: PersonaStatus;
+}) {
+  const [topic, setTopic] = useState("");
+  const [ideas, setIdeas] = useState<ContentIdea[] | null>(null);
+  const [schedulingIdea, setSchedulingIdea] = useState<ContentIdea | null>(null);
+  const [editedCaption, setEditedCaption] = useState("");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [draftsMinimized, setDraftsMinimized] = useState(false);
+  const queryClient = useQueryClient();
+
+  const generateMut = useMutation({
+    mutationFn: () =>
+      imageStudioApi.generateContent(companyId, persona.id, { topic: topic.trim(), count: 5 }),
+    onSuccess: (data) => {
+      setIdeas(data.ideas);
+    },
+  });
+
+  const scheduleMut = useMutation({
+    mutationFn: (body: { caption: string; scheduledAt?: string }) =>
+      imageStudioApi.schedulePost(companyId, persona.id, body),
+    onSuccess: () => {
+      setSchedulingIdea(null);
+      setEditedCaption("");
+      setScheduledAt("");
+      queryClient.invalidateQueries({ queryKey: ["influencer", "drafts", companyId, persona.id] });
+    },
+  });
+
+  const draftsQuery = useQuery({
+    queryKey: ["influencer", "drafts", companyId, persona.id],
+    queryFn: () => imageStudioApi.listDrafts(companyId, persona.id),
+    enabled: persona.status === "ready",
+  });
+
+  if (persona.status !== "ready") {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-10">
+        <MessageSquare className="h-10 w-10" style={{ color: DS.textMuted }} />
+        <p className="text-[13px]" style={{ color: DS.textMuted }}>
+          Complete persona training to access Content Studio
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-5 p-5">
+      {/* Topic input */}
+      <div
+        className="flex flex-col gap-3 rounded-xl p-4"
+        style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+      >
+        <span className="text-[13px] font-semibold" style={{ color: DS.text }}>
+          Generate Content Ideas
+        </span>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={topic}
+            onChange={(e) => setTopic(e.target.value)}
+            placeholder="e.g., New collection launch, behind the scenes, Q&A..."
+            className="min-w-0 flex-1 rounded-lg px-3 py-2 text-[13px] outline-none"
+            style={{
+              background: DS.surface,
+              color: DS.text,
+              border: `1px solid ${DS.border}`,
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && topic.trim()) generateMut.mutate();
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => generateMut.mutate()}
+            disabled={generateMut.isPending || !topic.trim()}
+            className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-medium transition-opacity disabled:opacity-50"
+            style={{ background: DS.primary, color: "#fff" }}
+          >
+            {generateMut.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5" />
+            )}
+            {generateMut.isPending ? "Generating..." : "Generate Ideas"}
+          </button>
+        </div>
+        {generateMut.isError && (
+          <p className="flex items-center gap-1.5 text-[12px]" style={{ color: DS.critical }}>
+            <TriangleAlert className="h-3 w-3" />
+            {(generateMut.error as Error)?.message ?? "Failed to generate ideas."}
+          </p>
+        )}
+      </div>
+
+      {/* Generated ideas */}
+      {ideas && ideas.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <span className="text-[13px] font-semibold" style={{ color: DS.text }}>
+            Ideas
+          </span>
+          {ideas.map((idea, i) => (
+            <div
+              key={i}
+              className="rounded-xl p-4"
+              style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+            >
+              <span className="text-[14px] font-semibold" style={{ color: DS.text }}>
+                {idea.title}
+              </span>
+              <p
+                className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed"
+                style={{ color: DS.textMuted }}
+              >
+                {idea.caption}
+              </p>
+              {idea.suggestedHashtags.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {idea.suggestedHashtags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="rounded-full px-2.5 py-0.5 text-[11px] font-medium"
+                      style={{ background: DS.surface, color: DS.primary }}
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSchedulingIdea(idea);
+                    setEditedCaption(idea.caption);
+                    setScheduledAt("");
+                  }}
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-medium transition-colors"
+                  style={{
+                    background: DS.primary,
+                    color: "#fff",
+                  }}
+                >
+                  <Send className="h-3 w-3" />
+                  Schedule
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state when generate hasn't been called */}
+      {!ideas && !generateMut.isPending && (
+        <div className="flex flex-col items-center justify-center gap-2 py-8">
+          <span className="text-[13px]" style={{ color: DS.textMuted }}>
+            Enter a topic and click Generate Ideas
+          </span>
+        </div>
+      )}
+
+      {/* Schedule form */}
+      {schedulingIdea && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setSchedulingIdea(null)}
+        >
+          <div
+            className="mx-4 w-full max-w-lg rounded-xl p-5"
+            style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span className="text-[14px] font-semibold" style={{ color: DS.text }}>
+              Schedule Post — {schedulingIdea.title}
+            </span>
+            <textarea
+              value={editedCaption}
+              onChange={(e) => setEditedCaption(e.target.value)}
+              rows={5}
+              className="mt-3 w-full resize-none rounded-lg px-3 py-2 text-[13px] outline-none"
+              style={{
+                background: DS.surface,
+                color: DS.text,
+                border: `1px solid ${DS.border}`,
+              }}
+            />
+            <input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(e) => setScheduledAt(e.target.value)}
+              className="mt-2 w-full rounded-lg px-3 py-2 text-[13px] outline-none"
+              style={{
+                background: DS.surface,
+                color: DS.text,
+                border: `1px solid ${DS.border}`,
+              }}
+              placeholder="Schedule for later (optional)"
+            />
+            {scheduleMut.isError && (
+              <p className="mt-2 flex items-center gap-1.5 text-[12px]" style={{ color: DS.critical }}>
+                <TriangleAlert className="h-3 w-3" />
+                {(scheduleMut.error as Error)?.message ?? "Failed to schedule."}
+              </p>
+            )}
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSchedulingIdea(null)}
+                className="rounded-lg px-4 py-2 text-[13px] font-medium transition-colors"
+                style={{ color: DS.textMuted }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  scheduleMut.mutate({
+                    caption: editedCaption,
+                    ...(scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {}),
+                  })
+                }
+                disabled={scheduleMut.isPending || !editedCaption.trim()}
+                className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-medium transition-opacity disabled:opacity-50"
+                style={{ background: DS.primary, color: "#fff" }}
+              >
+                {scheduleMut.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                )}
+                {scheduleMut.isPending ? "Scheduling..." : "Confirm Schedule"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Drafts section */}
+      <div
+        className="rounded-xl p-4"
+        style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold" style={{ color: DS.text }}>
+              Drafts
+            </span>
+            {draftsQuery.data?.drafts && (
+              <span
+                className="rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={{ background: DS.surface, color: DS.textMuted }}
+              >
+                {draftsQuery.data.drafts.length}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setDraftsMinimized(!draftsMinimized)}
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors"
+            style={{ color: DS.textMuted }}
+          >
+            {draftsMinimized ? "Show" : "Hide"}
+          </button>
+        </div>
+        {!draftsMinimized && (
+          <>
+            {draftsQuery.isPending ? (
+              <div className="flex items-center justify-center py-4">
+                <Loader2 className="h-5 w-5 animate-spin" style={{ color: DS.textMuted }} />
+              </div>
+            ) : draftsQuery.data?.drafts && draftsQuery.data.drafts.length > 0 ? (
+              <div className="mt-3 flex flex-col gap-2">
+                {draftsQuery.data.drafts.map((post) => (
+                  <div
+                    key={post.id}
+                    className="rounded-lg p-3"
+                    style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
+                  >
+                    <p className="line-clamp-2 text-[12px] leading-relaxed" style={{ color: DS.text }}>
+                      {post.content}
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <span
+                        className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                        style={{
+                          background:
+                            post.status === "draft"
+                              ? "rgba(251, 191, 36, 0.15)"
+                              : "rgba(47, 227, 138, 0.15)",
+                          color: post.status === "draft" ? "#F4B940" : "#2FE38A",
+                        }}
+                      >
+                        {post.status}
+                      </span>
+                      <span className="text-[10px]" style={{ color: DS.textFaint }}>
+                        {new Date(post.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 text-[12px]" style={{ color: DS.textMuted }}>
+                No drafts yet. Generate ideas and schedule them.
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Selected persona workspace                                                 */
 /* -------------------------------------------------------------------------- */
@@ -1160,6 +1485,7 @@ const WORKSPACE_TABS = [
   { key: "studio", label: "Studio", icon: Wand2 },
   { key: "profile", label: "Profile", icon: User },
   { key: "knowledge", label: "Knowledge", icon: BookOpen },
+  { key: "content", label: "Content", icon: MessageSquare },
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ] as const;
 type WorkspaceTab = (typeof WORKSPACE_TABS)[number]["key"];
@@ -1263,6 +1589,8 @@ function PersonaWorkspace({
         <ProfileTab persona={persona} />
       ) : tab === "knowledge" ? (
         <KnowledgeTab persona={persona} />
+      ) : tab === "content" ? (
+        <ContentPanel persona={persona} companyId={companyId} status={status} />
       ) : (
         <SettingsTab persona={persona} companyId={companyId} />
       )}
