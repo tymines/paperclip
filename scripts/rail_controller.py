@@ -652,6 +652,7 @@ def process_task(task, cfg):
             rework_count += 1
 
     elif state == "merging":
+        _check_ten_law_gate(tid, "merge", task_state, cfg)
         if stage_merge(task):
             state = "merged"
             add_comment(tid, "✅ Merged by RAIL controller (auto). Pre-merge tests passed.")
@@ -693,6 +694,7 @@ def process_task(task, cfg):
     all_state[tid] = {
         "state": state, "stall_count": stall, "last_artifact_at": last_artifact,
         "rework_count": rework_count, "gate_class": gate_class,
+        "claimed_at": load_state().get(tid, {}).get("claimed_at") or now_ts(),
         "updated": now_iso(),
     }
     save_state(all_state)
