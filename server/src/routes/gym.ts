@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { gymEvalSuites, gymEvalRuns, gymPromptCandidates, gymAgentProfiles } from "@paperclipai/db";
+import { gymEvalSuites, gymEvalRuns, gymPromptCandidates, gymAgentProfiles, activityLog, agents } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { logActivity } from "../services/index.js";
 
@@ -174,6 +174,171 @@ export function gymRoutes(db: Db) {
         .where(and(eq(gymEvalRuns.agentProfileId, profile.id), eq(gymEvalRuns.status, "completed")))
         .orderBy(desc(gymEvalRuns.completedAt)).limit(20);
       res.json({ profile, recentRuns });
+    } catch (err) { next(err); }
+  });
+
+  // GET /companies/:companyId/gym/agents
+  router.get("/companies/:companyId/gym/agents", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const rows = await db.select({
+        id: agents.id,
+        name: agents.name,
+        status: agents.status,
+      }).from(agents)
+        .where(eq(agents.companyId, companyId))
+        .orderBy(agents.name);
+
+      // Count skill-related events per agent
+      const agentIds = rows.map((a) => a.id);
+      const skillCounts = new Map<string, number>();
+      if (agentIds.length > 0) {
+        for (const aid of agentIds) {
+          const [r] = await db.select({
+            cnt: sql<number>`count(*)::int`,
+          }).from(activityLog)
+            .where(and(
+              eq(activityLog.companyId, companyId),
+              eq(activityLog.agentId, aid),
+              sql`${activityLog.entityType} = 'company_skill'`,
+            )).limit(1);
+          skillCounts.set(aid, r?.cnt ?? 0);
+        }
+      }
+
+      res.json(rows.map((a) => ({
+        name: a.name,
+        status: a.status === "running" ? "active" as const : a.status === "crashed" ? "idle" as const : "idle" as const,
+        lastActive: new Date().toISOString(), // ponytail: agent last-heartbeat lookup if freshness matters
+        skillCount: skillCounts.get(a.id) ?? 0,
+      })));
+    } catch (err) { next(err); }
+  });
+
+  // GET /companies/:companyId/gym/evolution-runs
+  router.get("/companies/:companyId/gym/evolution-runs", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const rows = await db.select({
+        id: activityLog.id,
+        action: activityLog.action,
+        details: activityLog.details,
+        agentId: activityLog.agentId,
+        entityId: activityLog.entityId,
+        createdAt: activityLog.createdAt,
+      }).from(activityLog)
+        .where(and(
+          eq(activityLog.companyId, companyId),
+          eq(activityLog.entityType, "company_skill"),
+        ))
+        .orderBy(desc(activityLog.createdAt))
+        .limit(50);
+
+      // Fetch skill names for entity IDs
+      const skillIds = [...new Set(rows.map((r) => r.entityId).filter(Boolean))];
+      const skillNames = new Map<string, string>();
+      if (skillIds.length > 0) {
+        try {
+          const skills = await db.select({
+            id: sql<string>`id::text`,
+            name: sql<string>`name`,
+          }).from(sql`company_skills`)
+            .where(sql`id::text = ANY(${skillIds})`);
+          for (const s of skills) skillNames.set(s.id, s.name);
+        } catch { /* company_skills table access — ok if fails */ }
+      }
+
+      res.json(rows.map((r) => {
+        const d = (r.details ?? {}) as Record<string, unknown>;
+        return {
+          id: r.id,
+          targetSkill: skillNames.get(r.entityId) ?? (d.skillName as string) ?? r.entityId,
+          beforeScore: (d.beforeScore as number) ?? 0,
+          afterScore: (d.afterScore as number) ?? 0,
+          delta: ((d.afterScore as number) ?? 0) - ((d.beforeScore as number) ?? 0),
+          status: (r.action === "skill.evolution_accepted" ? "approved"
+            : r.action === "skill.evolution_rejected" ? "rejected"
+            : "awaiting_approval") as "approved" | "rejected" | "awaiting_approval",
+          createdAt: r.createdAt?.toISOString() ?? new Date().toISOString(),
+          diff: (d.diff as string) ?? null,
+          rationale: (d.rationale as string) ?? null,
+          details: d,
+        };
+      }));
+    } catch (err) { next(err); }
+  });
+
+  // GET /companies/:companyId/gym/skills-stats
+  router.get("/companies/:companyId/gym/skills-stats", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      // Aggregate: per skill, latest score + last improved
+      const rows = await db.select({
+        entityId: activityLog.entityId,
+        details: activityLog.details,
+        createdAt: activityLog.createdAt,
+      }).from(activityLog)
+        .where(and(
+          eq(activityLog.companyId, companyId),
+          eq(activityLog.entityType, "company_skill"),
+          sql`${activityLog.details} ? 'afterScore'`,
+        ))
+        .orderBy(desc(activityLog.createdAt));
+
+      const skillNames = new Map<string, string>();
+      const seen = new Set<string>();
+      const uniqueIds = [...new Set(rows.map((r) => r.entityId).filter(Boolean))];
+      if (uniqueIds.length > 0) {
+        try {
+          const skills = await db.select({
+            id: sql<string>`id::text`,
+            name: sql<string>`name`,
+          }).from(sql`company_skills`)
+            .where(sql`id::text = ANY(${uniqueIds})`);
+          for (const s of skills) skillNames.set(s.id, s.name);
+        } catch { /* ok */ }
+      }
+
+      const stats: { skill: string; score: number; lastImproved: string }[] = [];
+      for (const r of rows) {
+        if (seen.has(r.entityId)) continue;
+        seen.add(r.entityId);
+        const d = (r.details ?? {}) as Record<string, unknown>;
+        stats.push({
+          skill: skillNames.get(r.entityId) ?? (d.skillName as string) ?? r.entityId,
+          score: (d.afterScore as number) ?? 0,
+          lastImproved: r.createdAt?.toISOString() ?? new Date().toISOString(),
+        });
+      }
+      res.json(stats);
+    } catch (err) { next(err); }
+  });
+
+  // GET /companies/:companyId/gym/registry — Hephaestus works/fails ledger
+  router.get("/companies/:companyId/gym/registry", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      // ponytail: surface eval run results + agent actions
+      const evalRows = await db.select({
+        id: gymEvalRuns.id, status: gymEvalRuns.status,
+        overallScore: gymEvalRuns.overallScore, createdAt: gymEvalRuns.createdAt,
+        error: gymEvalRuns.error,
+      }).from(gymEvalRuns)
+        .where(eq(gymEvalRuns.companyId, companyId))
+        .orderBy(desc(gymEvalRuns.createdAt))
+        .limit(50);
+      const entries = evalRows.map((r) => ({
+        id: r.id,
+        kind: r.status === "completed" ? "works" as const : "fails" as const,
+        score: r.overallScore,
+        detail: r.error ?? (r.status === "completed" ? `Score: ${r.overallScore}` : "evaluation failed"),
+        at: r.createdAt?.toISOString() ?? "",
+      }));
+      res.json({ entries });
     } catch (err) { next(err); }
   });
 
