@@ -17,6 +17,7 @@ export interface EvolutionRun {
   createdAt: string;
   diff: string | null;
   rationale: string | null;
+  details: Record<string, unknown> | null;
 }
 
 export interface SkillStat {

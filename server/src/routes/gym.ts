@@ -190,21 +190,20 @@ export function gymRoutes(db: Db) {
         .where(eq(agents.companyId, companyId))
         .orderBy(agents.name);
 
-      // Count skill-related events per agent
+      // Single GROUP BY — no N+1. ponytail: one query, one Map.
       const agentIds = rows.map((a) => a.id);
       const skillCounts = new Map<string, number>();
       if (agentIds.length > 0) {
-        for (const aid of agentIds) {
-          const [r] = await db.select({
-            cnt: sql<number>`count(*)::int`,
-          }).from(activityLog)
-            .where(and(
-              eq(activityLog.companyId, companyId),
-              eq(activityLog.agentId, aid),
-              sql`${activityLog.entityType} = 'company_skill'`,
-            )).limit(1);
-          skillCounts.set(aid, r?.cnt ?? 0);
-        }
+        const counts = await db.select({
+          agentId: activityLog.agentId,
+          cnt: sql<number>`count(*)::int`,
+        }).from(activityLog)
+          .where(and(
+            eq(activityLog.companyId, companyId),
+            eq(activityLog.entityType, sql`'company_skill'`),
+          ))
+          .groupBy(activityLog.agentId);
+        for (const c of counts) skillCounts.set(c.agentId!, c.cnt);
       }
 
       res.json(rows.map((a) => ({

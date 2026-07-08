@@ -282,7 +282,6 @@ export async function createApp(
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
   api.use(bookStudioAutopilotRoutes(db));
-  api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   api.use(influencerStudioRoutes(db, {}));
   if (opts.databaseBackupService) {

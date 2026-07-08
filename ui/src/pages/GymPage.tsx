@@ -95,16 +95,98 @@ function EvolutionRunRow({
   );
 }
 
-function TrainingFeedPlaceholder() {
-  return (
-    <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
-        <span className="text-xl">&#x1F3CB;</span>
+function LiveActivityFeed({ runs }: { runs: EvolutionRun[] }) {
+  if (runs.length === 0) {
+    return (
+      <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
+          <span className="text-xl">&#x1F3CB;</span>
+        </div>
+        <h3 className="mb-1 text-sm font-medium text-gray-200">No self-improvement events yet</h3>
+        <p className="text-xs text-gray-400">
+          Agent skill creation and evolution events will appear here
+        </p>
       </div>
-      <h3 className="mb-1 text-sm font-medium text-gray-200">Training Feed</h3>
-      <p className="text-xs text-gray-400">
-        Training data appears here after evolution runs complete
-      </p>
+    );
+  }
+
+  const latest = runs.slice(0, 15);
+  const iconForAction = (status: string) => {
+    if (status === "awaiting_approval") return "&#x1F4A1;"; // lightbulb — proposed
+    if (status === "approved") return "&#x2705;"; // check
+    if (status === "rejected") return "&#x274C;"; // X
+    return "&#x1F4CC;"; // pin — default
+  };
+  const actionLabel = (status: string) => {
+    if (status === "awaiting_approval") return "proposed evolution";
+    if (status === "approved") return "approved evolution";
+    if (status === "rejected") return "rejected evolution";
+    return status;
+  };
+
+  return (
+    <div className="rounded-lg border border-gray-800 bg-gray-950 overflow-hidden">
+      <div className="px-4 py-3 border-b border-gray-800">
+        <h2 className="text-sm font-medium text-gray-300">Live Self-Improvement Feed</h2>
+      </div>
+      <div className="divide-y divide-gray-800/50 max-h-[480px] overflow-y-auto">
+        {latest.map((run) => {
+          const d = (run.details ?? {}) as any;
+          return (
+            <div key={run.id} className="px-4 py-3 hover:bg-gray-900/30 transition-colors">
+              <div className="flex items-start gap-3">
+                <span
+                  className="mt-0.5 text-sm flex-shrink-0"
+                  dangerouslySetInnerHTML={{ __html: iconForAction(run.status) }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <span className="text-sm font-medium text-gray-200">{run.targetSkill}</span>
+                    <span className="text-xs text-gray-500">{actionLabel(run.status)}</span>
+                  </div>
+                  {d.whatWorks && (
+                    <p className="mt-1 text-xs text-green-400/80 leading-relaxed">
+                      <span className="text-green-500 font-medium">Works: </span>
+                      {d.whatWorks}
+                    </p>
+                  )}
+                  {d.whatFailed && (
+                    <p className="mt-0.5 text-xs text-red-400/80 leading-relaxed">
+                      <span className="text-red-500 font-medium">Failed: </span>
+                      {d.whatFailed}
+                    </p>
+                  )}
+                  {d.rationale && (
+                    <p className="mt-0.5 text-xs text-gray-400 leading-relaxed italic">
+                      {d.rationale}
+                    </p>
+                  )}
+                  {d.beforeScore != null && d.afterScore != null && (
+                    <div className="mt-1 flex items-center gap-2 text-xs">
+                      <span className="text-gray-500">{d.beforeScore}</span>
+                      <span className="text-gray-600">&rarr;</span>
+                      <span
+                        className={d.afterScore > d.beforeScore ? "text-green-400" : "text-red-400"}
+                      >
+                        {d.afterScore}
+                      </span>
+                      <span
+                        className={
+                          d.afterScore > d.beforeScore
+                            ? "text-green-500 font-medium"
+                            : "text-red-500 font-medium"
+                        }
+                      >
+                        ({d.afterScore > d.beforeScore ? "+" : ""}{d.afterScore - d.beforeScore})
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -145,8 +227,8 @@ export function GymPage() {
         <p className="mt-1 text-sm text-gray-400">Agent self-improvement dashboard</p>
       </div>
 
-      {/* Training Feed */}
-      <TrainingFeedPlaceholder />
+      {/* Live Self-Improvement Feed */}
+      <LiveActivityFeed runs={evolutionRunsQuery.data ?? []} />
 
       {/* Per-Agent Cards */}
       <div>
