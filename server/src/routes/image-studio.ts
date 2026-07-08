@@ -11,8 +11,11 @@ import {
   promptTemplates,
   generationJobs,
 } from "@paperclipai/db";
-import { assertCompanyAccess } from "./authz.js";
-import { badRequest } from "../errors.js";
+import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { badRequest, notFound, serviceUnavailable } from "../errors.js";
+import { socialPosts } from "@paperclipai/db";
+import { generateContentIdeas } from "../services/influencer-studio/content-generator.js";
+import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
 import {
   expandPromptVariations,
@@ -1541,6 +1544,122 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
       return;
     }
     res.json({ template: deleted });
+  });
+
+  // ── Influencer Studio: Gemini content generation ──────────────────────
+
+  // Simple in-memory rate limiting: 10 generations per persona per 60s
+  const contentGenRateMap = new Map<string, { count: number; windowStart: number }>();
+
+  // POST /companies/:companyId/image-studio/personas/:personaId/generate-content
+  // Body: { topic: string, count?: number }
+  // Uses Gemini to generate social media post ideas matching the persona's style.
+  router.post("/companies/:companyId/image-studio/personas/:personaId/generate-content", async (req, res, next) => {
+    try {
+      const { companyId, personaId } = req.params;
+      assertCompanyAccess(req, companyId);
+      const { topic, count = 5 } = req.body ?? {};
+      if (!topic || typeof topic !== "string" || topic.trim().length === 0) {
+        throw badRequest("topic is required");
+      }
+
+      // Load persona from existing imageProviders table
+      const [persona] = await db
+        .select()
+        .from(imageProviders)
+        .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
+        .limit(1);
+      if (!persona) throw notFound("Persona not found");
+
+      // Rate limit: 10 generations per persona per 60-second sliding window
+      const now = Date.now();
+      const entry = contentGenRateMap.get(personaId);
+      if (entry && now - entry.windowStart < 60_000) {
+        entry.count++;
+        if (entry.count > 10) {
+          const retryAfter = Math.ceil((entry.windowStart + 60_000 - now) / 1000);
+          res.setHeader("Retry-After", String(retryAfter));
+          res.status(429).json({ error: "Content generation rate limit exceeded. Try again shortly." });
+          return;
+        }
+      } else {
+        contentGenRateMap.set(personaId, { count: 1, windowStart: now });
+      }
+
+      const ideas = await generateContentIdeas(
+        { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },
+        topic.trim(),
+        Math.min(Math.max(1, count), 20),
+      );
+
+      res.json({ ideas });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // POST /companies/:companyId/image-studio/personas/:personaId/schedule-post
+  // Body: { caption: string, imagePath?: string, scheduledAt?: string }
+  // Creates a draft social_post (status='draft') — target account assignment
+  // happens later in the Social tab. Never auto-publishes.
+  router.post("/companies/:companyId/image-studio/personas/:personaId/schedule-post", async (req, res, next) => {
+    try {
+      const { companyId, personaId } = req.params;
+      assertCompanyAccess(req, companyId);
+      const { caption, imagePath, scheduledAt } = req.body ?? {};
+      if (!caption || typeof caption !== "string" || caption.trim().length === 0) {
+        throw badRequest("caption is required");
+      }
+
+      // Verify persona exists
+      const [persona] = await db
+        .select({ id: imageProviders.id })
+        .from(imageProviders)
+        .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
+        .limit(1);
+      if (!persona) throw notFound("Persona not found");
+
+      // Create social_post in DRAFT status only — no publish path reachable
+      // Uses existing social_posts table. No social_post_targets created —
+      // target account assignment happens later in the Social tab.
+      const actor = getActorInfo(req);
+      const insertData: Record<string, unknown> = {
+        companyId,
+        content: caption.trim(),
+        postType: "text",
+        status: "draft",
+        mediaUrls: imagePath ? [imagePath] : [],
+        metadata: { personaId, source: "influencer-studio" },
+        createdBy: actor.actorId,
+      };
+      if (scheduledAt && typeof scheduledAt === "string") {
+        insertData.scheduledAt = new Date(scheduledAt);
+      }
+
+      const [post] = await db
+        .insert(socialPosts)
+        .values(insertData as typeof socialPosts.$inferInsert)
+        .returning();
+
+      try {
+        await logActivity(db, {
+          companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          action: "influencer.post.drafted",
+          entityType: "social_post",
+          entityId: post.id,
+          details: { personaId, source: "influencer-studio" },
+        });
+      } catch {
+        // Activity logging is best-effort
+      }
+
+      res.status(201).json({ post });
+    } catch (err) {
+      next(err);
+    }
   });
 
   return router;
