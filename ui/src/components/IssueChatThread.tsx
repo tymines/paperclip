@@ -1433,6 +1433,8 @@ function IssueChatAssistantMessage({
     feedbackTermsUrl,
     onVote,
     agentMap,
+    currentUserId,
+    userLabelMap,
     onStopRun,
     stopRunLabel = "Stop run",
     stoppingRunLabel = "Stopping...",
@@ -1440,11 +1442,32 @@ function IssueChatAssistantMessage({
   } = useContext(IssueChatCtx);
   const custom = message.metadata.custom as Record<string, unknown>;
   const anchorId = typeof custom.anchorId === "string" ? custom.anchorId : undefined;
-  const authorName = typeof custom.authorName === "string"
-    ? custom.authorName
-    : typeof custom.runAgentName === "string"
-      ? custom.runAgentName
-      : "Agent";
+  // Resolve author name: explicit > agent lookup > user lookup > fallback
+  const authorName = (() => {
+    // Explicit author name takes precedence
+    if (typeof custom.authorName === "string") return custom.authorName;
+    if (typeof custom.runAgentName === "string") return custom.runAgentName;
+
+    // Look up agent name from agentMap
+    const agentId = typeof custom.authorAgentId === "string" ? custom.authorAgentId
+      : typeof custom.runAgentId === "string" ? custom.runAgentId : null;
+    if (agentId && agentMap?.has(agentId)) {
+      return agentMap.get(agentId)!.name;
+    }
+
+    // Look up user name from userLabelMap
+    const userId = typeof custom.authorUserId === "string" ? custom.authorUserId : null;
+    if (userId && userLabelMap?.has(userId)) {
+      return userLabelMap.get(userId)!;
+    }
+    // Current user is "You", other users are "User"
+    if (userId) {
+      return userId === currentUserId ? "You" : "User";
+    }
+
+    // Final fallback
+    return "Agent";
+  })();
   const authorAgentId = typeof custom.authorAgentId === "string" ? custom.authorAgentId : null;
   const runId = typeof custom.runId === "string" ? custom.runId : null;
   const runAgentId = typeof custom.runAgentId === "string" ? custom.runAgentId : null;
