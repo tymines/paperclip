@@ -224,3 +224,5 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
+export { councilSessions } from "./council_sessions.js";
+export { councilParticipants } from "./council_participants.js";
