@@ -224,3 +224,5 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
+export { roomsRailConfig } from "./rooms_rail_config.js";
+export { roomTransitions } from "./room_transitions.js";
