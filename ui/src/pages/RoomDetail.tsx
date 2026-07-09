@@ -12,6 +12,7 @@ import {
   User,
   Info,
   X,
+  Crown,
 } from "lucide-react";
 import { roomsApi } from "../api/rooms";
 import { agentsApi } from "../api/agents";
@@ -370,6 +371,18 @@ export function RoomDetail() {
         <Badge variant={room.status === "active" ? "default" : "secondary"} className="shrink-0 text-xs">
           {room.status}
         </Badge>
+        {room.type && (
+          <Badge variant="outline" className="shrink-0 text-xs flex items-center gap-1">
+            <Crown className="h-3 w-3" />
+            <span>
+              {room.type === "war-room" ? "Zeus" :
+               room.type === "brainstorm" ? "Zeus Critic" :
+               room.type === "council" ? "Ares" :
+               room.type === "team" ? "Hermes" :
+               "—"}
+            </span>
+          </Badge>
+        )}
         {room.description && (
           <span className="hidden truncate text-xs text-muted-foreground md:inline">{room.description}</span>
         )}

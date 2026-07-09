@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ponytail: mock @paperclipai/db so tests run without schema files on this branch
+vi.mock("@paperclipai/db", () => ({
+  councilSessions: { id: {}, roomId: {}, topic: {}, consensusProtocol: {} },
+  councilParticipants: { id: {}, sessionId: {}, agentId: {}, vote: {}, submittedAt: {} },
+}));
+
 import {
   createCouncilSession,
   addParticipant,

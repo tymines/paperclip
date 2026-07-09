@@ -635,7 +635,7 @@ export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 
 export const ROOM_STATUSES = ["active", "archived"] as const;
 export type RoomStatus = (typeof ROOM_STATUSES)[number];
-export const ROOM_TYPES = ["collaboration", "war-room", "standup"] as const;
+export const ROOM_TYPES = ["collaboration", "war-room", "standup", "brainstorm", "team", "council"] as const;
 export type RoomType = (typeof ROOM_TYPES)[number];
 export const ROOM_MEMBER_ROLES = ["member", "moderator", "observer"] as const;
 export type RoomMemberRole = (typeof ROOM_MEMBER_ROLES)[number];
