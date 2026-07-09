@@ -224,3 +224,10 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
+
+// ── WO-1/2/3/4: Rooms pipeline (shadow) ──
+export { roomsRailConfig } from "./rooms_rail_config.js";
+export { roomTransitions } from "./room_transitions.js";
+export { roomBosses } from "./room_bosses.js";
+export { councilSessions } from "./council_sessions.js";
+export { councilParticipants } from "./council_participants.js";
