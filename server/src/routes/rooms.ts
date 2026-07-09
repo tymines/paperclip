@@ -19,6 +19,9 @@ import { dispatchAgentBridge } from "../services/agent-bridge.js";
 import { conflict, notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
+import {
+  processRoomTransition,
+} from "../rooms-rail/rail-engine.js";
 
 export function roomRoutes(db: Db) {
   const router = Router();
@@ -146,6 +149,18 @@ export function roomRoutes(db: Db) {
     if (!room) {
       throw notFound("Room not found");
     }
+
+    // ponytail: rail transition hook — no-op while isRailEnabled() returns false
+    void processRoomTransition(
+      db,
+      roomId,
+      [existing.status, existing.type].filter(Boolean).join(":"),
+      [room.status ?? existing.status, room.type ?? existing.type].filter(Boolean).join(":"),
+      getActorInfo(req).actorId,
+    ).catch((err) =>
+      logger.warn({ err, roomId }, "room rail transition hook failed"),
+    );
+
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId,
