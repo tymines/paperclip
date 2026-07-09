@@ -606,8 +606,12 @@ def process_task(task, cfg):
     task_state = load_state().get(tid, {})
     
     if state == "claimed":
-        _check_ten_law_gate(tid, "plan", task_state, cfg)  # Ten Laws: enforcement check
-        if stage_plan(task):
+        law_check = _check_ten_law_gate(tid, "plan", task_state, cfg)
+        if not law_check["passed"]:
+            emit_event("ten_law_blocked", tid, stage="plan", checks=law_check["checks"])
+            state = "rework"
+            rework_count += 1
+        elif stage_plan(task):
             task_state["had_plan"] = True
             state = "plan_ready"
         else:
@@ -615,8 +619,12 @@ def process_task(task, cfg):
             rework_count += 1
 
     elif state == "plan_ready":
-        _check_ten_law_gate(tid, "critique", task_state, cfg)
-        if stage_critique(task):
+        law_check = _check_ten_law_gate(tid, "critique", task_state, cfg)
+        if not law_check["passed"]:
+            emit_event("ten_law_blocked", tid, stage="critique", checks=law_check["checks"])
+            state = "rework"
+            rework_count += 1
+        elif stage_critique(task):
             task_state["had_critique"] = True
             state = "critiqued"
         else:
@@ -624,8 +632,12 @@ def process_task(task, cfg):
             rework_count += 1
 
     elif state == "critiqued":
-        _check_ten_law_gate(tid, "code", task_state, cfg)
-        if stage_code(task):
+        law_check = _check_ten_law_gate(tid, "code", task_state, cfg)
+        if not law_check["passed"]:
+            emit_event("ten_law_blocked", tid, stage="code", checks=law_check["checks"])
+            state = "rework"
+            rework_count += 1
+        elif stage_code(task):
             state = "in_review"
             last_artifact = now_ts()
         else:
@@ -633,27 +645,36 @@ def process_task(task, cfg):
             rework_count += 1
 
     elif state == "in_review":
-        _check_ten_law_gate(tid, "review", task_state, cfg)
-        update_task(tid, status="in_review")
-        verdict = stage_review(task)
-        if verdict == "approved":
-            task_state["had_review"] = True
-            if gate_class in AUTO_MERGE_CLASSES:
-                state = "merging"
-            else:
-                state = "gated"
-                add_comment(tid, f"🔒 **Gate class `{gate_class}`** — held for Tyler approval.")
-                emit_event("gated", tid, gate_class=gate_class)
-        elif verdict == "changes":
+        law_check = _check_ten_law_gate(tid, "review", task_state, cfg)
+        if not law_check["passed"]:
+            emit_event("ten_law_blocked", tid, stage="review", checks=law_check["checks"])
             state = "rework"
             rework_count += 1
         else:
-            state = "rework"
-            rework_count += 1
+            update_task(tid, status="in_review")
+            verdict = stage_review(task)
+            if verdict == "approved":
+                task_state["had_review"] = True
+                if gate_class in AUTO_MERGE_CLASSES:
+                    state = "merging"
+                else:
+                    state = "gated"
+                    add_comment(tid, f"🔒 **Gate class `{gate_class}`** — held for Tyler approval.")
+                    emit_event("gated", tid, gate_class=gate_class)
+            elif verdict == "changes":
+                state = "rework"
+                rework_count += 1
+            else:
+                state = "rework"
+                rework_count += 1
 
     elif state == "merging":
-        _check_ten_law_gate(tid, "merge", task_state, cfg)
-        if stage_merge(task):
+        law_check = _check_ten_law_gate(tid, "merge", task_state, cfg)
+        if not law_check["passed"]:
+            emit_event("ten_law_blocked", tid, stage="merge", checks=law_check["checks"])
+            state = "rework"
+            rework_count += 1
+        elif stage_merge(task):
             state = "merged"
             add_comment(tid, "✅ Merged by RAIL controller (auto). Pre-merge tests passed.")
         else:
