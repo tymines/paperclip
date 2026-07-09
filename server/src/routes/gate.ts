@@ -1,4 +1,4 @@
-// ponytail: gate-decision + kill routes. WO-2 §3.3 enforcement endpoints.
+// ponytail: gate-decision + kill + run-create + advance. Manual-first pipeline.
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -6,8 +6,10 @@ import { checkGate } from "../rooms-rail/gate-checker.js";
 import { logger } from "../middleware/logger.js";
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const EVENTS_LOG = path.join(process.cwd(), ".rail_events.jsonl");
+const MANUAL_STAGES = ["idea", "spec", "design", "architecture", "build", "review", "ship", "retro"];
 
 function emitEvent(evt: Record<string, unknown>) {
   const line = JSON.stringify({ ts: new Date().toISOString(), ...evt }) + "\n";
@@ -17,7 +19,26 @@ function emitEvent(evt: Record<string, unknown>) {
 export function gateRoutes(db: Db) {
   const router = Router();
 
-  // POST /companies/:cid/gate-decision
+  // ── Run create — start pipeline at Idea ──
+  router.post("/companies/:companyId/pipeline/start", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { name } = req.body as { name?: string };
+    const runId = randomUUID();
+    const stageId = randomUUID();
+
+    await db.run(`
+      INSERT INTO pipeline_runs (id, company_id, name, status) VALUES ($1, $2, $3, 'active');
+      INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order)
+        VALUES ($4, $1, 'idea', 'active', 0);
+    `, [runId, companyId, name ?? "New Project", stageId]);
+
+    emitEvent({ type: "pipeline_start", runId, stageId, name });
+
+    res.status(201).json({ runId, stageId, stage: "idea", name: name ?? "New Project" });
+  });
+
+  // ── Gate decision + advance ──
   router.post("/companies/:companyId/gate-decision", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -29,30 +50,59 @@ export function gateRoutes(db: Db) {
       return;
     }
 
-    const { stage, decision, reason, evidence } = req.body as {
-      stage?: string; decision?: string; reason?: string; evidence?: string[];
+    const { runId, decision, evidence } = req.body as {
+      runId?: string; decision?: string; evidence?: string[];
     };
 
-    if (!stage || !decision) {
-      res.status(400).json({ error: "stage and decision required" });
+    if (!runId || !decision) {
+      res.status(400).json({ error: "runId and decision required" });
       return;
     }
 
-    const result = checkGate(stage, evidence ?? []);
+    // ponytail: get current active stage
+    const [activeRow] = await db.run(
+      "SELECT id, name, stage_order FROM run_stages WHERE pipeline_run_id = $1 AND status = 'active' ORDER BY stage_order LIMIT 1",
+      [runId]
+    );
+
+    if (!activeRow) {
+      res.status(404).json({ error: "no active stage found" });
+      return;
+    }
+
+    const currentStage = activeRow.name;
+    const currentIdx = MANUAL_STAGES.indexOf(currentStage);
+    const gateResult = checkGate(currentStage, evidence ?? []);
 
     if (decision === "pass") {
-      result.resolved = true;
-      emitEvent({ type: "gate_decision", stage, decision: "pass", reason, result });
-      res.json(result);
+      // Advance: mark current complete, create next
+      await db.run("UPDATE run_stages SET status = 'passed', completed_at = now() WHERE id = $1", [activeRow.id]);
+
+      const nextIdx = currentIdx + 1;
+      if (nextIdx < MANUAL_STAGES.length) {
+        const nextStage = MANUAL_STAGES[nextIdx];
+        const nextId = randomUUID();
+        await db.run(
+          "INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES ($1, $2, $3, 'active', $4)",
+          [nextId, runId, nextStage, nextIdx]
+        );
+        emitEvent({ type: "stage_advance", runId, from: currentStage, to: nextStage, decision: "pass" });
+        res.json({ advanced: true, from: currentStage, to: nextStage, stageId: nextId, gate: gateResult });
+      } else {
+        await db.run("UPDATE pipeline_runs SET status = 'completed', completed_at = now() WHERE id = $1", [runId]);
+        emitEvent({ type: "pipeline_complete", runId });
+        res.json({ advanced: false, completed: true, from: currentStage, gate: gateResult });
+      }
     } else {
-      result.resolved = false;
-      result.failed = true;
-      emitEvent({ type: "gate_decision", stage, decision: "fail", reason, result });
-      res.status(409).json(result);
+      // Fail: mark stage failed
+      await db.run("UPDATE run_stages SET status = 'failed', completed_at = now() WHERE id = $1", [activeRow.id]);
+      await db.run("UPDATE pipeline_runs SET status = 'paused' WHERE id = $1", [runId]);
+      emitEvent({ type: "stage_failed", runId, stage: currentStage });
+      res.status(409).json({ failed: true, stage: currentStage, gate: gateResult });
     }
   });
 
-  // POST /companies/:cid/kill — Tyler-only run kill
+  // ── Kill ──
   router.post("/companies/:companyId/kill", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
