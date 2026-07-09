@@ -7,7 +7,7 @@ meta:
   version: 1
   updated: 2026-07-01
   rules:
-    - "No OpenAI models anywhere."
+    - "OpenAI ONLY for Ares Evidence Verifier (gpt-4o-mini cross-model check). All other agents: no OpenAI."
     - "Test-phase baseline: deepseek-v4-flash fleet-wide, except vision -> gemini."
     - "Planned upgrades (P2): zeus + ares -> kimi-k2.6; reviewer-1 and reviewer-2 on different model families."
 
@@ -107,7 +107,7 @@ agents:
     box: box2
     orchestrator: Ares
     role: evidence-verifier
-    model: deepseek-v4-flash    # replaces gpt-4o-mini (no-OpenAI rule)
+    model: gpt-4o-mini          # cross-model independent verifier — only OpenAI exception
     framework: hermes
   - name: Ares Reviewer 1
     box: box2
