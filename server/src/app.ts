@@ -25,6 +25,7 @@ import { goalRoutes } from "./routes/goals.js";
 import { knowledgeGraphRoutes } from "./routes/knowledge-graph.js";
 import { fleetKbRoutes } from "./routes/fleet-kb.js";
 import { roomRoutes } from "./routes/rooms.js";
+import { gateRoutes } from "./routes/gate.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
 import type { SocialScheduler } from "./workers/social-scheduler.js";
@@ -263,6 +264,7 @@ export async function createApp(
   api.use(knowledgeGraphRoutes(db));
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
+  api.use(gateRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
   api.use(bulkUploadRoutes(db, opts.storageService));
