@@ -145,5 +145,19 @@ export function gateRoutes(db: Db) {
     res.json({ killed: true, runId, reason: reason ?? "killed by Tyler" });
   });
 
+  // ── Read pipeline runs + stages ──
+  router.get("/companies/:companyId/pipeline/runs", async (req, res) => {
+    const c = req.params.companyId as string; assertCompanyAccess(req, c);
+    const runs = await db.run("SELECT r.id,r.name,r.status,r.created_at,s.name AS current_stage,s.status AS stage_status FROM pipeline_runs r LEFT JOIN run_stages s ON s.pipeline_run_id=r.id AND s.status IN ('active','rework') WHERE r.company_id=$1 ORDER BY r.created_at DESC", [c]);
+    res.json({ runs });
+  });
+  router.get("/companies/:companyId/pipeline/runs/:runId", async (req, res) => {
+    const c = req.params.companyId as string; assertCompanyAccess(req, c);
+    const [run] = await db.run("SELECT id,name,status,created_at FROM pipeline_runs WHERE id=$1 AND company_id=$2", [req.params.runId, c]);
+    if (!run) { res.status(404).json({ error: "run not found" }); return; }
+    const stages = await db.run("SELECT id,name,status,stage_order,completed_at FROM run_stages WHERE pipeline_run_id=$1 ORDER BY stage_order,completed_at", [req.params.runId]);
+    res.json({ run, stages });
+  });
+
   return router;
 }

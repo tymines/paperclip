@@ -219,7 +219,7 @@ function SidebarLegacy({
       </SidebarSection>
 
       <SidebarSection label="Company">
-        <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
@@ -294,7 +294,7 @@ function SidebarV1({
       </div>
 
       <SidebarSection label="More">
-        <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />

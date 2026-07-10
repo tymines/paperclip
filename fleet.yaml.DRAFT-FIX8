@@ -1,0 +1,208 @@
+# fleet.yaml — SINGLE SOURCE OF TRUTH for the Tyler Co roster.
+# Souls, Hermes profiles, and Paperclip roster entries are GENERATED from this file.
+# Edit here, regenerate, commit. If a soul or the DB disagrees with this file, this file wins.
+# Watchdog runs a drift check against this file.
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+# DRAFT — FIX-8 — NOT YET APPLIED (Tyler Gate)
+# Generated: 2026-07-08 from live DB query + Hermes profile configs
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ═══ OPEN QUESTIONS (Tyler decision required) ═══
+#
+# Q1: Zeus Dispatch — REGISTER or DELETE?
+#   Fleet.yaml lists Zeus Dispatch (board-dispatcher, deepseek-v4-flash).
+#   Live DB has NO Zeus Dispatch agent. Options:
+#     (a) Register in DB → create the agent with matching config
+#     (b) Delete from fleet.yaml → Zeus Dispatch was paused/archived per zeus-dispatch
+#         skill v1.14.0: "Archived / Legacy agents (DO NOT USE for pipeline)"
+#   Recommendation: DELETE — Dispatch now routes through Zeus directly.
+#
+# Q2: OpenAI reversal — RESOLVED ✅ (Tyler approved 2026-07-08)
+#   OpenAI provider lane ADDED. Two live agents already bound to OpenAI models:
+#     - Ares Evidence Verifier: gpt-4o-mini (cost-floor evidence check)
+#     - Hermes Designer: gpt-4o (visual/creative tasks)
+#   August GPT-5.4-mini fallback documented as intentional (Box 2 emergency fallback).
+#   New OpenAI models launching tomorrow (Jul 9) — reserved slots noted below.
+#   BLOCKER for activation: Tyler drops OPENAI_API_KEY into box env (name only).
+
+meta:
+  version: 2                                    # bumped — Hephaestus added
+  updated: 2026-07-08
+  rules:
+    - "No OpenAI models anywhere."              # RESCINDED — Tyler approved OpenAI lane 2026-07-08
+    - "Test-phase baseline: deepseek-v4-flash fleet-wide, except vision -> gemini."  # STALE — most agents now on diverse models
+    - "Planned upgrades (P2): zeus + ares -> kimi-k2.6; reviewer-1 and reviewer-2 on different model families."
+    - "Hephaestus: debug/rescue specialist, kimi-k2.6 primary, deepseek-v4-pro fallback."
+    - "OpenAI: gpt-4o-mini for cost-floor tasks, gpt-4o for visual/creative, new models Jul 9 TBD."
+    - "August GPT-5.4-mini fallback: intentional. Box 2 emergency fallback model. Not fleet-wide."
+
+boxes:
+  windows:
+    hostname: WindowsAugi
+    tailscale_ip: 100.103.95.73
+    stage: plan
+    hosts: [paperclip, postgres, vault, obsidian-brain]
+  box1:
+    hostname: AugiAIs-Mini
+    tailscale_ip: 100.68.190.105
+    user: augi
+    stage: execute
+  box2:
+    hostname: AugiBot2s-Mini
+    tailscale_ip: 100.85.82.53
+    user: augibot2
+    stage: review
+    notes: "August GPT-5.4-mini fallback — intentional. Box 2 emergency model. Not fleet-wide."
+
+providers:
+  deepseek:
+    env_var: DEEPSEEK_API_KEY
+    models: [deepseek-v4-pro, deepseek-v4-flash]
+    notes: "Primary provider. v4-pro for orchestration, v4-flash for workers."
+
+  openrouter:
+    env_var: OPENROUTER_API_KEY
+    models: [kimi-k2.6, glm-5.2, qwen/qwen3-vl-8b-instruct]
+    notes: "Multi-model gateway. Kimi K2.6 for coding, GLM 5.2 1M ctx for long-context, Qwen VL for vision."
+
+  openai:
+    env_var: OPENAI_API_KEY                               # ⚠️ Tyler action: drop key into box env
+    models:
+      - gpt-4o                                           # LIVE: Hermes Designer (visual/creative)
+      - gpt-4o-mini                                      # LIVE: Ares Evidence Verifier (cost-floor)
+      - gpt-5.4-mini                                     # AUGUST FALLBACK (Box 2 emergency, intentional, not fleet-wide)
+    new_models_jul9:                                     # Launching tomorrow — reserved slots
+      - slot: "Hermes Designer"                          # Currently gpt-4o → candidate for new model
+      - slot: "Ares Evidence Verifier"                   # Currently gpt-4o-mini → candidate for new model
+      - slot: "August fallback"                          # Currently gpt-5.4-mini → eval new model as upgrade
+    status: RESERVED                                      # Lane reserved. Not active until Tyler drops OPENAI_API_KEY.
+    activation: "Tyler drops OPENAI_API_KEY into relevant box .env files."
+
+agents:
+  # ═══ Plan (Windows, Hermes framework) ═══
+  - name: Zeus
+    box: windows
+    orchestrator: null          # top of the tree
+    role: plan-orchestrator
+    model: deepseek-v4-pro      # LIVE (DB): deepseek-v4-pro (fleet said deepseek-v4-flash)
+    framework: hermes
+    adapter: hermes_local
+  - name: Zeus Critic
+    box: windows
+    orchestrator: Zeus
+    role: plan-critic
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: hermes
+  - name: Zeus Book Keeper
+    box: windows
+    orchestrator: Zeus
+    role: memory-scribe
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: hermes
+
+  # ═══ Execute (Box 1, Hermes framework) ═══
+  - name: Hermes
+    box: box1
+    orchestrator: Zeus
+    role: execute-dispatcher
+    model: deepseek-v4-pro      # LIVE (DB): deepseek-v4-pro (fleet said deepseek-v4-flash)
+    framework: hermes
+    adapter: hermes_local
+  - name: Hermes Coder 1
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: kimi-k2.6            # LIVE (DB): kimi-k2.6 (fleet said deepseek-v4-flash)
+    framework: hermes
+  - name: Hermes Coder 2
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: glm-5.2              # LIVE (DB): glm-5.2 1M ctx (fleet said deepseek-v4-flash)
+    framework: hermes
+  - name: Hermes Coder 3
+    box: box1
+    orchestrator: Hermes
+    role: coder
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: hermes
+  - name: Hermes Designer
+    box: box1
+    orchestrator: Hermes
+    role: designer
+    model: gpt-4o               # LIVE (DB): gpt-4o — OpenAI. Visual/creative specialist.
+    framework: hermes
+    notes: "OpenAI lane (Tyler approved). New models Jul 9 may replace this slot."
+  - name: Hermes Researcher
+    box: box1
+    orchestrator: Hermes
+    role: researcher
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: hermes
+
+  # ═══ Review (Box 2, Hermes framework) ═══
+  - name: Ares
+    box: box2
+    orchestrator: Zeus
+    role: review-boss
+    model: deepseek-v4-pro      # LIVE (DB): deepseek-v4-pro (fleet said deepseek-v4-flash)
+    framework: hermes
+    adapter: hermes_local
+  - name: Ares Evidence Verifier
+    box: box2
+    orchestrator: Ares
+    role: evidence-verifier
+    model: gpt-4o-mini          # LIVE (DB): gpt-4o-mini — OpenAI. Cost-floor evidence check.
+    framework: hermes
+    notes: "Cheapest OpenAI model. Evidence verification (read-only, low reasoning)."
+  - name: Ares Reviewer 1
+    box: box2
+    orchestrator: Ares
+    role: reviewer
+    model: kimi-k2.6            # LIVE (DB): kimi-k2.6 (fleet said deepseek-v4-flash)
+    framework: hermes
+  - name: Ares Reviewer 2
+    box: box2
+    orchestrator: Ares
+    role: reviewer
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: hermes
+
+  # ═══ Standalones ═══
+  - name: Augi
+    box: box1
+    orchestrator: null
+    role: apps-build-engineer
+    model: deepseek-v4-flash    # LIVE (DB): deepseek-v4-flash (matches)
+    framework: openclaw
+    standalone: true
+  - name: August
+    box: box2
+    orchestrator: null
+    role: fleet-ops-responder
+    model: deepseek-v4-pro      # LIVE (DB): deepseek-v4-pro (fleet said deepseek-v4-flash)
+    framework: openclaw
+    standalone: true
+  - name: Baily AI
+    box: external
+    orchestrator: null
+    role: in-app-service
+    model: qwen/qwen3-vl-8b-instruct  # LIVE (DB): qwen3-vl-8b (matches)
+    framework: external
+    standalone: true
+    dispatchable: false
+
+  # ═══ Hephaestus (NEW — registered in DB, not in previous fleet.yaml) ═══
+  - name: Hephaestus
+    box: windows                 # LIVE: Windows (Box 3 per metadata, but Windows host)
+    orchestrator: null           # TOP-LEVEL, reports to Tyler directly
+    role: debug-rescue-specialist
+    model: kimi-k2.6             # LIVE (DB): kimi-k2.6 primary, deepseek-v4-pro fallback
+    framework: hermes
+    standalone: true
+    no_openai: true              # LIVE (DB): no_openai=True
+    notes: >
+      Hephaestus (debug/rescue specialist) on Windows = Kimi K2.6 primary;
+      fallback deepseek-v4-pro for hard cases, flash for cheap triage.
+      No OpenAI. Lane: debug/rescue. Reports to Tyler directly.
