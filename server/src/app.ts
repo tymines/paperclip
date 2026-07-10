@@ -556,7 +556,7 @@ export async function createApp(
       server: {
         middlewareMode: true,
         hmr: {
-          host: opts.bindHost,
+          host: "127.0.0.1",
           port: hmrPort,
           clientPort: hmrPort,
         },
