@@ -2,10 +2,9 @@ name: Docker
 
 on:
   push:
-    branches:
-      - "master"
     tags:
       - "v*"
+  # push-to-master disabled (fork deploys via box, not ghcr) — was failing every commit + emailing Tyler
 
 permissions:
   contents: read
