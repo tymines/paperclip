@@ -50,8 +50,8 @@ export function gateRoutes(db: Db) {
       return;
     }
 
-    const { runId, decision, evidence } = req.body as {
-      runId?: string; decision?: string; evidence?: string[];
+    const { runId, decision, evidence, send_back_to } = req.body as {
+      runId?: string; decision?: string; evidence?: string[]; send_back_to?: string;
     };
 
     if (!runId || !decision) {
@@ -94,11 +94,35 @@ export function gateRoutes(db: Db) {
         res.json({ advanced: false, completed: true, from: currentStage, gate: gateResult });
       }
     } else {
-      // Fail: mark stage failed
-      await db.run("UPDATE run_stages SET status = 'failed', completed_at = now() WHERE id = $1", [activeRow.id]);
-      await db.run("UPDATE pipeline_runs SET status = 'paused' WHERE id = $1", [runId]);
-      emitEvent({ type: "stage_failed", runId, stage: currentStage });
-      res.status(409).json({ failed: true, stage: currentStage, gate: gateResult });
+      // Reject: mark current rework, re-activate target (or previous) room
+      const targetIdx = send_back_to
+        ? MANUAL_STAGES.indexOf(send_back_to)
+        : Math.max(0, currentIdx - 1);
+
+      if (targetIdx < 0 || targetIdx >= currentIdx) {
+        res.status(400).json({ error: "send_back_to must be an earlier stage" });
+        return;
+      }
+
+      const targetStage = MANUAL_STAGES[targetIdx];
+      const reworkId = randomUUID();
+
+      await db.run("UPDATE run_stages SET status = 'rework', completed_at = now() WHERE id = $1", [activeRow.id]);
+      // ponytail: new artifact version — fresh row at target stage
+      await db.run(
+        "INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES ($1, $2, $3, 'active', $4)",
+        [reworkId, runId, targetStage, targetIdx]
+      );
+      await db.run("UPDATE pipeline_runs SET status = 'active' WHERE id = $1", [runId]);
+
+      emitEvent({ type: "stage_rework", runId, from: currentStage, send_back_to: targetStage, reworkStageId: reworkId });
+      res.status(409).json({
+        rework: true,
+        from: currentStage,
+        send_back_to: targetStage,
+        stageId: reworkId,
+        gate: gateResult,
+      });
     }
   });
 
