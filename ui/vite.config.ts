@@ -24,6 +24,7 @@ export default defineConfig(({ mode }) => ({
   },
   server: {
     port: 5173,
+    hmr: { host: "127.0.0.1" },
     // Allow the Cloudflare-tunnelled host (paperclip.augiport.com) so Tyler can
     // open the dev UI from his phone. The tunnel is already access-gated, so the
     // Vite host check adds no security here — keep localhost too for local dev.
