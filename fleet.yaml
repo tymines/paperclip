@@ -153,3 +153,9 @@ agents:
     framework: external
     standalone: true
     dispatchable: false
+  - name: Nano Banana 2
+    box: box1
+    orchestrator: Hermes
+    role: designer
+    model: gemini-3.1-flash-image
+    framework: hermes
