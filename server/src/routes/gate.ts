@@ -1,5 +1,6 @@
 // ponytail: gate-decision + kill + run-create + advance. Manual-first pipeline.
 import { Router } from "express";
+import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { checkGate } from "../rooms-rail/gate-checker.js";
@@ -16,6 +17,11 @@ function emitEvent(evt: Record<string, unknown>) {
   try { fs.appendFileSync(EVENTS_LOG, line); } catch {}
 }
 
+// ponytail: drizzle-compatible raw-SQL helper (same pattern as gym-observability.ts)
+async function rows(db: Db, q: ReturnType<typeof sql>): Promise<any[]> {
+  return [...(await db.execute(q))] as any[];
+}
+
 export function gateRoutes(db: Db) {
   const router = Router();
 
@@ -26,16 +32,14 @@ export function gateRoutes(db: Db) {
     const { name } = req.body as { name?: string };
     const runId = randomUUID();
     const stageId = randomUUID();
+    const runName = name ?? "New Project";
 
-    await db.run(`
-      INSERT INTO pipeline_runs (id, company_id, name, status) VALUES ($1, $2, $3, 'active');
-      INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order)
-        VALUES ($4, $1, 'idea', 'active', 0);
-    `, [runId, companyId, name ?? "New Project", stageId]);
+    await db.execute(sql`INSERT INTO pipeline_runs (id, company_id, name, status) VALUES (${runId}, ${companyId}, ${runName}, 'active')`);
+    await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${stageId}, ${runId}, 'idea', 'active', 0)`);
 
-    emitEvent({ type: "pipeline_start", runId, stageId, name });
+    emitEvent({ type: "pipeline_start", runId, stageId, name: runName });
 
-    res.status(201).json({ runId, stageId, stage: "idea", name: name ?? "New Project" });
+    res.status(201).json({ runId, stageId, stage: "idea", name: runName });
   });
 
   // ── Gate decision + advance ──
@@ -59,42 +63,33 @@ export function gateRoutes(db: Db) {
       return;
     }
 
-    // ponytail: get current active stage
-    const [activeRow] = await db.run(
-      "SELECT id, name, stage_order FROM run_stages WHERE pipeline_run_id = $1 AND status = 'active' ORDER BY stage_order LIMIT 1",
-      [runId]
-    );
+    const [activeRow] = await rows(db, sql`SELECT id, name, stage_order FROM run_stages WHERE pipeline_run_id = ${runId} AND status = 'active' ORDER BY stage_order LIMIT 1`);
 
     if (!activeRow) {
       res.status(404).json({ error: "no active stage found" });
       return;
     }
 
-    const currentStage = activeRow.name;
+    const currentStage = activeRow.name as string;
     const currentIdx = MANUAL_STAGES.indexOf(currentStage);
     const gateResult = checkGate(currentStage, evidence ?? []);
 
     if (decision === "pass") {
-      // Advance: mark current complete, create next
-      await db.run("UPDATE run_stages SET status = 'passed', completed_at = now() WHERE id = $1", [activeRow.id]);
+      await db.execute(sql`UPDATE run_stages SET status = 'passed', completed_at = now() WHERE id = ${activeRow.id}`);
 
       const nextIdx = currentIdx + 1;
       if (nextIdx < MANUAL_STAGES.length) {
         const nextStage = MANUAL_STAGES[nextIdx];
         const nextId = randomUUID();
-        await db.run(
-          "INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES ($1, $2, $3, 'active', $4)",
-          [nextId, runId, nextStage, nextIdx]
-        );
+        await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${nextId}, ${runId}, ${nextStage}, 'active', ${nextIdx})`);
         emitEvent({ type: "stage_advance", runId, from: currentStage, to: nextStage, decision: "pass" });
         res.json({ advanced: true, from: currentStage, to: nextStage, stageId: nextId, gate: gateResult });
       } else {
-        await db.run("UPDATE pipeline_runs SET status = 'completed', completed_at = now() WHERE id = $1", [runId]);
+        await db.execute(sql`UPDATE pipeline_runs SET status = 'completed', completed_at = now() WHERE id = ${runId}`);
         emitEvent({ type: "pipeline_complete", runId });
         res.json({ advanced: false, completed: true, from: currentStage, gate: gateResult });
       }
     } else {
-      // Reject: mark current rework, re-activate target (or previous) room
       const targetIdx = send_back_to
         ? MANUAL_STAGES.indexOf(send_back_to)
         : Math.max(0, currentIdx - 1);
@@ -107,13 +102,9 @@ export function gateRoutes(db: Db) {
       const targetStage = MANUAL_STAGES[targetIdx];
       const reworkId = randomUUID();
 
-      await db.run("UPDATE run_stages SET status = 'rework', completed_at = now() WHERE id = $1", [activeRow.id]);
-      // ponytail: new artifact version — fresh row at target stage
-      await db.run(
-        "INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES ($1, $2, $3, 'active', $4)",
-        [reworkId, runId, targetStage, targetIdx]
-      );
-      await db.run("UPDATE pipeline_runs SET status = 'active' WHERE id = $1", [runId]);
+      await db.execute(sql`UPDATE run_stages SET status = 'rework', completed_at = now() WHERE id = ${activeRow.id}`);
+      await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${reworkId}, ${runId}, ${targetStage}, 'active', ${targetIdx})`);
+      await db.execute(sql`UPDATE pipeline_runs SET status = 'active' WHERE id = ${runId}`);
 
       emitEvent({ type: "stage_rework", runId, from: currentStage, send_back_to: targetStage, reworkStageId: reworkId });
       res.status(409).json({
@@ -148,14 +139,14 @@ export function gateRoutes(db: Db) {
   // ── Read pipeline runs + stages ──
   router.get("/companies/:companyId/pipeline/runs", async (req, res) => {
     const c = req.params.companyId as string; assertCompanyAccess(req, c);
-    const runs = await db.run("SELECT r.id,r.name,r.status,r.created_at,s.name AS current_stage,s.status AS stage_status FROM pipeline_runs r LEFT JOIN run_stages s ON s.pipeline_run_id=r.id AND s.status IN ('active','rework') WHERE r.company_id=$1 ORDER BY r.created_at DESC", [c]);
+    const runs = await rows(db, sql`SELECT r.id,r.name,r.status,r.created_at,s.name AS current_stage,s.status AS stage_status FROM pipeline_runs r LEFT JOIN run_stages s ON s.pipeline_run_id=r.id AND s.status IN ('active','rework') WHERE r.company_id=${c} ORDER BY r.created_at DESC`);
     res.json({ runs });
   });
   router.get("/companies/:companyId/pipeline/runs/:runId", async (req, res) => {
     const c = req.params.companyId as string; assertCompanyAccess(req, c);
-    const [run] = await db.run("SELECT id,name,status,created_at FROM pipeline_runs WHERE id=$1 AND company_id=$2", [req.params.runId, c]);
+    const [run] = await rows(db, sql`SELECT id,name,status,created_at FROM pipeline_runs WHERE id=${req.params.runId} AND company_id=${c}`);
     if (!run) { res.status(404).json({ error: "run not found" }); return; }
-    const stages = await db.run("SELECT id,name,status,stage_order,completed_at FROM run_stages WHERE pipeline_run_id=$1 ORDER BY stage_order,completed_at", [req.params.runId]);
+    const stages = await rows(db, sql`SELECT id,name,status,stage_order,completed_at FROM run_stages WHERE pipeline_run_id=${req.params.runId} ORDER BY stage_order,completed_at`);
     res.json({ run, stages });
   });
 

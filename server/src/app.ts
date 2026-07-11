@@ -49,6 +49,7 @@ import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-genera
 // Company import/export payloads can inline full portable packages.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { createServer: createViteServer } = await import("vite");
+import { gymObservabilityRoutes } from "./routes/gym-observability.js";
 import { gymRoutes } from "./routes/gym.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { influencerStudioRoutes } from "./routes/influencer-studio.js";
@@ -286,6 +287,7 @@ export async function createApp(
   api.use(bookStudioChapterGenRoutes(db));
   api.use(bookStudioAutopilotRoutes(db));
   api.use(bookStudioImageGenerateRoutes(db));
+  api.use(gymObservabilityRoutes(db));
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   api.use(influencerStudioRoutes(db, {}));
