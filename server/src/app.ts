@@ -45,6 +45,7 @@ import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
 import { bookStudioExportRoutes } from "./routes/book-studio-export.js";
 import { bookStudioChapterGenRoutes } from "./routes/book-studio-chapter-gen.js";
 import { bookStudioAutopilotRoutes } from "./routes/book-studio-autopilot.js";
+import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-generate.js";
 // Company import/export payloads can inline full portable packages.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { createServer: createViteServer } = await import("vite");
@@ -284,6 +285,7 @@ export async function createApp(
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
   api.use(bookStudioAutopilotRoutes(db));
+  api.use(bookStudioImageGenerateRoutes(db));
   api.use(gymRoutes(db));
   api.use(storyBibleRoutes(db));
   api.use(influencerStudioRoutes(db, {}));

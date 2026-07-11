@@ -184,6 +184,46 @@ function formatContext(ctx: BibleContext): string {
   return parts.length > 0 ? parts.join("\n") : "(No existing bible entries)";
 }
 
+// ponytail: normalize Gemini output to match DB column types
+// - voiceCard: string → { description: string }
+// - rules/sensoryNotes: array → { "0": item, ... }
+// - comps: array → comma-separated string
+// - beats: array of strings → [{ description: str }]
+function normalizeEntityOutput(
+  entityType: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const out = { ...data };
+
+  if (entityType === "character" && typeof out.voiceCard === "string") {
+    out.voiceCard = { description: out.voiceCard };
+  }
+  if (entityType === "location") {
+    for (const f of ["rules", "sensoryNotes"] as const) {
+      const val = out[f];
+      if (typeof val === "string") {
+        out[f] = { description: val };
+      } else if (Array.isArray(val)) {
+        const obj: Record<string, unknown> = {};
+        (val as unknown[]).forEach((v, i) => { obj[String(i)] = v; });
+        out[f] = obj;
+      }
+    }
+  }
+  if (entityType === "style") {
+    if (Array.isArray(out.comps)) {
+      out.comps = (out.comps as string[]).join(", ");
+    }
+  }
+  if (entityType === "outline-beats" && Array.isArray(out.beats)) {
+    const beats = out.beats as unknown[];
+    if (beats.length > 0 && typeof beats[0] === "string") {
+      out.beats = beats.map((b) => ({ description: b }));
+    }
+  }
+  return out;
+}
+
 // ── JSON extraction helper ──────────────────────────────────────────────────
 
 function extractJson(text: string): Record<string, unknown> {
@@ -260,15 +300,18 @@ export function storyBibleGenerateRoutes(db: Db) {
         // Parse JSON from response
         const parsed = extractJson(raw);
 
+        // Normalize Gemini output to match DB schemas
+        const normalized = normalizeEntityOutput(entityType, parsed);
+
         // Validate required fields
         for (const f of fields) {
-          if (parsed[f] === undefined) {
-            parsed[f] = "";
+          if (normalized[f] === undefined) {
+            normalized[f] = "";
           }
         }
 
         res.json({
-          draft: parsed,
+          draft: normalized,
           status: "draft",
           entityType,
         });
