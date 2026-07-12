@@ -627,4 +627,15 @@ export async function createApp(
     logger.error({ err }, "Failed to load ready plugins on startup");
   });
   process.once("exit", () => {
-    if (feedbackExportTimer) clearInterval(feedbackExport
+    if (feedbackExportTimer) clearInterval(feedbackExportTimer);
+    devWatcher?.close();
+    viteHtmlRenderer?.dispose();
+    hostServiceCleanup.disposeAll();
+    hostServiceCleanup.teardown();
+  });
+  process.once("beforeExit", () => {
+    void flushPluginLogBuffer();
+  });
+
+  return app;
+}
