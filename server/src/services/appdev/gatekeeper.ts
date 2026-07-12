@@ -293,7 +293,7 @@ export async function decideGate(db: Db, input: GateDecisionInput) {
   const transition = GATE_TRANSITIONS[input.gate];
   if (!transition) throw new GateRefusedError(`Unknown gate: ${input.gate}`);
 
-  let app;
+  let app: typeof appdevApps.$inferSelect | undefined;
   try {
     [app] = await db
       .select()
@@ -514,5 +514,4 @@ export async function tylerQueue(db: Db, companyId: string): Promise<TylerQueueI
   } catch (err) {
     rethrowMigrationPending(err);
   }
-  return items.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-}
+  return items.sort((a, b) => a.crea

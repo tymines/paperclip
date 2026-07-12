@@ -394,7 +394,7 @@ export function appdevControlRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
       const b = req.body ?? {};
-      let wo;
+      let wo: typeof appdevWorkOrders.$inferSelect | undefined;
       try {
         [wo] = await db
           .select()
@@ -664,6 +664,4 @@ export function appdevControlRoutes(db: Db) {
     }),
   );
 
-  logger.info("appdev-control routes mounted (spec v1.1; migration 0146 gated)");
-  return router;
-}
+  logger.info("appdev-control routes mounted (spec 
