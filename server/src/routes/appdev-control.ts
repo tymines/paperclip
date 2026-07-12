@@ -664,4 +664,6 @@ export function appdevControlRoutes(db: Db) {
     }),
   );
 
-  logger.info("appdev-control routes mounted (spec 
+  logger.info("appdev-control routes mounted (spec v1.1)");
+  return router;
+}
