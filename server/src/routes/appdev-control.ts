@@ -533,7 +533,7 @@ export function appdevControlRoutes(db: Db) {
               typeof req.body?.referencePackId === "string" ? req.body.referencePackId : null,
             reviewerLane: "review",
             reviewerModel: result.reviewerModel,
-            rubricScores: result.rubricScores,
+            rubricScores: result.rubricScores as Record<string, Record<string, unknown>>,
             verdict: result.verdict,
             worstScreen: result.worstScreen,
             summary: result.summary,
