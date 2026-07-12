@@ -4,6 +4,7 @@
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Megaphone, AlertTriangle, RefreshCw, TrendingUp, Repeat } from "lucide-react";
+import { SurfaceKeyedOff } from "./EmptyStates";
 import { adStudioApi, creativeToolsApi, AD_FORMATS, type BatchEstimate, type BatchResult } from "../../api/creativeTools";
 import { creativeStudioApi, type CreativeJob, type CreativeModel } from "../../api/creativeStudio";
 import { useCompany } from "../../context/CompanyContext";
@@ -15,7 +16,7 @@ const DS = {
   success: "#2FE38A", critical: "#FF5B5B",
 } as const;
 const MONO = "'IBM Plex Mono', monospace";
-const card: CSSProperties = { background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 20 };
+const card: CSSProperties = { background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 14 };
 const input: CSSProperties = { width: "100%", boxSizing: "border-box", background: DS.surface2, color: DS.text, border: `1px solid ${DS.border}`, borderRadius: 10, padding: "8px 10px", fontSize: 12, outline: "none" };
 
 export function AdStudio({ hfConfigured }: { hfConfigured: boolean }) {
@@ -92,10 +93,12 @@ export function AdStudio({ hfConfigured }: { hfConfigured: boolean }) {
 
   if (!hfConfigured) {
     return (
-      <div style={{ ...card, borderColor: DS.amber, display: "flex", gap: 10, alignItems: "center" }}>
-        <AlertTriangle size={16} color={DS.amber} />
-        <span style={{ fontSize: 13, color: DS.textMuted }}>Ad Studio runs on the Higgsfield MCP — keyed off (HIGGSFIELD_MCP_URL). Nothing here is mocked.</span>
-      </div>
+      <SurfaceKeyedOff
+        icon={<Megaphone size={18} />}
+        title="Ad Studio"
+        promise="Product URL in, ad campaign out: brand kits, twelve UGC ad formats, hook × setting batch matrices with spend confirmation, and virality scoring on every variant."
+        envVars={["HIGGSFIELD_MCP_URL", "HIGGSFIELD_MCP_TOKEN"]}
+      />
     );
   }
 

@@ -4,7 +4,8 @@
 // Higgsfield MCP (presets_show) — never hardcoded.
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Youtube, Presentation, Scissors, RefreshCw, AlertTriangle } from "lucide-react";
+import { Youtube, Presentation, Scissors, RefreshCw, AlertTriangle, LayoutGrid } from "lucide-react";
+import { SurfaceKeyedOff } from "./EmptyStates";
 import { creativeToolsApi, type BrowseItem } from "../../api/creativeTools";
 import { useCompany } from "../../context/CompanyContext";
 import { useToast } from "../../context/ToastContext";
@@ -16,7 +17,7 @@ const DS = {
 } as const;
 
 const card: CSSProperties = {
-  background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 24,
+  background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 14,
 };
 
 export function PresetsBrowser({ hfConfigured, onUsePreset }: {
@@ -57,10 +58,12 @@ export function PresetsBrowser({ hfConfigured, onUsePreset }: {
 
   if (!hfConfigured) {
     return (
-      <div style={{ ...card, borderColor: DS.amber, display: "flex", gap: 10, alignItems: "center" }}>
-        <AlertTriangle size={16} color={DS.amber} />
-        <span style={{ fontSize: 13, color: DS.textMuted }}>Presets and launchers need the Higgsfield MCP — keyed off (HIGGSFIELD_MCP_URL). Nothing here is mocked.</span>
-      </div>
+      <SurfaceKeyedOff
+        icon={<LayoutGrid size={18} />}
+        title="Presets & Launchers"
+        promise="Sixty-plus cinematic camera moves, viral VFX scenarios, and one-line launchers for explainers, shorts, and YouTube clipping — browsed live from your Higgsfield account."
+        envVars={["HIGGSFIELD_MCP_URL", "HIGGSFIELD_MCP_TOKEN"]}
+      />
     );
   }
 

@@ -3,7 +3,8 @@
 // Source = any URL (paste) or a completed library job (deep-linked via initialSourceUrl).
 import { useState, type CSSProperties } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Wand2, AlertTriangle } from "lucide-react";
+import { Wand2 } from "lucide-react";
+import { SurfaceKeyedOff } from "./EmptyStates";
 import { creativeToolsApi, EDIT_TOOL_META } from "../../api/creativeTools";
 import { useCompany } from "../../context/CompanyContext";
 import { useToast } from "../../context/ToastContext";
@@ -14,7 +15,7 @@ const DS = {
 } as const;
 
 const card: CSSProperties = {
-  background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 20,
+  background: DS.surface, border: "1px solid rgba(255,255,255,.06)", borderRadius: 16, padding: 14,
 };
 
 export function EditTools({ hfConfigured, initialSourceUrl }: {
@@ -41,10 +42,12 @@ export function EditTools({ hfConfigured, initialSourceUrl }: {
 
   if (!hfConfigured) {
     return (
-      <div style={{ ...card, borderColor: DS.amber, display: "flex", gap: 10, alignItems: "center" }}>
-        <AlertTriangle size={16} color={DS.amber} />
-        <span style={{ fontSize: 13, color: DS.textMuted }}>Edit tools run on the Higgsfield MCP — keyed off (HIGGSFIELD_MCP_URL). Nothing here is mocked.</span>
-      </div>
+      <SurfaceKeyedOff
+        icon={<Wand2 size={18} />}
+        title="One-click edit tools"
+        promise="Upscale, expand, reframe, remove backgrounds, and recast motion on any asset — six single-purpose tools, straight from your library cards."
+        envVars={["HIGGSFIELD_MCP_URL", "HIGGSFIELD_MCP_TOKEN"]}
+      />
     );
   }
 
