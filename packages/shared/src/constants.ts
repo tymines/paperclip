@@ -656,6 +656,15 @@ export const LIVE_EVENT_TYPES = [
   "room.member.joined",
   "room.member.left",
   "room.updated",
+  // App Dev Control Center typed wire (spec v1.1 Part 3.1.4)
+  "appdev.gate.passed",
+  "appdev.gate.failed",
+  "appdev.wo.requeued",
+  "appdev.vfg.failed",
+  "appdev.plan.escalated",
+  "appdev.release.halted",
+  "appdev.app.killed",
+  "appdev.queue.updated",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 

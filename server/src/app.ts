@@ -39,6 +39,7 @@ import { mlflowRoutes } from "./routes/mlflow.js";
 import { jarvisRoutes } from "./routes/jarvis.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
+import { appdevControlRoutes } from "./routes/appdev-control.js";
 import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
 import { bookStudioRoutes } from "./routes/book-studio.js";
@@ -261,6 +262,7 @@ export async function createApp(
   api.use(jarvisRoutes(db));
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));
+  api.use(appdevControlRoutes(db));
   api.use(promptsRoutes(db));
   api.use(gymRoutes(db));
   api.use(knowledgeGraphRoutes(db));

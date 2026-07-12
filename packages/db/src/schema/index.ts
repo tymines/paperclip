@@ -231,3 +231,23 @@ export { roomTransitions } from "./room_transitions.js";
 export { roomBosses } from "./room_bosses.js";
 export { councilSessions } from "./council_sessions.js";
 export { councilParticipants } from "./council_participants.js";
+
+// ── App Dev Control Center (spec v1.1) — migration 0146 GATED, not applied ──
+export {
+  appdevApps,
+  appdevGates,
+  appdevWorkOrders,
+  appdevReferencePacks,
+  appdevAssets,
+  appdevProofBundles,
+  appdevVisualReviews,
+  appdevFeedbackItems,
+  appdevChatThreads,
+  appdevChatMessages,
+  appdevScreens,
+  appdevSessions,
+  appdevReleases,
+  appdevSkills,
+  appdevDeployments,
+  appdevRetros,
+} from "./appdev_control.js";
