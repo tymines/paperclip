@@ -253,3 +253,12 @@ export {
 } from "./appdev_control.js";
 // ── Creative Studio (Fable spec 2026-07-12, P0) — migration 0149 GATED, not applied ──
 export { creativeJobs, type CreativeJob, type NewCreativeJob } from "./creative_studio.js";
+// ── Book Studio annotations (Fable, 2026-07-12) — migration 0151 GATED, not applied ──
+export {
+  bookAnnotations,
+  bookReviewRuns,
+  type BookAnnotation,
+  type NewBookAnnotation,
+  type BookReviewRun,
+  type NewBookReviewRun,
+} from "./book_annotations.js";

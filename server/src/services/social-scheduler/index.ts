@@ -79,3 +79,26 @@ export {
 } from "./token-exchange.js";
 export { buildConnectedAccountFromTokens } from "./connect-helpers.js";
 export { ensureFreshToken } from "./freshness.js";
+export {
+  SOCIAL_MEDIA_IMAGE_MIMES,
+  SOCIAL_MEDIA_VIDEO_MIMES,
+  SOCIAL_MEDIA_IMAGE_MAX_BYTES,
+  SOCIAL_MEDIA_VIDEO_MAX_BYTES,
+  MediaPublicUrlError,
+  MediaFetchError,
+  assertPubliclyFetchableMediaUrl,
+  buildPublishMediaUrl,
+  detectSocialMediaKind,
+  fetchMediaBytes,
+  isPrivateMediaHost,
+  publicSocialMediaPath,
+  resolvePublicBaseUrl,
+  resolveSelfBaseUrl,
+  socialMediaToken,
+  verifySocialMediaToken,
+  __setMediaPollSleepForTesting,
+  __resetMediaBaseUrlCacheForTesting,
+  type FetchedMedia,
+  type PublishMediaUrl,
+  type SocialMediaKind,
+} from "./media.js";

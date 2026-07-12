@@ -6,22 +6,33 @@
  *   - Platform toggle chips along the top (each selected platform validates
  *     live via /social/posts/validate, surfacing per-platform errors +
  *     warnings as colored chips below the editor).
- *   - Media URL input (Tyler ships real upload later; for now paste URLs).
+ *   - Media attach: real uploads (jpeg/png/webp/gif/mp4) through
+ *     POST /social/media with preview thumbnails, drag-free reordering
+ *     (arrows — the order IS the IG carousel order), plus a paste-a-URL
+ *     fallback for media already hosted elsewhere. Amber pre-publish hint
+ *     when a selected platform can't take the attached media (e.g. Meta
+ *     platforms need a publicly reachable URL — PAPERCLIP_PUBLIC_URL).
  *   - Save-draft / Schedule-for / Post-now action row.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
   CalendarClock,
   FileText,
+  Film,
   Image,
   Loader2,
+  Plus,
   Send,
   Sparkles,
+  Upload,
   Wand2,
+  X,
 } from "lucide-react";
-import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
+import type { SocialAccountPublic, SocialPlatform, SocialPostType } from "@paperclipai/shared";
 import { socialApi, type CaptionSuggestion, type PostValidationResult } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
 import { useToastActions } from "../../context/ToastContext";
@@ -39,6 +50,33 @@ interface ComposeTabProps {
 
 type ScheduleMode = "draft" | "post_now" | "schedule";
 
+/** One attached media item — uploaded through /social/media or a pasted URL. */
+interface ComposedMediaItem {
+  key: string;
+  /** Absolute URL that goes on the post's mediaUrls. */
+  url: string;
+  /** URL the browser can render as a thumbnail (session-authenticated). */
+  previewUrl: string;
+  kind: "image" | "video";
+  filename: string;
+  /** False = loopback fallback only (no public base URL configured). */
+  publiclyFetchable: boolean;
+}
+
+/** Derive the post type the adapters expect from the attached media. */
+function derivePostType(items: ComposedMediaItem[]): SocialPostType {
+  if (items.length === 0) return "text";
+  if (items.some((i) => i.kind === "video")) return "video";
+  return items.length > 1 ? "carousel" : "image";
+}
+
+/** Platforms whose servers must download media from a public URL. */
+const URL_FETCH_PLATFORMS: ReadonlySet<SocialPlatform> = new Set([
+  "instagram",
+  "facebook",
+  "threads",
+] as SocialPlatform[]);
+
 export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
   const queryClient = useQueryClient();
   const { pushToast } = useToastActions();
@@ -48,7 +86,10 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
     return new Set(accounts.map((a) => a.id));
   });
   const [caption, setCaption] = useState("");
-  const [mediaUrl, setMediaUrl] = useState("");
+  const [mediaItems, setMediaItems] = useState<ComposedMediaItem[]>([]);
+  const [mediaUrlInput, setMediaUrlInput] = useState("");
+  const [publicUrlNotice, setPublicUrlNotice] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [scheduleMode, setScheduleMode] = useState<ScheduleMode>("schedule");
   const [scheduledFor, setScheduledFor] = useState(() => nextRoundHourIso());
   const [redditTitle, setRedditTitle] = useState("");
@@ -80,19 +121,124 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
     return Array.from(set);
   }, [accounts, selectedAccountIds]);
 
+  const mediaUrls = useMemo(() => mediaItems.map((i) => i.url), [mediaItems]);
+  const postType = useMemo(() => derivePostType(mediaItems), [mediaItems]);
+
   // Live per-platform validation. Debounced via React Query refetch keying.
+  // The server's per-platform validatePost is the source of truth for
+  // media-count/type rules (X ≤4 images or 1 video, IG carousel 2–10,
+  // Reddit single image, …) — its errors render as the chips below.
   const validationQuery = useQuery({
-    queryKey: ["social", "validate", companyId, selectedPlatforms.join(","), caption, mediaUrl, redditTitle, redditSubreddit],
+    queryKey: [
+      "social",
+      "validate",
+      companyId,
+      selectedPlatforms.join(","),
+      caption,
+      mediaUrls.join("|"),
+      postType,
+      redditTitle,
+      redditSubreddit,
+    ],
     queryFn: () =>
       socialApi.validatePost(companyId, selectedPlatforms, {
         baseCaption: caption,
-        postType: mediaUrl ? "image" : "text",
-        mediaUrls: mediaUrl ? [mediaUrl] : [],
+        postType,
+        mediaUrls,
         metadata: { title: redditTitle, subreddit: redditSubreddit },
       }),
-    enabled: selectedPlatforms.length > 0 && (caption.length > 0 || mediaUrl.length > 0),
+    enabled: selectedPlatforms.length > 0 && (caption.length > 0 || mediaUrls.length > 0),
     staleTime: 200,
   });
+
+  // ── Media attach ──────────────────────────────────────────────────────
+  const uploadMutation = useMutation({
+    mutationFn: (files: File[]) => socialApi.uploadMedia(companyId, files),
+    onSuccess: (result) => {
+      if (result.media.length > 0) {
+        setMediaItems((prev) => [
+          ...prev,
+          ...result.media.map((m) => ({
+            key: m.id,
+            url: m.mediaUrl,
+            previewUrl: m.contentUrl,
+            kind: m.kind,
+            filename: m.filename,
+            publiclyFetchable: m.publiclyFetchable,
+          })),
+        ]);
+      }
+      setPublicUrlNotice(result.publicUrlNotice ?? null);
+      for (const err of result.errors) {
+        pushToast({ title: `Skipped ${err.filename}`, body: err.reason, tone: "error" });
+      }
+    },
+    onError: (err) => {
+      pushToast({
+        title: "Upload failed",
+        body: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+    },
+  });
+
+  const onFilesPicked = (fileList: FileList | null) => {
+    const files = Array.from(fileList ?? []);
+    if (files.length > 0) uploadMutation.mutate(files);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const addRemoteMediaUrl = () => {
+    const raw = mediaUrlInput.trim();
+    if (!raw) return;
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("not http(s)");
+    } catch {
+      pushToast({ title: "Not a valid URL", body: "Paste an absolute http(s) URL.", tone: "error" });
+      return;
+    }
+    const isVideo = /\.(mp4|mov)(\?|#|$)/i.test(raw);
+    setMediaItems((prev) => [
+      ...prev,
+      {
+        key: `url-${Date.now()}-${prev.length}`,
+        url: raw,
+        previewUrl: raw,
+        kind: isVideo ? "video" : "image",
+        filename: raw.split("/").pop()?.split("?")[0] ?? "remote media",
+        // Pasted URLs are assumed hosted publicly — the adapters still
+        // hard-check at publish time.
+        publiclyFetchable: true,
+      },
+    ]);
+    setMediaUrlInput("");
+  };
+
+  const removeMediaItem = (key: string) => {
+    setMediaItems((prev) => prev.filter((i) => i.key !== key));
+  };
+
+  /** Reorder — the resulting order is the IG/Threads carousel order. */
+  const moveMediaItem = (key: string, delta: -1 | 1) => {
+    setMediaItems((prev) => {
+      const index = prev.findIndex((i) => i.key === key);
+      if (index < 0) return prev;
+      const target = index + delta;
+      if (target < 0 || target >= prev.length) return prev;
+      const next = [...prev];
+      const [item] = next.splice(index, 1);
+      next.splice(target, 0, item as ComposedMediaItem);
+      return next;
+    });
+  };
+
+  // Amber pre-publish hint: a selected Meta-family platform can never
+  // fetch loopback-only media — name the config key, don't let the
+  // publish fail opaquely later.
+  const urlFetchPlatformsSelected = selectedPlatforms.filter((p) => URL_FETCH_PLATFORMS.has(p));
+  const nonPublicItems = mediaItems.filter((i) => !i.publiclyFetchable);
+  const showPublicUrlHint = urlFetchPlatformsSelected.length > 0 && nonPublicItems.length > 0;
 
   // Target platform for the AI suggestion: pick the first selected
   // platform if any, otherwise default to Instagram so the user gets a
@@ -102,12 +248,13 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
     [selectedPlatforms],
   );
 
+  const firstMediaUrl = mediaItems[0]?.url ?? null;
   const captionMutation = useMutation({
     mutationFn: () =>
       socialApi.suggestCaption(companyId, {
         platform: aiTargetPlatform,
         prompt: aiPrompt.length > 0 ? aiPrompt : null,
-        mediaUrl: mediaUrl.length > 0 ? mediaUrl : null,
+        mediaUrl: firstMediaUrl,
       }),
     onSuccess: (result) => {
       setAiSuggestion(result);
@@ -170,13 +317,17 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
             : null;
       return socialApi.createPost(companyId, {
         content: caption,
-        postType: mediaUrl ? "image" : "text",
+        postType,
         status,
         scheduledAt,
-        mediaUrls: mediaUrl ? [mediaUrl] : [],
+        mediaUrls,
         tags: [],
         accountIds: Array.from(selectedAccountIds),
         metadata: {
+          // Keys the Reddit adapter reads at publish time.
+          title: redditTitle || undefined,
+          subreddit: redditSubreddit || undefined,
+          // Legacy aliases kept for older readers of post.metadata.
           redditTitle: redditTitle || undefined,
           redditSubreddit: redditSubreddit || undefined,
         },
@@ -193,7 +344,8 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
         tone: "success",
       });
       setCaption("");
-      setMediaUrl("");
+      setMediaItems([]);
+      setMediaUrlInput("");
       setRedditTitle("");
       setRedditSubreddit("");
       queryClient.invalidateQueries({ queryKey: queryKeys.social.posts(companyId) });
@@ -223,8 +375,9 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
   const needsRedditMeta = selectedPlatforms.includes("reddit");
   const canSubmit =
     selectedAccountIds.size > 0 &&
-    (caption.trim().length > 0 || mediaUrl.trim().length > 0) &&
-    !anyHardError;
+    (caption.trim().length > 0 || mediaItems.length > 0) &&
+    !anyHardError &&
+    !uploadMutation.isPending;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -310,7 +463,7 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
                   size="sm"
                   disabled={
                     captionMutation.isPending ||
-                    (aiPrompt.trim().length === 0 && mediaUrl.trim().length === 0)
+                    (aiPrompt.trim().length === 0 && !firstMediaUrl)
                   }
                   onClick={() => captionMutation.mutate()}
                 >
@@ -322,7 +475,7 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
                   {captionMutation.isPending ? "Generating…" : "Generate"}
                 </Button>
                 <span className="text-[11px] text-muted-foreground">
-                  Uses the media URL above as visual context if provided.
+                  Uses the first attached media as visual context if provided.
                 </span>
               </div>
               {aiError ? (
@@ -411,17 +564,150 @@ export function ComposeTab({ companyId, accounts }: ComposeTabProps) {
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="compose-media" className="text-xs uppercase tracking-wide text-muted-foreground">
+          <Label className="text-xs uppercase tracking-wide text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
-              <Image className="h-3.5 w-3.5" /> Media URL (paste for now — upload coming soon)
+              <Image className="h-3.5 w-3.5" /> Media
             </span>
           </Label>
-          <Input
-            id="compose-media"
-            value={mediaUrl}
-            onChange={(e) => setMediaUrl(e.target.value)}
-            placeholder="https://…/photo.jpg"
-          />
+
+          {mediaItems.length > 0 ? (
+            <div className="flex flex-wrap gap-2" data-testid="compose-media-list">
+              {mediaItems.map((item, index) => (
+                <div
+                  key={item.key}
+                  className="group relative h-24 w-24 overflow-hidden rounded-md border border-border bg-card"
+                  title={item.filename}
+                >
+                  {item.kind === "video" ? (
+                    <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground">
+                      <Film className="h-6 w-6" />
+                      <span className="max-w-[80px] truncate px-1 text-[10px]">{item.filename}</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={item.previewUrl}
+                      alt={item.filename}
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                  <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] font-medium text-white">
+                    {index + 1}
+                  </span>
+                  {!item.publiclyFetchable ? (
+                    <span
+                      className="absolute bottom-1 left-1 rounded bg-amber-500/90 px-1 text-[9px] font-semibold text-black"
+                      title="Only reachable from this server — Instagram/Facebook/Threads can't fetch it. Set PAPERCLIP_PUBLIC_URL."
+                    >
+                      local
+                    </span>
+                  ) : null}
+                  <div className="absolute inset-x-0 bottom-0 hidden items-center justify-between bg-black/60 px-1 py-0.5 group-hover:flex">
+                    <button
+                      type="button"
+                      className="text-white/80 hover:text-white disabled:opacity-30"
+                      disabled={index === 0}
+                      onClick={() => moveMediaItem(item.key, -1)}
+                      aria-label="Move earlier"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="text-white/80 hover:text-white"
+                      onClick={() => removeMediaItem(item.key)}
+                      aria-label="Remove media"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="text-white/80 hover:text-white disabled:opacity-30"
+                      disabled={index === mediaItems.length - 1}
+                      onClick={() => moveMediaItem(item.key, 1)}
+                      aria-label="Move later"
+                    >
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {mediaItems.length > 1 && !mediaItems.some((i) => i.kind === "video") ? (
+            <p className="text-[11px] text-muted-foreground">
+              This order is the carousel order on Instagram/Threads — use the arrows to rearrange.
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/gif,video/mp4"
+              multiple
+              className="hidden"
+              data-testid="compose-media-file-input"
+              onChange={(e) => onFilesPicked(e.target.files)}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={uploadMutation.isPending}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploadMutation.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              {uploadMutation.isPending ? "Uploading…" : "Upload media"}
+            </Button>
+            <span className="text-[11px] text-muted-foreground">jpeg / png / webp / gif / mp4</span>
+          </div>
+
+          <div className="flex gap-1.5">
+            <Input
+              id="compose-media-url"
+              value={mediaUrlInput}
+              onChange={(e) => setMediaUrlInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addRemoteMediaUrl();
+                }
+              }}
+              placeholder="…or paste a public media URL (https://…/photo.jpg)"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={mediaUrlInput.trim().length === 0}
+              onClick={addRemoteMediaUrl}
+            >
+              <Plus className="h-3.5 w-3.5" /> Add
+            </Button>
+          </div>
+
+          {showPublicUrlHint ? (
+            <div
+              data-testid="compose-public-url-hint"
+              className="flex items-start gap-2 rounded-md border border-amber-400/60 bg-amber-50/60 px-3 py-2 text-[11px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                {urlFetchPlatformsSelected.join(", ")} must download media from a publicly
+                reachable URL, but {nonPublicItems.length === 1 ? "an attached file is" : `${nonPublicItems.length} attached files are`} only
+                served from this machine. Set <code className="font-mono">PAPERCLIP_PUBLIC_URL</code> (or
+                <code className="font-mono"> auth.publicBaseUrl</code> in config.json) and re-attach, or those
+                targets will fail with this exact reason. X and Reddit are unaffected.
+              </span>
+            </div>
+          ) : null}
+          {publicUrlNotice && !showPublicUrlHint && mediaItems.some((i) => !i.publiclyFetchable) ? (
+            <p className="text-[11px] text-muted-foreground">{publicUrlNotice}</p>
+          ) : null}
         </div>
 
         {needsRedditMeta ? (

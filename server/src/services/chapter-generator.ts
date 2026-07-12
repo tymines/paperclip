@@ -174,6 +174,179 @@ export async function callLLM(systemPrompt: string, userPrompt: string): Promise
   );
 }
 
+// ── Token streaming (SSE draft output) ──────────────────────────────────────
+
+/**
+ * Parse an OpenAI-style SSE body (`data: {json}` / `data: [DONE]`) yielding
+ * text deltas. Used for Gemini's OpenAI-compatible endpoint and DeepSeek.
+ * Convention copied from services/app-dev/design-chat.ts.
+ */
+async function* parseOpenAiSse(body: ReadableStream<Uint8Array>): AsyncGenerator<string, void, unknown> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (data === "[DONE]") return;
+      try {
+        const json = JSON.parse(data);
+        const delta = json?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta.length) yield delta;
+      } catch { /* keep-alive / partial frame */ }
+    }
+  }
+}
+
+/** Anthropic /v1/messages streaming: content_block_delta → delta.text. */
+async function* parseAnthropicSse(body: ReadableStream<Uint8Array>): AsyncGenerator<string, void, unknown> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line.startsWith("data:")) continue;
+      try {
+        const json = JSON.parse(line.slice(5).trim());
+        if (json?.type === "content_block_delta" && typeof json?.delta?.text === "string") {
+          yield json.delta.text;
+        }
+      } catch { /* keep-alive / partial frame */ }
+    }
+  }
+}
+
+async function* streamGemini(systemPrompt: string, userPrompt: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  const key = await getRawKey("gemini");
+  if (!key) throw new Error("Gemini not configured");
+  // Gemini's OpenAI-compatible Chat Completions endpoint (same pattern as the
+  // App Dev design chat) — simplest reliable token stream.
+  const resp = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: "gemini-2.5-flash",
+      stream: true,
+      temperature: 0.8,
+      max_tokens: 4096,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const errBody = await resp.text().catch(() => "");
+    throw new Error(`Gemini stream error (${resp.status}): ${errBody.slice(0, 200)}`);
+  }
+  yield* parseOpenAiSse(resp.body);
+}
+
+async function* streamDeepSeek(systemPrompt: string, userPrompt: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  const key = await getRawKey("deepseek");
+  if (!key) throw new Error("DeepSeek not configured");
+  const resp = await fetch("https://api.deepseek.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "deepseek-chat",
+      stream: true,
+      temperature: 0.8,
+      max_tokens: 4096,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const errBody = await resp.text().catch(() => "");
+    throw new Error(`DeepSeek stream error (${resp.status}): ${errBody.slice(0, 200)}`);
+  }
+  yield* parseOpenAiSse(resp.body);
+}
+
+async function* streamAnthropic(systemPrompt: string, userPrompt: string, signal?: AbortSignal): AsyncGenerator<string, void, unknown> {
+  const key = await getRawKey("anthropic");
+  if (!key) throw new Error("Anthropic not configured");
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      stream: true,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userPrompt }],
+    }),
+    signal,
+  });
+  if (!resp.ok || !resp.body) {
+    const errBody = await resp.text().catch(() => "");
+    throw new Error(`Anthropic stream error (${resp.status}): ${errBody.slice(0, 200)}`);
+  }
+  yield* parseAnthropicSse(resp.body);
+}
+
+/**
+ * Stream draft tokens with the same provider order as callLLM
+ * (Gemini → DeepSeek → Anthropic; OpenAI hard-banned). Fallback only happens
+ * BEFORE the first token: once a provider has emitted prose we never silently
+ * switch models mid-chapter — a mid-stream failure surfaces as an error.
+ */
+export async function* streamLLM(
+  systemPrompt: string,
+  userPrompt: string,
+  signal?: AbortSignal,
+): AsyncGenerator<string, void, unknown> {
+  const providers: Array<{ name: string; gen: () => AsyncGenerator<string, void, unknown> }> = [
+    { name: "gemini", gen: () => streamGemini(systemPrompt, userPrompt, signal) },
+    { name: "deepseek", gen: () => streamDeepSeek(systemPrompt, userPrompt, signal) },
+    { name: "anthropic", gen: () => streamAnthropic(systemPrompt, userPrompt, signal) },
+  ];
+  let lastErr: unknown = null;
+  for (const provider of providers) {
+    if (signal?.aborted) throw new Error("Aborted");
+    let yieldedAny = false;
+    try {
+      for await (const delta of provider.gen()) {
+        yieldedAny = true;
+        yield delta;
+      }
+      if (yieldedAny) return;
+      // Stream completed but produced nothing — treat as failure, try next.
+      lastErr = new Error(`${provider.name} stream produced no tokens`);
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      if (yieldedAny) throw err; // never switch providers mid-prose
+      lastErr = err;
+      console.warn(`[chapter-generator] ${provider.name} stream failed, trying next provider:`, err);
+    }
+  }
+  throw lastErr instanceof Error
+    ? lastErr
+    : new Error("No LLM API key configured for streaming. Set 'gemini', 'deepseek', or 'anthropic' in provider API keys.");
+}
+
 /**
  * Generates a new chapter draft for a book.
  */

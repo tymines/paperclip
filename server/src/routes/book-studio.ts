@@ -8,6 +8,8 @@ import {
   storyBibleOutline,
   storyBibleChatMessages,
   manuscriptChapters,
+  bookAnnotations,
+  bookReviewRuns,
 } from "@paperclipai/db";
 import {
   createStoryBibleCharacterSchema,
@@ -27,9 +29,11 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
-import { badRequest, notFound } from "../errors.js";
+import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
+import { callLLM } from "../services/chapter-generator.js";
+import { chapterContentHash } from "../services/book-prose-writer.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -737,6 +741,307 @@ bookBibleRouter.delete("/review-notes/:noteId", async (req, res) => {
     .where(eq(books.id, bookId));
 
   res.status(204).send();
+});
+
+// ── Span-anchored annotations (book_annotations — migration 0151, GATED) ──
+//
+// The tables are defined + migration 0151 is written, but NOT applied yet.
+// Every endpoint here catches relation-does-not-exist (42P01) and degrades to
+// the books.metadata.reviewNotes jsonb path, reporting `available: false` +
+// `pendingMigration: "0151"` so the UI can say so instead of pretending.
+
+function isMissingTableError(err: unknown): boolean {
+  const anyErr = err as { code?: string; cause?: { code?: string }; message?: string };
+  if (anyErr?.code === "42P01" || anyErr?.cause?.code === "42P01") return true;
+  const msg = String(anyErr?.message ?? "");
+  return /relation "(book_annotations|book_review_runs)" does not exist/i.test(msg);
+}
+
+const ANNOTATION_KINDS = ["note", "review", "suggestion"];
+const REVIEW_LENSES = ["canon", "voice", "continuity", "structure", "prose"];
+const PENDING_0151 =
+  "book_annotations table pending migration 0151 — notes currently fall back to books.metadata review notes.";
+
+// GET /annotations?chapterNumber=N — list annotations (+review runs), with
+// per-annotation `stale` computed from the current chapter content hash.
+bookBibleRouter.get("/annotations", async (req, res) => {
+  const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+  assertCompanyAccess(req, companyId);
+  const chapterQ = req.query.chapterNumber != null ? parseInt(String(req.query.chapterNumber), 10) : null;
+  if (req.query.chapterNumber != null && Number.isNaN(chapterQ)) throw badRequest("chapterNumber must be an integer");
+
+  const chapters = await db
+    .select({ chapterNumber: manuscriptChapters.chapterNumber, content: manuscriptChapters.content })
+    .from(manuscriptChapters)
+    .where(eq(manuscriptChapters.bookId, bookId));
+  const hashByChapter = new Map(chapters.map((c) => [c.chapterNumber, chapterContentHash(c.content ?? "")]));
+
+  try {
+    const annoWhere = chapterQ != null
+      ? and(eq(bookAnnotations.bookId, bookId), eq(bookAnnotations.chapterNumber, chapterQ))
+      : eq(bookAnnotations.bookId, bookId);
+    const annos = await db.select().from(bookAnnotations).where(annoWhere).orderBy(desc(bookAnnotations.createdAt));
+    const runs = await db.select().from(bookReviewRuns).where(eq(bookReviewRuns.bookId, bookId)).orderBy(desc(bookReviewRuns.createdAt));
+    res.json({
+      available: true,
+      annotations: annos.map((a) => ({
+        ...a,
+        stale: hashByChapter.get(a.chapterNumber) !== a.contentHash,
+      })),
+      reviewRuns: runs,
+    });
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    res.json({
+      available: false,
+      pendingMigration: "0151",
+      reason: PENDING_0151,
+      annotations: [],
+      reviewRuns: [],
+    });
+  }
+});
+
+// POST /annotations — create a span-anchored annotation. Fallback: writes a
+// review note into books.metadata.reviewNotes (the pre-migration path).
+bookBibleRouter.post("/annotations", async (req, res) => {
+  const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+  assertCompanyAccess(req, companyId);
+  const { chapterNumber, spanStart, spanEnd, kind, body, author } = (req.body ?? {}) as {
+    chapterNumber?: number; spanStart?: number; spanEnd?: number; kind?: string; body?: string; author?: string;
+  };
+  if (typeof chapterNumber !== "number" || !Number.isFinite(chapterNumber)) throw badRequest("chapterNumber (number) is required");
+  if (!body || typeof body !== "string" || !body.trim()) throw badRequest("body is required");
+  const resolvedKind = kind && ANNOTATION_KINDS.includes(kind) ? kind : "note";
+
+  const chapter = await db
+    .select()
+    .from(manuscriptChapters)
+    .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)))
+    .then((r) => r[0]);
+  if (!chapter) throw notFound(`Chapter ${chapterNumber} has no manuscript row yet — save or draft it first.`);
+
+  const content = chapter.content ?? "";
+  const hasSpan = typeof spanStart === "number" && typeof spanEnd === "number";
+  if (hasSpan && (spanStart! < 0 || spanEnd! < spanStart! || spanEnd! > content.length)) {
+    throw badRequest(`Invalid span [${spanStart}, ${spanEnd}] for chapter of length ${content.length}`);
+  }
+
+  try {
+    const [inserted] = await db
+      .insert(bookAnnotations)
+      .values({
+        bookId,
+        chapterId: chapter.id,
+        chapterNumber,
+        spanStart: hasSpan ? spanStart! : null,
+        spanEnd: hasSpan ? spanEnd! : null,
+        contentHash: chapterContentHash(content),
+        kind: resolvedKind,
+        body: body.trim(),
+        author: typeof author === "string" && author.trim() ? author.trim() : "user",
+      })
+      .returning();
+    res.status(201).json({ available: true, annotation: { ...inserted, stale: false } });
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    // Fallback: books.metadata.reviewNotes (same shape as /review-notes).
+    const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
+    if (!book) throw notFound("Book not found");
+    const note: ReviewNote = {
+      id: randomUUID(),
+      chapterNumber,
+      category: resolvedKind === "review" ? "consistency" : "prose",
+      text: body.trim(),
+      startOffset: hasSpan ? spanStart : undefined,
+      endOffset: hasSpan ? spanEnd : undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const existingNotes = (book.metadata?.reviewNotes as ReviewNote[]) ?? [];
+    await db
+      .update(books)
+      .set({ metadata: { ...(book.metadata as Record<string, unknown>), reviewNotes: [...existingNotes, note] } })
+      .where(eq(books.id, bookId));
+    res.status(201).json({
+      available: false,
+      pendingMigration: "0151",
+      reason: PENDING_0151,
+      fallback: "review-note",
+      note,
+    });
+  }
+});
+
+// PATCH /annotations/:annotationId — resolve/unresolve or edit body.
+bookBibleRouter.patch("/annotations/:annotationId", async (req, res) => {
+  const { companyId, bookId, annotationId } = req.params as { companyId: string; bookId: string; annotationId: string };
+  assertCompanyAccess(req, companyId);
+  const { resolved, body } = (req.body ?? {}) as { resolved?: boolean; body?: string };
+  if (resolved === undefined && body === undefined) throw badRequest("resolved or body required");
+
+  try {
+    const updates: Record<string, unknown> = { updatedAt: new Date() };
+    if (typeof resolved === "boolean") updates.resolved = resolved;
+    if (typeof body === "string" && body.trim()) updates.body = body.trim();
+    const [updated] = await db
+      .update(bookAnnotations)
+      .set(updates)
+      .where(and(eq(bookAnnotations.id, annotationId), eq(bookAnnotations.bookId, bookId)))
+      .returning();
+    if (!updated) throw notFound("Annotation not found");
+    res.json({ available: true, annotation: updated });
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    throw serviceUnavailable(PENDING_0151);
+  }
+});
+
+// DELETE /annotations/:annotationId
+bookBibleRouter.delete("/annotations/:annotationId", async (req, res) => {
+  const { companyId, bookId, annotationId } = req.params as { companyId: string; bookId: string; annotationId: string };
+  assertCompanyAccess(req, companyId);
+  try {
+    const existing = await db
+      .select({ id: bookAnnotations.id })
+      .from(bookAnnotations)
+      .where(and(eq(bookAnnotations.id, annotationId), eq(bookAnnotations.bookId, bookId)))
+      .then((r) => r[0]);
+    if (!existing) throw notFound("Annotation not found");
+    await db.delete(bookAnnotations).where(eq(bookAnnotations.id, annotationId));
+    res.status(204).send();
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    throw serviceUnavailable(PENDING_0151);
+  }
+});
+
+// POST /review-runs — run one AI review pass (lens) over a chapter's prose and
+// store the run + its span-anchored annotations. Availability is probed BEFORE
+// spending tokens: if 0151 isn't applied there is nowhere to store the pass.
+bookBibleRouter.post("/review-runs", async (req, res) => {
+  const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+  assertCompanyAccess(req, companyId);
+  const { chapterNumber, lens } = (req.body ?? {}) as { chapterNumber?: number; lens?: string };
+  if (typeof chapterNumber !== "number" || !Number.isFinite(chapterNumber)) throw badRequest("chapterNumber (number) is required");
+  const resolvedLens = lens && REVIEW_LENSES.includes(lens) ? lens : "prose";
+
+  // Probe table availability first — do not burn LLM tokens on a pass whose
+  // results cannot be stored.
+  try {
+    await db.select({ id: bookReviewRuns.id }).from(bookReviewRuns).where(eq(bookReviewRuns.bookId, bookId)).limit(1);
+  } catch (err) {
+    if (isMissingTableError(err)) {
+      res.status(503).json({ available: false, pendingMigration: "0151", reason: PENDING_0151 });
+      return;
+    }
+    throw err;
+  }
+
+  const chapter = await db
+    .select()
+    .from(manuscriptChapters)
+    .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)))
+    .then((r) => r[0]);
+  if (!chapter || !(chapter.content ?? "").trim()) {
+    throw badRequest(`Chapter ${chapterNumber} has no prose to review yet.`);
+  }
+  const content = chapter.content ?? "";
+
+  const lensGuide: Record<string, string> = {
+    canon: "violations of established facts, character traits, or world rules",
+    voice: "dialogue or narration that breaks a character's established voice",
+    continuity: "timeline errors, who-knows-what-when problems, contradictions with earlier text",
+    structure: "pacing problems and whether the chapter delivers its beat",
+    prose: "clichés, repetition, echoes, weak or overwritten prose",
+  };
+  const systemPrompt = [
+    "You are the reviewer lane for a book studio. You highlight, cite, and propose — you never edit and never block.",
+    "Under-flag: only report findings you are confident about (max 8).",
+    'Return ONLY valid JSON: { "summary": "one-paragraph pass summary", "findings": [{ "excerpt": "EXACT verbatim quote from the chapter (10-40 words)", "note": "why this is a problem + a concrete suggestion", "kind": "review" | "suggestion" }] }',
+    "The excerpt MUST be copied character-for-character from the chapter so it can be anchored.",
+  ].join("\n");
+  const userPrompt = `Review lens: ${resolvedLens} — look for ${lensGuide[resolvedLens]}.\n\nCHAPTER ${chapterNumber} PROSE:\n${content.slice(0, 24000)}\n\nRespond with the JSON object only.`;
+
+  let raw: string;
+  try {
+    raw = await callLLM(systemPrompt, userPrompt);
+  } catch (err) {
+    throw serviceUnavailable(`Reviewer lane unavailable: ${(err as Error).message}`);
+  }
+
+  let parsed: { summary?: string; findings?: Array<{ excerpt?: string; note?: string; kind?: string }> };
+  try {
+    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    parsed = JSON.parse(jsonMatch ? jsonMatch[1].trim() : raw);
+  } catch {
+    throw serviceUnavailable("Reviewer returned unparseable output — no annotations were stored.");
+  }
+  const findings = Array.isArray(parsed.findings) ? parsed.findings.slice(0, 8) : [];
+
+  try {
+    const [run] = await db
+      .insert(bookReviewRuns)
+      .values({
+        bookId,
+        companyId,
+        lens: resolvedLens,
+        reviewer: "reviewer-lane",
+        // Honest about the provider chain — callLLM does not report which
+        // provider answered, only the fixed fallback order.
+        model: "auto (gemini→deepseek→anthropic)",
+        scope: `chapter:${chapterNumber}`,
+        summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : "",
+      })
+      .returning();
+
+    const hash = chapterContentHash(content);
+    const inserted = [];
+    for (const f of findings) {
+      if (!f?.note || typeof f.note !== "string") continue;
+      const excerpt = typeof f.excerpt === "string" ? f.excerpt : "";
+      const idx = excerpt ? content.indexOf(excerpt) : -1;
+      const [anno] = await db
+        .insert(bookAnnotations)
+        .values({
+          bookId,
+          chapterId: chapter.id,
+          chapterNumber,
+          reviewRunId: run.id,
+          spanStart: idx >= 0 ? idx : null,
+          spanEnd: idx >= 0 ? idx + excerpt.length : null,
+          contentHash: hash,
+          kind: f.kind === "suggestion" ? "suggestion" : "review",
+          body: excerpt && idx < 0 ? `[unanchored — excerpt not found verbatim] "${excerpt.slice(0, 120)}" — ${f.note.trim()}` : f.note.trim(),
+          author: "reviewer-lane",
+        })
+        .returning();
+      inserted.push({ ...anno, stale: false });
+    }
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "book.review_run",
+      entityType: "book",
+      entityId: bookId,
+      details: { bookId, chapterNumber, lens: resolvedLens, findings: inserted.length },
+    }).catch(() => {});
+
+    res.status(201).json({
+      available: true,
+      run,
+      annotations: inserted,
+      unanchored: inserted.filter((a) => a.spanStart === null).length,
+    });
+  } catch (err) {
+    if (!isMissingTableError(err)) throw err;
+    res.status(503).json({ available: false, pendingMigration: "0151", reason: PENDING_0151 });
+  }
 });
 
 // ── Brainstorm Chat ────────────────────────────────────────────────────

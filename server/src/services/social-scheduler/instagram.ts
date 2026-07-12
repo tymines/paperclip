@@ -26,8 +26,14 @@
  *      { creation_id } → { id: <media-id> }
  *   Carousels = N child containers (is_carousel_item=true) + 1 parent
  *   container (media_type=CAROUSEL, children=[...]) + publish.
- *   Reels/stories/video need the async container-status poll — punted;
- *   `publishPost` throws `InstagramApiError(501)` for those types.
+ *   Video/Reels = { media_type: REELS, video_url } container, then a
+ *   status poll (GET /{container}?fields=status_code) until FINISHED
+ *   before media_publish — ERROR/EXPIRED/timeout throw, never a fake
+ *   publish. Stories remain 501 (honest) for now.
+ *
+ *   IG downloads image_url/video_url itself, so every media URL must be
+ *   publicly reachable — `assertPubliclyFetchableMediaUrl` fails loudly
+ *   (naming PAPERCLIP_PUBLIC_URL) when handed a localhost/LAN URL.
  *
  * Instagram cannot publish text-only posts — a post without media fails
  * with a clear 400 rather than being silently dropped.
@@ -48,11 +54,14 @@ import type {
 } from "./types.js";
 import { caption } from "./stub-helpers.js";
 import { NotSupportedError, requireRealAccessToken } from "./errors.js";
+import { assertPubliclyFetchableMediaUrl, mediaPollSleep } from "./media.js";
 
 const IG_CAPTION_MAX = 2200;
 const IG_HASHTAG_MAX = 30;
 
 const IG_GRAPH = "https://graph.instagram.com/v21.0";
+const IG_CONTAINER_POLL_INTERVAL_MS = 2_000;
+const IG_CONTAINER_POLL_MAX_ATTEMPTS = 90; // ~3 min of video processing
 
 export class InstagramApiError extends Error {
   readonly statusCode: number;
@@ -100,6 +109,37 @@ function readId(json: Record<string, unknown>, context: string): string {
   const id = typeof json.id === "string" ? json.id : null;
   if (!id) throw new InstagramApiError(`Instagram ${context} returned no id`, 502, json);
   return id;
+}
+
+/**
+ * Poll a media container until IG finishes processing it (video/reels are
+ * async). FINISHED → return; ERROR/EXPIRED or a poll timeout → throw with
+ * the real status. Publishing an unfinished container fails opaquely, so
+ * this runs before every video media_publish.
+ */
+async function waitForIgContainer(containerId: string, accessToken: string): Promise<void> {
+  for (let attempt = 0; attempt < IG_CONTAINER_POLL_MAX_ATTEMPTS; attempt += 1) {
+    const url = new URL(`${IG_GRAPH}/${containerId}`);
+    url.searchParams.set("fields", "status_code,status");
+    url.searchParams.set("access_token", accessToken);
+    const res = await fetch(url);
+    const json = await parseGraphJson(res, `GET /${containerId} (container status)`);
+    const statusCode = typeof json.status_code === "string" ? json.status_code : null;
+    if (statusCode === "FINISHED") return;
+    if (statusCode === "ERROR" || statusCode === "EXPIRED") {
+      const detail = typeof json.status === "string" ? ` — ${json.status}` : "";
+      throw new InstagramApiError(
+        `Instagram container ${containerId} processing ${statusCode}${detail}`,
+        422,
+        json,
+      );
+    }
+    await mediaPollSleep(IG_CONTAINER_POLL_INTERVAL_MS);
+  }
+  throw new InstagramApiError(
+    `Instagram container ${containerId} did not finish processing in time`,
+    504,
+  );
 }
 
 /** Best-effort permalink lookup for the published media — null on failure. */
@@ -166,15 +206,39 @@ export const instagramAdapter: SocialPlatformAdapter = {
         400,
       );
     }
-    if (post.postType === "video" || post.postType === "reel" || post.postType === "story") {
+    if (post.postType === "story") {
       throw new InstagramApiError(
-        "Instagram video/reel/story publishing not yet implemented (async container-status poll — next iteration)",
+        "Instagram story publishing not yet implemented (STORIES container — next iteration)",
         501,
       );
     }
+    // IG's servers download every image_url/video_url — hard-fail with the
+    // config fix if the URL can never be reached from the public internet.
+    for (const url of post.mediaUrls) {
+      assertPubliclyFetchableMediaUrl(url, {
+        platform: "instagram",
+        action: "publish media (Instagram downloads image_url/video_url)",
+      });
+    }
+
+    const isVideo = post.postType === "video" || post.postType === "reel";
 
     let containerId: string;
-    if (post.mediaUrls.length === 1) {
+    if (isVideo) {
+      // Feed video + reels both publish through the REELS container type.
+      if (post.mediaUrls.length !== 1) {
+        throw new InstagramApiError("Instagram video/reel posts take exactly one video", 400);
+      }
+      const created = await igPost(`/${igUserId}/media`, {
+        media_type: "REELS",
+        video_url: post.mediaUrls[0] as string,
+        ...(text ? { caption: text } : {}),
+        access_token: accessToken,
+      });
+      containerId = readId(created, "REELS container");
+      // Video containers process async — publish only after FINISHED.
+      await waitForIgContainer(containerId, accessToken);
+    } else if (post.mediaUrls.length === 1) {
       // Single image: one container carrying the caption.
       const created = await igPost(`/${igUserId}/media`, {
         image_url: post.mediaUrls[0] as string,
@@ -236,8 +300,17 @@ export const instagramAdapter: SocialPlatformAdapter = {
     if (post.postType === "carousel" && (post.mediaUrls.length < 2 || post.mediaUrls.length > 10)) {
       errors.push("Carousel needs 2–10 media items.");
     }
-    if (post.postType === "reel" && post.mediaUrls.length === 0) {
-      errors.push("Reel requires a video file.");
+    if ((post.postType === "reel" || post.postType === "video") && post.mediaUrls.length !== 1) {
+      errors.push("Instagram video/reel posts take exactly one video file (mp4).");
+    }
+    if (post.postType === "story") {
+      errors.push("Instagram story publishing is not wired yet.");
+    }
+    if (post.postType === "text") {
+      // Warning (not error) so a caption-only post to other platforms isn't
+      // hard-blocked just because IG is also selected — the IG target itself
+      // fails visibly at publish time with the same reason.
+      warnings.push("Instagram cannot publish text-only posts — this target will fail unless media is attached.");
     }
     // URLs in IG captions are not clickable — gentle warning.
     if (/(https?:\/\/\S+)/.test(text)) {

@@ -16,10 +16,20 @@
  * `RedditRateLimitError` carrying the `Retry-After` seconds so the
  * scheduler can back off rather than retrying tight.
  *
- * Image/video posts are a separate flow (POST /api/media/asset.json →
- * upload to S3 → POST /api/submit with kind=image and the asset URL).
- * That's a meaningful chunk of code — punted to a follow-up iteration;
- * `publishPost` throws `RedditApiError(501)` if media is supplied.
+ * Image/video posts run the asset-lease flow:
+ *   1. POST /api/media/asset.json { filepath, mimetype } → S3 lease
+ *      ({ args: { action, fields }, asset: { asset_id } })
+ *   2. multipart POST to the lease URL (fields + file) → asset lands at
+ *      `${action}/${fields.key}` (i.redd.it / v.redd.it backing store)
+ *   3. POST /api/submit with kind=image|video and the asset URL. Media
+ *      submits confirm asynchronously over websocket; when the sync
+ *      response has no fullname we look the fresh post up via the
+ *      free own-submissions listing rather than fabricating an id.
+ * The adapter downloads the bytes itself (`fetchMediaBytes`), so a
+ * loopback self-URL works — no public base URL required for Reddit.
+ * Galleries (2+ images) need the websocket confirmation flow — v1 keeps
+ * them an honest 501. Videos require a poster image
+ * (`metadata.posterUrl`) — a clear 400 otherwise, never a silent drop.
  *
  * Connect is NOT done through this adapter: `startConnect`/`finishConnect`
  * throw `NotSupportedError` — the wizard flow (`routes/social.ts` +
@@ -41,6 +51,12 @@ import {
   hasRealAccessToken,
   requireRealAccessToken,
 } from "./errors.js";
+import {
+  SOCIAL_MEDIA_IMAGE_MIMES,
+  SOCIAL_MEDIA_VIDEO_MIMES,
+  fetchMediaBytes,
+  type FetchedMedia,
+} from "./media.js";
 
 const REDDIT_TITLE_MAX = 300;
 const REDDIT_BODY_MAX = 40_000;
@@ -114,10 +130,14 @@ function resolveSubreddit(account: SocialAccount, post: PostDraftPayload): strin
 function detectPostKind(
   post: PostDraftPayload,
   meta: Record<string, unknown>,
-): "self" | "link" | "image" {
+): "self" | "link" | "image" | "video" {
   const explicit = typeof meta.kind === "string" ? meta.kind : "";
-  if (explicit === "self" || explicit === "link" || explicit === "image") return explicit;
-  if (post.mediaUrls.length > 0) return "image";
+  if (explicit === "self" || explicit === "link" || explicit === "image" || explicit === "video") {
+    return explicit;
+  }
+  if (post.mediaUrls.length > 0) {
+    return post.postType === "video" || post.postType === "reel" ? "video" : "image";
+  }
   const linkUrl = typeof meta.url === "string" ? meta.url : "";
   if (linkUrl) return "link";
   return "self";
@@ -150,6 +170,101 @@ async function redditFetch(
   }
 
   return res;
+}
+
+/* ── Media asset-lease flow ─────────────────────────────────────────── */
+
+interface RedditAssetLease {
+  /** Absolute https upload URL (Reddit returns it scheme-relative). */
+  actionUrl: string;
+  /** Pre-signed S3 form fields, appended verbatim before the file part. */
+  fields: Array<{ name: string; value: string }>;
+  assetId: string;
+}
+
+const LEASE_EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+};
+
+function leaseFilenameFor(mimeType: string): string {
+  return `paperclip-upload.${LEASE_EXTENSION_BY_MIME[mimeType] ?? "bin"}`;
+}
+
+/** POST /api/media/asset.json — mint a pre-signed S3 upload lease. */
+async function mintRedditAssetLease(
+  accessToken: string,
+  filename: string,
+  mimeType: string,
+): Promise<RedditAssetLease> {
+  const body = new URLSearchParams({ filepath: filename, mimetype: mimeType });
+  const res = await redditFetch("/api/media/asset.json", {
+    accessToken,
+    method: "POST",
+    body,
+  });
+  let parsed: {
+    args?: { action?: string; fields?: Array<{ name?: unknown; value?: unknown }> };
+    asset?: { asset_id?: unknown };
+  } | null = null;
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    /* handled below */
+  }
+  if (!res.ok) {
+    throw new RedditApiError(
+      `Reddit /api/media/asset.json failed: ${res.status}`,
+      res.status,
+      parsed,
+    );
+  }
+  const action = typeof parsed?.args?.action === "string" ? parsed.args.action : "";
+  const rawFields = Array.isArray(parsed?.args?.fields) ? parsed.args.fields : [];
+  if (!action || rawFields.length === 0) {
+    throw new RedditApiError("Reddit media lease returned no upload action/fields", 502, parsed);
+  }
+  const fields = rawFields
+    .filter((f): f is { name: string; value: string } =>
+      typeof f?.name === "string" && typeof f?.value === "string",
+    )
+    .map((f) => ({ name: f.name, value: f.value }));
+  return {
+    actionUrl: action.startsWith("//") ? `https:${action}` : action,
+    fields,
+    assetId: typeof parsed?.asset?.asset_id === "string" ? parsed.asset.asset_id : "",
+  };
+}
+
+/**
+ * Multipart POST to the lease URL. The asset's final URL is the lease
+ * action + the pre-signed `key` field — that URL goes on /api/submit.
+ */
+async function uploadToRedditLease(
+  lease: RedditAssetLease,
+  media: FetchedMedia,
+  filename: string,
+): Promise<string> {
+  const form = new FormData();
+  for (const field of lease.fields) form.append(field.name, field.value);
+  form.append("file", new Blob([new Uint8Array(media.buffer)], { type: media.mimeType }), filename);
+  const res = await fetch(lease.actionUrl, { method: "POST", body: form });
+  // S3 lease uploads answer 201 (Created) with an XML body.
+  if (!res.ok && res.status !== 201) {
+    throw new RedditApiError(
+      `Reddit media upload to lease URL failed: HTTP ${res.status}`,
+      502,
+    );
+  }
+  const key = lease.fields.find((f) => f.name === "key")?.value;
+  if (!key) {
+    throw new RedditApiError("Reddit media lease had no 'key' field", 502, lease.fields);
+  }
+  return `${lease.actionUrl}/${key}`;
 }
 
 async function submitPost(
@@ -198,14 +313,58 @@ async function submitPost(
     }
     body.set("url", url);
   } else {
-    // Reddit image/video uploads need a separate /api/media/asset.json
-    // dance (mint lease → PUT to S3 → submit kind=image with asset URL).
-    // Tracking as a follow-up — surface a 501 so the scheduler marks the
-    // target failed with a clear message rather than silently doing nothing.
-    throw new RedditApiError(
-      "Reddit image/video posts not yet implemented (POST /api/media/asset.json upload — next iteration)",
-      501,
+    // image | video via the asset-lease flow.
+    if (post.mediaUrls.length > 1) {
+      // Gallery submits need the websocket confirmation flow — honest 501.
+      throw new RedditApiError(
+        "Reddit gallery posts (multiple images) not yet implemented (websocket-confirmation flow) — attach a single image",
+        501,
+      );
+    }
+    const mediaUrl = post.mediaUrls[0] ?? "";
+    if (!mediaUrl) {
+      throw new RedditApiError("Reddit media post requires a media attachment", 400);
+    }
+    const media = await fetchMediaBytes(mediaUrl);
+    const isVideoMime = SOCIAL_MEDIA_VIDEO_MIMES.has(media.mimeType);
+    const isImageMime = SOCIAL_MEDIA_IMAGE_MIMES.has(media.mimeType);
+    if (!isVideoMime && !isImageMime) {
+      throw new RedditApiError(
+        `Reddit media upload supports jpeg/png/webp/gif/mp4 — media served as "${media.mimeType}"`,
+        415,
+      );
+    }
+    if (kind === "video" && !isVideoMime) {
+      throw new RedditApiError(
+        `Reddit video post requires an mp4 — media served as "${media.mimeType}"`,
+        415,
+      );
+    }
+    // Reddit refuses kind=video without a poster frame. We can't extract
+    // one server-side (no ffmpeg) — require it explicitly BEFORE spending
+    // a lease + upload, never guess.
+    const posterUrl = typeof meta.posterUrl === "string" ? meta.posterUrl.trim() : "";
+    if (isVideoMime && !posterUrl) {
+      throw new RedditApiError(
+        "Reddit video posts require a poster image — set metadata.posterUrl to a public image URL",
+        400,
+      );
+    }
+    const filename = leaseFilenameFor(media.mimeType);
+    const lease = await mintRedditAssetLease(
+      account.accessToken as string,
+      filename,
+      media.mimeType,
     );
+    const assetUrl = await uploadToRedditLease(lease, media, filename);
+    if (isVideoMime) {
+      body.set("kind", "video");
+      body.set("url", assetUrl);
+      body.set("video_poster_url", posterUrl);
+    } else {
+      body.set("kind", "image");
+      body.set("url", assetUrl);
+    }
   }
 
   const res = await redditFetch("/api/submit", {
@@ -235,6 +394,28 @@ async function submitPost(
 
   const data = parsed?.json?.data;
   if (!data?.name || !data.url) {
+    // Media submits (kind=image/video) confirm asynchronously over
+    // websocket and can come back 200 + empty data. Data honesty: don't
+    // fabricate an id — look the freshly-created post up via the free
+    // own-submissions listing, and fail loudly if it isn't there.
+    if (kind === "image" || kind === "video") {
+      const recent = await listOwnSubmissions(account, { limit: 1 }).catch(() => null);
+      const latest = recent?.posts[0];
+      if (latest && Date.now() - latest.publishedAt.getTime() < 5 * 60_000) {
+        return {
+          platformPostId: latest.platformPostId,
+          platformUrl: latest.platformUrl,
+          publishedAt: latest.publishedAt,
+          caption: caption(post),
+          mediaUrl: post.mediaUrls[0] ?? null,
+        };
+      }
+      throw new RedditApiError(
+        "Reddit accepted the media submit but returned no post id (websocket-only confirmation) and the post has not appeared on the account's submissions yet",
+        502,
+        parsed,
+      );
+    }
     throw new RedditApiError("Reddit /api/submit returned no post id", 502, parsed);
   }
 
@@ -409,6 +590,21 @@ export const redditAdapter: SocialPlatformAdapter = {
 
     if (/@\w+/.test(text) || /@\w+/.test(title)) {
       warnings.push("Reddit uses `u/username` for mentions, not `@username`.");
+    }
+
+    if (post.postType === "video" || post.postType === "reel") {
+      if (post.mediaUrls.length !== 1) {
+        errors.push("Reddit video posts take exactly one mp4 file.");
+      }
+      const posterUrl =
+        typeof meta.posterUrl === "string" ? (meta.posterUrl as string).trim() : "";
+      if (!posterUrl) {
+        warnings.push(
+          "Reddit video posts need a poster image (metadata.posterUrl) — the publish will fail without one.",
+        );
+      }
+    } else if (post.mediaUrls.length > 1) {
+      errors.push("Reddit galleries aren't supported yet — attach a single image.");
     }
 
     return { ok: errors.length === 0, errors, warnings };

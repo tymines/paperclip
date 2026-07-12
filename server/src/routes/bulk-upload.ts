@@ -43,6 +43,7 @@ import {
   CaptionProviderError,
   CaptionConfigError,
 } from "../services/social-caption.js";
+import { buildPublishMediaUrl } from "../services/social-scheduler/media.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound } from "../errors.js";
 
@@ -632,7 +633,10 @@ export function bulkUploadRoutes(db: Db, storage: StorageService) {
             postType: upload.detectedType === "video" ? "video" : "image",
             status: "scheduled",
             scheduledAt: item.scheduledAt,
-            mediaUrls: [upload.storageKey],
+            // Publishable URL (public base URL when configured, loopback
+            // self-URL otherwise) — adapters can't do anything with a raw
+            // storage key.
+            mediaUrls: [buildPublishMediaUrl(upload.id, upload.storageKey).url],
             tags: Array.isArray(upload.hashtags) ? (upload.hashtags as string[]) : [],
             metadata: { bulkUploadId: upload.id, draftId: built.draft.id },
             createdBy: actor?.actorId ?? null,
