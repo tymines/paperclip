@@ -46,6 +46,8 @@ export interface CreativeProvider {
   generate(req: GenerateRequest): Promise<ProviderJobState>;
   getJob(providerJobId: string, mode: CreativeMode): Promise<ProviderJobState>;
   credits(): Promise<{ balance: number | null; detail?: unknown }>;
+  /** optional: narration voice catalog (Higgsfield) */
+  listVoices?(): Promise<Array<{ id: string; name: string; description?: string }>>;
 }
 
 function env(name: string): string | undefined {
@@ -160,6 +162,17 @@ class HiggsfieldProvider implements CreativeProvider {
       error: job?.error ? String(job.error) : undefined,
       raw: job,
     };
+  }
+
+  async listVoices(): Promise<Array<{ id: string; name: string; description?: string }>> {
+    const res = await this.need().callTool("list_voices", {});
+    const json = McpHttpClient.toJson<any>(res) ?? {};
+    const voices: any[] = json?.voices ?? json?.items ?? [];
+    return voices.map((v) => ({
+      id: String(v.id ?? v.voice_id ?? v.name),
+      name: String(v.name ?? v.display_name ?? v.id),
+      description: v.description ? String(v.description) : undefined,
+    }));
   }
 
   async credits(): Promise<{ balance: number | null; detail?: unknown }> {

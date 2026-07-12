@@ -1,5 +1,6 @@
 import { pgTable, uuid, text, jsonb, integer, timestamp, index } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
+import { books } from "./books.js";
 
 // Creative Studio (Fable spec 2026-07-12) — P0: one table.
 // creative_jobs is the app-side job-metadata store: it indexes every generation
@@ -23,6 +24,11 @@ export const creativeJobs = pgTable(
     costCredits: integer("cost_credits"),
     error: text("error"),
     folder: text("folder"),
+    // Book Studio media linkage (migration 0150, gated)
+    bookId: uuid("book_id").references(() => books.id),
+    chapterId: text("chapter_id"),
+    purpose: text("purpose"), // cover | illustration | trailer | narration-chunk | narration-chunk-superseded
+
     favorite: integer("favorite").notNull().default(0), // 0/1 (int for cheap toggling)
     createdBy: text("created_by").notNull().default("unknown"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -32,6 +38,8 @@ export const creativeJobs = pgTable(
     companyIdx: index("creative_jobs_company_idx").on(table.companyId),
     companyStatusIdx: index("creative_jobs_company_status_idx").on(table.companyId, table.status),
     companyCreatedIdx: index("creative_jobs_company_created_idx").on(table.companyId, table.createdAt),
+    bookIdx: index("creative_jobs_book_idx").on(table.bookId),
+    bookPurposeIdx: index("creative_jobs_book_purpose_idx").on(table.bookId, table.purpose),
   }),
 );
 

@@ -53,6 +53,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { createServer: createViteServer } = await import("vite");
 import { gymRoutes } from "./routes/gym.js";
 import { creativeStudioRoutes } from "./routes/creative-studio.js";
+import { bookMediaRoutes } from "./routes/book-media.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { influencerStudioRoutes } from "./routes/influencer-studio.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -267,6 +268,7 @@ export async function createApp(
   api.use(promptsRoutes(db));
   api.use(gymRoutes(db));
   api.use(creativeStudioRoutes(db));
+  api.use(bookMediaRoutes(db));
   api.use(knowledgeGraphRoutes(db));
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));

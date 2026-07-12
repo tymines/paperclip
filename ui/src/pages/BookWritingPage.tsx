@@ -48,6 +48,7 @@ import { ErrorBoundary } from "@/components/book-studio/ErrorBoundary";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
+import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -1954,6 +1955,9 @@ export function BookWritingPage() {
           />
         )}
       </div>
+
+      {/* Book Media drawer (Fable, additive — fixed-position, layout-independent) */}
+      {activeBook && <BookMediaPanel bookId={activeBook.id} />}
 
       {/* BOTTOM BAR */}
       <footer className="flex items-center gap-4 border-t border-gray-800 px-5 py-3 shrink-0 bg-gray-950/80 backdrop-blur-sm">
