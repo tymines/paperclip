@@ -53,7 +53,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   );
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["book-media", cid, bookId] });
-  const onErr = (e: any) => pushToast({ title: "Request failed", description: String(e?.message ?? e).slice(0, 180), variant: "error" });
+  const onErr = (e: any) => pushToast({ title: "Request failed", body: String(e?.message ?? e).slice(0, 180), tone: "error" });
 
   const coverMut = useMutation({ mutationFn: () => bookMediaApi.generateCover(cid!, bookId), onSuccess: invalidate, onError: onErr });
   const illMut = useMutation({ mutationFn: (chapterId: string) => bookMediaApi.generateIllustration(cid!, bookId, { chapterId }), onSuccess: invalidate, onError: onErr });
@@ -63,12 +63,12 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   });
   const narrateMut = useMutation({
     mutationFn: (chapterId: string) => bookMediaApi.narrateChapter(cid!, bookId, chapterId, voiceId ? { voiceId } : {}),
-    onSuccess: (r) => { invalidate(); pushToast({ title: `Narration dispatched (${r.chunks} chunk${r.chunks === 1 ? "" : "s"})`, variant: "success" }); },
+    onSuccess: (r) => { invalidate(); pushToast({ title: `Narration dispatched (${r.chunks} chunk${r.chunks === 1 ? "" : "s"})`, tone: "success" }); },
     onError: onErr,
   });
   const stitchMut = useMutation({
     mutationFn: () => bookMediaApi.stitchNarration(cid!, bookId),
-    onSuccess: (r) => { invalidate(); pushToast({ title: r.stitched ? "Audiobook stitched" : "Exported per-chapter files (ffmpeg unavailable)", variant: r.stitched ? "success" : "default" }); },
+    onSuccess: (r) => { invalidate(); pushToast({ title: r.stitched ? "Audiobook stitched" : "Exported per-chapter files (ffmpeg unavailable)", tone: r.stitched ? "success" : "info" }); },
     onError: onErr,
   });
 
