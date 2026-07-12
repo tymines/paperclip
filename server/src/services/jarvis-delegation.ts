@@ -62,8 +62,6 @@ export interface DelegationDispatchResult {
 }
 
 const DISPATCH_TIMEOUT_MS = 12_000;
-/** Dispatch path on the peer gateway — defaults to the OpenClaw /agent/message endpoint. */
-const DISPATCH_PATH = process.env.JARVIS_DISPATCH_PATH ?? "/agent/message";
 const REACHABILITY_TIMEOUT_MS = 4_000;
 const REACHABILITY_CACHE_TTL_MS = 30_000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
@@ -279,7 +277,10 @@ export async function dispatchDelegation(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS);
     try {
-      const target = new URL(DISPATCH_PATH, endpoint.url).toString();
+      const target = new URL(
+        process.env.JARVIS_DISPATCH_PATH ?? "/agent/message",
+        endpoint.url,
+      ).toString();
       const resp = await fetch(target, {
         method: "POST",
         headers: {
