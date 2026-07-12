@@ -66,7 +66,6 @@ import { PluginPage } from "./pages/PluginPage";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
 import { WarRoom } from "./pages/WarRoom";
-import { PipelinePage } from "./pages/PipelinePage";
 import { WorldView } from "./pages/WorldView";
 import { RoomDetail } from "./pages/RoomDetail";
 // /social now points at the multi-platform scheduler (Buffer/Later-style).
@@ -117,7 +116,6 @@ function boardRoutes() {
       <Route path="world-view" element={<WorldView />} />
       <Route path="rooms" element={<Rooms />} />
       <Route path="war-room" element={<WarRoom />} />
-      <Route path="pipeline" element={<PipelinePage />} />
       <Route path="gym" element={<GymPage />} />
       <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
