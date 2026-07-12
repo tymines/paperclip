@@ -207,12 +207,13 @@ async function mintRedditAssetLease(
     method: "POST",
     body,
   });
-  let parsed: {
+  type RedditAssetJson = {
     args?: { action?: string; fields?: Array<{ name?: unknown; value?: unknown }> };
     asset?: { asset_id?: unknown };
-  } | null = null;
+  };
+  let parsed: RedditAssetJson | null = null;
   try {
-    parsed = (await res.json()) as typeof parsed;
+    parsed = (await res.json()) as RedditAssetJson | null;
   } catch {
     /* handled below */
   }
