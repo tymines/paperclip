@@ -346,10 +346,10 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
     setImageGenerating(false);
   };
 
-  const initials = char.name
+  const initials = (char.name ?? "")
     .split(" ")
-    .map((n) => n[0])
-    .join("");
+    .map((n) => n[0] ?? "")
+    .join("") || "?";
 
   const handleSave = () => {
     onUpdate(char.id, {
@@ -1180,11 +1180,11 @@ export function BookWritingPage() {
   };
 
   const createCharacter = async (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<CharacterEntity>(`${API_PREFIX}/characters`, {
+    const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setCharacters((prev) => [...prev, res]);
+    setCharacters((prev) => [...prev, res.character]);
     setShowCreateCharacter(false);
   };
 
@@ -1202,11 +1202,11 @@ export function BookWritingPage() {
   };
 
   const createLocation = async (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<WorldLocationEntity>(`${API_PREFIX}/world-locations`, {
+    const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setLocations((prev) => [...prev, res]);
+    setLocations((prev) => [...prev, res["world-location"]]);
     setShowCreateLocation(false);
   };
 
@@ -1224,11 +1224,11 @@ export function BookWritingPage() {
   };
 
   const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => {
-    const res = await apiFetch<StyleEntity>(`${API_PREFIX}/style`, {
+    const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setStyleEntries((prev) => [...prev, res]);
+    setStyleEntries((prev) => [...prev, res["style-entry"]]);
     setShowCreateStyle(false);
   };
 
@@ -1779,6 +1779,9 @@ export function BookWritingPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            {/* Scoped boundary: a crash in one bible panel shows a local fallback
+                instead of taking down the whole tab; key={tab} auto-recovers on switch. */}
+            <ErrorBoundary key={activeBibleTab}>
             {/* Overview Tab */}
             {activeBibleTab === "overview" && (
               <OverviewEditor
@@ -2050,6 +2053,7 @@ export function BookWritingPage() {
                 </div>
               </div>
             )}
+            </ErrorBoundary>
           </div>
         </aside>
         )}
