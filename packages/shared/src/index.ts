@@ -704,6 +704,8 @@ export type {
   SocialPostListItem,
   SocialAppCredentialPublic,
   SocialAppCredentialTestResult,
+  SocialFeatureHomeworkLink,
+  SocialFeatureAvailability,
   StoryBibleCharacter,
   StoryBibleWorldLocation,
   StoryBibleStyle,

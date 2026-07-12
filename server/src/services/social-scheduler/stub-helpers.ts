@@ -1,7 +1,11 @@
 /**
- * Shared utilities for the v1 stub platform adapters. Real adapters will
- * replace `publishPost` / `listRecentPosts` with API calls; the validation
- * helpers stay forever.
+ * Legacy mock fixtures + the shared `caption()` helper.
+ *
+ * PRODUCTION CODE MUST NOT SERVE THE mock* EXPORTS. The adapters and routes
+ * are data-honest: no real credential → `BlockedNoCredentialError` /
+ * `available: false`, never fabricated data. The mock builders stay only as
+ * fixtures for tests and explicit `?demo=true` previews; `caption()` is the
+ * one production helper in this file.
  */
 import { randomUUID } from "node:crypto";
 import type { SocialAccount } from "@paperclipai/shared";

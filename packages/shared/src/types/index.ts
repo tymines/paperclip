@@ -415,6 +415,8 @@ export type {
   SocialPostListItem,
   SocialAppCredentialPublic,
   SocialAppCredentialTestResult,
+  SocialFeatureHomeworkLink,
+  SocialFeatureAvailability,
 } from "./social.js";
 export type {
   StoryBibleCharacter,

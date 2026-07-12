@@ -31,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import type { SocialPlatform, SocialPostTarget } from "@paperclipai/shared";
 import { XLogoIcon } from "../components/social/x-icon";
+import { BlockedBadge, isBlockedStatus } from "../components/social/data-honesty";
 
 const PLATFORM_COLORS: Record<SocialPlatform, string> = {
   x: "bg-black",
@@ -81,6 +82,10 @@ const STATUS_VARIANTS: Record<string, "default" | "secondary" | "destructive" | 
   published: "default",
   failed: "destructive",
   cancelled: "secondary",
+  // Terminal: no credentialed publish path (blocked_no_credential). Rendered
+  // as an amber BlockedBadge where we have the target; this variant is the
+  // fallback for generic status badges.
+  blocked: "outline",
 };
 
 function TargetRow({ target }: { target: SocialPostTarget }) {
@@ -98,9 +103,13 @@ function TargetRow({ target }: { target: SocialPostTarget }) {
           <span className="text-xs text-muted-foreground ml-2">ID: {target.platformPostId}</span>
         )}
       </div>
-      <Badge variant={STATUS_VARIANTS[target.status] ?? "secondary"} className="text-[10px] px-1.5">
-        {target.status}
-      </Badge>
+      {isBlockedStatus(target.status) ? (
+        <BlockedBadge detail={target.errorMessage} />
+      ) : (
+        <Badge variant={STATUS_VARIANTS[target.status] ?? "secondary"} className="text-[10px] px-1.5">
+          {target.status}
+        </Badge>
+      )}
       {target.platformUrl && (
         <a
           href={target.platformUrl}
@@ -192,9 +201,13 @@ export function SocialPostDetail() {
             <h1 className="text-lg font-semibold truncate">
               {post.title || "Untitled Post"}
             </h1>
-            <Badge variant={statusBadge} className="text-xs">
-              {post.status}
-            </Badge>
+            {isBlockedStatus(post.status) ? (
+              <BlockedBadge />
+            ) : (
+              <Badge variant={statusBadge} className="text-xs">
+                {post.status}
+              </Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
             Created {new Date(post.createdAt).toLocaleString()}

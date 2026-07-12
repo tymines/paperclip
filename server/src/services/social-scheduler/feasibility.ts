@@ -161,6 +161,65 @@ export const TYLER_HOMEWORK: HomeworkItem[] = [
 ];
 
 /**
+ * Look up a feature row's status for one platform. Returns null when the
+ * feature or platform isn't in the matrix.
+ */
+export function getFeatureStatus(
+  feature: string,
+  platform: SocialPlatform,
+): { status: FeatureStatus; note?: string } | null {
+  const row = SOCIAL_FEATURE_MATRIX.find((r) => r.feature === feature);
+  return row?.byPlatform[platform] ?? null;
+}
+
+/**
+ * Human-readable "why isn't this live" sentence for an `available: false`
+ * expansion-endpoint response, derived from the matrix so route handlers
+ * never invent their own copy.
+ */
+export function describeFeatureGate(feature: string, platform: SocialPlatform): string {
+  const entry = getFeatureStatus(feature, platform);
+  if (!entry) return `${feature} is not available on ${platform}.`;
+  const note = entry.note ? ` (${entry.note})` : "";
+  switch (entry.status) {
+    case "ok":
+    case "self":
+      return `${feature} on ${platform} is possible${note} but not wired into Paperclip yet.`;
+    case "review":
+      return `${feature} on ${platform} requires Meta App Review before the API grants the scope${note}.`;
+    case "paid":
+      return `${feature} on ${platform} requires a paid API tier${note}.`;
+    case "blocked":
+      return `${feature} on ${platform} is blocked by an external contract or admin process${note}.`;
+    case "missing":
+      return `${platform} has no API for ${feature.toLowerCase()}${note}.`;
+    case "banned":
+      return `${feature} is banned by ${platform}'s terms of service — Paperclip will not ship it.`;
+  }
+}
+
+/**
+ * The homework item that unlocks a platform (Meta app for the Meta family,
+ * X Developer Portal for X, Reddit app for Reddit). Used to attach a
+ * `homework` link to `available: false` responses.
+ */
+export function getHomeworkForPlatform(
+  platform: SocialPlatform,
+): { title: string; href: string } | null {
+  const titleNeedle =
+    platform === "instagram" || platform === "facebook" || platform === "threads"
+      ? "Meta Developer"
+      : platform === "x"
+        ? "X Developer"
+        : platform === "reddit"
+          ? "Reddit app"
+          : null;
+  if (!titleNeedle) return null;
+  const item = TYLER_HOMEWORK.find((h) => h.title.includes(titleNeedle));
+  return item ? { title: item.title, href: item.href } : null;
+}
+
+/**
  * Hard never-ship list. Display these on the Accounts tab so Tyler
  * and any future operator sees the line. The adapters MUST refuse to
  * implement these even if explicitly asked — they're instant-ban risks

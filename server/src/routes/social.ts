@@ -15,25 +15,51 @@ import { validate } from "../middleware/validate.js";
 import { socialService, logActivity } from "../services/index.js";
 import {
   buildConnectedAccountFromTokens,
+  describeFeatureGate,
   ensureFreshToken,
   exchangeCodeForTokens,
+  getHomeworkForPlatform,
   getSocialAdapter,
   listSupportedSocialPlatforms,
   socialCredentialsService,
   testCredentialFormat,
   TokenExchangeError,
   verifyAccessToken,
+  type DirectMessage,
+  type DirectMessageThread,
 } from "../services/social-scheduler/index.js";
-import { SOCIAL_PLATFORMS, type SocialPlatform } from "@paperclipai/shared";
+import {
+  SOCIAL_PLATFORMS,
+  type SocialFeatureAvailability,
+  type SocialPlatform,
+} from "@paperclipai/shared";
 import { notFound, badRequest } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import type { SocialScheduler } from "../workers/social-scheduler.js";
 import type { SocialDmPoller } from "../workers/social-dm-poller.js";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { socialDms } from "@paperclipai/db";
 
 function isSocialPlatform(value: string): value is SocialPlatform {
   return (SOCIAL_PLATFORMS as readonly string[]).includes(value);
+}
+
+/**
+ * Honest keyed-off response for an expansion feature that has no real
+ * backing source on this platform yet. Reason + homework link come from
+ * `feasibility.ts` (single source of truth) — routes never serve stub data
+ * in place of this.
+ */
+function unavailable(
+  feature: string,
+  platform: SocialPlatform,
+): Extract<SocialFeatureAvailability<never>, { available: false }> {
+  const homework = getHomeworkForPlatform(platform);
+  return {
+    available: false,
+    reason: describeFeatureGate(feature, platform),
+    ...(homework ? { homework } : {}),
+  };
 }
 
 /** Strip token fields before sending to client */
@@ -555,26 +581,43 @@ export function socialRoutes(
   });
 
   // POST /companies/:companyId/social/oauth/start
-  // Body: { platform }
-  // Returns { authUrl, state } — caller redirects user to authUrl.
+  // Body: { platform, redirectUri? }
+  // Returns { authUrl, state } — a REAL authorize URL built from the saved
+  // app credentials (same state store as the wizard's authorize endpoint).
+  // Data honesty: no saved credentials → 400 pointing at the wizard. The
+  // legacy stub connect path (fake authUrl + `@stub_*` accounts) is gone.
   router.post("/companies/:companyId/social/oauth/start", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const platform = String(req.body?.platform ?? "");
     if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
-    const adapter = getSocialAdapter(platform);
-    if (!adapter) throw badRequest(`platform ${platform} is not yet wired`);
+    const spec = getWizardSpec(platform);
+    if (!spec) throw badRequest(`${platform} is not yet supported by the connect wizard`);
+    const creds = await credentials.get(platform);
+    if (!creds) {
+      throw badRequest(
+        `Save ${platform} app credentials (Accounts → Connect Wizard) before starting OAuth`,
+      );
+    }
     const redirectUri =
-      typeof req.body?.redirectUri === "string"
+      typeof req.body?.redirectUri === "string" && req.body.redirectUri
         ? req.body.redirectUri
-        : `${req.protocol}://${req.get("host")}/social/oauth/callback`;
-    const start = await adapter.startConnect({ companyId, redirectUri });
-    res.json(start);
+        : creds.redirectUri ?? `${PAPERCLIP_SOCIAL_CALLBACK_BASE}/${platform}`;
+    const state = randomBytes(24).toString("base64url");
+    rememberOAuthState(state, { companyId, platform, redirectUri, createdAt: Date.now() });
+    const authUrl = buildOAuthAuthorizeUrl({
+      spec,
+      clientId: creds.clientId,
+      redirectUri,
+      state,
+    });
+    res.json({ authUrl, state });
   });
 
   // POST /companies/:companyId/social/oauth/finish
   // Body: { platform, code, state }
-  // Returns the persisted SocialAccount row (token redacted).
+  // Exchanges the auth code for REAL tokens (token-exchange.ts) and persists
+  // the connected account. Returns the persisted row (tokens redacted).
   router.post("/companies/:companyId/social/oauth/finish", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -582,25 +625,57 @@ export function socialRoutes(
     const code = String(req.body?.code ?? "");
     const state = String(req.body?.state ?? "");
     if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
-    const adapter = getSocialAdapter(platform);
-    if (!adapter) throw badRequest(`platform ${platform} is not yet wired`);
+    if (!code) throw badRequest("code is required");
+    const entry = consumeOAuthState(state);
+    if (!entry || entry.platform !== platform || entry.companyId !== companyId) {
+      throw badRequest("OAuth state expired or did not match — restart the connect flow");
+    }
+    const creds = await credentials.getDecrypted(platform);
+    if (!creds) {
+      throw badRequest(
+        `Save ${platform} app credentials (Accounts → Connect Wizard) before finishing OAuth`,
+      );
+    }
 
-    const stubAccount = await adapter.finishConnect({ code, state, companyId });
+    let exchanged;
+    try {
+      exchanged = await exchangeCodeForTokens({
+        platform,
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+        code,
+        redirectUri: entry.redirectUri,
+      });
+    } catch (err) {
+      const message =
+        err instanceof TokenExchangeError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      throw badRequest(`Token exchange failed: ${message}`);
+    }
+
+    const spec = getWizardSpec(platform);
+    const account = buildConnectedAccountFromTokens({ platform, companyId, tokens: exchanged });
     const actor = getActorInfo(req);
-    // Persist into our DB so the rest of the UI can use the account.
     const persisted = await svc.createAccount(companyId, {
-      platform: stubAccount.platform,
-      platformAccountId: stubAccount.platformAccountId,
-      displayName: stubAccount.displayName,
-      username: stubAccount.username,
-      avatarUrl: stubAccount.avatarUrl,
-      accessToken: stubAccount.accessToken,
-      refreshToken: stubAccount.refreshToken,
-      tokenExpiresAt: stubAccount.tokenExpiresAt,
-      status: stubAccount.status,
-      metadata: stubAccount.metadata as Record<string, unknown> | null,
+      platform: account.platform,
+      platformAccountId: account.platformAccountId,
+      displayName: account.displayName,
+      username: account.username,
+      avatarUrl: account.avatarUrl,
+      accessToken: account.accessToken,
+      refreshToken: account.refreshToken,
+      tokenExpiresAt: account.tokenExpiresAt,
+      status: account.status,
+      metadata: account.metadata as Record<string, unknown> | null,
+      scopes: exchanged.scope
+        ? exchanged.scope.split(/[\s,]+/).filter(Boolean)
+        : spec?.oauth.scopes ?? [],
+      connectMethod: "api",
       createdBy: actor.actorId,
-    });
+    } as unknown as Parameters<typeof svc.createAccount>[1]);
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
@@ -609,7 +684,7 @@ export function socialRoutes(
       action: "social.account.connected",
       entityType: "social_account",
       entityId: persisted.id,
-      details: { platform, stub: true },
+      details: { platform, method: "api", handle: account.username, scope: exchanged.scope },
     });
     res.status(201).json(redactAccount(persisted));
   });
@@ -670,9 +745,21 @@ export function socialRoutes(
       return;
     }
 
+    // Best-effort refresh before the platform read — don't fail the feed if
+    // refresh itself errors, the read will surface the real auth failure.
+    let working = account;
+    try {
+      working = (await ensureFreshToken(
+        db,
+        account as unknown as Parameters<typeof ensureFreshToken>[1],
+      )) as unknown as typeof account;
+    } catch {
+      /* fall through to the existing token */
+    }
+
     // Cast: socialAccounts rows store platform as `text` so TS widens to
     // `string` even though we only ever insert values from SocialPlatform.
-    const adapterAccount = account as unknown as Parameters<typeof adapter.listRecentPosts>[0];
+    const adapterAccount = working as unknown as Parameters<typeof adapter.listRecentPosts>[0];
     const [{ posts: publishedRaw }, scheduledPosts] = await Promise.all([
       adapter.listRecentPosts(adapterAccount, { limit }),
       svc.listPosts(companyId, "scheduled"),
@@ -698,8 +785,63 @@ export function socialRoutes(
   });
 
   // ── Expansion-pass: Inbox / Competitors / Analytics / Hashtags ─────────
+  //
+  // Data-honesty contract: each of these returns
+  //   { available: true, data: <payload> }
+  // when a real backing source exists (X DMs come from the `social_dms`
+  // table the DM poller fills), and
+  //   { available: false, reason, homework? }
+  // otherwise — reason/homework wired from `feasibility.ts`. Stub adapters
+  // never feed these routes.
+
+  /**
+   * Fold the account's `social_dms` rows (most-recent-first) into
+   * DirectMessageThread summaries for the Inbox list.
+   */
+  async function buildDmThreadsFromDb(
+    accountId: string,
+    limit: number,
+  ): Promise<DirectMessageThread[]> {
+    const rows = await db
+      .select()
+      .from(socialDms)
+      .where(eq(socialDms.socialAccountId, accountId))
+      .orderBy(desc(socialDms.sentAt))
+      .limit(500);
+    const threads = new Map<string, DirectMessageThread>();
+    for (const row of rows) {
+      let thread = threads.get(row.threadId);
+      if (!thread) {
+        // Rows arrive newest-first, so the first row per thread is the
+        // latest message.
+        thread = {
+          threadId: row.threadId,
+          participantHandle: row.senderHandle ?? row.senderDisplayName ?? row.threadId,
+          participantAvatarUrl: row.senderAvatarUrl ?? null,
+          lastMessageAt: row.sentAt,
+          lastMessagePreview: (row.text ?? "").slice(0, 140),
+          unreadCount: 0,
+          canReply: true,
+        };
+        threads.set(row.threadId, thread);
+      }
+      if (row.direction === "inbound") {
+        if (row.senderHandle && thread.participantHandle === row.threadId) {
+          thread.participantHandle = row.senderHandle;
+        }
+        if (!thread.participantAvatarUrl && row.senderAvatarUrl) {
+          thread.participantAvatarUrl = row.senderAvatarUrl;
+        }
+        if (!row.readAt) thread.unreadCount += 1;
+      }
+    }
+    return [...threads.values()].slice(0, limit);
+  }
 
   // GET /companies/:companyId/social/inbox?accountId=...
+  // Per-account entries: X threads come from social_dms (real, poller-fed);
+  // platforms without DM wiring return available:false with the homework
+  // that unlocks them — never mock threads.
   router.get("/companies/:companyId/social/inbox", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -710,32 +852,24 @@ export function socialRoutes(
       ? accounts.filter((a) => a.id === accountId)
       : accounts.filter((a) => a.status === "connected");
 
-    const out: Array<{ accountId: string; platform: string; threads: unknown[] }> = [];
+    const out: Array<
+      { accountId: string; platform: string } & SocialFeatureAvailability<DirectMessageThread[]>
+    > = [];
     for (const account of targets) {
-      const adapter = getSocialAdapter(account.platform as SocialPlatform);
-      if (!adapter?.listDirectMessageThreads) {
-        out.push({ accountId: account.id, platform: account.platform, threads: [] });
-        continue;
-      }
-      try {
-        const threads = await adapter.listDirectMessageThreads(
-          account as unknown as Parameters<NonNullable<typeof adapter.listDirectMessageThreads>>[0],
-          { limit: 30 },
-        );
-        out.push({ accountId: account.id, platform: account.platform, threads });
-      } catch (err) {
-        out.push({
-          accountId: account.id,
-          platform: account.platform,
-          threads: [],
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
+      const platform = account.platform as SocialPlatform;
+      if (platform === "x") {
+        const threads = await buildDmThreadsFromDb(account.id, 30);
+        out.push({ accountId: account.id, platform, available: true, data: threads });
+      } else {
+        out.push({ accountId: account.id, platform, ...unavailable("Read DMs", platform) });
       }
     }
     res.json(out);
   });
 
   // GET /companies/:companyId/social/inbox/:accountId/:threadId
+  // Message stream for one thread. X reads from social_dms; other platforms
+  // return the keyed-off state.
   router.get("/companies/:companyId/social/inbox/:accountId/:threadId", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -743,20 +877,32 @@ export function socialRoutes(
     const threadId = req.params.threadId as string;
     const account = await svc.getAccount(accountId);
     if (!account || account.companyId !== companyId) throw notFound("account");
-    const adapter = getSocialAdapter(account.platform as SocialPlatform);
-    if (!adapter?.listDirectMessages) {
-      res.json([]);
+    const platform = account.platform as SocialPlatform;
+    if (platform !== "x") {
+      res.json(unavailable("Read DMs", platform));
       return;
     }
-    const messages = await adapter.listDirectMessages(
-      account as unknown as Parameters<NonNullable<typeof adapter.listDirectMessages>>[0],
-      threadId,
-    );
-    res.json(messages);
+    const rows = await db
+      .select()
+      .from(socialDms)
+      .where(and(eq(socialDms.socialAccountId, accountId), eq(socialDms.threadId, threadId)))
+      .orderBy(asc(socialDms.sentAt))
+      .limit(200);
+    const messages: DirectMessage[] = rows.map((row) => ({
+      id: row.id,
+      threadId: row.threadId,
+      direction: row.direction === "outbound" ? "outbound" : "inbound",
+      sentAt: row.sentAt,
+      text: row.text ?? "",
+      attachments: Array.isArray(row.mediaUrls) ? (row.mediaUrls as string[]) : [],
+    }));
+    res.json({ available: true, data: messages });
   });
 
   // POST /companies/:companyId/social/inbox/:accountId/:threadId/send
-  // Body: { text }
+  // Body: { text } — real X DM send via the adapter (dm.write, PPU); the
+  // outbound message is mirrored into social_dms so the thread view stays
+  // complete. Platforms without a real send path 400 with the reason.
   router.post("/companies/:companyId/social/inbox/:accountId/:threadId/send", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -766,17 +912,52 @@ export function socialRoutes(
     if (!text.trim()) throw badRequest("text is required");
     const account = await svc.getAccount(accountId);
     if (!account || account.companyId !== companyId) throw notFound("account");
-    const adapter = getSocialAdapter(account.platform as SocialPlatform);
-    if (!adapter?.sendDirectMessage) throw badRequest("platform does not support sending DMs");
+    const platform = account.platform as SocialPlatform;
+    const adapter = getSocialAdapter(platform);
+    if (!adapter?.sendDirectMessage) {
+      throw badRequest(describeFeatureGate("Send DMs", platform));
+    }
+    // Best-effort refresh — the send itself surfaces real auth failures.
+    let working = account;
+    try {
+      working = (await ensureFreshToken(
+        db,
+        account as unknown as Parameters<typeof ensureFreshToken>[1],
+      )) as unknown as typeof account;
+    } catch {
+      /* fall through to the existing token */
+    }
     const message = await adapter.sendDirectMessage(
-      account as unknown as Parameters<NonNullable<typeof adapter.sendDirectMessage>>[0],
+      working as unknown as Parameters<NonNullable<typeof adapter.sendDirectMessage>>[0],
       threadId,
       text,
     );
+    // Mirror the outbound DM into social_dms (idempotent on platform+id).
+    try {
+      await db
+        .insert(socialDms)
+        .values({
+          socialAccountId: account.id,
+          platform: account.platform,
+          threadId,
+          messageId: message.id,
+          direction: "outbound",
+          senderPlatformUserId: account.platformAccountId,
+          text,
+          mediaUrls: [],
+          sentAt: message.sentAt,
+          rawPayload: null,
+        })
+        .onConflictDoNothing({ target: [socialDms.platform, socialDms.messageId] });
+    } catch (err) {
+      req.log?.warn?.({ err, accountId, threadId }, "failed to mirror outbound DM into social_dms");
+    }
     res.status(201).json(message);
   });
 
   // GET /companies/:companyId/social/competitors/search?platform=...&q=...
+  // Available only when the platform adapter has a real searchCompetitors
+  // implementation (none do yet) — otherwise the keyed-off state.
   router.get("/companies/:companyId/social/competitors/search", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -785,11 +966,11 @@ export function socialRoutes(
     if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
     const adapter = getSocialAdapter(platform);
     if (!adapter?.searchCompetitors) {
-      res.json([]);
+      res.json(unavailable("Competitor profile fetch", platform));
       return;
     }
     const results = await adapter.searchCompetitors(query);
-    res.json(results);
+    res.json({ available: true, data: results });
   });
 
   // GET /companies/:companyId/social/competitors/:platform/:handle?from=&to=
@@ -801,16 +982,19 @@ export function socialRoutes(
     if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
     const adapter = getSocialAdapter(platform);
     if (!adapter?.getCompetitorMetrics) {
-      res.json({ byDay: [], topPosts: [] });
+      res.json(unavailable("Competitor profile fetch", platform));
       return;
     }
     const from = req.query.from ? new Date(String(req.query.from)) : new Date(Date.now() - 30 * 86_400_000);
     const to = req.query.to ? new Date(String(req.query.to)) : new Date();
     const metrics = await adapter.getCompetitorMetrics(handle, { from, to });
-    res.json(metrics);
+    res.json({ available: true, data: metrics });
   });
 
   // GET /companies/:companyId/social/analytics?accountId=...&from=...&to=...
+  // Available only when the platform adapter has a real getAccountAnalytics
+  // implementation (none do yet — X owned reads / Meta Insights land per
+  // the feasibility matrix) — otherwise the keyed-off state.
   router.get("/companies/:companyId/social/analytics", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -823,23 +1007,30 @@ export function socialRoutes(
       ? accounts.find((a) => a.id === accountId)
       : accounts.find((a) => a.status === "connected");
     if (!account) {
-      res.json({ followers: [], engagement: [], bestTimes: [], topPosts: [], topHashtags: [] });
+      res.json({
+        available: false,
+        reason: "No connected social account — connect one in the Accounts tab.",
+      });
       return;
     }
-    const adapter = getSocialAdapter(account.platform as SocialPlatform);
+    const platform = account.platform as SocialPlatform;
+    const adapter = getSocialAdapter(platform);
     if (!adapter?.getAccountAnalytics) {
-      res.json({ followers: [], engagement: [], bestTimes: [], topPosts: [], topHashtags: [] });
+      res.json(unavailable("Own analytics (per-post)", platform));
       return;
     }
     const result = await adapter.getAccountAnalytics(
       account as unknown as Parameters<NonNullable<typeof adapter.getAccountAnalytics>>[0],
       { from, to },
     );
-    res.json(result);
+    res.json({ available: true, data: result });
   });
 
   // POST /companies/:companyId/social/hashtags/suggest
   // Body: { platform, text, niche? }
+  // The self-built hashtag corpus (per the feasibility matrix) doesn't
+  // exist yet, so no adapter implements suggestHashtags — keyed-off state
+  // until the corpus lands. AI captions (DeepSeek) are separate and real.
   router.post("/companies/:companyId/social/hashtags/suggest", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
@@ -849,11 +1040,11 @@ export function socialRoutes(
     if (!isSocialPlatform(platform)) throw badRequest(`unknown platform: ${platform}`);
     const adapter = getSocialAdapter(platform);
     if (!adapter?.suggestHashtags) {
-      res.json([]);
+      res.json(unavailable("Hashtag suggestions", platform));
       return;
     }
     const suggestions = await adapter.suggestHashtags({ text, niche });
-    res.json(suggestions);
+    res.json({ available: true, data: suggestions });
   });
 
   // GET /companies/:companyId/social/queue?accountId=...

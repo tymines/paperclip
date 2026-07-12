@@ -693,7 +693,11 @@ export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 export const SOCIAL_ACCOUNT_STATUSES = ["connected", "expired", "revoked", "error"] as const;
 export type SocialAccountStatus = (typeof SOCIAL_ACCOUNT_STATUSES)[number];
 
-export const SOCIAL_POST_STATUSES = ["draft", "scheduled", "publishing", "published", "failed", "cancelled"] as const;
+// "partial_failed" — post-level rollup when some targets published and some
+// reached a terminal failure. "blocked" — target-level terminal state when the
+// account has no real credential for the platform (never retried; the target's
+// errorMessage carries the `blocked_no_credential:` prefix).
+export const SOCIAL_POST_STATUSES = ["draft", "scheduled", "publishing", "published", "failed", "partial_failed", "blocked", "cancelled"] as const;
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 
 export const SOCIAL_POST_TYPES = ["text", "image", "video", "carousel", "story", "reel", "thread"] as const;

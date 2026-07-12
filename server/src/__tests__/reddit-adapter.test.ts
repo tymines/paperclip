@@ -2,8 +2,9 @@
  * Reddit adapter — publish + verify, with `fetch` mocked at the global.
  *
  * Covers:
- *  - Stub-token path returns deterministic mock success (current default
- *    until P0 #1 — real OAuth token exchange — lands).
+ *  - Stub-token path is data-honest: publishPost throws
+ *    BlockedNoCredentialError (the scheduler marks the target `blocked`)
+ *    and verify refuses to synthesize a profile — no fake successes.
  *  - Real-token self-post hits POST oauth.reddit.com/api/submit with the
  *    correct headers + body and unwraps Reddit's JSON-of-JSON envelope.
  *  - Real-token link post sets kind=link + url.
@@ -22,6 +23,7 @@ import {
   RedditRateLimitError,
   verifyRedditAccount,
 } from "../services/social-scheduler/reddit.js";
+import { BlockedNoCredentialError } from "../services/social-scheduler/errors.js";
 import type { PostDraftPayload } from "../services/social-scheduler/types.js";
 
 const REAL_TOKEN = "real_reddit_bearer_xyz";
@@ -106,24 +108,49 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("reddit adapter — stub-token fallback (P0 #1 not landed)", () => {
-  it("returns a deterministic mock success when token is the stub sentinel", async () => {
+describe("reddit adapter — stub-token guard (data honesty)", () => {
+  it("publishPost throws BlockedNoCredentialError instead of faking a submit", async () => {
     const account = fakeAccount({ accessToken: "stub_access_token" });
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
-    const ref = await redditAdapter.publishPost(account, selfPost());
-
+    await expect(redditAdapter.publishPost(account, selfPost())).rejects.toBeInstanceOf(
+      BlockedNoCredentialError,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(ref.platformPostId).toMatch(/^reddit-/);
-    expect(ref.platformUrl).toContain("https://");
-    expect(ref.publishedAt).toBeInstanceOf(Date);
   });
 
-  it("verifyAccount returns a synthetic profile with the stub username", async () => {
+  it("publishPost also blocks legacy stub rows flagged via metadata.stub", async () => {
+    const account = fakeAccount({ metadata: { stub: true } });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(redditAdapter.publishPost(account, selfPost())).rejects.toBeInstanceOf(
+      BlockedNoCredentialError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("verifyRedditAccount rejects stub tokens instead of synthesizing a profile", async () => {
     const account = fakeAccount({ accessToken: "stub_access_token", username: "stub_reddit_user" });
-    const profile = await verifyRedditAccount(account);
-    expect(profile).toEqual({ name: "stub_reddit_user", link_karma: 0, comment_karma: 0 });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(verifyRedditAccount(account)).rejects.toMatchObject({
+      name: "RedditApiError",
+      statusCode: 401,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("listRecentPosts returns an honest empty page for stub tokens", async () => {
+    const account = fakeAccount({ accessToken: "stub_access_token" });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const page = await redditAdapter.listRecentPosts(account, { limit: 10 });
+    expect(page).toEqual({ posts: [], nextCursor: null });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
 

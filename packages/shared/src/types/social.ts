@@ -109,6 +109,27 @@ export interface SocialAppCredentialPublic {
   updatedAt: Date;
 }
 
+/**
+ * Link to the Tyler's-Homework item that unlocks a gated feature. Served
+ * alongside `available: false` responses so the UI can render "what unlocks
+ * this" instead of mock data.
+ */
+export interface SocialFeatureHomeworkLink {
+  title: string;
+  href: string;
+}
+
+/**
+ * Discriminated availability wrapper returned by the expansion endpoints
+ * (analytics, competitors, hashtag suggestions, inbox). Data-honesty rule:
+ * a route either has a real backing source (`available: true`) or says
+ * exactly why it doesn't (`available: false` + reason + optional homework
+ * link) — mock data is never served as real.
+ */
+export type SocialFeatureAvailability<T> =
+  | { available: true; data: T }
+  | { available: false; reason: string; homework?: SocialFeatureHomeworkLink };
+
 /** Result of POST /social/credentials/:platform/test. */
 export interface SocialAppCredentialTestResult {
   ok: boolean;
