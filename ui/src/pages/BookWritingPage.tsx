@@ -40,7 +40,6 @@ import {
   Loader2,
   FileDown,
   Volume2,
-  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
