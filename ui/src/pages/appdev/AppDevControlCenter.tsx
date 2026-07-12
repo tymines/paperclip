@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Plus, ShieldAlert, ArrowRight } from "lucide-react";
-import { appdevControlApi, type AppdevApp } from "../../api/appdevControl";
+import { appdevControlApi, appdevStudioApi, type AppdevApp } from "../../api/appdevControl";
 import { useCompany } from "../../context/CompanyContext";
 import { useBreadcrumbs } from "../../context/BreadcrumbContext";
 import { DS, PHASE_LABELS, PHASE_ORDER, cardBorder, surfaceCard } from "./ds";
@@ -177,16 +177,11 @@ export function AppDevControlCenter() {
         <div className="text-[13px]" style={{ color: DS.textFaint }}>Loading portfolio…</div>
       )}
 
+      {!migrationPending && <SkillsDigestPanel companyId={selectedCompanyId!} apps={apps} />}
+
       <footer className="flex items-center justify-between text-[12px]" style={{ color: DS.textFaint }}>
         <span>
           Gates are objects, not Slack threads — every passage is recorded with evidence.
         </span>
         <Link to="/app-dev" className="flex items-center gap-1" style={{ color: DS.primary }}>
-          Legacy App Dev dashboard (design chat & feedback) <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
-      </footer>
-    </div>
-  );
-}
-
-export default AppDevControlCenter;
+          Legacy App Dev dashboard (design chat & feedback) <ArrowRight cl

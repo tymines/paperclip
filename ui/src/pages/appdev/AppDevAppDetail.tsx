@@ -17,12 +17,17 @@ import {
 import { useCompany } from "../../context/CompanyContext";
 import { useBreadcrumbs } from "../../context/BreadcrumbContext";
 import { DS, GATE_FROM_PHASE, PHASE_LABELS, PHASE_ORDER, cardBorder, surfaceCard } from "./ds";
+import { ChatTab, FeedbackTab, PacksTab, RetroTab, VisualQcPro } from "./StudioTabs";
 
 const TABS = [
   "overview",
   "pipeline",
   "work-orders",
+  "packs",
+  "chat",
+  "feedback",
   "visual-qc",
+  "retro",
   "sessions",
   "releases",
   "analytics",
@@ -158,8 +163,19 @@ export function AppDevAppDetail() {
         <PipelineTab gates={data?.gates ?? []} phase={app?.phase} />
       ) : tab === "work-orders" ? (
         <WorkOrdersTab workOrders={data?.workOrders ?? []} />
+      ) : tab === "packs" ? (
+        <PacksTab companyId={selectedCompanyId!} appId={appId!} />
+      ) : tab === "chat" ? (
+        <ChatTab companyId={selectedCompanyId!} appId={appId!} />
+      ) : tab === "feedback" ? (
+        <FeedbackTab companyId={selectedCompanyId!} appId={appId!} />
+      ) : tab === "retro" ? (
+        <RetroTab companyId={selectedCompanyId!} appId={appId!} />
       ) : (
-        <VisualQcTab reviews={data?.visualReviews ?? []} screens={data?.screens ?? []} />
+        <div className="flex flex-col gap-4">
+          <VisualQcPro companyId={selectedCompanyId!} appId={appId!} screens={data?.screens ?? []} />
+          <VisualQcTab reviews={data?.visualReviews ?? []} screens={data?.screens ?? []} />
+        </div>
       )}
     </div>
   );
@@ -403,25 +419,4 @@ function VisualQcTab({
                   >
                     {r.verdict}
                   </span>
-                  <span className="text-[11px]" style={{ color: DS.textFaint }}>
-                    {r.reviewerModel} · {new Date(r.createdAt).toLocaleString()}
-                  </span>
-                </div>
-                {r.worstScreen && (
-                  <div className="mt-1 text-[11px]" style={{ color: DS.textMuted }}>
-                    worst screen: <code>{r.worstScreen}</code>
-                  </div>
-                )}
-                {r.summary && (
-                  <p className="mt-1 text-[12px] leading-relaxed" style={{ color: DS.textMuted }}>{r.summary}</p>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-export default AppDevAppDetail;
+                  <span className="text-[11px]" s
