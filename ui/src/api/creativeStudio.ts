@@ -1,7 +1,7 @@
 import { api } from "./client";
 
 export type CreativeMode = "image" | "video" | "audio" | "3d";
-export type CreativeProviderId = "higgsfield" | "openart";
+export type CreativeProviderId = "higgsfield" | "openart" | "gemini" | "openai" | "replicate";
 
 export interface CreativeModel {
   provider: CreativeProviderId;
@@ -32,10 +32,20 @@ export interface CreativeJob {
   updatedAt: string;
 }
 
+export interface ProviderStatusEntry {
+  configured: boolean;
+  keyedOffHint: string;
+  label?: string;
+  capabilities?: string;
+}
+
 export interface CreativeStudioStatus {
-  higgsfield: { configured: boolean; keyedOffHint: string };
-  openart: { configured: boolean; keyedOffHint: string };
-  krea: { configured: boolean; keyedOffHint: string };
+  gemini: ProviderStatusEntry;
+  openai: ProviderStatusEntry;
+  replicate: ProviderStatusEntry;
+  higgsfield: ProviderStatusEntry;
+  openart: ProviderStatusEntry;
+  krea: ProviderStatusEntry;
   defaultProviderByMode: Record<CreativeMode, CreativeProviderId>;
   batchConfirmThresholdCredits: number;
 }
