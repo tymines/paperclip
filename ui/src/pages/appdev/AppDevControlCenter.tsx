@@ -184,4 +184,76 @@ export function AppDevControlCenter() {
           Gates are objects, not Slack threads — every passage is recorded with evidence.
         </span>
         <Link to="/app-dev" className="flex items-center gap-1" style={{ color: DS.primary }}>
-          Legacy App Dev dashboard (design chat & feedback) <ArrowRight cl
+          Legacy App Dev dashboard (design chat & feedback) <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </footer>
+    </div>
+  );
+}
+
+/* ── Skills + digest (Phase 6): suggestion allowed, execution confirmed ──── */
+function SkillsDigestPanel({ companyId, apps }: { companyId: string; apps: AppdevApp[] }) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [digestMd, setDigestMd] = useState<string | null>(null);
+  const { data } = useQuery({
+    queryKey: ["appdev", "skills", companyId],
+    queryFn: () => appdevStudioApi.skills(companyId),
+  });
+  const invoke = useMutation({
+    mutationFn: ({ skillId, confirm }: { skillId: string; confirm: boolean }) =>
+      appdevStudioApi.invokeSkill(companyId, skillId, { confirm, appId: apps[0]?.id }),
+    onSuccess: (resp, vars) => {
+      if ((resp as { confirmationRequired?: boolean }).confirmationRequired) setConfirming(vars.skillId);
+      else setConfirming(null);
+    },
+    onError: (_e, vars) => setConfirming(vars.skillId), // 409 confirmationRequired arrives as error via ApiError
+  });
+  const digest = useMutation({
+    mutationFn: () => appdevStudioApi.runDigest(companyId),
+    onSuccess: (r) => setDigestMd(r.markdown),
+  });
+  const skills = data?.skills ?? [];
+
+  return (
+    <section style={surfaceCard} className="flex flex-col gap-3 p-5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.12em]" style={{ color: DS.textFaint }}>
+          Skills & digest
+        </span>
+        <button onClick={() => digest.mutate()} disabled={digest.isPending} className="rounded-lg px-3 py-1.5 text-[12px] font-semibold" style={{ background: "rgba(49,217,255,0.12)", color: DS.analytics }}>
+          {digest.isPending ? "Building…" : "Run weekly digest now"}
+        </button>
+      </div>
+      {skills.length === 0 ? (
+        <span className="text-[12px]" style={{ color: DS.textFaint }}>
+          No saved skills yet — save one from a designer-chat message ("skill" action).
+        </span>
+      ) : (
+        <div className="flex flex-wrap gap-2">
+          {skills.map((s) => (
+            <div key={s.id} className="flex items-center gap-2 rounded-xl px-3 py-1.5" style={{ background: DS.surface, border: cardBorder }}>
+              <code className="text-[12px]" style={{ color: DS.text }}>{s.slashCommand}</code>
+              <span className="text-[10px]" style={{ color: DS.textFaint }}>×{s.runCount}</span>
+              {confirming === s.id ? (
+                <button onClick={() => invoke.mutate({ skillId: s.id, confirm: true })} className="rounded px-2 py-0.5 text-[10px] font-bold" style={{ background: DS.warning, color: DS.canvas }}>
+                  Confirm draft WO
+                </button>
+              ) : (
+                <button onClick={() => invoke.mutate({ skillId: s.id, confirm: false })} className="rounded px-2 py-0.5 text-[10px] font-semibold" style={{ background: DS.surface3, color: DS.textMuted }}>
+                  Run
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {digestMd && (
+        <pre className="max-h-52 overflow-auto whitespace-pre-wrap rounded-xl p-3 text-[11px]" style={{ background: DS.surface, border: cardBorder, color: DS.textMuted }}>
+          {digestMd}
+        </pre>
+      )}
+    </section>
+  );
+}
+
+export default AppDevControlCenter;
