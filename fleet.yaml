@@ -5,7 +5,8 @@
 #
 # Last correction (2026-07-09, Zeus):
 #   1. REVIEWERS: R1 (Gemini), R2 (DeepSeek), EV (OpenAI) — 3 distinct families. Verified OpenAI 200.
-#   2. Bosses (Zeus, Ares) upgraded to kimi-k2.6 (smart). Workers stay on flash.
+#   2. Bosses: Ares on kimi-k2.6 (smart). Zeus moved to deepseek-v4-pro (Tyler 2026-07-13 — was
+#      kimi-k2.6; the kimi provider was the "Provider authentication failed" cause). Workers stay on flash.
 #   3. Hermes Designer: gemini (vision exception to flash rule). Zeus Dispatch: deepseek-v4-flash (operational).
 
 meta:
@@ -41,7 +42,7 @@ agents:
     box: windows
     orchestrator: null
     role: plan-orchestrator
-    model: kimi-k2.6               # smart boss
+    model: deepseek-v4-pro         # Tyler 2026-07-13: Zeus on DeepSeek V4 Pro (was kimi-k2.6)
     framework: hermes
     adapter: hermes_local
   - name: Zeus Critic
