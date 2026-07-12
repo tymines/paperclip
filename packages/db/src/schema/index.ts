@@ -253,3 +253,5 @@ export {
 } from "./appdev_control.js";
 // ── Creative Studio (Fable spec 2026-07-12, P0) — migration 0149 GATED, not applied ──
 export { creativeJobs, type CreativeJob, type NewCreativeJob } from "./creative_studio.js";
+export { creativeBrandKits, type CreativeBrandKit, type NewCreativeBrandKit } from "./creative_brand_kits.js";
+

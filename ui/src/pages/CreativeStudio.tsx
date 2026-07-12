@@ -5,11 +5,15 @@
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Sparkles, ImageIcon, Film, Music, Box, RefreshCw, Star, Download, AlertTriangle, Repeat,
+  Sparkles, ImageIcon, Film, Music, Box, RefreshCw, Star, Download, AlertTriangle, Repeat, Wand2, TrendingUp,
 } from "lucide-react";
 import {
   creativeStudioApi, type CreativeJob, type CreativeMode, type CreativeModel, type CreativeProviderId,
 } from "../api/creativeStudio";
+import { PresetsBrowser } from "../components/creative-studio/PresetsBrowser";
+import { EditTools } from "../components/creative-studio/EditTools";
+import { AdStudio } from "../components/creative-studio/AdStudio";
+import { creativeToolsApi, type BrowseItem } from "../api/creativeTools";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useToast } from "../context/ToastContext";
@@ -43,10 +47,15 @@ export function CreativeStudio() {
   const { pushToast } = useToast();
   const qc = useQueryClient();
 
-  const [surface, setSurface] = useState<"create" | "library">("create");
+  const [surface, setSurface] = useState<"create" | "presets" | "ads" | "edit" | "library">("create");
   const [mode, setMode] = useState<CreativeMode>("image");
   const [modelId, setModelId] = useState<string>("");
   const [prompt, setPrompt] = useState("");
+  // P1 reference slots: "Animate this frame" (start_image) vs "Feature this subject" (image_references)
+  const [startFrameUrl, setStartFrameUrl] = useState("");
+  const [subjectRefUrl, setSubjectRefUrl] = useState("");
+  const [activePreset, setActivePreset] = useState<BrowseItem | null>(null);
+  const [editSourceUrl, setEditSourceUrl] = useState<string | undefined>(undefined);
 
   useEffect(() => { setBreadcrumbs([{ label: "Creative Studio" }]); }, [setBreadcrumbs]);
 
@@ -99,7 +108,10 @@ export function CreativeStudio() {
   useQuery({
     queryKey: ["creative-jobs-poll", cid, activeJobs.map((j) => j.id).join(",")],
     queryFn: async () => {
-      await Promise.allSettled(activeJobs.map((j) => creativeStudioApi.job(cid!, j.id)));
+      await Promise.allSettled(activeJobs.map((j) =>
+        j.purpose === "shorts" || j.purpose === "clipper"
+          ? creativeToolsApi.launcherStatus(cid!, j.id)
+          : creativeStudioApi.job(cid!, j.id)));
       qc.invalidateQueries({ queryKey: ["creative-jobs", cid] });
       return true;
     },
@@ -110,8 +122,13 @@ export function CreativeStudio() {
   const generateMut = useMutation({
     mutationFn: () => {
       if (!selectedModel) throw new Error("pick a model first");
+      const refs: Array<{ role: string; url: string }> = [];
+      if (mode === "video" && /^https?:\/\//.test(startFrameUrl)) refs.push({ role: "start_image", url: startFrameUrl });
+      if (/^https?:\/\//.test(subjectRefUrl)) refs.push({ role: "image_references", url: subjectRefUrl });
       return creativeStudioApi.generate(cid!, {
         provider: selectedModel.provider, mode, model: selectedModel.id, prompt,
+        refs,
+        params: activePreset ? { preset_id: activePreset.id } : undefined,
       });
     },
     onSuccess: () => {
@@ -120,6 +137,15 @@ export function CreativeStudio() {
       qc.invalidateQueries({ queryKey: ["creative-credits", cid] });
     },
     onError: (e: any) => pushToast({ title: "Generation failed", body: String(e?.message ?? e).slice(0, 200), tone: "error" }),
+  });
+
+  const viralityMut = useMutation({
+    mutationFn: (jobId: string) => creativeToolsApi.virality(cid!, jobId),
+    onSuccess: (r) => {
+      qc.invalidateQueries({ queryKey: ["creative-jobs", cid] });
+      pushToast({ title: `Virality: ${r.virality.score ?? "scored"}`, body: r.virality.summary ? String(r.virality.summary).slice(0, 160) : undefined, tone: "success" });
+    },
+    onError: (e: any) => pushToast({ title: "Virality scoring failed", body: String(e?.message ?? e).slice(0, 160), tone: "error" }),
   });
 
   const favMut = useMutation({
@@ -186,14 +212,14 @@ export function CreativeStudio() {
 
       {/* sub-nav */}
       <div style={{ display: "flex", gap: 4, marginBottom: 20 }}>
-        {(["create", "library"] as const).map((s) => (
+        {(["create", "presets", "ads", "edit", "library"] as const).map((s) => (
           <button key={s} onClick={() => setSurface(s)} style={{
             background: surface === s ? DS.surface2 : "transparent",
             color: surface === s ? DS.text : DS.textMuted,
             border: `1px solid ${surface === s ? DS.border2 : "transparent"}`,
             borderRadius: 10, padding: "8px 18px", fontSize: 13, fontWeight: 500, cursor: "pointer",
           }}>
-            {s === "create" ? "Create" : "Library"}
+            {s === "create" ? "Create" : s === "presets" ? "Presets" : s === "ads" ? "Ad Studio" : s === "edit" ? "Edit" : "Library"}
           </button>
         ))}
       </div>
@@ -231,6 +257,28 @@ export function CreativeStudio() {
                   fontFamily: "inherit", outline: "none", boxSizing: "border-box",
                 }}
               />
+              {(mode === "video" || mode === "image") && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 10 }}>
+                  {mode === "video" && (
+                    <div>
+                      <label style={{ fontSize: 10, color: DS.textFaint, textTransform: "uppercase", letterSpacing: ".05em" }}>Animate this frame — exact first frame</label>
+                      <input value={startFrameUrl} onChange={(e) => setStartFrameUrl(e.target.value)} placeholder="start image URL (locks framing)"
+                        style={{ width: "100%", boxSizing: "border-box", background: DS.surface2, color: DS.text, border: `1px solid ${DS.border}`, borderRadius: 10, padding: "7px 10px", fontSize: 11, outline: "none", marginTop: 4 }} />
+                    </div>
+                  )}
+                  <div style={{ gridColumn: mode === "video" ? undefined : "1 / -1" }}>
+                    <label style={{ fontSize: 10, color: DS.textFaint, textTransform: "uppercase", letterSpacing: ".05em" }}>Feature this subject — identity reference</label>
+                    <input value={subjectRefUrl} onChange={(e) => setSubjectRefUrl(e.target.value)} placeholder="reference image URL (new scene, same subject)"
+                      style={{ width: "100%", boxSizing: "border-box", background: DS.surface2, color: DS.text, border: `1px solid ${DS.border}`, borderRadius: 10, padding: "7px 10px", fontSize: 11, outline: "none", marginTop: 4 }} />
+                  </div>
+                </div>
+              )}
+              {activePreset && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 11, color: DS.primary }}>
+                  Preset: {activePreset.name}
+                  <button onClick={() => setActivePreset(null)} style={{ background: "none", border: "none", color: DS.textFaint, cursor: "pointer", fontSize: 11 }}>✕ clear</button>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
                 <div style={{ fontSize: 11, color: DS.textFaint }}>
                   {selectedModel ? `${PROVIDER_LABEL[selectedModel.provider]} · ${selectedModel.displayName}` : modelsQ.isLoading ? "Loading models…" : "No model available for this mode"}
@@ -256,6 +304,8 @@ export function CreativeStudio() {
               emptyText={anyConfigured ? "No generations yet — your jobs will appear here with live progress." : "Keyed off — configure a provider to start generating."}
               onRecreate={recreate}
               onFavorite={(job) => favMut.mutate({ job })}
+              onEdit={(job) => { setEditSourceUrl(job.outputs[0]?.url); setSurface("edit"); }}
+              onVirality={(job) => viralityMut.mutate(job.id)}
               card={card}
             />
           </div>
@@ -294,12 +344,30 @@ export function CreativeStudio() {
         </div>
       )}
 
+      {surface === "presets" && (
+        <PresetsBrowser
+          hfConfigured={!!status?.higgsfield.configured}
+          onUsePreset={(p) => {
+            setActivePreset(p);
+            setSurface("create");
+            setMode("video");
+            if (p.description && !prompt) setPrompt(p.description);
+          }}
+        />
+      )}
+
+      {surface === "ads" && <AdStudio hfConfigured={!!status?.higgsfield.configured} />}
+
+      {surface === "edit" && <EditTools hfConfigured={!!status?.higgsfield.configured} initialSourceUrl={editSourceUrl} />}
+
       {surface === "library" && (
         <JobGrid
           jobs={jobs}
           emptyText="Library is empty — everything you generate lands here (favorites, Recreate, downloads)."
           onRecreate={recreate}
           onFavorite={(job) => favMut.mutate({ job })}
+          onEdit={(job) => { setEditSourceUrl(job.outputs[0]?.url); setSurface("edit"); }}
+          onVirality={(job) => viralityMut.mutate(job.id)}
           card={card}
         />
       )}
@@ -312,11 +380,13 @@ function surfaceFilter(j: CreativeJob, mode: CreativeMode): boolean {
   return j.mode === mode;
 }
 
-function JobGrid({ jobs, emptyText, onRecreate, onFavorite, card }: {
+function JobGrid({ jobs, emptyText, onRecreate, onFavorite, onEdit, onVirality, card }: {
   jobs: CreativeJob[];
   emptyText: string;
   onRecreate: (j: CreativeJob) => void;
   onFavorite: (j: CreativeJob) => void;
+  onEdit?: (j: CreativeJob) => void;
+  onVirality?: (j: CreativeJob) => void;
   card: CSSProperties;
 }) {
   if (jobs.length === 0) {
@@ -354,6 +424,12 @@ function JobGrid({ jobs, emptyText, onRecreate, onFavorite, card }: {
                 <span style={{ fontSize: 10, color: DS.textFaint, fontFamily: MONO }}>{PROVIDER_LABEL[j.provider]} · {j.model.slice(0, 18)}</span>
                 <div style={{ display: "flex", gap: 4 }}>
                   <IconBtn title="Recreate — reopen with this prompt/model" onClick={() => onRecreate(j)}><Repeat size={13} /></IconBtn>
+                  {onEdit && out && <IconBtn title="Edit — send to the edit tool grid" onClick={() => onEdit(j)}><Wand2 size={13} /></IconBtn>}
+                  {onVirality && j.mode === "video" && j.status === "completed" && (
+                    <IconBtn title={(j.params as any)?.virality ? `Virality: ${(j.params as any).virality.score ?? "?"}` : "Score virality (directional)"} onClick={() => onVirality(j)}>
+                      <TrendingUp size={13} color={(j.params as any)?.virality ? "#2FE38A" : undefined} />
+                    </IconBtn>
+                  )}
                   <IconBtn title={j.favorite === 1 ? "Unfavorite" : "Favorite"} onClick={() => onFavorite(j)}>
                     <Star size={13} fill={j.favorite === 1 ? DS.amber : "none"} color={j.favorite === 1 ? DS.amber : DS.textMuted} />
                   </IconBtn>

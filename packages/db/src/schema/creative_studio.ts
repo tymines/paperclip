@@ -27,7 +27,8 @@ export const creativeJobs = pgTable(
     // Book Studio media linkage (migration 0150, gated)
     bookId: uuid("book_id").references(() => books.id),
     chapterId: text("chapter_id"),
-    purpose: text("purpose"), // cover | illustration | trailer | narration-chunk | narration-chunk-superseded
+    purpose: text("purpose"), // cover | illustration | trailer | narration-chunk | narration-chunk-superseded | edit:* | explainer | shorts | clipper | ad-batch | ad-variant | ad-reference
+    batchId: uuid("batch_id"), // ad-batch grouping (migration 0151, gated)
 
     favorite: integer("favorite").notNull().default(0), // 0/1 (int for cheap toggling)
     createdBy: text("created_by").notNull().default("unknown"),
@@ -40,6 +41,7 @@ export const creativeJobs = pgTable(
     companyCreatedIdx: index("creative_jobs_company_created_idx").on(table.companyId, table.createdAt),
     bookIdx: index("creative_jobs_book_idx").on(table.bookId),
     bookPurposeIdx: index("creative_jobs_book_purpose_idx").on(table.bookId, table.purpose),
+    batchIdx: index("creative_jobs_batch_idx").on(table.batchId),
   }),
 );
 

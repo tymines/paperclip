@@ -26,6 +26,8 @@ export interface CreativeJob {
   error: string | null;
   folder: string | null;
   favorite: number;
+  purpose?: string | null;
+  batchId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
