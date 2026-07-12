@@ -40,6 +40,7 @@ import { jarvisRoutes } from "./routes/jarvis.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
 import { appdevControlRoutes } from "./routes/appdev-control.js";
+import { appdevStudioRoutes, appdevWebhookRoutes } from "./routes/appdev-studio.js";
 import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
 import { bookStudioRoutes } from "./routes/book-studio.js";
@@ -265,6 +266,7 @@ export async function createApp(
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));
   api.use(appdevControlRoutes(db));
+  api.use(appdevStudioRoutes(db));
   api.use(promptsRoutes(db));
   api.use(gymRoutes(db));
   api.use(creativeStudioRoutes(db));
@@ -394,6 +396,9 @@ export async function createApp(
       fallthrough: false,
     }),
   );
+  // ── Public App Dev Sentry webhook (token-guarded, ingest-only scope; same
+  //    defense-in-depth pattern as the feedback intake below) ────────────────
+  app.use(appdevWebhookRoutes(db));
   // ── Public app-feedback intake (Baily's App "Request a Feature") ──────────
   // Mounted ahead of the guarded /api router so the app can POST off-Tailnet
   // with no session. Defense-in-depth: single-purpose token (a speed bump, NOT
@@ -630,18 +635,4 @@ export async function createApp(
       }
     }
   }).catch((err) => {
-    logger.error({ err }, "Failed to load ready plugins on startup");
-  });
-  process.once("exit", () => {
-    if (feedbackExportTimer) clearInterval(feedbackExportTimer);
-    devWatcher?.close();
-    viteHtmlRenderer?.dispose();
-    hostServiceCleanup.disposeAll();
-    hostServiceCleanup.teardown();
-  });
-  process.once("beforeExit", () => {
-    void flushPluginLogBuffer();
-  });
-
-  return app;
-}
+    logger.error({ err }, "Failed to load ready plu

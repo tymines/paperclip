@@ -514,5 +514,5 @@ export async function tylerQueue(db: Db, companyId: string): Promise<TylerQueueI
   } catch (err) {
     rethrowMigrationPending(err);
   }
-  return items.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-}
+  // Oldest FIRST (spec Part 7): the queue surfaces what has been blocked on
+  // Tyler the longest.

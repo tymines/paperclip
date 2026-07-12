@@ -380,18 +380,15 @@ export const appdevDeployments = pgTable(
   (t) => ({ appIdx: index("appdev_deployments_app_idx").on(t.appId) }),
 );
 
-export const appdevRetros = pgTable(
-  "appdev_retros",
+/** 4.6 appdev_screen_baselines — versioned baselines for VFG-R (migration 0151).
+ * Latest approved is the default; merge-base selection prefers an exact
+ * branch_point_sha match, else the newest baseline approved before the work
+ * order started (temporal approximation of branch ancestry — the server has
+ * no git; documented in visual-diff.ts). Superseded baselines are retained
+ * for the history scrubber. */
+export const appdevScreenBaselines = pgTable(
+  "appdev_screen_baselines",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
-    appId: uuid("app_id").notNull().references(() => appdevApps.id),
-    deploymentId: uuid("deployment_id"),
-    doc: text("doc"),
-    lessons: jsonb("lessons").$type<Array<Record<string, unknown>>>(),
-    /** OUROBOROS in data: new idea/WO ids spawned from lessons */
-    fedForwardIds: jsonb("fed_forward_ids").$type<string[]>(),
-    createdAt: ts("created_at").notNull().defaultNow(),
-  },
-  (t) => ({ appIdx: index("appdev_retros_app_idx").on(t.appId) }),
-);
+    screenId: uuid("scre
