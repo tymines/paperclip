@@ -277,7 +277,9 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   }, [selectedCh, markingDone, API_PREFIX]);
 
   const wordCount = content.split(/\s+/).filter(Boolean).length;
-  const chapterTitle = chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`;
+  const chapterTitle = selectedCh == null
+    ? "No chapters yet — add one in the Outline tab to start writing"
+    : (chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`);
 
   return (
     <div className="flex flex-col min-h-0 h-full">

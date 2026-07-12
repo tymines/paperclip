@@ -1111,6 +1111,46 @@ export function BookWritingPage() {
     fetchData();
   }, [fetchData]);
 
+  // ── Book selection + creation (fixes: no create button, books not surfacing) ──
+  const loadBookEntities = useCallback(async (bookId: string) => {
+    const [charsRes, locsRes, styleRes, outlineRes] = await Promise.all([
+      apiFetch<{ characters: CharacterEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/characters`),
+      apiFetch<{ "world-locations": WorldLocationEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/world-locations`),
+      apiFetch<{ style: StyleEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/style`),
+      apiFetch<{ outline: OutlineEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/outline`),
+    ]);
+    setCharacters(charsRes.characters || []);
+    setLocations(locsRes["world-locations"] || []);
+    setStyleEntries(styleRes.style || []);
+    setOutlineEntries(outlineRes.outline || []);
+  }, [companySlug]);
+
+  const selectBook = useCallback(async (bookId: string) => {
+    const b = booksList.find((x) => x.id === bookId) || null;
+    setActiveBook(b);
+    if (b) { try { await loadBookEntities(b.id); } catch (e) { console.error("load book entities failed", e); } }
+    else { setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]); }
+  }, [booksList, loadBookEntities]);
+
+  const createBook = useCallback(async (title: string) => {
+    try {
+      const book = await apiFetch<BookData>(`/companies/${companySlug}/book-studio/books`, {
+        method: "POST", body: JSON.stringify({ title }),
+      });
+      setBooksList((prev) => [book, ...prev]);
+      setActiveBook(book);
+      setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]);
+    } catch (e) {
+      console.error("create book failed", e);
+      alert("Could not create the book — see console. (You may need write access to this company.)");
+    }
+  }, [companySlug]);
+
+  const handleNewBook = useCallback(() => {
+    const title = window.prompt("New book title:");
+    if (title && title.trim()) void createBook(title.trim());
+  }, [createBook]);
+
   // ── CRUD helpers ───────────────────────────────────────────────────────
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${activeBook?.id}`;
@@ -1466,6 +1506,25 @@ export function BookWritingPage() {
           <span className="text-sm text-gray-400 italic">
             {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>
+          {booksList.length > 0 && (
+            <select
+              value={activeBook?.id ?? ""}
+              onChange={(e) => void selectBook(e.target.value)}
+              className="rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50 max-w-48"
+              title="Switch book"
+            >
+              {booksList.map((b) => (
+                <option key={b.id} value={b.id}>{b.title}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={handleNewBook}
+            className="rounded-md border border-blue-700 px-2.5 py-1 text-xs font-medium text-blue-300 hover:text-blue-100 hover:border-blue-500"
+            title="Create a new book"
+          >
+            + New Book
+          </button>
         </div>
 
         <div className="flex items-center gap-3">
