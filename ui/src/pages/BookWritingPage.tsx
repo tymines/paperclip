@@ -1651,13 +1651,11 @@ export function BookWritingPage() {
             <Sparkles className="w-3 h-3" /> Brainstorm
           </button>
           <button
-            onClick={() => {
-              setConsistencyFindings(null);
-              setShowExportModal(true);
-            }}
-            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 flex items-center gap-1.5"
+            onClick={() => { setShowExportModal(true); void handleCheckConsistency(); }}
+            disabled={!activeBook || checkingConsistency}
+            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 flex items-center gap-1.5 disabled:opacity-50"
           >
-            <AlertTriangle className="w-3 h-3" /> Check Consistency
+            <AlertTriangle className="w-3 h-3" /> {checkingConsistency ? "Checking…" : "Check Consistency"}
           </button>
           <button
             onClick={handleNarrateEstimate}

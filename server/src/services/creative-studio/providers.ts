@@ -103,8 +103,10 @@ class HiggsfieldProvider implements CreativeProvider {
 
   constructor() {
     const url = env("HIGGSFIELD_MCP_URL");
-    this.configured = !!url;
-    this.client = url ? new McpHttpClient(url, env("HIGGSFIELD_MCP_TOKEN")) : null;
+    const token = env("HIGGSFIELD_MCP_TOKEN");
+    // configured requires BOTH url and token so a bare URL never regresses the keyed-off state to error-on-use.
+    this.configured = !!url && !!token;
+    this.client = url && token ? new McpHttpClient(url, token) : null;
   }
 
   private need(): McpHttpClient {
@@ -201,8 +203,10 @@ class OpenArtProvider implements CreativeProvider {
 
   constructor() {
     const url = env("OPENART_MCP_URL");
-    this.configured = !!url;
-    this.client = url ? new McpHttpClient(url, env("OPENART_MCP_TOKEN")) : null;
+    const token = env("OPENART_MCP_TOKEN");
+    // configured requires BOTH url and token so a bare URL never regresses the keyed-off state to error-on-use.
+    this.configured = !!url && !!token;
+    this.client = url && token ? new McpHttpClient(url, token) : null;
   }
 
   private need(): McpHttpClient {
