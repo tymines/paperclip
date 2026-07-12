@@ -32,6 +32,10 @@ const BOARD_ROUTE_ROOTS = new Set([
   "voice-memos",
   "personas",
   "world-view",
+  "war-room",
+  "gym",
+  "app-dev",
+  "book-writing",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set([

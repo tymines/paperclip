@@ -48,6 +48,8 @@ import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
 import { GymPage } from "./pages/GymPage";
+import { BookWritingPage } from "./pages/BookWritingPage";
+import { ErrorBoundary as BookStudioErrorBoundary } from "./components/book-studio/ErrorBoundary";
 import { OrgChart } from "./pages/OrgChart";
 import { Personas } from "./pages/Personas";
 import { PersonaDetail } from "./pages/PersonaDetail";
@@ -115,6 +117,8 @@ function boardRoutes() {
       <Route path="world-view" element={<WorldView />} />
       <Route path="rooms" element={<Rooms />} />
       <Route path="war-room" element={<WarRoom />} />
+      <Route path="gym" element={<GymPage />} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
       <Route path="social" element={<SocialScheduler />} />
       <Route path="social/posts/:postId" element={<SocialPostDetail />} />
@@ -188,6 +192,7 @@ function boardRoutes() {
       <Route path="personas/:personaId" element={<PersonaDetail />} />
       <Route path="image-studio" element={<ImageStudio />} />
 <Route path="gym" element={<GymPage />} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       {/* Legacy standalone tool routes — collapsed into the unified Image Studio
           workbench. Redirect old links to the matching ?tab= rather than 404. */}
       <Route path="image-studio/tools/photoshoot" element={<LegacyImageToolRedirect tab="photoshoot" />} />
@@ -477,21 +482,4 @@ export function App() {
           <Route path="issues/done" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/recent" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/budget" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings/secrets" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/export/*" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/import" element={<UnprefixedBoardRedirect />} />
-          <Route path="plugins/:pluginId" element={<UnprefixedBoardRedirect />} />
-          <Route path=":companyPrefix" element={<Layout />}>
-            {boardRoutes()}
-          </Route>
-          <Route path="*" element={<NotFoundPage scope="global" />} />
-        </Route>
-      </Routes>
-      <OnboardingWizard />
-    </>
-  );
-}
+          <Route path="company/settings" element={<UnprefixedBoardRed

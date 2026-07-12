@@ -26,6 +26,7 @@ import {
   Paperclip,
   AppWindow,
   BookOpen,
+  Dumbbell,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -220,6 +221,7 @@ function SidebarLegacy({
 
       <SidebarSection label="Company">
         <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
@@ -295,6 +297,7 @@ function SidebarV1({
 
       <SidebarSection label="More">
         <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
         <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
