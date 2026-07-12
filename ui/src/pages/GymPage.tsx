@@ -1,266 +1,307 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+// Gym Tab (Fable spec) — read-only observability of what the fleet LEARNS + what it
+// wants to CHANGE. Learning Feed (vault deep-dreams/session-ends) + Proposed-Changes
+// queue (approve/reject/edit) + Skill Evolution Timeline. Nothing auto-executes.
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Sparkles, RefreshCw, Check, X, Pencil, FileText, Crown, TrendingUp, Brain,
+} from "lucide-react";
+import { gymObservabilityApi, type SkillProposal } from "../api/gymObservability";
 import { useCompany } from "../context/CompanyContext";
-import { cn } from "../lib/utils";
-import { gymApi, type EvolutionRun } from "../api/gym";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
+import { useToast } from "../context/ToastContext";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-function statusColor(status: string) {
-  switch (status) {
-    case "active":
-      return "bg-yellow-400";
-    case "idle":
-      return "bg-green-400";
-    case "paused":
-      return "bg-gray-400";
-    default:
-      return "bg-gray-400";
-  }
-}
+const DS = {
+  canvas: "#06090F", surface: "#0D131D", surface2: "#111926", surface3: "#172131",
+  border: "#1C2635", border2: "#263246", text: "#F5F8FF", textMuted: "#A3B0C2",
+  textFaint: "#68758A", primary: "#3B82FF", success: "#2FE38A", critical: "#FF5B5B",
+  amber: "#F5A623", purple: "#8B7BF0",
+} as const;
 
-function AgentCard({
-  name,
-  status,
-  skillCount,
-}: {
-  name: string;
-  status: string;
-  skillCount: number;
-}) {
-  return (
-    <div className="rounded-lg border border-gray-800 bg-gray-950 p-4 transition-colors hover:border-gray-700">
-      <div className="flex items-center gap-3">
-        <span className={cn("h-3 w-3 rounded-full", statusColor(status))} />
-        <span className="text-sm font-medium text-gray-200">{name}</span>
-      </div>
-      <div className="mt-3 flex items-center justify-between text-xs text-gray-400">
-        <span className="capitalize">{status}</span>
-        <span>{skillCount} skills</span>
-      </div>
-    </div>
-  );
-}
+const TARGET_COLOR: Record<string, string> = { skill: DS.primary, soul: DS.purple, workflow: DS.amber };
 
-function EvolutionRunRow({
-  run,
-  defaultExpanded,
-}: {
-  run: EvolutionRun;
-  defaultExpanded?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
-  const deltaClass =
-    run.delta > 0 ? "text-green-400" : run.delta < 0 ? "text-red-400" : "text-gray-400";
-  const statusClass =
-    run.status === "approved"
-      ? "text-green-400"
-      : run.status === "rejected"
-        ? "text-red-400"
-        : "text-yellow-400";
-
-  return (
-    <>
-      <tr
-        className="cursor-pointer border-b border-gray-800 transition-colors hover:bg-gray-900/50"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <td className="px-4 py-3 text-xs font-mono text-gray-400">{run.id}</td>
-        <td className="px-4 py-3 text-sm text-gray-200">{run.targetSkill}</td>
-        <td className="px-4 py-3 text-sm text-gray-400">
-          {run.beforeScore} &rarr; {run.afterScore}
-        </td>
-        <td className={cn("px-4 py-3 text-sm font-medium", deltaClass)}>
-          {run.delta > 0 ? "+" : ""}{run.delta}
-        </td>
-        <td className={cn("px-4 py-3 text-sm capitalize", statusClass)}>
-          {run.status.replace("_", " ")}
-        </td>
-      </tr>
-      {expanded && run.diff && (
-        <tr className="border-b border-gray-800 bg-gray-900/30">
-          <td colSpan={5} className="px-6 py-3">
-            <div className="rounded-md border border-gray-700 bg-gray-950 p-3">
-              <p className="mb-2 text-xs font-medium text-gray-400">Change Description</p>
-              <pre className="whitespace-pre-wrap font-mono text-xs text-gray-300">{run.diff}</pre>
-              {run.rationale && (
-                <>
-                  <p className="mb-1 mt-3 text-xs font-medium text-gray-400">Rationale</p>
-                  <p className="text-xs text-gray-300">{run.rationale}</p>
-                </>
-              )}
-            </div>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function TrainingFeedPlaceholder() {
-  return (
-    <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
-      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-800">
-        <span className="text-xl">&#x1F3CB;</span>
-      </div>
-      <h3 className="mb-1 text-sm font-medium text-gray-200">Training Feed</h3>
-      <p className="text-xs text-gray-400">
-        Training data appears here after evolution runs complete
-      </p>
-    </div>
-  );
+function fmtDate(s: string | null): string {
+  if (!s) return "";
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? String(s).slice(0, 10) : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export function GymPage() {
-  const { selectedCompanyId } = useCompany();
+  const { selectedCompanyId: cid } = useCompany();
+  const { setBreadcrumbs } = useBreadcrumbs();
+  const { pushToast } = useToast();
+  const qc = useQueryClient();
 
-  const agentsQuery = useQuery({
-    queryKey: ["gym", "agents", selectedCompanyId],
-    queryFn: () => gymApi.listAgents(selectedCompanyId!),
-    enabled: Boolean(selectedCompanyId),
+  const [agentFilter, setAgentFilter] = useState<string>("All");
+  const [editing, setEditing] = useState<SkillProposal | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editTarget, setEditTarget] = useState("");
+  const [editDetail, setEditDetail] = useState("");
+
+  const [isMobile, setIsMobile] = useState<boolean>(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(max-width: 768px)");
+    const onChange = () => setIsMobile(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => { setBreadcrumbs([{ label: "Gym" }]); }, [setBreadcrumbs]);
+
+  const feedQ = useQuery({
+    queryKey: ["gym-feed", cid],
+    queryFn: () => gymObservabilityApi.learningFeed(cid!),
+    enabled: !!cid,
+  });
+  const proposalsQ = useQuery({
+    queryKey: ["gym-proposals", cid],
+    queryFn: () => gymObservabilityApi.proposals(cid!),
+    enabled: !!cid,
+    refetchInterval: 8000,
+  });
+  const timelineQ = useQuery({
+    queryKey: ["gym-timeline", cid],
+    queryFn: () => gymObservabilityApi.timeline(cid!),
+    enabled: !!cid,
   });
 
-  const evolutionRunsQuery = useQuery({
-    queryKey: ["gym", "evolution-runs", selectedCompanyId],
-    queryFn: () => gymApi.listEvolutionRuns(selectedCompanyId!),
-    enabled: Boolean(selectedCompanyId),
+  const feed = (feedQ.data as any)?.items ?? [];
+  const proposals: SkillProposal[] = (proposalsQ.data as any)?.proposals ?? [];
+  const timelines = (timelineQ.data as any)?.timelines ?? [];
+
+  const agents = useMemo(() => {
+    const s = new Set<string>();
+    feed.forEach((f: any) => f.agent && s.add(f.agent));
+    return ["All", ...Array.from(s)];
+  }, [feed]);
+  const filteredFeed = agentFilter === "All" ? feed : feed.filter((f: any) => f.agent === agentFilter);
+
+  const pending = proposals.filter((p) => p.status === "pending");
+  const reviewed = proposals.filter((p) => p.status !== "pending");
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["gym-proposals", cid] });
+    qc.invalidateQueries({ queryKey: ["gym-timeline", cid] });
+  };
+
+  const generateM = useMutation({
+    mutationFn: () => gymObservabilityApi.generate(cid!),
+    onSuccess: (d: any) => {
+      invalidate();
+      pushToast({ title: `Scanned ${d.scanned} — ${d.inserted} new proposal(s)`, variant: "success" } as any);
+    },
+    onError: () => pushToast({ title: "Scan failed", variant: "destructive" } as any),
+  });
+  const reviewM = useMutation({
+    mutationFn: (a: { id: string; decision: "approve" | "reject" }) => gymObservabilityApi.review(cid!, a.id, a.decision),
+    onSuccess: (_d, a) => { invalidate(); pushToast({ title: a.decision === "approve" ? "Approved" : "Rejected", variant: "success" } as any); },
+  });
+  const editM = useMutation({
+    mutationFn: (a: { id: string; title: string; target_name: string; detail: string }) =>
+      gymObservabilityApi.edit(cid!, a.id, { title: a.title, target_name: a.target_name, detail: a.detail }),
+    onSuccess: () => { invalidate(); setEditing(null); pushToast({ title: "Updated", variant: "success" } as any); },
   });
 
-  const skillStatsQuery = useQuery({
-    queryKey: ["gym", "skills-stats", selectedCompanyId],
-    queryFn: () => gymApi.listSkillStats(selectedCompanyId!),
-    enabled: Boolean(selectedCompanyId),
-  });
+  const openEdit = (p: SkillProposal) => {
+    setEditing(p); setEditTitle(p.title); setEditTarget(p.target_name); setEditDetail(p.detail ?? "");
+  };
 
-  if (!selectedCompanyId) {
+  if (!cid) return <div style={{ background: DS.canvas, minHeight: "100vh", padding: 24, color: DS.textMuted }}>Select a company.</div>;
+
+  const badge = (label: string, color: string) => (
+    <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", color, background: `${color}1E`, padding: "2px 7px", borderRadius: 6 }}>{label}</span>
+  );
+
+  const proposalCard = (p: SkillProposal) => {
+    const tc = TARGET_COLOR[p.target_type] ?? DS.textFaint;
     return (
-      <div className="flex items-center justify-center p-12">
-        <p className="text-sm text-gray-400">Select a company to view the Gym</p>
+      <div key={p.id} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+          {badge(p.target_type, tc)}
+          <span style={{ fontSize: 12, color: DS.textMuted }}>{p.agent_name ?? "Fleet"}</span>
+          {p.effort && <span style={{ fontSize: 11, color: DS.textFaint }}>· effort {p.effort}</span>}
+          {p.status !== "pending" && (
+            <span style={{ marginLeft: "auto" }}>{badge(p.status, p.status === "approved" ? DS.success : DS.critical)}</span>
+          )}
+        </div>
+        <div style={{ fontSize: 13.5, fontWeight: 500, lineHeight: 1.4, marginBottom: 4 }}>{p.title}</div>
+        <div style={{ fontSize: 12, color: DS.textFaint, marginBottom: 8 }}>
+          Target: <span style={{ color: DS.textMuted }}>{p.target_name}</span>
+          {p.value_note && <> · {p.value_note}</>}
+        </div>
+        <div style={{ fontSize: 10.5, color: DS.textFaint, marginBottom: p.status === "pending" ? 12 : 0 }}>
+          {p.source_file?.split("/").pop()} {p.source_ref ? `· ${p.source_ref}` : ""}
+        </div>
+        {p.status === "pending" ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Button size="sm" style={{ background: DS.success, color: "#04120B" }} disabled={reviewM.isPending}
+              onClick={() => reviewM.mutate({ id: p.id, decision: "approve" })}>
+              <Check size={13} style={{ marginRight: 5 }} /> Approve
+            </Button>
+            <Button size="sm" variant="destructive" disabled={reviewM.isPending}
+              onClick={() => reviewM.mutate({ id: p.id, decision: "reject" })}>
+              <X size={13} style={{ marginRight: 5 }} /> Reject
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => openEdit(p)}>
+              <Pencil size={13} style={{ marginRight: 5 }} /> Edit
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
-  }
+  };
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div>
-        <h1 className="text-xl font-semibold text-gray-200">Gym</h1>
-        <p className="mt-1 text-sm text-gray-400">Agent self-improvement dashboard</p>
+    <div style={{ background: DS.canvas, minHeight: "100vh", color: DS.text, padding: isMobile ? 16 : 28 }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 6, flexWrap: "wrap" }}>
+        <div style={{ flex: 1, minWidth: 220 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Brain size={20} color={DS.success} />
+            <h1 style={{ fontSize: 22, fontWeight: 600 }}>Gym</h1>
+          </div>
+          <div style={{ fontSize: 13, color: DS.textFaint, marginTop: 4 }}>
+            What the fleet is learning and what it wants to change. You review every proposal — nothing auto-executes.
+          </div>
+        </div>
+        <Button onClick={() => generateM.mutate()} disabled={generateM.isPending}
+          style={{ background: DS.surface2, border: `1px solid ${DS.border}`, color: DS.text }}>
+          <RefreshCw size={14} style={{ marginRight: 6 }} /> {generateM.isPending ? "Scanning…" : "Scan for proposals"}
+        </Button>
       </div>
 
-      {/* Training Feed */}
-      <TrainingFeedPlaceholder />
-
-      {/* Per-Agent Cards */}
-      <div>
-        <h2 className="mb-3 text-sm font-medium text-gray-300">Per-Agent Cards</h2>
-        {agentsQuery.isLoading ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {[1, 2, 3, 4, 5, 6].map((i) => (
-              <div key={i} className="animate-pulse rounded-lg border border-gray-800 bg-gray-900 p-4">
-                <div className="h-4 w-24 rounded bg-gray-800" />
-                <div className="mt-3 h-3 w-16 rounded bg-gray-800" />
+      <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 18, marginTop: 18 }}>
+        {/* ── Learning Feed ── */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <Sparkles size={15} color={DS.textMuted} />
+            <h2 style={{ fontSize: 15, fontWeight: 600 }}>Learning Feed</h2>
+          </div>
+          {/* agent filter */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
+            {agents.map((a) => (
+              <button key={a} onClick={() => setAgentFilter(a)}
+                style={{
+                  fontSize: 11.5, padding: "4px 10px", borderRadius: 20, cursor: "pointer",
+                  background: agentFilter === a ? DS.primary : DS.surface2,
+                  color: agentFilter === a ? "#fff" : DS.textMuted,
+                  border: `1px solid ${agentFilter === a ? DS.primary : DS.border}`,
+                }}>{a}</button>
+            ))}
+          </div>
+          {feedQ.isLoading && <div style={{ color: DS.textMuted, fontSize: 13 }}>Loading…</div>}
+          {feedQ.isError && <div style={{ color: DS.critical, fontSize: 13 }}>Couldn't load the feed.</div>}
+          {!feedQ.isLoading && filteredFeed.length === 0 && (
+            <div style={{ color: DS.textFaint, fontSize: 13 }}>No reflections yet.</div>
+          )}
+          {filteredFeed.map((f: any) => (
+            <div key={f.id} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: DS.text }}>{f.agent}</span>
+                {badge(f.type, f.type === "deep-dream" ? DS.purple : DS.textFaint)}
+                <span style={{ marginLeft: "auto", fontSize: 11, color: DS.textFaint }}>{fmtDate(f.date)}</span>
               </div>
-            ))}
+              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, marginBottom: 4 }}>{f.title}</div>
+              {f.summary && <div style={{ fontSize: 12, color: DS.textMuted, lineHeight: 1.5 }}>{f.summary}</div>}
+              <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 8, display: "flex", alignItems: "center", gap: 5 }}>
+                <FileText size={11} /> {f.path}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Proposed Changes ── */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+            <Crown size={15} color={DS.amber} />
+            <h2 style={{ fontSize: 15, fontWeight: 600 }}>Proposed Changes</h2>
+            {pending.length > 0 && <span style={{ fontSize: 11, color: DS.amber }}>{pending.length} pending</span>}
           </div>
-        ) : agentsQuery.error ? (
-          <p className="text-sm text-red-400">Failed to load agent cards</p>
+          {proposalsQ.isLoading && <div style={{ color: DS.textMuted, fontSize: 13 }}>Loading…</div>}
+          {proposalsQ.isError && <div style={{ color: DS.critical, fontSize: 13 }}>Couldn't load proposals.</div>}
+          {!proposalsQ.isLoading && proposals.length === 0 && (
+            <div style={{ color: DS.textFaint, fontSize: 13, background: DS.surface, border: `1px dashed ${DS.border2}`, borderRadius: 12, padding: 16 }}>
+              No proposals yet. Hit <strong style={{ color: DS.textMuted }}>Scan for proposals</strong> to pull the latest skill/soul/workflow changes the fleet surfaced in its deep-dreams.
+            </div>
+          )}
+          {pending.map(proposalCard)}
+          {reviewed.length > 0 && (
+            <>
+              <div style={{ fontSize: 11, letterSpacing: "0.05em", textTransform: "uppercase", color: DS.textFaint, margin: "14px 0 8px" }}>
+                Reviewed
+              </div>
+              {reviewed.map(proposalCard)}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── Skill Evolution Timeline ── */}
+      <div style={{ marginTop: 24 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <TrendingUp size={15} color={DS.success} />
+          <h2 style={{ fontSize: 15, fontWeight: 600 }}>Skill Evolution Timeline</h2>
+        </div>
+        {timelines.length === 0 ? (
+          <div style={{ color: DS.textFaint, fontSize: 13 }}>No approved changes yet — approve proposals to build the timeline.</div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {(agentsQuery.data ?? []).map((agent) => (
-              <AgentCard
-                key={agent.name}
-                name={agent.name}
-                status={agent.status}
-                skillCount={agent.skillCount}
-              />
-            ))}
-          </div>
+          timelines.map((t: any) => (
+            <div key={t.target} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                {badge(t.type, TARGET_COLOR[t.type] ?? DS.textFaint)}
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{t.target}</span>
+              </div>
+              <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 4 }}>
+                {t.versions.map((v: any, i: number) => (
+                  <div key={i} style={{ minWidth: 150, flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <span style={{ width: 9, height: 9, borderRadius: "50%", background: DS.success }} />
+                      <span style={{ fontSize: 12, fontWeight: 600, color: DS.success }}>{v.version}</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: DS.textMuted, lineHeight: 1.4 }}>{v.title}</div>
+                    <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 3 }}>{v.agent} · {fmtDate(v.at)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))
         )}
       </div>
 
-      {/* Evolution Runs */}
-      <div>
-        <h2 className="mb-3 text-sm font-medium text-gray-300">Evolution Runs</h2>
-        {evolutionRunsQuery.isLoading ? (
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
-            <p className="text-sm text-gray-400">Loading evolution runs...</p>
+      {/* Edit dialog */}
+      <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Edit proposal</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Title</Label>
+              <Input value={editTitle} onChange={(e) => setEditTitle(e.target.value)} />
+            </div>
+            <div>
+              <Label>Target</Label>
+              <Input value={editTarget} onChange={(e) => setEditTarget(e.target.value)} />
+            </div>
+            <div>
+              <Label>Notes (optional)</Label>
+              <Input value={editDetail} onChange={(e) => setEditDetail(e.target.value)} placeholder="Any tweak before approving…" />
+            </div>
           </div>
-        ) : evolutionRunsQuery.error ? (
-          <p className="text-sm text-red-400">Failed to load evolution runs</p>
-        ) : (evolutionRunsQuery.data ?? []).length === 0 ? (
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
-            <p className="text-sm text-gray-400">
-              No evolution runs yet. Self-evolution proposals will appear here.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-800">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-800 bg-gray-900/50">
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Run ID
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Target Skill
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Before to After
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Delta
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Status
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(evolutionRunsQuery.data ?? []).map((run) => (
-                  <EvolutionRunRow key={run.id} run={run} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      {/* Skill Scoreboard */}
-      <div>
-        <h2 className="mb-3 text-sm font-medium text-gray-300">Skill Scoreboard</h2>
-        {skillStatsQuery.isLoading ? (
-          <div className="rounded-lg border border-gray-800 bg-gray-950 p-6 text-center">
-            <p className="text-sm text-gray-400">Loading skill stats...</p>
-          </div>
-        ) : skillStatsQuery.error ? (
-          <p className="text-sm text-red-400">Failed to load skill stats</p>
-        ) : (
-          <div className="overflow-x-auto rounded-lg border border-gray-800">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="border-b border-gray-800 bg-gray-900/50">
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Skill
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Score
-                  </th>
-                  <th className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-                    Last Improved
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {(skillStatsQuery.data ?? []).map((stat) => (
-                  <tr key={stat.skill} className="border-b border-gray-800 transition-colors hover:bg-gray-900/50">
-                    <td className="px-4 py-3 text-sm text-gray-200">{stat.skill}</td>
-                    <td className="px-4 py-3 text-sm text-gray-200">{stat.score}</td>
-                    <td className="px-4 py-3 text-sm text-gray-400">{stat.lastImproved}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setEditing(null)}>Cancel</Button>
+            <Button disabled={editM.isPending || !editing}
+              onClick={() => editing && editM.mutate({ id: editing.id, title: editTitle, target_name: editTarget, detail: editDetail })}>
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -26,6 +26,7 @@ import { knowledgeGraphRoutes } from "./routes/knowledge-graph.js";
 import { fleetKbRoutes } from "./routes/fleet-kb.js";
 import { roomRoutes } from "./routes/rooms.js";
 import { gateRoutes } from "./routes/gate.js";
+import { gymObservabilityRoutes } from "./routes/gym-observability.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
 import type { SocialScheduler } from "./workers/social-scheduler.js";
@@ -267,6 +268,7 @@ export async function createApp(
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
   api.use(gateRoutes(db));
+  api.use(gymObservabilityRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
   api.use(bulkUploadRoutes(db, opts.storageService));
@@ -627,15 +629,4 @@ export async function createApp(
     logger.error({ err }, "Failed to load ready plugins on startup");
   });
   process.once("exit", () => {
-    if (feedbackExportTimer) clearInterval(feedbackExportTimer);
-    devWatcher?.close();
-    viteHtmlRenderer?.dispose();
-    hostServiceCleanup.disposeAll();
-    hostServiceCleanup.teardown();
-  });
-  process.once("beforeExit", () => {
-    void flushPluginLogBuffer();
-  });
-
-  return app;
-}
+    if (feedbackExportTimer) clearInterval(feedbackExport
