@@ -1,6 +1,5 @@
 import {
   CircleDot,
-  Target,
   LayoutDashboard,
   DollarSign,
   History,
@@ -15,11 +14,9 @@ import {
   Settings,
   Megaphone,
   Home as HomeIcon,
-  Hexagon,
   Bot,
   MoreHorizontal,
   Sparkles,
-  Mic,
   Palette,
   ImageIcon,
   Drama,
@@ -201,7 +198,7 @@ function SidebarLegacy({
           className="flex flex-col gap-0.5"
           itemClassName="text-[13px] font-medium"
         />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {/* 'Goals' nav hidden 2026-07-13 (Tyler de-clutter). Route /goals + page + data kept; restore by re-adding this item (icon Target). */}
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
         ) : null}
@@ -301,9 +298,9 @@ function SidebarV1({
         <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
         <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
-        <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
-        <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {/* 'Voice Memos' nav hidden 2026-07-13 (Tyler de-clutter). Route /voice-memos + page + data kept; restore by re-adding this item (icon Mic). */}
+        {/* 'Projects' nav hidden 2026-07-13 (Tyler de-clutter). Route /projects + page + data kept; restore by re-adding this item (icon Hexagon). NOTE: the SidebarProjects tree below is a separate component, left intact. */}
+        {/* 'Goals' nav hidden 2026-07-13 (Tyler de-clutter). Route /goals + page + data kept; restore by re-adding this item (icon Target). */}
         <SidebarNavItem
           to="/social"
           label="Social"
