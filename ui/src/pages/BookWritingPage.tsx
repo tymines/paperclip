@@ -190,6 +190,20 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// apiFetch throws Error("API 503: {\"error\":\"…\"}"). Pull the clean server
+// message out so honest errors (missing provider/tool) read nicely in the UI.
+function extractApiError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const jsonStart = raw.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (parsed && typeof parsed.error === "string") return parsed.error;
+    } catch { /* not JSON — fall through */ }
+  }
+  return raw;
+}
+
 // ── CameraButton helper ────────────────────────────────────────────────────────
 
 function CameraButton({ onClick, loading, title }: { onClick: () => void; loading: boolean; title: string }) {
@@ -1062,6 +1076,7 @@ export function BookWritingPage() {
   // Export modal
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Consistency check
   const [checkingConsistency, setCheckingConsistency] = useState(false);
@@ -1070,6 +1085,7 @@ export function BookWritingPage() {
   const [narrating, setNarrating] = useState(false);
   const [narrateEstimate, setNarrateEstimate] = useState<{ chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number } | null>(null);
   const [narrateComplete, setNarrateComplete] = useState<{ exportId: string; combinedPath: string } | null>(null);
+  const [narrateError, setNarrateError] = useState<string | null>(null);
   const [consistencyFindings, setConsistencyFindings] = useState<Array<{
     severity: string; category: string; description: string; suggestion: string;
   }> | null>(null);
@@ -1421,13 +1437,18 @@ export function BookWritingPage() {
   const handleNarrateEstimate = async () => {
     if (!activeBook) return;
     setNarrating(true);
+    setNarrateError(null);
     try {
       const res = await apiFetch<{ estimate: { chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number }; requiresConfirm: boolean }>(
         `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
         { method: "POST", body: JSON.stringify({}) },
       );
       if (res.estimate) setNarrateEstimate(res.estimate);
-    } catch { /* handled by UI */ }
+    } catch (err) {
+      // Surface the honest server message (e.g. "Audiobook needs a voice
+      // provider. Set an ElevenLabs API key…") instead of failing silently.
+      setNarrateError(extractApiError(err));
+    }
     setNarrating(false);
   };
 
@@ -1435,6 +1456,7 @@ export function BookWritingPage() {
     if (!activeBook) return;
     setNarrating(true);
     setNarrateEstimate(null);
+    setNarrateError(null);
     try {
       const res = await apiFetch<{ narration: { id: string; outputPath: string; metadata: Record<string, unknown> } }>(
         `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
@@ -1442,30 +1464,51 @@ export function BookWritingPage() {
       );
       const slug = activeBook.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? "";
       setNarrateComplete({ exportId: res.narration.id, combinedPath: `/companies/${companySlug}/book-studio/narration-audio/${slug}/${res.narration.id}/combined.mp3` });
-    } catch { /* handled by UI */ }
+    } catch (err) {
+      setNarrateError(extractApiError(err));
+    }
     setNarrating(false);
   };
 
-  const handleExportMarkdown = async () => {
+  // Generic export download: hits GET /export/:format which generates the real
+  // file server-side (markdown / epub / pdf) and streams it back. Honest errors
+  // (e.g. PDF needs pandoc/LaTeX) come back as JSON { error } and are surfaced.
+  const handleExportDownload = async (format: string, ext: string) => {
     if (!activeBook) return;
-    setExportingFormat("markdown");
+    setExportError(null);
+    setExportingFormat(format);
     try {
       const res = await fetch(
-        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/export/markdown`,
+        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/export/${format}`,
       );
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch { /* non-JSON error body */ }
+        throw new Error(msg);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${activeBook.slug || "book"}.md`;
+      a.download = `${activeBook.slug || "book"}.${ext}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Markdown export failed:", err);
+      setExportError(err instanceof Error ? err.message : String(err));
     } finally {
       setExportingFormat(null);
     }
+  };
+
+  // Audiobook export reuses the existing narrate pipeline (per-chapter ElevenLabs
+  // TTS → ffmpeg stitch). Close the export modal and open the narrate estimate
+  // dialog, which then confirms cost and produces the combined MP3.
+  const handleExportAudiobook = () => {
+    setShowExportModal(false);
+    void handleNarrateEstimate();
   };
 
   const handleCheckConsistency = async () => {
@@ -1713,6 +1756,20 @@ export function BookWritingPage() {
                   <Play className="w-3 h-3" /> Download MP3
                 </a>
                 <button onClick={() => setNarrateComplete(null)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Narrate error dialog — honest "what's missing" message (e.g. no voice provider) */}
+        {narrateError && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateError(null)} />
+            <div className="relative w-96 bg-gray-950 border border-red-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-red-300">Audiobook unavailable</h3>
+              <p className="text-xs text-gray-300">{narrateError}</p>
+              <div className="flex justify-end">
+                <button onClick={() => setNarrateError(null)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Close</button>
               </div>
             </div>
           </div>
@@ -2105,10 +2162,12 @@ export function BookWritingPage() {
           activeBook={activeBook}
           companySlug={companySlug}
           exportingFormat={exportingFormat}
+          exportError={exportError}
           consistencyFindings={consistencyFindings}
           checkingConsistency={checkingConsistency}
           onClose={() => setShowExportModal(false)}
-          onExportMarkdown={handleExportMarkdown}
+          onExport={handleExportDownload}
+          onExportAudiobook={handleExportAudiobook}
           onCheckConsistency={handleCheckConsistency}
           severityColors={severityColors}
         />
@@ -2124,28 +2183,36 @@ interface ExportModalContentProps {
   activeBook: BookData | null;
   companySlug: string;
   exportingFormat: string | null;
+  exportError: string | null;
   consistencyFindings: Array<{ severity: string; category: string; description: string; suggestion: string }> | null;
   checkingConsistency: boolean;
   onClose: () => void;
-  onExportMarkdown: () => void;
+  onExport: (format: string, ext: string) => void;
+  onExportAudiobook: () => void;
   onCheckConsistency: () => void;
   severityColors: Record<string, string>;
 }
 
+// Every format is a real, working export. Markdown/EPUB always work (EPUB has an
+// in-process builder when pandoc is absent). PDF works when pandoc + a PDF engine
+// are on the server, else it returns an honest error. Audiobook routes through
+// the narrate pipeline (ElevenLabs TTS + ffmpeg).
 const EXPORT_FORMATS = [
-  { key: "markdown", label: "Markdown", ext: ".md", active: true, hint: null },
-  { key: "epub", label: "EPUB", ext: ".epub", active: false, hint: "Install epub-gen npm package to enable" },
-  { key: "pdf", label: "PDF", ext: ".pdf", active: false, hint: "Install pandoc to enable" },
-  { key: "audiobook", label: "Audiobook", ext: ".mp3", active: false, hint: "Set TTS_API_KEY to enable" },
+  { key: "markdown", label: "Markdown", ext: ".md", kind: "download" as const },
+  { key: "epub", label: "EPUB", ext: ".epub", kind: "download" as const },
+  { key: "pdf", label: "PDF", ext: ".pdf", kind: "download" as const },
+  { key: "audiobook", label: "Audiobook", ext: ".mp3", kind: "audiobook" as const },
 ] as const;
 
 function ExportModalContent({
   activeBook,
   exportingFormat,
+  exportError,
   consistencyFindings,
   checkingConsistency,
   onClose,
-  onExportMarkdown,
+  onExport,
+  onExportAudiobook,
   onCheckConsistency,
   severityColors,
 }: ExportModalContentProps) {
@@ -2171,42 +2238,38 @@ function ExportModalContent({
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Export Formats</h3>
             <div className="space-y-2">
-              {EXPORT_FORMATS.map((fmt) => (
-                <div
-                  key={fmt.key}
-                  className={cn(
-                    "flex items-center justify-between rounded-md border px-4 py-3",
-                    fmt.active ? "border-gray-700 bg-gray-900/50" : "border-gray-800 bg-gray-900/30 opacity-60",
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    <FileDown className={cn("w-4 h-4", fmt.active ? "text-blue-400" : "text-gray-600")} />
-                    <div>
-                      <span className="text-sm font-medium text-gray-200">{fmt.label}</span>
-                      <span className="text-xs text-gray-500 ml-1.5">{fmt.ext}</span>
+              {EXPORT_FORMATS.map((fmt) => {
+                const busy = exportingFormat === fmt.key;
+                const isAudiobook = fmt.kind === "audiobook";
+                return (
+                  <div
+                    key={fmt.key}
+                    className="flex items-center justify-between rounded-md border border-gray-700 bg-gray-900/50 px-4 py-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <FileDown className="w-4 h-4 text-blue-400" />
+                      <div>
+                        <span className="text-sm font-medium text-gray-200">{fmt.label}</span>
+                        <span className="text-xs text-gray-500 ml-1.5">{fmt.ext}</span>
+                      </div>
                     </div>
-                  </div>
-                  {fmt.active ? (
                     <button
-                      onClick={onExportMarkdown}
-                      disabled={exportingFormat === "markdown"}
+                      onClick={() => (isAudiobook ? onExportAudiobook() : onExport(fmt.key, fmt.ext.replace(/^\./, "")))}
+                      disabled={busy || !activeBook}
                       className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 flex items-center gap-1.5"
                     >
-                      {exportingFormat === "markdown" ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Download className="w-3 h-3" />
-                      )}
-                      {exportingFormat === "markdown" ? "Downloading..." : "Download"}
+                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : isAudiobook ? <Volume2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+                      {busy ? "Working…" : isAudiobook ? "Generate" : "Download"}
                     </button>
-                  ) : (
-                    <span className="text-[10px] text-gray-500 cursor-default" title={fmt.hint ?? undefined}>
-                      Coming soon
-                    </span>
-                  )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
+            {exportError && (
+              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-300">
+                {exportError}
+              </div>
+            )}
           </div>
 
           <div>

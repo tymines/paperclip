@@ -18,6 +18,7 @@ import { eq, and, desc, asc, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { creativeJobs, books, manuscriptChapters, bookExports } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
+import { serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { creativeProviders, providerStatus, type ProviderId, type CreativeMode } from "../services/creative-studio/providers.js";
 
@@ -26,10 +27,56 @@ const execFileAsync = promisify(execFile);
 const EXPORT_DIR = process.env.BOOK_EXPORT_DIR
   || path.join(process.env.HOME || "/tmp", "paperclip", "book-exports");
 
-// D3 defaults (Tyler can override per request): OA for images, HF for video/audio.
+// D3 defaults (Tyler can override per request): HF for video/audio. Image
+// (cover/illustration) provider is resolved dynamically — see resolveImageProvider.
 const DEFAULT_PROVIDER: Record<string, ProviderId> = {
-  cover: "openart", illustration: "openart", trailer: "higgsfield", narration: "higgsfield",
+  trailer: "higgsfield", narration: "higgsfield",
 };
+
+// ── Image provider selection ─────────────────────────────────────────────────
+// Book Media prefers the keyed MCP image providers (OpenArt/Higgsfield) but, when
+// those are OAuth-gated/unconfigured, falls back to the Creative Studio REST
+// registry's Replicate (Flux) using the configured 'replicate' credential — so
+// covers + illustrations work today. Replicate's key lives in the credentials
+// vault, so we honor its async checkConfigured() (the sync `configured` getter is
+// env-only and would miss a vault-stored key). Only providers that return
+// directly-renderable https URLs are auto-selected (OpenArt/Higgsfield/Replicate).
+const IMAGE_PROVIDER_PREFERENCE: ProviderId[] = ["openart", "higgsfield", "replicate"];
+
+const IMAGE_PROVIDER_DEFAULT_MODEL: Partial<Record<ProviderId, string>> = {
+  openart: "nano-banana-pro",
+  higgsfield: "nano-banana-pro",
+  // Flux dev — quality/speed balance; resolves within Replicate's wait=30 window.
+  replicate: "black-forest-labs/flux-dev",
+  // honored only when a caller explicitly requests these (not auto-selected)
+  gemini: "imagen-4.0-generate-001",
+  openai: "gpt-image-1",
+};
+
+async function isImageProviderConfigured(id: ProviderId): Promise<boolean> {
+  const p = creativeProviders()[id];
+  if (typeof p.checkConfigured === "function") {
+    try { return await p.checkConfigured(); } catch { return p.configured; }
+  }
+  return p.configured;
+}
+
+async function resolveImageProvider(
+  feature: string,
+  explicit?: ProviderId,
+): Promise<{ provider: ProviderId; defaultModel: string }> {
+  const order = explicit
+    ? [explicit, ...IMAGE_PROVIDER_PREFERENCE.filter((p) => p !== explicit)]
+    : IMAGE_PROVIDER_PREFERENCE;
+  for (const id of order) {
+    if (await isImageProviderConfigured(id)) {
+      return { provider: id, defaultModel: IMAGE_PROVIDER_DEFAULT_MODEL[id] ?? "" };
+    }
+  }
+  throw serviceUnavailable(
+    `${feature} needs an image provider. Configure Replicate (add a 'replicate' key in Settings → Provider Keys, or set REPLICATE_API_TOKEN) to generate with Flux, or key OpenArt/Higgsfield (OAuth pending).`,
+  );
+}
 
 // ── chapter chunking: split on scene breaks, then cap chunk size ─────────────
 const SCENE_BREAK = /\n\s*(?:\*\s*){3,}\n|\n\s*#{1,3}\s+|\n\s*[-—]{3,}\s*\n/g;
@@ -64,13 +111,13 @@ async function getBook(db: Db, companyId: string, bookId: string) {
   return book ?? null;
 }
 
-function needProvider(provider: ProviderId) {
+function needProvider(provider: ProviderId, feature = "This feature") {
   const p = creativeProviders()[provider];
   if (!p.configured) {
-    const err: any = new Error("provider_not_configured");
-    err.status = 503;
-    err.hint = (providerStatus() as any)[provider]?.keyedOffHint;
-    throw err;
+    const status = (providerStatus() as any)[provider];
+    const label = status?.label ?? provider;
+    const hint = status?.keyedOffHint ?? "";
+    throw serviceUnavailable(`${feature} needs ${label}. ${hint}`.trim());
   }
   return p;
 }
@@ -128,6 +175,33 @@ export function bookMediaRoutes(db: Db) {
           .orderBy(desc(creativeJobs.createdAt)),
       ]);
 
+      // Reconcile still-running image jobs that carry a providerJobId (Replicate
+      // async predictions that exceeded the wait=30 window). The panel refetches
+      // this overview on an interval, so this doubles as the poll loop. Best-effort
+      // per job — a poll failure leaves the job untouched for the next tick.
+      const runningImages = jobs.filter(
+        (j) => (j.purpose === "cover" || j.purpose === "illustration")
+          && (j.status === "pending" || j.status === "running")
+          && j.providerJobId,
+      );
+      if (runningImages.length > 0) {
+        await Promise.all(runningImages.map(async (j) => {
+          try {
+            const prov = creativeProviders()[j.provider as ProviderId];
+            const state = await prov.getJob(j.providerJobId as string, j.mode as CreativeMode);
+            if (state.status !== j.status || (state.outputs?.length ?? 0) !== j.outputs.length) {
+              await db.update(creativeJobs).set({
+                status: state.status, outputs: state.outputs,
+                error: state.error ?? null, updatedAt: new Date(),
+              }).where(eq(creativeJobs.id, j.id));
+              j.status = state.status;
+              j.outputs = state.outputs;
+              j.error = state.error ?? j.error;
+            }
+          } catch { /* leave as-is; retried on next poll */ }
+        }));
+      }
+
       // reconcile cover slot from the newest completed cover job
       const meta = (book.metadata ?? {}) as Record<string, unknown>;
       const coverJob = jobs.find((j) => j.purpose === "cover" && j.status === "completed" && j.outputs.length > 0);
@@ -157,13 +231,19 @@ export function bookMediaRoutes(db: Db) {
         .where(and(eq(bookExports.bookId, book.id), eq(bookExports.type, "narration")))
         .orderBy(desc(bookExports.createdAt)).limit(10);
 
+      // providerStatus() reads Replicate's sync (env-only) `configured` getter;
+      // patch it with the vault-aware async check so a vault-stored 'replicate'
+      // key is reflected as available for the Book Media image lane.
+      const status = providerStatus() as any;
+      status.replicate = { ...status.replicate, configured: await isImageProviderConfigured("replicate") };
+
       res.json({
         book: { id: book.id, slug: book.slug, title: book.title, coverUrl: (meta.coverUrl as string) ?? null },
         chapters: chapterSummaries,
         trailerJobs: jobs.filter((j) => j.purpose === "trailer"),
         coverJobs: jobs.filter((j) => j.purpose === "cover"),
         narrationExports: exportsRows,
-        providerStatus: providerStatus(),
+        providerStatus: status,
       });
     } catch (err) { next(err); }
   });
@@ -186,9 +266,9 @@ export function bookMediaRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const book = await getBook(db, companyId, req.params.bookId as string);
       if (!book) return res.status(404).json({ error: "book not found" });
-      const provider = (req.body?.provider as ProviderId) || DEFAULT_PROVIDER.cover!;
-      needProvider(provider);
-      const model = typeof req.body?.model === "string" ? req.body.model : "nano-banana-pro";
+      const explicit = typeof req.body?.provider === "string" ? (req.body.provider as ProviderId) : undefined;
+      const { provider, defaultModel } = await resolveImageProvider("Book cover generation", explicit);
+      const model = typeof req.body?.model === "string" ? req.body.model : defaultModel;
       const prompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
         ? req.body.prompt.trim()
         : `Book cover for "${book.title}". Professional publishing-quality cover art, portrait composition, strong focal imagery, space for title typography at the top third. No text.`;
@@ -215,9 +295,9 @@ export function bookMediaRoutes(db: Db) {
       const [chapter] = await db.select().from(manuscriptChapters)
         .where(and(eq(manuscriptChapters.id, chapterId), eq(manuscriptChapters.bookId, book.id))).limit(1);
       if (!chapter) return res.status(404).json({ error: "chapter not found" });
-      const provider = (req.body?.provider as ProviderId) || DEFAULT_PROVIDER.illustration!;
-      needProvider(provider);
-      const model = typeof req.body?.model === "string" ? req.body.model : "nano-banana-pro";
+      const explicit = typeof req.body?.provider === "string" ? (req.body.provider as ProviderId) : undefined;
+      const { provider, defaultModel } = await resolveImageProvider("Chapter illustration", explicit);
+      const model = typeof req.body?.model === "string" ? req.body.model : defaultModel;
       const excerpt = chapter.content.slice(0, 800);
       const prompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
         ? req.body.prompt.trim()
@@ -241,7 +321,7 @@ export function bookMediaRoutes(db: Db) {
       const book = await getBook(db, companyId, req.params.bookId as string);
       if (!book) return res.status(404).json({ error: "book not found" });
       const provider = (req.body?.provider as ProviderId) || DEFAULT_PROVIDER.trailer!;
-      needProvider(provider);
+      needProvider(provider, "Book trailer generation");
       const model = typeof req.body?.model === "string" ? req.body.model : "";
       if (!model) return res.status(422).json({ error: "model is required (pick a video model from /creative-studio/models)" });
 
@@ -283,7 +363,7 @@ export function bookMediaRoutes(db: Db) {
       if (!chapter) return res.status(404).json({ error: "chapter not found" });
       if (!chapter.content.trim()) return res.status(422).json({ error: "chapter has no content to narrate" });
       const provider: ProviderId = "higgsfield";
-      needProvider(provider);
+      needProvider(provider, "Chapter narration");
       const model = typeof req.body?.model === "string" ? req.body.model : "text-to-speech-v2";
       const voiceId = typeof req.body?.voiceId === "string" ? req.body.voiceId : undefined;
 

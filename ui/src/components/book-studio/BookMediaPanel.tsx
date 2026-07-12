@@ -46,7 +46,10 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
 
   const ov = overviewQ.data;
   const ps = ov?.providerStatus;
-  const anyConfigured = !!(ps?.higgsfield.configured || ps?.openart.configured);
+  // Book Media image lane (cover + illustrations) works with ANY of OpenArt,
+  // Higgsfield, or Replicate (Flux) — the server prefers the MCPs but falls back
+  // to the configured 'replicate' key. The amber wall only shows when none exist.
+  const imageProviderConfigured = !!(ps?.higgsfield.configured || ps?.openart.configured || ps?.replicate?.configured);
   const videoModels = useMemo(
     () => (modelsQ.data?.models ?? []).filter((m) => m.modes.includes("video")),
     [modelsQ.data],
@@ -95,10 +98,10 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
             <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-gray-200"><X size={16} /></button>
           </div>
 
-          {ps && !anyConfigured && (
+          {ps && !imageProviderConfigured && (
             <div className="m-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: AMBER, color: AMBER }}>
               <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-              <span>No creative provider configured. {ps.higgsfield.keyedOffHint} {ps.openart.keyedOffHint} Nothing here is mocked — generation stays disabled until keyed.</span>
+              <span>No image provider configured for Book Media. Add a Replicate key (Settings → Provider Keys, or set REPLICATE_API_TOKEN) to generate covers and illustrations with Flux — or key OpenArt/Higgsfield (OAuth pending). Nothing here is mocked — generation stays disabled until keyed.</span>
             </div>
           )}
 
@@ -119,11 +122,13 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                 {ov.book.coverUrl
                   ? <img src={ov.book.coverUrl} alt="Book cover" className="mx-auto w-48 rounded-lg border border-gray-800" />
                   : <div className="mx-auto flex h-64 w-48 items-center justify-center rounded-lg border border-dashed border-gray-700 text-xs text-gray-600">No cover yet</div>}
-                <button onClick={() => coverMut.mutate()} disabled={!ps?.openart.configured || coverMut.isPending}
+                <button onClick={() => coverMut.mutate()} disabled={!imageProviderConfigured || coverMut.isPending}
                   className="w-full rounded-lg bg-blue-600 py-2 text-xs font-semibold text-white disabled:opacity-40">
                   {coverMut.isPending ? "Dispatching…" : ov.book.coverUrl ? "Regenerate cover" : "Generate cover"}
                 </button>
-                {!ps?.openart.configured && ps?.higgsfield.configured && <p className="text-[10px] text-gray-500">OpenArt keyed off — pass provider "higgsfield" via API, or key OpenArt.</p>}
+                {!ps?.openart.configured && !ps?.higgsfield.configured && ps?.replicate?.configured && (
+                  <p className="text-[10px] text-gray-500">Using Replicate (Flux) — OpenArt/Higgsfield not keyed.</p>
+                )}
                 {ov.coverJobs.filter((j) => j.status !== "completed").slice(0, 2).map((j) => (
                   <div key={j.id} className="flex items-center gap-2 text-[11px] text-gray-400">
                     {j.status === "failed" ? <AlertTriangle size={12} color="#FF5B5B" /> : <RefreshCw size={12} className="animate-spin" style={{ color: AMBER }} />}
@@ -140,7 +145,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                   <div key={ch.id} className="rounded-lg border border-gray-800 p-3">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-gray-200">Ch. {ch.chapterNumber} — {ch.title || "Untitled"}</span>
-                      <button onClick={() => illMut.mutate(ch.id)} disabled={!anyConfigured || illMut.isPending}
+                      <button onClick={() => illMut.mutate(ch.id)} disabled={!imageProviderConfigured || illMut.isPending}
                         className="rounded bg-gray-800 px-2 py-1 text-[10px] text-gray-200 hover:bg-gray-700 disabled:opacity-40">
                         Illustrate
                       </button>

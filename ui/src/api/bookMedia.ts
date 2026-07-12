@@ -24,6 +24,7 @@ export interface BookMediaOverview {
   providerStatus: {
     higgsfield: { configured: boolean; keyedOffHint: string };
     openart: { configured: boolean; keyedOffHint: string };
+    replicate: { configured: boolean; keyedOffHint: string };
   };
 }
 
