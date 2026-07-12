@@ -1037,6 +1037,13 @@
       "when": 1783600400000,
       "tag": "0151_appdev_studio_p36",
       "breakpoints": true
+    },
+    {
+      "idx": 148,
+      "version": "7",
+      "when": 1783600500000,
+      "tag": "0152_creative_brand_kits",
+      "breakpoints": true
     }
   ]
 }

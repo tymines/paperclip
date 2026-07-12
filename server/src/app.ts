@@ -55,6 +55,8 @@ const { createServer: createViteServer } = await import("vite");
 import { gymRoutes } from "./routes/gym.js";
 import { creativeStudioRoutes } from "./routes/creative-studio.js";
 import { bookMediaRoutes } from "./routes/book-media.js";
+import { creativeStudioToolsRoutes } from "./routes/creative-studio-tools.js";
+import { adStudioRoutes } from "./routes/ad-studio.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
 import { influencerStudioRoutes } from "./routes/influencer-studio.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
@@ -271,6 +273,8 @@ export async function createApp(
   api.use(gymRoutes(db));
   api.use(creativeStudioRoutes(db));
   api.use(bookMediaRoutes(db));
+  api.use(creativeStudioToolsRoutes(db));
+  api.use(adStudioRoutes(db));
   api.use(knowledgeGraphRoutes(db));
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
