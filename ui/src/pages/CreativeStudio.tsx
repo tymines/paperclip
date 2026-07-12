@@ -115,11 +115,11 @@ export function CreativeStudio() {
       });
     },
     onSuccess: () => {
-      pushToast({ title: "Generation dispatched", variant: "success" });
+      pushToast({ title: "Generation dispatched", tone: "success" });
       qc.invalidateQueries({ queryKey: ["creative-jobs", cid] });
       qc.invalidateQueries({ queryKey: ["creative-credits", cid] });
     },
-    onError: (e: any) => pushToast({ title: "Generation failed", description: String(e?.message ?? e).slice(0, 200), variant: "error" }),
+    onError: (e: any) => pushToast({ title: "Generation failed", body: String(e?.message ?? e).slice(0, 200), tone: "error" }),
   });
 
   const favMut = useMutation({
