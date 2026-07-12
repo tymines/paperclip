@@ -36,6 +36,7 @@ const BOARD_ROUTE_ROOTS = new Set([
   "gym",
   "app-dev",
   "book-writing",
+  "creative-studio",
 ]);
 
 const GLOBAL_ROUTE_ROOTS = new Set([

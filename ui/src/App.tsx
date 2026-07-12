@@ -48,6 +48,7 @@ import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
 import { GymPage } from "./pages/GymPage";
+import { CreativeStudio } from "./pages/CreativeStudio";
 import { BookWritingPage } from "./pages/BookWritingPage";
 import { ErrorBoundary as BookStudioErrorBoundary } from "./components/book-studio/ErrorBoundary";
 import { OrgChart } from "./pages/OrgChart";
@@ -117,6 +118,7 @@ function boardRoutes() {
       <Route path="rooms" element={<Rooms />} />
       <Route path="war-room" element={<WarRoom />} />
       <Route path="gym" element={<GymPage />} />
+      <Route path="creative-studio" element={<CreativeStudio />} />
       <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
       <Route path="social" element={<SocialScheduler />} />
@@ -191,6 +193,7 @@ function boardRoutes() {
       <Route path="personas/:personaId" element={<PersonaDetail />} />
       <Route path="image-studio" element={<ImageStudio />} />
 <Route path="gym" element={<GymPage />} />
+      <Route path="creative-studio" element={<CreativeStudio />} />
       <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       {/* Legacy standalone tool routes — collapsed into the unified Image Studio
           workbench. Redirect old links to the matching ?tab= rather than 404. */}

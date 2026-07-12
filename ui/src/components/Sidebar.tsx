@@ -27,6 +27,7 @@ import {
   AppWindow,
   BookOpen,
   Dumbbell,
+  Clapperboard,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -230,6 +231,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/creative-studio" label="Creative Studio" icon={Clapperboard} />
         <SidebarNavItem to="/image-studio" label="AI Influencer Studio" icon={ImageIcon} />
         <SidebarNavItem to="/book-writing" label="Book Writing" icon={BookOpen} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
@@ -316,6 +318,7 @@ function SidebarV1({
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/creative-studio" label="Creative Studio" icon={Clapperboard} />
         <SidebarNavItem to="/image-studio" label="AI Influencer Studio" icon={ImageIcon} />
         <SidebarNavItem to="/book-writing" label="Book Writing" icon={BookOpen} />
         {showWorkspacesLink ? (

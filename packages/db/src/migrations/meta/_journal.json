@@ -1016,6 +1016,13 @@
       "when": 1783600100000,
       "tag": "0146_appdev_control_center",
       "breakpoints": true
+    },
+    {
+      "idx": 145,
+      "version": "7",
+      "when": 1783600200000,
+      "tag": "0149_creative_studio_jobs",
+      "breakpoints": true
     }
   ]
 }
