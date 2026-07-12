@@ -419,4 +419,25 @@ function VisualQcTab({
                   >
                     {r.verdict}
                   </span>
-                  <span className="text-[11px]" s
+                  <span className="text-[11px]" style={{ color: DS.textFaint }}>
+                    {r.reviewerModel} · {new Date(r.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                {r.worstScreen && (
+                  <div className="mt-1 text-[11px]" style={{ color: DS.textMuted }}>
+                    worst screen: <code>{r.worstScreen}</code>
+                  </div>
+                )}
+                {r.summary && (
+                  <p className="mt-1 text-[12px] leading-relaxed" style={{ color: DS.textMuted }}>{r.summary}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export default AppDevAppDetail;

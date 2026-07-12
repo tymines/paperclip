@@ -515,4 +515,7 @@ export async function tylerQueue(db: Db, companyId: string): Promise<TylerQueueI
     rethrowMigrationPending(err);
   }
   // Oldest FIRST (spec Part 7): the queue surfaces what has been blocked on
-  // Tyler the longest.
+  // Tyler the longest. (A merge-train reconstruction had flipped this to
+  // newest-first — semantic, not cosmetic: it buries the most expensive item.)
+  return items.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+}

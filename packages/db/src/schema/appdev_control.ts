@@ -391,4 +391,27 @@ export const appdevScreenBaselines = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
-    screenId: uuid("scre
+    screenId: uuid("screen_id").notNull().references(() => appdevScreens.id),
+    assetId: uuid("asset_id").notNull(),
+    commitSha: text("commit_sha"),
+    approvedBy: text("approved_by").notNull(),
+    approvedAt: ts("approved_at").notNull().defaultNow(),
+  },
+  (t) => ({ screenIdx: index("appdev_screen_baselines_screen_idx").on(t.screenId, t.approvedAt) }),
+);
+
+export const appdevRetros = pgTable(
+  "appdev_retros",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    companyId: uuid("company_id").notNull().references(() => companies.id),
+    appId: uuid("app_id").notNull().references(() => appdevApps.id),
+    deploymentId: uuid("deployment_id"),
+    doc: text("doc"),
+    lessons: jsonb("lessons").$type<Array<Record<string, unknown>>>(),
+    /** OUROBOROS in data: new idea/WO ids spawned from lessons */
+    fedForwardIds: jsonb("fed_forward_ids").$type<string[]>(),
+    createdAt: ts("created_at").notNull().defaultNow(),
+  },
+  (t) => ({ appIdx: index("appdev_retros_app_idx").on(t.appId) }),
+);
