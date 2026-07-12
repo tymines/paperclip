@@ -5,6 +5,4 @@ export const pipelineApi = {
   start: (c: string, name: string) => api.post(`/companies/${c}/pipeline/start`, { name }),
   gateDecision: (c: string, runId: string, decision: "pass" | "fail", opts?: { reason?: string; send_back_to?: string }) =>
     api.post(`/companies/${c}/gate-decision`, { runId, decision, ...(opts || {}) }),
-  kill: (c: string, runId: string, reason?: string) =>
-    api.post(`/companies/${c}/kill`, { runId, ...(reason ? { reason } : {}) }),
 };

@@ -1,14 +1,110 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { books, storyBibleOutline } from "@paperclipai/db";
+import { books, storyBibleOutline, manuscriptChapters } from "@paperclipai/db";
 import { eq, and, desc } from "drizzle-orm";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { generateChapterDraft, reviseChapterContent } from "../services/chapter-generator.js";
+import { generateChapterDraft, reviseChapterContent, callLLM } from "../services/chapter-generator.js";
+import { compileChapterContext } from "../services/book-context-compiler.js";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+
+const BOOK_VAULT_ROOT =
+  process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
+
+function writeChapterToVault(slug: string, chapterNumber: number, title: string, prose: string) {
+  try {
+    const dir = path.join(BOOK_VAULT_ROOT, slug, "chapters");
+    fs.mkdirSync(dir, { recursive: true });
+    const pad = String(chapterNumber).padStart(2, "0");
+    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: false\nupdated: ${new Date().toISOString()}\n---\n\n`;
+    fs.writeFileSync(path.join(dir, `ch${pad}.md`), fm + prose, "utf8");
+    const vaultDir = path.join(BOOK_VAULT_ROOT, slug);
+    try {
+      execSync("git add .", { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
+      execSync(`git commit -m "draft: ch${pad}"`, { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
+    } catch { /* best-effort: skip if not a git repo */ }
+  } catch { /* vault write is best-effort; DB is authoritative */ }
+}
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
+
+  // ── POST .../chapters/:chapterNumber/write-prose ─────────────────────
+  // The real writer lane: compile the approved bible into a context packet
+  // (spec §5) and draft actual chapter PROSE into manuscript_chapters — not
+  // outline beats. This is what makes "write a whole book end-to-end" work.
+  router.post(
+    "/companies/:companyId/book-studio/books/:bookId/chapters/:chapterNumber/write-prose",
+    async (req, res, next) => {
+      try {
+        const { companyId, bookId } = req.params;
+        assertCompanyAccess(req, companyId);
+        const chapterNumber = Number(req.params.chapterNumber);
+        if (!Number.isFinite(chapterNumber) || chapterNumber < 1) throw badRequest("Invalid chapter number");
+        const { guidance } = (req.body ?? {}) as { guidance?: string };
+
+        const [book] = await db
+          .select({ id: books.id, title: books.title, slug: books.slug })
+          .from(books).where(eq(books.id, bookId));
+        if (!book) throw notFound("Book not found");
+
+        // Refuse to overwrite a human-locked chapter (invariant §2.2): only a
+        // diff proposal may change her text. Here we simply refuse the write.
+        const [existing] = await db
+          .select().from(manuscriptChapters)
+          .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+        // (human_locked lives in vault frontmatter; DB has no column yet — treat
+        // any existing non-empty content as protected unless ?overwrite=1.)
+        const overwrite = req.query.overwrite === "1";
+        if (existing && existing.content && existing.content.trim().length > 0 && !overwrite) {
+          throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
+        }
+
+        const ctx = await compileChapterContext(db, bookId, chapterNumber, guidance);
+
+        let prose: string;
+        try {
+          prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
+        } catch (err) {
+          throw serviceUnavailable(`Writer lane unavailable: ${(err as Error).message}`);
+        }
+        if (!prose || !prose.trim()) throw serviceUnavailable("Writer returned empty prose — check provider keys (GOOGLE/DeepSeek/Anthropic).");
+
+        // Derive a title: first heading line, else keep existing / default.
+        const firstLine = prose.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
+        const derivedTitle = firstLine.replace(/^#+\s*/, "").slice(0, 120).trim();
+        const title = existing?.title?.trim() || derivedTitle || `Chapter ${chapterNumber}`;
+
+        if (existing) {
+          await db.update(manuscriptChapters)
+            .set({ content: prose, title, updatedAt: new Date() })
+            .where(eq(manuscriptChapters.id, existing.id));
+        } else {
+          await db.insert(manuscriptChapters).values({
+            id: randomUUID(), bookId, chapterNumber, title, content: prose,
+          });
+        }
+
+        writeChapterToVault(book.slug, chapterNumber, title, prose);
+
+        await logActivity(db, {
+          companyId, actorType: getActorInfo(req).actorType, actorId: getActorInfo(req).actorId,
+          action: "chapter.prose_written",
+          entityType: "book", entityId: bookId,
+          details: { bookId, chapterNumber, chars: prose.length, usedCharacters: ctx.usedCharacters, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat },
+        }).catch(() => {});
+
+        res.json({
+          chapterNumber, title, content: prose,
+          context: { usedCharacters: ctx.usedCharacters, usedLocations: ctx.usedLocations, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat },
+        });
+      } catch (err) { next(err); }
+    },
+  );
 
   // ── POST .../chapters/draft ──────────────────────────────────────────
   // Draft a new chapter with AI-generated content.

@@ -1844,3 +1844,14 @@ span.paperclip-project-mention-chip {
   background: var(--pp-accent-strong);
 }
 :root[data-ui-v2="true"] [data-pp-new-issue="true"] svg { color: #ffffff; }
+
+/* ── World View (TYL-131) — alerts ticker marquee ─────────────────────────── */
+@keyframes wv-marquee-kf {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.wv-marquee { animation: wv-marquee-kf 40s linear infinite; will-change: transform; }
+.wv-marquee:hover { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .wv-marquee { animation: none; } }
+[data-pp-page-v4="world-view"] .maplibregl-ctrl-attrib { background: rgba(5,7,10,0.7); color: #5A626D; }
+[data-pp-page-v4="world-view"] .maplibregl-ctrl-attrib a { color: #9AA2AD; }

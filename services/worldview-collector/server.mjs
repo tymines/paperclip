@@ -35,6 +35,13 @@
  *   GET /api/sources      -> catalog of every feed + which API key it needs
  */
 import http from "node:http";
+import {
+  refreshExtras,
+  extrasHandle,
+  extrasFreshness,
+  EXTRA_ENDPOINTS,
+  EXTRA_SOURCE_ROWS,
+} from "./feeds-extra.mjs";
 
 const PORT = Number(process.env.WORLDVIEW_PORT || 8788);
 const POLL_MS = Number(process.env.WORLDVIEW_POLL_MS || 5 * 60 * 1000); // 5 min
@@ -1362,6 +1369,7 @@ const server = http.createServer((req, res) => {
       const c = getCache(k);
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
+    Object.assign(freshness, extrasFreshness());
     return send(res, 200, { ok: true, service: "worldview-collector", pollMs: POLL_MS, freshness });
   }
   if (path === "/api/news") return send(res, 200, getCache("news") || { status: "pending", items: [] });
@@ -1386,14 +1394,16 @@ const server = http.createServer((req, res) => {
         ? { ...s, status: c.status, notes: c.note ?? s.notes, count: c.items?.length }
         : s;
     });
-    return send(res, 200, { sources, fetchedAt: new Date().toISOString() });
+    return send(res, 200, { sources: [...sources, ...EXTRA_SOURCE_ROWS], fetchedAt: new Date().toISOString() });
   }
-  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/cloudflare", "/api/fred", "/api/brief", "/api/sources"] });
+  const extra = extrasHandle(path);
+  if (extra) return send(res, 200, extra);
+  return send(res, 404, { error: "not found", endpoints: ["/health", "/api/news", "/api/geopolitical", "/api/firms", "/api/finnhub", "/api/openaq", "/api/waqi", "/api/opensky", "/api/aviationstack", "/api/ais", "/api/cloudflare", "/api/fred", "/api/brief", "/api/sources", ...EXTRA_ENDPOINTS] });
 });
 
 async function refreshAll() {
   ensureAisStream(); // maintain AISStream WebSocket (connect / reconnect watchdog)
-  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack(), refreshFred(), refreshCloudflareRadar()]);
+  await Promise.allSettled([refreshNews(), refreshGeopolitical(), refreshFirms(), refreshFinnhub(), refreshOpenaq(), refreshWaqi(), refreshOpensky(), refreshAviationstack(), refreshFred(), refreshCloudflareRadar(), refreshExtras()]);
   // The AI brief consumes the feeds refreshed above, so run it AFTER they settle
   // (it self-throttles to GROQ_BRIEF_MIN_INTERVAL_MS, so this is cheap per cycle).
   await refreshAiBrief();

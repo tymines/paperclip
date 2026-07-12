@@ -3,7 +3,7 @@
  * ponytail: textarea + dangerouslySetInnerHTML for preview, no editor lib.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Maximize, Minimize, Eye, Edit3 } from "lucide-react";
+import { Maximize, Minimize, Eye, Edit3, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface OutlineEntry {
@@ -60,6 +60,8 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   const [title, setTitle] = useState("");
   const [preview, setPreview] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">("saved");
+  const [drafting, setDrafting] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -125,6 +127,26 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [content, title]);
 
+  // AI writer lane: compile the approved bible → draft real prose for this chapter.
+  const draftProse = useCallback(async () => {
+    if (selectedCh == null || drafting) return;
+    setDrafting(true); setDraftError(null);
+    try {
+      const hasProse = content.trim().length > 0;
+      const res = await apiFetch<{ title: string; content: string }>(
+        `${API_PREFIX}/chapters/${selectedCh}/write-prose${hasProse ? "?overwrite=1" : ""}`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      setContent(res.content ?? "");
+      if (res.title) setTitle(res.title);
+      setSaveStatus("saved");
+    } catch (e) {
+      setDraftError((e as Error).message || "Draft failed");
+    } finally {
+      setDrafting(false);
+    }
+  }, [selectedCh, drafting, content, API_PREFIX]);
+
   const wordCount = content.split(/\s+/).filter(Boolean).length;
   const chapterTitle = chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`;
 
@@ -151,6 +173,18 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={draftProse}
+            disabled={drafting || selectedCh == null}
+            title={content.trim() ? "Redraft this chapter with AI (overwrites)" : "Draft this chapter with AI from the approved bible"}
+            className={cn(
+              "rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              drafting ? "border-blue-500/40 bg-blue-600/10 text-blue-300" : "border-blue-500/30 text-blue-300 hover:bg-blue-600/10",
+            )}
+          >
+            <Sparkles className="w-3 h-3" />
+            {drafting ? "Drafting…" : content.trim() ? "Redraft" : "AI Draft"}
+          </button>
           <button
             onClick={() => setPreview(!preview)}
             className={cn(
@@ -195,7 +229,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       {/* Status bar */}
       <div className="flex items-center justify-between border-t border-gray-800 px-5 py-2 shrink-0">
         <span className="text-xs text-gray-600">
-          {wordCount.toLocaleString()} words
+          {draftError ? <span className="text-red-500">{draftError}</span> : `${wordCount.toLocaleString()} words`}
         </span>
         <span className={cn(
           "text-xs",

@@ -1,6 +1,27 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { books, storyBibleOutline, bookExports } from "@paperclipai/db";
+import { books, storyBibleOutline, bookExports, manuscriptChapters } from "@paperclipai/db";
+
+// Merge outline beats with real manuscript prose. Prose wins when present so the
+// export is the BOOK, not the outline; beats are the fallback for undrafted chapters.
+async function loadChaptersWithProse(db: any, bookId: string, beatToText: (b: any) => string) {
+  const [outline, prose] = await Promise.all([
+    db.select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
+      .from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId)).orderBy(storyBibleOutline.chapterNumber),
+    db.select({ chapterNumber: manuscriptChapters.chapterNumber, title: manuscriptChapters.title, content: manuscriptChapters.content })
+      .from(manuscriptChapters).where(eq(manuscriptChapters.bookId, bookId)),
+  ]);
+  const proseByNum = new Map<number, { title: string; content: string }>();
+  for (const c of prose) proseByNum.set(c.chapterNumber, { title: c.title, content: c.content });
+  // union of chapter numbers (outline drives order; drafted-but-unoutlined chapters appended)
+  const nums = new Set<number>([...outline.map((o: any) => o.chapterNumber), ...prose.map((c: any) => c.chapterNumber)]);
+  return [...nums].sort((a, b) => a - b).map((n) => {
+    const o = outline.find((x: any) => x.chapterNumber === n);
+    const pr = proseByNum.get(n);
+    const body = (pr && pr.content && pr.content.trim()) ? pr.content : (o && Array.isArray(o.beats) && o.beats.length ? beatToText(o.beats) : "");
+    return { chapterNumber: n, title: (pr?.title || o?.title || `Chapter ${n}`), content: body, beats: o?.beats };
+  });
+}
 import { eq, desc } from "drizzle-orm";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
@@ -37,22 +58,14 @@ export function bookStudioExportRoutes(db: Db) {
       if (!book) throw notFound("Book not found");
 
       // Load chapters
-      const chapters = await db
-        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
-        .from(storyBibleOutline)
-        .where(eq(storyBibleOutline.bookId, bookId))
-        .orderBy(storyBibleOutline.chapterNumber);
+      const chapters = await loadChaptersWithProse(db, bookId, beatToText);
 
       // Assemble markdown
       const mdLines = [`# ${book.title}`, ""];
       for (const ch of chapters) {
         mdLines.push(`## ${ch.title || `Chapter ${ch.chapterNumber}`}`);
         mdLines.push("");
-        if (Array.isArray(ch.beats) && ch.beats.length > 0) {
-          mdLines.push(beatToText(ch.beats));
-        } else {
-          mdLines.push("*[Chapter content pending]*");
-        }
+        mdLines.push(ch.content && ch.content.trim() ? ch.content : "*[Chapter content pending]*");
         mdLines.push("");
       }
       const markdown = mdLines.join("\n");
@@ -146,14 +159,10 @@ export function bookStudioExportRoutes(db: Db) {
 
       if (!book) throw notFound("Book not found");
 
-      const chapters = await db
-        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
-        .from(storyBibleOutline)
-        .where(eq(storyBibleOutline.bookId, bookId))
-        .orderBy(storyBibleOutline.chapterNumber);
+      const chapters = await loadChaptersWithProse(db, bookId, beatToText);
 
       const totalChars = chapters.reduce((sum, ch) => {
-        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        const text = ch.content ?? "";
         return sum + text.length + (ch.title?.length || 0);
       }, 0);
 
@@ -182,7 +191,7 @@ export function bookStudioExportRoutes(db: Db) {
 
       // Pre-compute non-empty chapters once for both narration loop and concat building
       const nonEmptyChapters = chapters.filter(ch => {
-        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        const text = ch.content ?? "";
         return text.trim().length > 0;
       });
 
@@ -192,7 +201,7 @@ export function bookStudioExportRoutes(db: Db) {
       for (const ch of nonEmptyChapters) {
         const chTitle = ch.title || `Chapter ${ch.chapterNumber}`;
         const result = await tts.generateNarration(
-          Array.isArray(ch.beats) ? beatToText(ch.beats) : "",
+          ch.content ?? "",
           chTitle,
         );
         const chPath = path.join(tempDir, `chapter-${ch.chapterNumber}.mp3`);
