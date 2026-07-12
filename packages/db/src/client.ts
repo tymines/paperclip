@@ -754,5 +754,32 @@ export async function migratePostgresIfEmpty(url: string): Promise<MigrationBoot
 
     const db = drizzlePg(sql);
     await migratePg(db, { migrationsFolder: MIGRATIONS_FOLDER });
+    return { migrated: true, reason: "migrated-empty-db", tableCount: 0 };
+  } finally {
+    await sql.end();
+  }
+}
 
-    return { migrated: true, reason: "migrated-empty-db", tableC
+export async function ensurePostgresDatabase(
+  url: string,
+  databaseName: string,
+): Promise<"created" | "exists"> {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(databaseName)) {
+    throw new Error(`Unsafe database name: ${databaseName}`);
+  }
+
+  const sql = createUtilitySql(url);
+  try {
+    const existing = await sql<{ one: number }[]>`
+      select 1 as one from pg_database where datname = ${databaseName} limit 1
+    `;
+    if (existing.length > 0) return "exists";
+
+    await sql.unsafe(`create database "${databaseName}" encoding 'UTF8' lc_collate 'C' lc_ctype 'C' template template0`);
+    return "created";
+  } finally {
+    await sql.end();
+  }
+}
+
+export type Db = ReturnType<typeof createDb>;

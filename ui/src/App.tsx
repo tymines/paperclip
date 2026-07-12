@@ -482,4 +482,21 @@ export function App() {
           <Route path="issues/done" element={<UnprefixedBoardRedirect />} />
           <Route path="issues/recent" element={<UnprefixedBoardRedirect />} />
           <Route path="projects/:projectId/budget" element={<UnprefixedBoardRedirect />} />
-          <Route path="company/settings" element={<UnprefixedBoardRed
+          <Route path="company/settings" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/environments" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/access" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/invites" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/settings/secrets" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/export/*" element={<UnprefixedBoardRedirect />} />
+          <Route path="company/import" element={<UnprefixedBoardRedirect />} />
+          <Route path="plugins/:pluginId" element={<UnprefixedBoardRedirect />} />
+          <Route path=":companyPrefix" element={<Layout />}>
+            {boardRoutes()}
+          </Route>
+          <Route path="*" element={<NotFoundPage scope="global" />} />
+        </Route>
+      </Routes>
+      <OnboardingWizard />
+    </>
+  );
+}
