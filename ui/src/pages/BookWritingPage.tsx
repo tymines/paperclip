@@ -16,7 +16,6 @@ import {
   Palette,
   List,
   FileText,
-  Check,
   ChevronLeft,
   ChevronRight,
   Pause,
@@ -1022,9 +1021,6 @@ export function BookWritingPage() {
   const [showCreateOutline, setShowCreateOutline] = useState(false);
 
   // Spend tracking (from book metadata)
-  const spendThisMonth = (activeBook?.metadata?.spendThisMonth as number) || 0;
-  const spendBudget = (activeBook?.metadata?.spendBudget as number) || 50.0;
-  const spendPercent = spendBudget > 0 ? (spendThisMonth / spendBudget) * 100 : 0;
 
   // Chat drawer state
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -1596,10 +1592,9 @@ export function BookWritingPage() {
               )}
             </span>
           )}
-          <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
-            <span className={cn("inline-block h-2 w-2 rounded-full", (spendPercent ?? 0) >= 80 ? "bg-red-500" : (spendPercent ?? 0) >= 50 ? "bg-yellow-500" : "bg-green-500")} />
-            ${spendThisMonth.toFixed(2)} / ${spendBudget.toFixed(2)}
-          </div>
+          {/* Budget chip removed from header (2026-07-12, Fable) per Tyler — the
+              autopilot spend guard stays server-side (budgetCents on /autopilot/start);
+              nothing about spend renders on the main header. */}
           <button
             onClick={handleAutopilotPauseResume}
             disabled={!autopilotMode}
@@ -2086,28 +2081,12 @@ export function BookWritingPage() {
       {/* Book Media drawer (Fable, additive — fixed-position, layout-independent) */}
       {activeBook && <BookMediaPanel bookId={activeBook.id} />}
 
-      {/* BOTTOM BAR */}
-      <footer className="flex items-center gap-4 border-t border-gray-800 px-5 py-3 shrink-0 bg-gray-950/80 backdrop-blur-sm">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 shrink-0">
-          Rewrite Proposal
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs text-gray-300 truncate">
-            <span className="text-gray-600 line-through mr-2">Mara watched it spiral down through the amber light</span>
-            <span className="text-green-400">Mara watched the petal spiral through amber light</span>
-          </p>
-          <p className="text-[10px] text-gray-600 mt-0.5">Suggested: tighter prose, active voice, removes redundant "down"</p>
-        </div>
-        <button className="rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 flex items-center gap-1.5">
-          <Check className="w-3 h-3" /> Accept
-        </button>
-        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600">
-          Reject
-        </button>
-        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-          <Pen className="w-3 h-3" /> Edit
-        </button>
-      </footer>
+      {/* Rewrite Proposal bar removed (2026-07-12, Fable): it rendered hardcoded
+          demo content ("Mara watched…") unconditionally with no-op Accept/Reject/Edit
+          buttons — a data-honesty violation. A real rewrite-proposal feature should
+          render only when an actual proposal exists for the current chapter and wire
+          Accept→apply-to-manuscript / Reject→dismiss / Edit→editable. Until that
+          exists, show nothing rather than fake content. */}
 
       {/* Chat Drawer Overlay */}
       {activeBook && (

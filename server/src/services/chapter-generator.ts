@@ -1,4 +1,18 @@
-import { getRawKey } from "../services/provider-api-keys/index.js";
+import { getRawKey, type ProviderKey } from "../services/provider-api-keys/index.js";
+
+/**
+ * Build a diagnosable failure message that names the feature and each provider's
+ * outcome, so a "provider not configured" surfaces WHICH feature + WHICH provider
+ * (and points at the Gemini pin) instead of a bare "Anthropic not configured".
+ */
+function providerFailureMessage(feature: string, diag: string[]): string {
+  return (
+    `${feature}: no LLM provider produced output. Book Studio is pinned to Gemini — ` +
+    `set GOOGLE_API_KEY (or GEMINI_API_KEY) to enable it. ` +
+    `Provider chain: [${diag.join("; ")}]. ` +
+    `DeepSeek/Anthropic are used only if their keys are explicitly configured.`
+  );
+}
 
 // Tyler's ruling (2026-07-12): Gemini is THE Book Studio writer model — the
 // pinned PRIMARY, not a coin-flip. DeepSeek/Anthropic are explicit FALLBACKS
@@ -138,40 +152,33 @@ async function callAnthropic(systemPrompt: string, userPrompt: string): Promise<
  * Provider priority: Gemini (primary) → DeepSeek (fallback) → Anthropic (last resort).
  * OpenAI is NOT in this chain (hard-banned).
  */
-export async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-  // Level 1 — Gemini (primary, per Tyler's directive)
-  const geminiKey = await getRawKey("gemini").catch(() => null);
-  if (geminiKey) {
+export async function callLLM(
+  systemPrompt: string,
+  userPrompt: string,
+  feature = "Book Studio",
+): Promise<string> {
+  // Gemini (pinned primary) → DeepSeek → Anthropic, but ONLY providers whose key
+  // is configured (store or env) are attempted. Unconfigured providers are
+  // skipped, never invoked — so the surfaced error can't be a downstream
+  // "Anthropic not configured" masking the real (Gemini) cause.
+  const chain: Array<{ name: ProviderKey; call: (s: string, u: string) => Promise<string> }> = [
+    { name: "gemini", call: callGemini },
+    { name: "deepseek", call: callDeepSeek },
+    { name: "anthropic", call: callAnthropic },
+  ];
+  const diag: string[] = [];
+  for (const p of chain) {
+    const key = await getRawKey(p.name).catch(() => null);
+    if (!key) { diag.push(`${p.name}: not configured`); continue; }
     try {
-      return await callGemini(systemPrompt, userPrompt);
+      return await p.call(systemPrompt, userPrompt);
     } catch (err) {
-      console.warn("[chapter-generator] Gemini failed, trying DeepSeek:", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[chapter-generator] ${feature}: ${p.name} failed:`, err);
+      diag.push(`${p.name}: error (${msg.slice(0, 140)})`);
     }
   }
-
-  // Level 2 — DeepSeek (non-OpenAI fallback)
-  const deepseekKey = await getRawKey("deepseek").catch(() => null);
-  if (deepseekKey) {
-    try {
-      return await callDeepSeek(systemPrompt, userPrompt);
-    } catch (err) {
-      console.warn("[chapter-generator] DeepSeek failed, trying Anthropic:", err);
-    }
-  }
-
-  // Level 3 — Anthropic (last resort)
-  const anthropicKey = await getRawKey("anthropic").catch(() => null);
-  if (anthropicKey) {
-    try {
-      return await callAnthropic(systemPrompt, userPrompt);
-    } catch (err) {
-      console.warn("[chapter-generator] Anthropic also failed:", err);
-    }
-  }
-
-  throw new Error(
-    "No LLM API key configured. Set 'gemini', 'deepseek', or 'anthropic' in provider API keys.",
-  );
+  throw new Error(providerFailureMessage(feature, diag));
 }
 
 // ── Token streaming (SSE draft output) ──────────────────────────────────────
@@ -317,15 +324,20 @@ export async function* streamLLM(
   systemPrompt: string,
   userPrompt: string,
   signal?: AbortSignal,
+  feature = "Book Studio",
 ): AsyncGenerator<string, void, unknown> {
-  const providers: Array<{ name: string; gen: () => AsyncGenerator<string, void, unknown> }> = [
+  const providers: Array<{ name: ProviderKey; gen: () => AsyncGenerator<string, void, unknown> }> = [
     { name: "gemini", gen: () => streamGemini(systemPrompt, userPrompt, signal) },
     { name: "deepseek", gen: () => streamDeepSeek(systemPrompt, userPrompt, signal) },
     { name: "anthropic", gen: () => streamAnthropic(systemPrompt, userPrompt, signal) },
   ];
-  let lastErr: unknown = null;
+  const diag: string[] = [];
   for (const provider of providers) {
     if (signal?.aborted) throw new Error("Aborted");
+    // Only attempt configured providers — never invoke an unconfigured lane
+    // (that's what surfaced the misleading "Anthropic not configured").
+    const key = await getRawKey(provider.name).catch(() => null);
+    if (!key) { diag.push(`${provider.name}: not configured`); continue; }
     let yieldedAny = false;
     try {
       for await (const delta of provider.gen()) {
@@ -333,18 +345,16 @@ export async function* streamLLM(
         yield delta;
       }
       if (yieldedAny) return;
-      // Stream completed but produced nothing — treat as failure, try next.
-      lastErr = new Error(`${provider.name} stream produced no tokens`);
+      diag.push(`${provider.name}: produced no tokens`);
     } catch (err) {
       if (signal?.aborted) throw err;
       if (yieldedAny) throw err; // never switch providers mid-prose
-      lastErr = err;
-      console.warn(`[chapter-generator] ${provider.name} stream failed, trying next provider:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      diag.push(`${provider.name}: error (${msg.slice(0, 140)})`);
+      console.warn(`[chapter-generator] ${feature}: ${provider.name} stream failed, trying next:`, err);
     }
   }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error("No LLM API key configured for streaming. Set 'gemini', 'deepseek', or 'anthropic' in provider API keys.");
+  throw new Error(providerFailureMessage(feature, diag));
 }
 
 /**
