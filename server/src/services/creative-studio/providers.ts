@@ -8,9 +8,10 @@
 //   OPENART_MCP_URL   + OPENART_MCP_TOKEN
 
 import { McpHttpClient } from "./mcp-client.js";
+import { GeminiProvider, OpenAIImagesProvider, ReplicateProvider } from "./rest-providers.js";
 
 export type CreativeMode = "image" | "video" | "audio" | "3d";
-export type ProviderId = "higgsfield" | "openart";
+export type ProviderId = "higgsfield" | "openart" | "gemini" | "openai" | "replicate";
 
 export interface NormalizedModel {
   provider: ProviderId;
@@ -50,6 +51,8 @@ export interface CreativeProvider {
   listVoices?(): Promise<Array<{ id: string; name: string; description?: string }>>;
   /** optional: constrained raw MCP tool call — callers MUST allowlist tool names */
   tool?(name: string, args: Record<string, unknown>, timeoutMs?: number): Promise<any>;
+  /** optional async config check (e.g. Replicate credentials vault) */
+  checkConfigured?(): Promise<boolean>;
 }
 
 function env(name: string): string | undefined {
@@ -266,17 +269,29 @@ class OpenArtProvider implements CreativeProvider {
 let registry: Record<ProviderId, CreativeProvider> | null = null;
 
 export function creativeProviders(): Record<ProviderId, CreativeProvider> {
-  if (!registry) registry = { higgsfield: new HiggsfieldProvider(), openart: new OpenArtProvider() };
+  if (!registry) {
+    registry = {
+      higgsfield: new HiggsfieldProvider(),
+      openart: new OpenArtProvider(),
+      gemini: new GeminiProvider(),
+      openai: new OpenAIImagesProvider(),
+      replicate: new ReplicateProvider(),
+    };
+  }
   return registry;
 }
 
 export function providerStatus() {
   const p = creativeProviders();
   return {
-    higgsfield: { configured: p.higgsfield.configured, keyedOffHint: "Set HIGGSFIELD_MCP_URL (+_TOKEN) in the server environment." },
-    openart: { configured: p.openart.configured, keyedOffHint: "Set OPENART_MCP_URL (+_TOKEN) in the server environment." },
-    krea: { configured: false, keyedOffHint: "Deferred to P3 (decision D2 default)." },
-    defaultProviderByMode: { image: "openart", video: "higgsfield", audio: "higgsfield", "3d": "higgsfield" },
+    // Gemini is the R2 flagship: GOOGLE_API_KEY is already on the box (fleet uses it).
+    gemini: { configured: p.gemini.configured, keyedOffHint: "Set GEMINI_API_KEY or GOOGLE_API_KEY in the server environment.", label: "Gemini", capabilities: "Imagen images · Veo video" },
+    openai: { configured: p.openai.configured, keyedOffHint: "Set OPENAI_API_KEY in the server environment.", label: "OpenAI", capabilities: "GPT Image" },
+    replicate: { configured: p.replicate.configured, keyedOffHint: "Set REPLICATE_API_TOKEN (or add a 'replicate' key in Credentials — the Influencer studio's source). Flux can also run BFL-direct later (BFL_API_KEY, config option).", label: "Replicate", capabilities: "Flux dev/schnell/1.1-pro · SD 3.5" },
+    higgsfield: { configured: p.higgsfield.configured, keyedOffHint: "Set HIGGSFIELD_MCP_URL (+_TOKEN) in the server environment (OAuth pending).", label: "Higgsfield", capabilities: "video · audio · presets · edit tools · Ad Studio" },
+    openart: { configured: p.openart.configured, keyedOffHint: "Set OPENART_MCP_URL (+_TOKEN) in the server environment (OAuth pending).", label: "OpenArt", capabilities: "fast multi-model image + video" },
+    krea: { configured: false, keyedOffHint: "Deferred to P3 (decision D2 default).", label: "Krea", capabilities: "22K enhancer · style training (deferred)" },
+    defaultProviderByMode: { image: "gemini", video: "gemini", audio: "higgsfield", "3d": "higgsfield" },
     batchConfirmThresholdCredits: 50, // D6 default, Tyler can override
   };
 }

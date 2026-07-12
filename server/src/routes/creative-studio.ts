@@ -10,12 +10,21 @@ import { creativeJobs } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { logActivity } from "../services/index.js";
 import { creativeProviders, providerStatus, type CreativeMode, type ProviderId } from "../services/creative-studio/providers.js";
+import { LOCAL_ASSET_PREFIX } from "../services/creative-studio/rest-providers.js";
+import { assetUrlPath, resolveAssetPath } from "../services/creative-studio/asset-store.js";
+
+function scopeOutputs(companyId: string, outputs: Array<{ url: string; kind: string; thumbUrl?: string }>) {
+  return outputs.map((o) => o.url.startsWith(LOCAL_ASSET_PREFIX)
+    ? { ...o, url: assetUrlPath(companyId, o.url.slice(LOCAL_ASSET_PREFIX.length)) }
+    : o);
+}
 
 const MODES: CreativeMode[] = ["image", "video", "audio", "3d"];
 const TERMINAL = new Set(["completed", "failed"]);
 
+const PROVIDER_IDS = new Set(["higgsfield", "openart", "gemini", "openai", "replicate"]);
 function isProviderId(v: unknown): v is ProviderId {
-  return v === "higgsfield" || v === "openart";
+  return PROVIDER_IDS.has(v as string);
 }
 
 export function creativeStudioRoutes(db: Db) {
@@ -25,7 +34,23 @@ export function creativeStudioRoutes(db: Db) {
   router.get("/companies/:companyId/creative-studio/status", async (req, res, next) => {
     try {
       assertCompanyAccess(req, req.params.companyId as string);
-      res.json(providerStatus());
+      const status: any = providerStatus();
+      // Replicate may be configured via the credentials vault rather than env
+      const rep = creativeProviders().replicate;
+      if (!status.replicate.configured && rep.checkConfigured) {
+        try { status.replicate.configured = await rep.checkConfigured(); } catch { /* keep env answer */ }
+      }
+      res.json(status);
+    } catch (err) { next(err); }
+  });
+
+  // GET /companies/:companyId/creative-assets/:filename — locally-stored provider outputs
+  router.get("/companies/:companyId/creative-assets/:filename", async (req, res, next) => {
+    try {
+      assertCompanyAccess(req, req.params.companyId as string);
+      const resolved = resolveAssetPath(req.params.filename as string);
+      if (!resolved) return res.status(404).json({ error: "asset not found" });
+      res.sendFile(resolved, (err) => { if (err) res.status(404).json({ error: "asset not found" }); });
     } catch (err) { next(err); }
   });
 
@@ -68,7 +93,7 @@ export function creativeStudioRoutes(db: Db) {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
       const { provider, mode, model, prompt, params, refs, folder } = req.body ?? {};
-      if (!isProviderId(provider)) return res.status(422).json({ error: "provider must be 'higgsfield' | 'openart'" });
+      if (!isProviderId(provider)) return res.status(422).json({ error: `provider must be one of ${[...PROVIDER_IDS].join(", ")}` });
       if (!MODES.includes(mode)) return res.status(422).json({ error: `mode must be one of ${MODES.join(", ")}` });
       if (!model || typeof model !== "string") return res.status(422).json({ error: "model is required" });
       if (typeof prompt !== "string" || prompt.trim() === "") return res.status(422).json({ error: "prompt is required" });
@@ -95,7 +120,7 @@ export function creativeStudioRoutes(db: Db) {
         const [updated] = await db.update(creativeJobs).set({
           providerJobId: state.providerJobId,
           status: state.status,
-          outputs: state.outputs,
+          outputs: scopeOutputs(companyId, state.outputs),
           costCredits: state.costCredits ?? null,
           error: state.error ?? null,
           updatedAt: new Date(),
@@ -153,7 +178,7 @@ export function creativeStudioRoutes(db: Db) {
         const state = await p.getJob(row.providerJobId, row.mode as CreativeMode);
         const [updated] = await db.update(creativeJobs).set({
           status: state.status,
-          outputs: state.outputs.length > 0 ? state.outputs : row.outputs,
+          outputs: state.outputs.length > 0 ? scopeOutputs(companyId, state.outputs) : row.outputs,
           costCredits: state.costCredits ?? row.costCredits,
           error: state.error ?? row.error,
           updatedAt: new Date(),
