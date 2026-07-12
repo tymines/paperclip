@@ -12,7 +12,6 @@ import {
   Library,
   Repeat,
   GitBranch,
-  Workflow,
   Settings,
   Megaphone,
   Home as HomeIcon,
@@ -222,7 +221,6 @@ function SidebarLegacy({
 
       <SidebarSection label="Company">
         <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
-        <SidebarNavItem to="/pipeline" label="Pipeline" icon={Workflow} />
         <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
@@ -299,7 +297,6 @@ function SidebarV1({
 
       <SidebarSection label="More">
         <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
-        <SidebarNavItem to="/pipeline" label="Pipeline" icon={Workflow} />
         <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
