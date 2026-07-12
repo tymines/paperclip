@@ -1,34 +1,36 @@
 /**
- * World View  MapLibre basemap style (TYL-131).
- * Dark CARTO raster basemap served through the same-origin tile proxy
- * (/api/worldview/tiles?url=), mirroring OSIRIS's proxy-tiles approach. The
- * proxy allowlists *.basemaps.cartocdn.com and long-caches tiles.
+ * World View — MapLibre basemap style (TYL-131; fixed on fable/worldview-fixes).
+ *
+ * Dark CARTO raster basemap loaded DIRECTLY from cartocdn (CORS-open, keyless,
+ * free with attribution). We previously routed tiles through the same-origin
+ * `/api/worldview/tiles` proxy, but that path `encodeURIComponent`'d the tile
+ * template — percent-encoding the `{z}/{x}/{y}` placeholders so MapLibre could no
+ * longer substitute them, so every tile 404'd and the map rendered as a black
+ * void. Direct tiles remove that failure mode and the dependency on the collector
+ * host being reachable. The proxy route still exists server-side for optional
+ * caching, but the basemap no longer depends on it.
  */
 import type { StyleSpecification } from "maplibre-gl";
-import { COLLECTOR, C } from "./theme";
+import { C } from "./theme";
 
-const CARTO_DARK =
-  "https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-
-/** Wrap an upstream tile URL in the same-origin proxy. */
-function proxied(url: string): string {
-  // MapLibre substitutes {z}/{x}/{y} before requesting, so we must encode the
-  // template as-is and let the proxy receive the concrete tile URL. We keep the
-  // placeholders intact by encoding only once; the proxy validates the host.
-  return `${COLLECTOR}/tiles?url=${encodeURIComponent(url)}`;
-}
+// CARTO dark basemap — subdomains a–d for request parallelism.
+const CARTO_DARK = [
+  "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+];
 
 export function buildStyle(): StyleSpecification {
   return {
     version: 8,
-    // Glyphs for symbol layers (labels/plane icons need a glyph source present).
     glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
     sources: {
       carto: {
         type: "raster",
-        tiles: [proxied(CARTO_DARK)],
+        tiles: CARTO_DARK,
         tileSize: 256,
-        attribution: " CARTO  OpenStreetMap contributors",
+        attribution: "© CARTO © OpenStreetMap contributors",
       },
     },
     layers: [
@@ -40,17 +42,18 @@ export function buildStyle(): StyleSpecification {
 
 /** Satellite basemap (Esri World Imagery) for the SAT toggle. */
 export function buildSatStyle(): StyleSpecification {
-  const esri =
-    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
+  const esri = [
+    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  ];
   return {
     version: 8,
     glyphs: "https://fonts.openmaptiles.org/{fontstack}/{range}.pbf",
     sources: {
       esri: {
         type: "raster",
-        tiles: [esri],
+        tiles: esri,
         tileSize: 256,
-        attribution: " Esri, Maxar, Earthstar Geographics",
+        attribution: "© Esri, Maxar, Earthstar Geographics",
       },
     },
     layers: [

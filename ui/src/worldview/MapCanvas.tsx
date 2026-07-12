@@ -17,6 +17,7 @@ import { C } from "./theme";
 
 export type Projection = "globe" | "mercator";
 export type Basemap = "map" | "sat";
+export type BasemapStatus = "loading" | "ok" | "failed";
 export type EntityProps = Record<string, unknown> & { kind?: string };
 
 interface Props {
@@ -26,6 +27,7 @@ interface Props {
   basemap: Basemap;
   onSelect: (props: EntityProps) => void;
   onReady?: (api: MapApi) => void;
+  onBasemapStatus?: (s: BasemapStatus) => void;
 }
 
 export interface MapApi {
@@ -73,7 +75,7 @@ function installLayers(map: MLMap, geojsonByLayer: Props["geojsonByLayer"], enab
   }
 }
 
-export function MapCanvas({ geojsonByLayer, enabled, projection, basemap, onSelect, onReady }: Props) {
+export function MapCanvas({ geojsonByLayer, enabled, projection, basemap, onSelect, onReady, onBasemapStatus }: Props) {
   const holder = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MLMap | null>(null);
   const styledRef = useRef(false);
@@ -90,6 +92,27 @@ export function MapCanvas({ geojsonByLayer, enabled, projection, basemap, onSele
       maplibreLogo: false,
     });
     mapRef.current = map;
+
+    // Basemap reachability watchdog (TYL-131 fix): a black map is not a
+    // data-honest failure state, so we surface tile success/failure to the HUD.
+    let basemapOk = false;
+    let tileErrors = 0;
+    const srcId = () => (basemap === "sat" ? "esri" : "carto");
+    onBasemapStatus?.("loading");
+    map.on("data", (e: maplibregl.MapSourceDataEvent) => {
+      if (e.sourceId === srcId() && (e as { tile?: unknown }).tile) {
+        if (!basemapOk) { basemapOk = true; onBasemapStatus?.("ok"); }
+      }
+    });
+    map.on("error", (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
+      const src = (e as { sourceId?: string }).sourceId;
+      const msg = String(e?.error?.message || "");
+      if (src === srcId() || /tile|cartocdn|arcgis/i.test(msg)) {
+        tileErrors += 1;
+        if (!basemapOk && tileErrors >= 4) onBasemapStatus?.("failed");
+      }
+    });
+    window.setTimeout(() => { if (!basemapOk) onBasemapStatus?.("failed"); }, 9000);
 
     map.on("style.load", () => {
       try {
@@ -172,6 +195,7 @@ export function MapCanvas({ geojsonByLayer, enabled, projection, basemap, onSele
     const map = mapRef.current;
     if (!map || !styledRef.current) return;
     styledRef.current = false;
+    onBasemapStatus?.("loading");
     map.setStyle(styleFor(basemap));
     map.once("style.load", () => {
       try { map.setProjection({ type: projection }); } catch { /* noop */ }

@@ -63,3 +63,13 @@ export async function fetchQuakesDirect(): Promise<Quake[]> {
     url: f.properties.url, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1],
   }));
 }
+
+// ── collector health (TYL-131 fix) — for the map-area diagnostic overlay ──────
+export async function fetchHealth(): Promise<{ ok: boolean }> {
+  try {
+    const r = await fetch(`${COLLECTOR}/health`, { signal: AbortSignal.timeout(6000) });
+    return { ok: r.ok };
+  } catch {
+    return { ok: false };
+  }
+}

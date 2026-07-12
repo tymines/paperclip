@@ -24,14 +24,15 @@ import { C, MONO } from "../worldview/theme";
 import { LAYERS, type LayerId, type LayerDef } from "../worldview/layerRegistry";
 import { useLayerData, type LayerData } from "../worldview/hooks/useLayerData";
 import { useWorldClock } from "../worldview/hooks/useWorldClock";
-import { fetchSwpc } from "../worldview/fetchers";
-import { MapCanvas, type MapApi, type Projection, type Basemap, type EntityProps } from "../worldview/MapCanvas";
+import { fetchSwpc, fetchHealth } from "../worldview/fetchers";
+import { MapCanvas, type MapApi, type Projection, type Basemap, type BasemapStatus, type EntityProps } from "../worldview/MapCanvas";
 import { StatusBar } from "../worldview/StatusBar";
 import { LayerPanel } from "../worldview/LayerPanel";
 import { IntelFeed } from "../worldview/IntelFeed";
 import { EntityPopover } from "../worldview/EntityPopover";
 import { AlertsTicker, type Alert } from "../worldview/AlertsTicker";
 import { SourcesBoard } from "../worldview/SourcesBoard";
+import { MapDiagnostic } from "../worldview/MapDiagnostic";
 
 const DEFAULT_ON = new Set<LayerId>(
   (LAYERS as LayerDef[]).filter((l) => l.defaultOn).map((l) => l.id));
@@ -48,6 +49,7 @@ export function WorldView() {
   const [intelOpen, setIntelOpen] = useState(true);
   const [showSources, setShowSources] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [basemapStatus, setBasemapStatus] = useState<BasemapStatus>("loading");
   const apiRef = useRef<MapApi | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -71,6 +73,8 @@ export function WorldView() {
   }, layerGeojsons);
 
   const swpc = useQuery({ queryKey: ["worldview", "swpc"], queryFn: fetchSwpc, refetchInterval: 300000, retry: 0 });
+  const health = useQuery({ queryKey: ["worldview", "health"], queryFn: fetchHealth, refetchInterval: 60000, retry: 0 });
+  const collectorOnline = health.isLoading ? null : (health.data?.ok ?? false);
 
   //  derived status 
   const feedsLive = (LAYERS as LayerDef[]).filter((l) => enabled.has(l.id) && data[l.id].status === "live").length;
@@ -139,7 +143,11 @@ export function WorldView() {
         <MapCanvas
           geojsonByLayer={geojsonByLayer} enabled={enabled} projection={projection} basemap={basemap}
           onSelect={setSelected} onReady={(api) => { apiRef.current = api; }}
+          onBasemapStatus={setBasemapStatus}
         />
+
+        <MapDiagnostic basemap={basemapStatus} collectorOnline={collectorOnline}
+          feedsLive={feedsLive} feedsTotal={feedsTotal} />
 
         {/* layers overlay (top-left) */}
         <div className="absolute left-2 top-2 z-10">
