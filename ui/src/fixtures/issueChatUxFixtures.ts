@@ -19,6 +19,7 @@ function createAgent(
   const now = new Date("2026-04-06T12:00:00.000Z");
   return {
     id,
+    urlKey,
     companyId: "company-ux",
     name,
     role: "engineer",
@@ -72,7 +73,7 @@ export const issueChatUxAgentMap = new Map<string, Agent>([
 
 // ponytail: stub exports — IssueChatUxLab is a dev-only UX playground.
 // Full fixtures were removed upstream; empty defaults unblock CI.
-export const issueChatUxFeedbackVotes = new Map();
+export const issueChatUxFeedbackVotes: never[] = [];
 export const issueChatUxLinkedRuns: any[] = [];
 export const issueChatUxLiveComments: any[] = [];
 export const issueChatUxLiveEvents: any[] = [];

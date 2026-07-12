@@ -105,7 +105,6 @@ function createComment(index: number): IssueChatComment {
     authorName: null,
     presentation: null,
     metadata: null,
-    authorName: null,
     resolvedAuthorName: null,
     createdAt: atMinute(index),
     updatedAt: atMinute(index),

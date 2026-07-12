@@ -97,6 +97,7 @@ interface CharacterEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface WorldLocationEntity {
@@ -110,6 +111,7 @@ interface WorldLocationEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface StyleEntity {
@@ -124,6 +126,7 @@ interface StyleEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface OutlineEntity {
@@ -136,6 +139,7 @@ interface OutlineEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 // ── Review Notes — now handled by ReviewNotesPanel component ─────────────

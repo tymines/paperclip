@@ -63,6 +63,7 @@ export function createOptimisticIssueComment(params: {
     body: params.body,
     presentation: null,
     metadata: null,
+    authorName: null,
     resolvedAuthorName: null,
     clientStatus: params.clientStatus ?? "pending",
     queueTargetRunId: params.queueTargetRunId ?? null,
