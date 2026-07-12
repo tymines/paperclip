@@ -12,6 +12,13 @@
  * parent post is rolled up to `published` / `failed` / `partial_failed`
  * once every target has reached a terminal state.
  *
+ * Data honesty: when an adapter throws `BlockedNoCredentialError` (account
+ * has no real token / platform credential), the target is marked `blocked`
+ * — terminal, NO retries or backoff — with errorMessage prefixed
+ * `blocked_no_credential: `. Retrying a call that can never succeed would
+ * only burn attempts; `fireNow` (the explicit admin bypass) resets blocked
+ * targets so a re-connect + fire-now re-attempts them.
+ *
  * Diagnostics (lastTickAt, postsProcessedLast5min, lastError) are exposed
  * via getDiagnostics() and surfaced through `GET /api/social/scheduler/health`.
  * `fireNow(postId)` is the admin-bypass path used by the test endpoint.
@@ -22,6 +29,7 @@ import { socialAccounts, socialPosts, socialPostTargets } from "@paperclipai/db"
 import type { SocialAccount, SocialPlatform } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 import {
+  BlockedNoCredentialError,
   ensureFreshToken,
   getSocialAdapter,
   type PostDraftPayload,
@@ -303,9 +311,32 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
       );
       return "published";
     } catch (err) {
+      if (err instanceof BlockedNoCredentialError) {
+        return blockTarget(target.id, err.message);
+      }
       const message = err instanceof Error ? err.message : String(err);
       return failTarget(target.id, attempt, message);
     }
+  }
+
+  /**
+   * Terminal no-credential state — the adapter refused to publish because
+   * the account has no real token. No retries/backoff: the call can never
+   * succeed until Tyler reconnects the account, at which point `fireNow`
+   * resets the target back to `scheduled`.
+   */
+  async function blockTarget(targetId: string, message: string): Promise<"failed"> {
+    await db
+      .update(socialPostTargets)
+      .set({
+        status: "blocked",
+        errorMessage: `blocked_no_credential: ${message}`.slice(0, 1000),
+        nextAttemptAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(socialPostTargets.id, targetId));
+    log.warn({ targetId, message }, "social post target blocked (no credential)");
+    return "failed";
   }
 
   async function failTarget(
@@ -335,10 +366,13 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
   }
 
   /**
-   * After all targets for a post have hit a terminal state (published, or
-   * failed with no retries left), roll the parent row up to the right
-   * final status. If any target is still in `publishing` or `failed`-with-
-   * retries-left, leave the post in `publishing` so the next tick re-enters.
+   * After all targets for a post have hit a terminal state (published,
+   * blocked, or failed with no retries left), roll the parent row up to the
+   * right final status. If any target is still in `publishing` or `failed`-
+   * with-retries-left, leave the post in `publishing` so the next tick
+   * re-enters. `blocked` is terminal: a post with blocked targets and no
+   * successes rolls up to `failed`; blocked alongside successes rolls up to
+   * `partial_failed`.
    */
   async function rollupParentStatus(postId: string) {
     const targets = await db
@@ -361,8 +395,8 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
     if (stillPending) return;
 
     const allPublished = targets.every((t) => t.status === "published");
-    const allFailed = targets.every((t) => t.status === "failed");
-    const finalStatus = allPublished ? "published" : allFailed ? "failed" : "partial_failed";
+    const anyPublished = targets.some((t) => t.status === "published");
+    const finalStatus = allPublished ? "published" : anyPublished ? "partial_failed" : "failed";
     await db
       .update(socialPosts)
       .set({
@@ -413,6 +447,21 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
         .update(socialPostTargets)
         .set({ nextAttemptAt: new Date(0), updatedAt: new Date() })
         .where(eq(socialPostTargets.postId, postId));
+      // Blocked targets are terminal for the periodic ticker, but fireNow
+      // is the explicit admin bypass — reset them to `scheduled` so a
+      // freshly-reconnected account gets a clean attempt budget.
+      await db
+        .update(socialPostTargets)
+        .set({
+          status: "scheduled",
+          attemptCount: 0,
+          errorMessage: null,
+          nextAttemptAt: new Date(0),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(socialPostTargets.postId, postId), eq(socialPostTargets.status, "blocked")),
+        );
       const result = await publishPostTargets(postId);
       recordProcessed(result.published + result.failed);
       return { ok: true, published: result.published, failed: result.failed };

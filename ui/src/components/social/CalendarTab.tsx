@@ -15,6 +15,7 @@ import { socialApi } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { cn } from "../../lib/utils";
+import { BlockedBadge, isBlockedStatus } from "./data-honesty";
 import { PLATFORM_META } from "./platform-meta";
 
 interface CalendarTabProps {
@@ -177,7 +178,9 @@ function ListView({ posts }: { posts: SocialPostListItem[] }) {
             </div>
             <div className="mt-1 line-clamp-2 text-sm">{post.content}</div>
           </div>
-          <div className="shrink-0 text-[11px] text-muted-foreground">{post.status}</div>
+          <div className="shrink-0 text-[11px] text-muted-foreground">
+            {isBlockedStatus(post.status) ? <BlockedBadge /> : post.status}
+          </div>
         </li>
       ))}
     </ul>

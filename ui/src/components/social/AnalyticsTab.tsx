@@ -6,15 +6,17 @@
  * stacked area, best-times-to-post heatmap (7 days × 24 hours),
  * top posts grid, top hashtags table.
  *
- * Stub returns shaped data for every connected account; real impl will
- * pull from IG Graph Insights / FB Pages Insights / X public_metrics.
+ * Data-honest (spec §7): the endpoint returns real metrics where keyed
+ * (IG Graph Insights / FB Pages Insights / X public_metrics), or an
+ * explicit keyed-off state — never mock charts.
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3, Heart, Users } from "lucide-react";
 import type { SocialAccountPublic } from "@paperclipai/shared";
-import { socialApi, type AccountAnalytics } from "../../api/social";
+import { socialApi } from "../../api/social";
 import { cn } from "../../lib/utils";
+import { KeyedOffNotice } from "./data-honesty";
 import { PLATFORM_META } from "./platform-meta";
 
 interface AnalyticsTabProps {
@@ -36,12 +38,14 @@ export function AnalyticsTab({ companyId, accounts }: AnalyticsTabProps) {
   if (accounts.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-border bg-card/60 p-8 text-center text-sm text-muted-foreground">
-        Connect at least one account to see analytics.
+        Connect at least one account (Accounts surface → connect wizard) to see analytics.
       </div>
     );
   }
 
-  const data = analyticsQuery.data;
+  const result = analyticsQuery.data;
+  const keyedOff = result && !result.available ? result : null;
+  const data = result?.available ? result.data : undefined;
   const followerStart = data?.followers[0]?.value ?? 0;
   const followerEnd = data?.followers.at(-1)?.value ?? 0;
   const followerDelta = followerEnd - followerStart;
@@ -78,6 +82,14 @@ export function AnalyticsTab({ companyId, accounts }: AnalyticsTabProps) {
           })}
       </div>
 
+      {keyedOff ? (
+        <KeyedOffNotice
+          icon={BarChart3}
+          featurePitch="Analytics will chart follower growth, engagement over time, best times to post, and your top posts and hashtags — from real platform metrics, never mock data."
+          state={keyedOff}
+        />
+      ) : (
+        <>
       {/* KPI tiles */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <KpiTile
@@ -169,6 +181,8 @@ export function AnalyticsTab({ companyId, accounts }: AnalyticsTabProps) {
           </table>
         </ChartCard>
       ) : null}
+        </>
+      )}
     </div>
   );
 }

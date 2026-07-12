@@ -1,29 +1,29 @@
 /**
- * SocialScheduler — multi-platform social-media scheduling tool.
+ * SocialScheduler — multi-platform social-media management studio.
  *
- * Replaces the previous in-app /social broadcast feed. Modeled after Buffer /
- * Later / Hootsuite — five surfaces stitched together by an internal tab bar:
+ * Six surfaces stitched together by an internal tab bar (spec §4):
  *
- *   - Compose:   multi-platform editor with per-platform previews
- *   - Calendar:  month + list views of scheduled posts (color-coded by platform)
- *   - Grid:      Instagram-only 3-col preview of feed-after-scheduled-posts-publish
- *   - Queue:     Buffer-style chronological queue per account
- *   - Accounts:  connected social accounts with Connect / Disconnect actions
+ *   - Compose:   multi-platform editor + AI captions, with a collapsible
+ *                "Hashtags & AI" lab underneath
+ *   - Calendar:  month/list calendar, with sub-views for the Buffer-style
+ *                Queue and the Instagram Grid lens
+ *   - Inbox:     real DM threads only — platforms without DM wiring show a
+ *                keyed-off state, never mock threads
+ *   - Analytics: own-account metrics where keyed, plus a Competitors sub-view
+ *   - Library:   bulk upload → review → schedule content pipeline
+ *   - Accounts:  connected accounts, connect wizard, feasibility + homework
  *
- * Everything runs against the existing /api/companies/:id/social/* endpoints +
- * the new scheduler endpoints (validate / feed / queue / oauth). When the user
- * has no accounts connected, every tab degrades to a "connect an account to
- * start" empty state instead of breaking.
- *
- * NOT gated by enableUiV2 — Tyler asked for this as a product change, not a
- * v2 visual reskin.
+ * Everything runs against the existing /api/companies/:id/social/* endpoints.
+ * With zero accounts connected every surface degrades to a connect-first
+ * empty state instead of breaking. Stub accounts (metadata.stub === true) are
+ * never rendered — there is no demo mode (spec §7: no mock data as real).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "@/lib/router";
 import {
   BarChart3,
   CalendarDays,
+  FolderOpen,
   Grid3X3,
   Hash,
   Inbox,
@@ -31,7 +31,6 @@ import {
   Mail,
   PenSquare,
   Share2,
-  UploadCloud,
   Users,
 } from "lucide-react";
 import { socialApi } from "../api/social";
@@ -52,47 +51,37 @@ import { CompetitorsTab } from "../components/social/CompetitorsTab";
 import { HashtagLabTab } from "../components/social/HashtagLabTab";
 import { BulkUploadTab } from "../components/social/BulkUploadTab";
 
-type SchedulerTab =
+type SchedulerSurface =
   | "compose"
   | "calendar"
-  | "grid"
-  | "queue"
-  | "accounts"
   | "inbox"
   | "analytics"
-  | "competitors"
-  | "hashtags"
-  | "bulk-upload";
+  | "library"
+  | "accounts";
 
-const TABS: { key: SchedulerTab; label: string; icon: typeof PenSquare }[] = [
+const SURFACES: { key: SchedulerSurface; label: string; icon: typeof PenSquare }[] = [
   { key: "compose", label: "Compose", icon: PenSquare },
   { key: "calendar", label: "Calendar", icon: CalendarDays },
-  { key: "grid", label: "IG Grid", icon: Grid3X3 },
-  { key: "queue", label: "Queue", icon: Inbox },
-  { key: "bulk-upload", label: "Bulk Upload", icon: UploadCloud },
   { key: "inbox", label: "Inbox", icon: Mail },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
-  { key: "competitors", label: "Competitors", icon: Users },
-  { key: "hashtags", label: "Hashtag Lab", icon: Hash },
+  { key: "library", label: "Library", icon: FolderOpen },
   { key: "accounts", label: "Accounts", icon: Link2 },
 ];
+
+type CalendarView = "calendar" | "queue" | "grid";
+type AnalyticsView = "analytics" | "competitors";
 
 export function SocialScheduler() {
   const { selectedCompanyId, selectedCompany } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
-  const location = useLocation();
-  const [tab, setTab] = useState<SchedulerTab>("compose");
+  const [tab, setTab] = useState<SchedulerSurface>("compose");
+  const [calendarView, setCalendarView] = useState<CalendarView>("calendar");
+  const [analyticsView, setAnalyticsView] = useState<AnalyticsView>("analytics");
+  const [hashtagLabOpen, setHashtagLabOpen] = useState(false);
 
   useEffect(() => {
     setBreadcrumbs([{ label: "Social" }]);
   }, [setBreadcrumbs]);
-
-  // Demo mode (?demo=true) opts back into server-returned stub data so
-  // developers can still preview the full UI with seed accounts.
-  const demoMode = useMemo(
-    () => new URLSearchParams(location.search).get("demo") === "true",
-    [location.search],
-  );
 
   const accountsQuery = useQuery({
     queryKey: queryKeys.social.accounts(selectedCompanyId ?? "__none__"),
@@ -104,15 +93,12 @@ export function SocialScheduler() {
     return <EmptyState icon={Share2} message="Select a company to use the scheduler." />;
   }
 
-  // Hide accounts the stub OAuth flow has persisted (metadata.stub === true)
-  // unless the page is loaded in demo mode. Otherwise Tyler sees fake handles
-  // (@stub_x_handle, etc.) he never registered and the UI implies they are
-  // real connected accounts.
-  const allAccounts = accountsQuery.data ?? [];
-  const accounts = demoMode
-    ? allAccounts
-    : allAccounts.filter((a) => !(a.metadata && (a.metadata as Record<string, unknown>).stub === true));
-  const stubHidden = allAccounts.length - accounts.length;
+  // Data honesty (spec §7): stub accounts persisted by the old stub OAuth
+  // flow (metadata.stub === true) are never shown. No demo mode — Tyler only
+  // ever sees accounts he actually connected through the wizard.
+  const accounts = (accountsQuery.data ?? []).filter(
+    (a) => !(a.metadata && (a.metadata as Record<string, unknown>).stub === true),
+  );
   const hasNoAccounts = !accountsQuery.isLoading && accounts.length === 0;
 
   return (
@@ -133,7 +119,7 @@ export function SocialScheduler() {
         aria-label="Social scheduler sections"
         className="flex flex-wrap items-center gap-1 rounded-2xl border border-border/60 bg-card/40 p-1.5 shadow-sm"
       >
-        {TABS.map((t) => {
+        {SURFACES.map((t) => {
           const Icon = t.icon;
           const active = tab === t.key;
           return (
@@ -168,30 +154,141 @@ export function SocialScheduler() {
         </div>
       ) : null}
 
-      {demoMode ? (
-        <div className="rounded-xl border border-primary/30 bg-primary/[0.08] px-3 py-2 text-xs text-muted-foreground">
-          Demo mode is on — showing seeded stub accounts. Remove{" "}
-          <code className="font-mono text-foreground/80">?demo=true</code> from the URL to hide them.
-        </div>
-      ) : stubHidden > 0 ? (
-        <div className="rounded-xl border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-          {stubHidden} stub account{stubHidden === 1 ? "" : "s"} hidden. Append{" "}
-          <code className="font-mono text-foreground/80">?demo=true</code> to the URL to preview them.
-        </div>
-      ) : null}
-
       <section className="min-h-0">
-        {tab === "compose" ? <ComposeTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "calendar" ? <CalendarTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "grid" ? <InstagramGridTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "queue" ? <QueueTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "bulk-upload" ? <BulkUploadTab companyId={selectedCompanyId} accounts={accounts} /> : null}
+        {tab === "compose" ? (
+          <div className="flex flex-col gap-4">
+            <ComposeTab companyId={selectedCompanyId} accounts={accounts} />
+            <div className="rounded-2xl border border-border/60 bg-card/40">
+              <button
+                type="button"
+                onClick={() => setHashtagLabOpen((open) => !open)}
+                aria-expanded={hashtagLabOpen}
+                className="flex w-full items-center gap-2 px-4 py-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <Hash className={cn("h-4 w-4", hashtagLabOpen && "text-primary")} />
+                Hashtags &amp; AI
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {hashtagLabOpen ? "Hide" : "Show"}
+                </span>
+              </button>
+              {hashtagLabOpen ? (
+                <div className="border-t border-border/60 p-4">
+                  <HashtagLabTab companyId={selectedCompanyId} accounts={accounts} />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {tab === "calendar" ? (
+          <div className="flex flex-col gap-3">
+            <SubSwitcher
+              options={[
+                { key: "calendar", label: "Calendar", icon: CalendarDays },
+                { key: "queue", label: "Queue", icon: Inbox },
+                { key: "grid", label: "IG Grid", icon: Grid3X3 },
+              ]}
+              value={calendarView}
+              onChange={setCalendarView}
+              ariaLabel="Calendar views"
+            />
+            {calendarView === "calendar" ? (
+              <CalendarTab companyId={selectedCompanyId} accounts={accounts} />
+            ) : null}
+            {calendarView === "queue" ? (
+              <QueueTab companyId={selectedCompanyId} accounts={accounts} />
+            ) : null}
+            {calendarView === "grid" ? (
+              <InstagramGridTab companyId={selectedCompanyId} accounts={accounts} />
+            ) : null}
+          </div>
+        ) : null}
+
         {tab === "inbox" ? <InboxTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "analytics" ? <AnalyticsTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "competitors" ? <CompetitorsTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "hashtags" ? <HashtagLabTab companyId={selectedCompanyId} accounts={accounts} /> : null}
-        {tab === "accounts" ? <AccountsTab companyId={selectedCompanyId} accounts={accounts} loading={accountsQuery.isLoading} /> : null}
+
+        {tab === "analytics" ? (
+          <div className="flex flex-col gap-3">
+            <SubSwitcher
+              options={[
+                { key: "analytics", label: "Analytics", icon: BarChart3 },
+                { key: "competitors", label: "Competitors", icon: Users },
+              ]}
+              value={analyticsView}
+              onChange={setAnalyticsView}
+              ariaLabel="Analytics views"
+            />
+            {analyticsView === "analytics" ? (
+              <AnalyticsTab companyId={selectedCompanyId} accounts={accounts} />
+            ) : (
+              <CompetitorsTab companyId={selectedCompanyId} accounts={accounts} />
+            )}
+          </div>
+        ) : null}
+
+        {tab === "library" ? (
+          <div className="flex flex-col gap-3">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight text-foreground">Library</h2>
+              <p className="text-sm text-muted-foreground">
+                Upload a pile of content, review captions and targets, and let the scheduler spread
+                it across your queue.
+              </p>
+            </div>
+            <BulkUploadTab companyId={selectedCompanyId} accounts={accounts} />
+          </div>
+        ) : null}
+
+        {tab === "accounts" ? (
+          <AccountsTab
+            companyId={selectedCompanyId}
+            accounts={accounts}
+            loading={accountsQuery.isLoading}
+          />
+        ) : null}
       </section>
+    </div>
+  );
+}
+
+function SubSwitcher<K extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  options: { key: K; label: string; icon: typeof PenSquare }[];
+  value: K;
+  onChange: (key: K) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      className="flex w-fit flex-wrap items-center gap-1 rounded-xl border border-border/60 bg-card/40 p-1"
+    >
+      {options.map((opt) => {
+        const Icon = opt.icon;
+        const active = value === opt.key;
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(opt.key)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors",
+              active
+                ? "border border-primary/40 bg-primary/10 text-foreground"
+                : "border border-transparent text-muted-foreground hover:bg-accent/40 hover:text-foreground",
+            )}
+          >
+            <Icon className={cn("h-3.5 w-3.5", active && "text-primary")} />
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

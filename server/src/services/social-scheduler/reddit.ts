@@ -1,14 +1,14 @@
 /**
- * Reddit adapter — real publish + verify, with stub-token fallback.
+ * Reddit adapter — real publish + verify + own-post listing.
  *
  * Wiring requires a "script" or "web app" registered at
  * https://www.reddit.com/prefs/apps. client_id + client_secret are stored
- * in `social_app_credentials` via the Connect Wizard. Once P0 #1
- * (real OAuth token exchange in the callback) lands, `account.accessToken`
- * will be a real bearer token and `publishPost` will hit Reddit for real.
- * Until then, accounts persisted by the stub callback carry the literal
- * token `"stub_access_token"` and we return a deterministic mock submit
- * result so the scheduler worker can be tested end-to-end.
+ * in `social_app_credentials` via the Connect Wizard; the wizard's OAuth
+ * callback exchanges the auth code for a real bearer token which lands on
+ * `account.accessToken`. Legacy stub rows (the `"stub_access_token"`
+ * sentinel / `metadata.stub === true`) are refused: `publishPost` throws
+ * `BlockedNoCredentialError` so the scheduler marks the target `blocked`
+ * instead of faking a submit result.
  *
  * Publish path: POST https://oauth.reddit.com/api/submit with body
  *   { sr, kind: self|link|image, title, text|url, flair_id?, flair_text? }
@@ -20,24 +20,27 @@
  * upload to S3 → POST /api/submit with kind=image and the asset URL).
  * That's a meaningful chunk of code — punted to a follow-up iteration;
  * `publishPost` throws `RedditApiError(501)` if media is supplied.
+ *
+ * Connect is NOT done through this adapter: `startConnect`/`finishConnect`
+ * throw `NotSupportedError` — the wizard flow (`routes/social.ts` +
+ * `token-exchange.ts`) is the only real connect path, and no stub account
+ * is ever created.
  */
 import type { SocialAccount } from "@paperclipai/shared";
 import type {
   AccountMetrics,
+  ConnectAuthStart,
   PostDraftPayload,
   PostValidation,
   PublishedPostRef,
   SocialPlatformAdapter,
 } from "./types.js";
+import { caption } from "./stub-helpers.js";
 import {
-  caption,
-  mockAccountMetrics,
-  mockConnectAccount,
-  mockConnectStart,
-  mockPublishedRef,
-  mockRecentPosts,
-} from "./stub-helpers.js";
-import { expansionStubs } from "./expansion-stubs.js";
+  NotSupportedError,
+  hasRealAccessToken,
+  requireRealAccessToken,
+} from "./errors.js";
 
 const REDDIT_TITLE_MAX = 300;
 const REDDIT_BODY_MAX = 40_000;
@@ -48,10 +51,6 @@ const REDDIT_OAUTH_BASE = "https://oauth.reddit.com";
 // (https://github.com/reddit-archive/reddit/wiki/API). Generic/shared UAs
 // (e.g. "node-fetch", browser strings) get rate-limited or 403'd.
 const REDDIT_USER_AGENT = "Paperclip:v1.0 (by /u/tylerswitzer19)";
-
-// Sentinel token written by `mockConnectAccount()` while P0 #1 (real OAuth
-// token exchange in the callback) is still in flight.
-const STUB_ACCESS_TOKEN = "stub_access_token";
 
 /** Reddit returns a JSON-of-JSON envelope from /api/submit. */
 interface RedditSubmitResponse {
@@ -91,10 +90,6 @@ export class RedditApiError extends Error {
     this.statusCode = statusCode;
     this.details = details;
   }
-}
-
-function isStubToken(account: SocialAccount): boolean {
-  return !account.accessToken || account.accessToken === STUB_ACCESS_TOKEN;
 }
 
 function resolveSubreddit(account: SocialAccount, post: PostDraftPayload): string {
@@ -254,19 +249,14 @@ async function submitPost(
 
 /** GET /api/v1/me — used by the Accounts dot + the /verify route. */
 export async function verifyRedditAccount(account: SocialAccount): Promise<RedditMeProfile> {
-  if (!account.accessToken) {
-    throw new RedditApiError("Reddit account has no access token", 401);
+  if (!hasRealAccessToken(account)) {
+    // Legacy stub rows never verify green — reconnect through the wizard.
+    throw new RedditApiError(
+      "Reddit account has no real access token — reconnect via the connect wizard",
+      401,
+    );
   }
-  if (isStubToken(account)) {
-    // Account row was created by the stub callback (P0 #1 not landed yet).
-    // Return a synthetic profile so the dot can still render green in dev.
-    return {
-      name: (account.username ?? "stub_reddit_user").replace(/^u\//, ""),
-      link_karma: 0,
-      comment_karma: 0,
-    };
-  }
-  const res = await redditFetch("/api/v1/me", { accessToken: account.accessToken });
+  const res = await redditFetch("/api/v1/me", { accessToken: account.accessToken as string });
   if (!res.ok) {
     throw new RedditApiError(`Reddit /api/v1/me failed: ${res.status}`, res.status);
   }
@@ -278,49 +268,111 @@ export async function verifyRedditAccount(account: SocialAccount): Promise<Reddi
   };
 }
 
+/** One `t3` child from a /user/{name}/submitted listing. */
+interface RedditListingChild {
+  data?: {
+    name?: string;
+    permalink?: string;
+    created_utc?: number;
+    title?: string;
+    url?: string;
+    thumbnail?: string;
+    score?: number;
+    num_comments?: number;
+  };
+}
+
+/**
+ * GET /user/{username}/submitted — the connected account's own posts.
+ * Free own-resource read under Reddit's API rules.
+ */
+async function listOwnSubmissions(
+  account: SocialAccount,
+  opts?: { limit?: number; cursor?: string | null },
+): Promise<{ posts: PublishedPostRef[]; nextCursor: string | null }> {
+  const username = (account.username ?? "").replace(/^u\//, "");
+  if (!username) {
+    throw new RedditApiError("Reddit account has no username to list posts for", 400);
+  }
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 20), raw_json: "1" });
+  if (opts?.cursor) params.set("after", opts.cursor);
+  const res = await redditFetch(
+    `/user/${encodeURIComponent(username)}/submitted?${params.toString()}`,
+    { accessToken: account.accessToken as string },
+  );
+  if (!res.ok) {
+    throw new RedditApiError(`Reddit /user/${username}/submitted failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as {
+    data?: { children?: RedditListingChild[]; after?: string | null };
+  };
+  const children = Array.isArray(body.data?.children) ? body.data.children : [];
+  const posts: PublishedPostRef[] = [];
+  for (const child of children) {
+    const d = child.data;
+    if (!d?.name) continue;
+    const thumbnail =
+      typeof d.thumbnail === "string" && /^https?:\/\//.test(d.thumbnail) ? d.thumbnail : null;
+    posts.push({
+      platformPostId: d.name,
+      platformUrl: d.permalink ? `https://www.reddit.com${d.permalink}` : null,
+      publishedAt:
+        typeof d.created_utc === "number" ? new Date(d.created_utc * 1000) : new Date(),
+      caption: d.title ?? null,
+      mediaUrl: null,
+      thumbnailUrl: thumbnail,
+      metrics: {
+        likes: Number(d.score ?? 0) || 0,
+        comments: Number(d.num_comments ?? 0) || 0,
+      },
+    });
+  }
+  return { posts, nextCursor: body.data?.after ?? null };
+}
+
 export const redditAdapter: SocialPlatformAdapter = {
   platform: "reddit",
 
-  async startConnect() {
-    return mockConnectStart("reddit");
+  async startConnect(): Promise<ConnectAuthStart> {
+    throw new NotSupportedError(
+      "Reddit connect runs through the Social connect wizard (app credentials + OAuth callback), not the adapter.",
+    );
   },
 
-  async finishConnect(opts) {
-    return mockConnectAccount({
-      platform: "reddit",
-      companyId: opts.companyId,
-      username: "u/stub_reddit_user",
-      displayName: "u/stub_reddit_user",
-    });
+  async finishConnect(): Promise<SocialAccount> {
+    throw new NotSupportedError(
+      "Reddit connect runs through the Social connect wizard (app credentials + OAuth callback), not the adapter.",
+    );
   },
 
-  async refreshAuth(account) {
-    return { ...account, tokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60) };
+  async refreshAuth(): Promise<SocialAccount> {
+    throw new NotSupportedError(
+      "Token refresh is handled by ensureFreshToken() (freshness.ts), which persists the rotated token.",
+    );
   },
 
-  async disconnect() {},
+  async disconnect() {
+    // Local disconnect only — deleting the social_accounts row drops our
+    // copy of the token. Remote revoke lands with the wizard-side revoke.
+  },
 
   async listRecentPosts(account, opts) {
-    return {
-      posts: mockRecentPosts(account, opts?.limit ?? 20),
-      nextCursor: null,
-    };
+    // No real token → honest empty page, never mock posts.
+    if (!hasRealAccessToken(account)) return { posts: [], nextCursor: null };
+    return listOwnSubmissions(account, opts);
   },
 
   async getAccountMetrics(account): Promise<AccountMetrics> {
-    if (isStubToken(account)) return mockAccountMetrics(account);
-    try {
-      const profile = await verifyRedditAccount(account);
-      // Reddit exposes karma, not followers/engagement-rate. Surface
-      // total karma in the engagementRate field so the existing card UI
-      // has something to render; followerCount/postCount stay undefined
-      // until we add the listings calls.
-      return {
-        engagementRate: profile.link_karma + profile.comment_karma,
-      };
-    } catch {
-      return mockAccountMetrics(account);
-    }
+    // No real token → honest empty; the Accounts card renders "no data".
+    if (!hasRealAccessToken(account)) return {};
+    const profile = await verifyRedditAccount(account);
+    // Reddit exposes karma, not followers/engagement-rate. Surface
+    // total karma in the engagementRate field so the existing card UI
+    // has something to render; followerCount/postCount stay undefined
+    // until we add the listings calls.
+    return {
+      engagementRate: profile.link_karma + profile.comment_karma,
+    };
   },
 
   async verifyAccount(account) {
@@ -336,13 +388,9 @@ export const redditAdapter: SocialPlatformAdapter = {
   },
 
   async publishPost(account, post): Promise<PublishedPostRef> {
-    if (isStubToken(account)) {
-      // Stub-token path: P0 #1 (real OAuth token exchange) hasn't landed,
-      // so there's no real token to call Reddit with. Return a synthetic
-      // success so the scheduler worker can be tested end-to-end with the
-      // stub callback's account rows.
-      return mockPublishedRef(account, post);
-    }
+    // Data honesty: no real token → BlockedNoCredentialError (the worker
+    // marks the target `blocked`, terminal). Publish never fakes success.
+    requireRealAccessToken(account, "publish to Reddit");
     return submitPost(account, post);
   },
 
@@ -365,6 +413,4 @@ export const redditAdapter: SocialPlatformAdapter = {
 
     return { ok: errors.length === 0, errors, warnings };
   },
-
-  ...expansionStubs("reddit"),
 };

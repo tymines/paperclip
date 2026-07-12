@@ -29,11 +29,28 @@ export function listSupportedSocialPlatforms(): SocialPlatform[] {
   return Object.keys(REGISTRY) as SocialPlatform[];
 }
 
-export type { SocialPlatformAdapter, PostDraftPayload, PostValidation, PublishedPostRef } from "./types.js";
+export type {
+  SocialPlatformAdapter,
+  PostDraftPayload,
+  PostValidation,
+  PublishedPostRef,
+  DirectMessage,
+  DirectMessageThread,
+} from "./types.js";
+export {
+  BlockedNoCredentialError,
+  NotSupportedError,
+  STUB_ACCESS_TOKEN,
+  hasRealAccessToken,
+  requireRealAccessToken,
+} from "./errors.js";
 export {
   SOCIAL_FEATURE_MATRIX,
   TYLER_HOMEWORK,
   BANNED_FEATURES,
+  describeFeatureGate,
+  getFeatureStatus,
+  getHomeworkForPlatform,
   type FeatureStatus,
   type FeatureRow,
   type HomeworkItem,
