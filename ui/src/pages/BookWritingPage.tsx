@@ -1018,14 +1018,24 @@ export function BookWritingPage() {
   // Chat drawer state
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  // Assisted mode
-  const [assistedMode, setAssistedMode] = useState(false);
+  // ── Writing autonomy dial — 3 states, persisted per-book in
+  // books.metadata.autonomyMode (no migration needed; jsonb pattern).
+  // manual: nothing auto-generates. assisted: mark-done drafts the NEXT
+  // chapter and parks it for review. autopilot: chains prose drafts until
+  // error or completion, pausable.
+  const autonomyMode: "manual" | "assisted" | "autopilot" = (() => {
+    const m = activeBook?.metadata?.autonomyMode;
+    return m === "assisted" || m === "autopilot" ? m : "manual";
+  })();
+  const assistedMode = autonomyMode === "assisted";
+  const autopilotMode = autonomyMode === "autopilot";
+  const [dialSaving, setDialSaving] = useState(false);
+  const [dialError, setDialError] = useState<string | null>(null);
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
 
-  // Autopilot state
-  const [autopilotMode, setAutopilotMode] = useState(false);
+  // Autopilot loop status (server-side orchestrator)
   const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
   const [autopilotPaused, setAutopilotPaused] = useState(false);
   const [showGuidanceInput, setShowGuidanceInput] = useState(false);
@@ -1214,86 +1224,120 @@ export function BookWritingPage() {
     return `/companies/${companySlug}/book-studio/books/${activeBook.id}/autopilot`;
   };
 
-  const handleAutopilotToggle = async () => {
-    if (!activeBook) return;
-    if (autopilotMode) {
-      // Turning OFF: pause, clear polling, reset state
-      setAutopilotMode(false);
-      setAssistedMode(false);
-      try {
-        await apiFetch(`${getAutopilotBase()}/pause`, { method: "POST" });
-      } catch (err) {
-        console.error("Failed to pause autopilot:", err);
-      }
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-      setAutopilotState("idle");
-      setAutopilotPaused(false);
-      setAutopilotPhase("");
-      setAutopilotCurrentChapter(0);
-      setAutopilotTotalChapters(0);
-    } else {
-      // Turning ON: start loop, begin polling
-      setAutopilotMode(true);
-      setAssistedMode(false);
-      try {
-        const res = await apiFetch<{ autopilot: { status: string; phase: string; paused: boolean } }>(
-          `${getAutopilotBase()}/start`,
-          { method: "POST", body: JSON.stringify({ budgetCents: 500, iterationCapPerChapter: 3 }) },
-        );
-        if (res.autopilot) {
-          setAutopilotState(res.autopilot.status as "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused");
-          setAutopilotPhase(res.autopilot.phase || "");
-          setAutopilotPaused(res.autopilot.paused || false);
-        }
-      } catch (err) {
-        console.error("Failed to start autopilot:", err);
-        setAutopilotMode(false);
-        return;
-      }
-      // Start polling every 5s
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = setInterval(async () => {
-        try {
-          const statusRes = await apiFetch<{ autopilot: { status: string; phase: string; currentChapter: number; totalChapters: number; paused: boolean } }>(
-            `${getAutopilotBase()}/status`,
-          );
-          if (statusRes.autopilot) {
-            setAutopilotState(statusRes.autopilot.status as any);
-            setAutopilotPhase(statusRes.autopilot.phase || "");
-            setAutopilotCurrentChapter(statusRes.autopilot.currentChapter || 0);
-            setAutopilotTotalChapters(statusRes.autopilot.totalChapters || 0);
-            setAutopilotPaused(statusRes.autopilot.paused || false);
-          }
-        } catch {
-          // Silently handle poll errors
-        }
-      }, 5000);
+  const stopStatusPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
     }
   };
+
+  const startStatusPolling = () => {
+    stopStatusPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const statusRes = await apiFetch<{ autopilot: { status: string; phase: string; currentChapter: number; totalChapters: number; paused: boolean; failReason?: string | null } }>(
+          `${getAutopilotBase()}/status`,
+        );
+        if (statusRes.autopilot) {
+          setAutopilotState(statusRes.autopilot.status as any);
+          setAutopilotPhase(statusRes.autopilot.phase || "");
+          setAutopilotCurrentChapter(statusRes.autopilot.currentChapter || 0);
+          setAutopilotTotalChapters(statusRes.autopilot.totalChapters || 0);
+          setAutopilotPaused(statusRes.autopilot.status === "paused");
+          if (statusRes.autopilot.status === "failed" && statusRes.autopilot.failReason) {
+            setDialError(`Autopilot stopped: ${statusRes.autopilot.failReason}`);
+          }
+        }
+      } catch {
+        // Silently handle poll errors (404 = no loop yet)
+      }
+    }, 5000);
+  };
+
+  const startAutopilotLoop = async () => {
+    const res = await apiFetch<{ autopilot: { status: string; phase: string; paused: boolean } }>(
+      `${getAutopilotBase()}/start`,
+      { method: "POST", body: JSON.stringify({ budgetCents: 500, iterationCapPerChapter: 3 }) },
+    );
+    if (res.autopilot) {
+      setAutopilotState(res.autopilot.status as "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused");
+      setAutopilotPhase(res.autopilot.phase || "");
+      setAutopilotPaused(false);
+    }
+    startStatusPolling();
+  };
+
+  const stopAutopilotLoop = async () => {
+    try {
+      await apiFetch(`${getAutopilotBase()}/pause`, { method: "POST" });
+    } catch (err) {
+      // 404/409 = no running loop — nothing to pause
+      console.error("Failed to pause autopilot:", err);
+    }
+    stopStatusPolling();
+    setAutopilotState("idle");
+    setAutopilotPaused(false);
+    setAutopilotPhase("");
+    setAutopilotCurrentChapter(0);
+    setAutopilotTotalChapters(0);
+  };
+
+  // The dial: persist per-book, then wire the side effects.
+  const setAutonomy = async (mode: "manual" | "assisted" | "autopilot") => {
+    if (!activeBook || dialSaving || mode === autonomyMode) return;
+    setDialSaving(true);
+    setDialError(null);
+    const prev = autonomyMode;
+    try {
+      await updateBook({ metadata: { autonomyMode: mode } });
+      if (mode === "autopilot") {
+        try {
+          await startAutopilotLoop();
+        } catch (err) {
+          // Honest rollback: don't leave the dial claiming autopilot is on.
+          setDialError(`Autopilot failed to start: ${(err as Error).message}`);
+          await updateBook({ metadata: { autonomyMode: prev } }).catch(() => {});
+          return;
+        }
+      } else if (prev === "autopilot") {
+        await stopAutopilotLoop();
+      }
+    } catch (err) {
+      setDialError((err as Error).message || "Failed to switch mode");
+    } finally {
+      setDialSaving(false);
+    }
+  };
+
+  // If the persisted dial says autopilot (e.g. after a reload), resume status
+  // polling — the server-side loop/checkpoint is the source of truth.
+  useEffect(() => {
+    if (!activeBook || !autopilotMode) return;
+    startStatusPolling();
+    return stopStatusPolling;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBook?.id, autopilotMode]);
 
   const handleAutopilotPauseResume = async () => {
     if (!activeBook) return;
     try {
       if (autopilotPaused) {
-        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
+        const res = await apiFetch<{ autopilot: { status: string } }>(
           `${getAutopilotBase()}/resume`,
           { method: "POST" },
         );
         if (res.autopilot) {
           setAutopilotState(res.autopilot.status as any);
-          setAutopilotPaused(res.autopilot.paused || false);
+          setAutopilotPaused(res.autopilot.status === "paused");
         }
       } else {
-        const res = await apiFetch<{ autopilot: { status: string; paused: boolean } }>(
+        const res = await apiFetch<{ autopilot: { status: string } }>(
           `${getAutopilotBase()}/pause`,
           { method: "POST" },
         );
         if (res.autopilot) {
           setAutopilotState(res.autopilot.status as any);
-          setAutopilotPaused(res.autopilot.paused || false);
+          setAutopilotPaused(res.autopilot.status === "paused");
         }
       }
     } catch (err) {
@@ -1425,14 +1469,16 @@ export function BookWritingPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* ── Mode toggle: Manual | Assisted | Autopilot ── */}
+          {/* ── Autonomy dial: Manual | Assisted | Autopilot (persisted per-book) ── */}
           <div className="flex items-center rounded-md border border-gray-700 text-xs">
             <button
               className={cn(
                 "flex items-center gap-1.5 rounded-l-md px-3 py-1.5 border-r border-gray-700",
-                !assistedMode ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
+                autonomyMode === "manual" ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={() => setAssistedMode(false)}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("manual")}
+              title="Manual: nothing auto-generates"
             >
               <Pen className="w-3 h-3" />
               Manual
@@ -1442,7 +1488,9 @@ export function BookWritingPage() {
                 "flex items-center gap-1.5 px-3 py-1.5 border-r border-gray-700",
                 assistedMode ? "bg-purple-600/20 text-purple-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={() => setAssistedMode(true)}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("assisted")}
+              title="Assisted: marking a chapter done drafts the NEXT chapter and parks it for review (never auto-advances)"
             >
               <Sparkles className="w-3 h-3" />
               Assisted
@@ -1452,8 +1500,9 @@ export function BookWritingPage() {
                 "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
                 autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={handleAutopilotToggle}
-              title={autopilotMode ? "Autopilot active — click to disable" : "Enable Autopilot mode"}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("autopilot")}
+              title={autopilotMode ? "Autopilot active — switch to Manual/Assisted to stop" : "Autopilot: chains prose drafts over the outline until error or completion (pausable)"}
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
@@ -1462,6 +1511,11 @@ export function BookWritingPage() {
               )}
             </button>
           </div>
+          {dialError && (
+            <span className="text-[11px] text-red-400 bg-red-600/10 rounded-md px-2 py-1 border border-red-700/30 max-w-64 truncate" title={dialError}>
+              {dialError}
+            </span>
+          )}
           {/* Autopilot status display */}
           {autopilotMode && autopilotState !== "idle" && (
             <span className="text-[11px] text-green-400/80 bg-green-600/10 rounded-md px-2 py-1 border border-green-700/30">
@@ -1942,6 +1996,7 @@ export function BookWritingPage() {
             onToggleFocus={() => setFocusMode(!focusMode)}
             jumpToChapter={jumpToChapter}
             highlightRange={highlightRange}
+            autonomyMode={autonomyMode}
           />
         </div>
 

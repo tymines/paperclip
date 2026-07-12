@@ -40,10 +40,20 @@
  *   SECONDS> } — min 10 minutes in the future, max ~75 days. Pass the post
  *   metadata `scheduledPublishTime` (unix seconds or ISO string) to use it.
  *
- * Multi-photo and video posts need the unpublished-photos / video-upload
- * flows — punted; `publishPost` throws `FacebookApiError(501)` rather than
- * dropping media. Page target selection: `metadata.pageId` on the post or
- * account wins; otherwise the first Page from /me/accounts.
+ * Publish — multi-photo:
+ *   N × POST /{page-id}/photos with { url, published: false } (unpublished
+ *   photos), then POST /{page-id}/feed with attached_media[i] =
+ *   {"media_fbid": <photo-id>} + message (+ native scheduling params).
+ *
+ * Publish — video:
+ *   POST /{page-id}/videos with { file_url, description } — Graph
+ *   downloads the file from the URL (+ native scheduling params).
+ *
+ * Facebook downloads url/file_url itself, so media URLs must be publicly
+ * reachable — `assertPubliclyFetchableMediaUrl` fails loudly (naming
+ * PAPERCLIP_PUBLIC_URL) when handed a localhost/LAN URL. Page target
+ * selection: `metadata.pageId` on the post or account wins; otherwise the
+ * first Page from /me/accounts.
  *
  * Connect is NOT done through this adapter: `startConnect`/`finishConnect`
  * throw `NotSupportedError` — the wizard flow (`routes/social.ts` +
@@ -61,8 +71,10 @@ import type {
 } from "./types.js";
 import { caption } from "./stub-helpers.js";
 import { NotSupportedError, requireRealAccessToken } from "./errors.js";
+import { assertPubliclyFetchableMediaUrl } from "./media.js";
 
 const FB_GRAPH = "https://graph.facebook.com/v21.0";
+const FB_MULTI_PHOTO_MAX = 10;
 
 export class FacebookApiError extends Error {
   readonly statusCode: number;
@@ -204,48 +216,101 @@ export const facebookAdapter: SocialPlatformAdapter = {
     const userToken = requireRealAccessToken(account, "publish to Facebook");
     const meta = (post.metadata ?? {}) as Record<string, unknown>;
     const text = caption(post);
+    const isVideo = post.postType === "video" || post.postType === "reel";
 
-    if (post.mediaUrls.length > 1 || post.postType === "video" || post.postType === "reel") {
-      throw new FacebookApiError(
-        "Facebook multi-photo/video posts not yet implemented (unpublished-photos / video upload flow — next iteration)",
-        501,
-      );
-    }
     if (!text && post.mediaUrls.length === 0) {
       throw new FacebookApiError("Facebook post needs either text or media", 400);
+    }
+    if (isVideo && post.mediaUrls.length !== 1) {
+      throw new FacebookApiError("Facebook video posts take exactly one video file", 400);
+    }
+    if (!isVideo && post.mediaUrls.length > FB_MULTI_PHOTO_MAX) {
+      throw new FacebookApiError(
+        `Facebook multi-photo posts support at most ${FB_MULTI_PHOTO_MAX} images`,
+        400,
+      );
+    }
+    // Graph downloads url/file_url itself — hard-fail with the config fix
+    // when the URL can never be reached from the public internet.
+    for (const url of post.mediaUrls) {
+      assertPubliclyFetchableMediaUrl(url, {
+        platform: "facebook",
+        action: "publish media (Facebook downloads url/file_url)",
+      });
     }
 
     const page = await resolvePage(account, post, userToken);
     const scheduledPublishTime = readScheduledPublishTime(post);
 
-    const body = new URLSearchParams();
-    body.set("access_token", page.accessToken);
-    if (scheduledPublishTime != null) {
-      body.set("published", "false");
-      body.set("scheduled_publish_time", String(scheduledPublishTime));
-    }
+    const withScheduling = (body: URLSearchParams) => {
+      if (scheduledPublishTime != null) {
+        body.set("published", "false");
+        body.set("scheduled_publish_time", String(scheduledPublishTime));
+      }
+      return body;
+    };
+    const fbPost = async (path: string, body: URLSearchParams) => {
+      const res = await fetch(`${FB_GRAPH}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+      });
+      return parseGraphJson(res, `POST ${path}`);
+    };
 
-    let endpoint: string;
-    if (post.mediaUrls.length === 1) {
+    let json: Record<string, unknown>;
+    if (isVideo) {
+      // Video → POST /{page-id}/videos; Graph downloads file_url.
+      const body = withScheduling(new URLSearchParams());
+      body.set("access_token", page.accessToken);
+      body.set("file_url", post.mediaUrls[0] as string);
+      if (text) body.set("description", text);
+      json = await fbPost(`/${page.id}/videos`, body);
+    } else if (post.mediaUrls.length === 1) {
       // Single image → POST /{page-id}/photos with the public image URL.
-      endpoint = `${FB_GRAPH}/${page.id}/photos`;
+      const body = withScheduling(new URLSearchParams());
+      body.set("access_token", page.accessToken);
       body.set("url", post.mediaUrls[0] as string);
       if (text) body.set("caption", text);
+      json = await fbPost(`/${page.id}/photos`, body);
+    } else if (post.mediaUrls.length > 1) {
+      // Multi-photo → N unpublished photos, then one /feed post that
+      // attaches them all via attached_media.
+      const photoIds: string[] = [];
+      for (const mediaUrl of post.mediaUrls) {
+        const photoBody = new URLSearchParams();
+        photoBody.set("access_token", page.accessToken);
+        photoBody.set("url", mediaUrl);
+        photoBody.set("published", "false");
+        const photoJson = await fbPost(`/${page.id}/photos`, photoBody);
+        const photoId = typeof photoJson.id === "string" ? photoJson.id : null;
+        if (!photoId) {
+          throw new FacebookApiError(
+            "Facebook unpublished-photo upload returned no id",
+            502,
+            photoJson,
+          );
+        }
+        photoIds.push(photoId);
+      }
+      const body = withScheduling(new URLSearchParams());
+      body.set("access_token", page.accessToken);
+      if (text) body.set("message", text);
+      photoIds.forEach((photoId, i) => {
+        body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: photoId }));
+      });
+      json = await fbPost(`/${page.id}/feed`, body);
     } else {
-      endpoint = `${FB_GRAPH}/${page.id}/feed`;
+      const body = withScheduling(new URLSearchParams());
+      body.set("access_token", page.accessToken);
       body.set("message", text);
       const link = typeof meta.link === "string" ? meta.link : "";
       if (link) body.set("link", link);
+      json = await fbPost(`/${page.id}/feed`, body);
     }
 
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
-    const json = await parseGraphJson(res, `POST ${endpoint.slice(FB_GRAPH.length)}`);
     // /feed returns { id: "<pageid>_<postid>" }; /photos returns
-    // { id: <photo-id>, post_id?: "<pageid>_<postid>" }.
+    // { id: <photo-id>, post_id?: "<pageid>_<postid>" }; /videos { id }.
     const postId =
       (typeof json.post_id === "string" && json.post_id) ||
       (typeof json.id === "string" && json.id) ||
@@ -270,6 +335,13 @@ export const facebookAdapter: SocialPlatformAdapter = {
 
     if (text.length === 0 && post.mediaUrls.length === 0) {
       errors.push("Facebook post needs either text or media.");
+    }
+    if (post.postType === "video" || post.postType === "reel") {
+      if (post.mediaUrls.length !== 1) {
+        errors.push("Facebook video posts take exactly one video file (mp4).");
+      }
+    } else if (post.mediaUrls.length > FB_MULTI_PHOTO_MAX) {
+      errors.push(`Facebook multi-photo posts support at most ${FB_MULTI_PHOTO_MAX} images.`);
     }
     // FB has no hard caption cap but anything over ~5000 chars is unreadable.
     if (text.length > 5000) {

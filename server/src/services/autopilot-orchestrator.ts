@@ -1,10 +1,12 @@
 import { writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { generateChapterDraft, reviseChapterContent, callLLM } from "./chapter-generator.js";
+import { callLLM } from "./chapter-generator.js";
+import { compileChapterContext } from "./book-context-compiler.js";
+import { persistChapterProse } from "./book-prose-writer.js";
 import { logActivity } from "./index.js";
 import type { Db } from "@paperclipai/db";
-import { storyBibleOutline } from "@paperclipai/db";
+import { books, storyBibleOutline, manuscriptChapters } from "@paperclipai/db";
 import { eq, and } from "drizzle-orm";
 
 // --- Types ---
@@ -189,241 +191,138 @@ export function steerAutopilot(bookId: string, guidance: string): AutopilotState
   return state;
 }
 
-// --- Pricing constants ---
-const GEMINI_INPUT_PRICE_PER_1M = 1.25;   // $1.25/1M input tokens
-const GEMINI_OUTPUT_PRICE_PER_1M = 10;     // $10/1M output tokens
-
-function estimateCostCents(promptTokens: number, candidateTokens: number): number {
-  const costUsd = (promptTokens / 1_000_000) * GEMINI_INPUT_PRICE_PER_1M +
-                  (candidateTokens / 1_000_000) * GEMINI_OUTPUT_PRICE_PER_1M;
-  return Math.ceil(costUsd * 100); // convert to cents
-}
-
-// --- Critique Prompt ---
-const CRITIQUE_SYSTEM_PROMPT = `You are a professional fiction editor reviewing a chapter outline.
-Evaluate pacing, character voice, dialogue, plot consistency, and adherence to style.
-Return ONLY valid JSON: { "hasIssues": boolean, "issues": string[], "praise": string, "score": number }`;
-
-function buildCritiqueUserPrompt(chapterTitle: string, beatsText: string, guidance: string | null): string {
-  const parts = [`Review the following chapter outline: "${chapterTitle}"`, `\nBeats:\n${beatsText}`];
-  if (guidance) parts.push(`\nAuthor's guidance: ${guidance}`);
-  parts.push("\nRespond with the JSON object only.");
-  return parts.join("");
-}
-
-// --- Beat to text ---
-function beatToText(beat: Record<string, unknown>): string {
-  return (beat.description as string) ?? (beat as any).toString ?? JSON.stringify(beat);
-}
-
-// --- Parse critique JSON from LLM response ---
-function parseCritique(raw: string): { hasIssues: boolean; issues: string[]; praise: string; score: number } {
-  try {
-    // Try direct parse
-    return JSON.parse(raw);
-  } catch {
-    // Try extracting from markdown code block
-    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) return JSON.parse(jsonMatch[1].trim());
-  }
-  return { hasIssues: true, issues: ["Failed to parse critique"], praise: "", score: 5 };
-}
-
 // --- Main loop ---
+// Rewired 2026-07-12 (deferred item 2): the loop now chains manuscript PROSE,
+// not outline beats. Scope = the approved outline (story_bible_outline); each
+// remaining chapter gets a freshly compiled context packet (spec §5) → prose
+// draft → persist into manuscript_chapters via the same persistChapterProse
+// path every other writer uses. The chain continues while each generation
+// succeeds and stops on error, pause, or book completion. It NEVER overwrites
+// a chapter that already has prose (human text is inviolable — spec §2.2).
 async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
   try {
-    // Determine existing chapters
-    const existingChapters = await db
+    const [book] = await db
+      .select({ id: books.id, slug: books.slug })
+      .from(books)
+      .where(eq(books.id, state.bookId));
+    const bookSlug = book?.slug ?? "";
+
+    // Scope = the approved outline, in order.
+    const outline = await db
       .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title })
       .from(storyBibleOutline)
       .where(eq(storyBibleOutline.bookId, state.bookId))
       .orderBy(storyBibleOutline.chapterNumber);
 
-    // Initialize chapter progress
-    if (state.chapters.length === 0) {
-      for (const ch of existingChapters) {
-        state.chapters.push({
-          chapterNumber: ch.chapterNumber,
-          title: ch.title,
-          status: "complete",
-          iterationCount: 0,
-        });
-      }
-      // Find the next chapter number
-      const maxExisting = existingChapters.length > 0
-        ? Math.max(...existingChapters.map((c) => c.chapterNumber))
-        : 0;
-      state.currentChapter = maxExisting + 1;
-      state.chapters.push({
-        chapterNumber: state.currentChapter,
-        title: `Chapter ${state.currentChapter}`,
-        status: "pending",
-        iterationCount: 0,
-      });
+    if (outline.length === 0) {
+      state.status = "failed";
+      state.failReason =
+        "No outline chapters — Autopilot chains prose over approved beats. Draft an outline first.";
+      state.phase = "idle";
+      writeCheckpoint(state);
+      return;
     }
 
-    // Calculate total chapters (current + any already in progress)
-    if (state.totalChapters === 0) {
-      state.totalChapters = Math.max(state.currentChapter, existingChapters.length + 1);
-    }
+    // Which chapters already have prose (skip — never overwrite).
+    const manuscripts = await db
+      .select({ chapterNumber: manuscriptChapters.chapterNumber, content: manuscriptChapters.content })
+      .from(manuscriptChapters)
+      .where(eq(manuscriptChapters.bookId, state.bookId));
+    const hasProse = new Set(
+      manuscripts.filter((m) => (m.content ?? "").trim().length > 0).map((m) => m.chapterNumber),
+    );
 
+    state.totalChapters = outline.length;
+    state.chapters = outline.map((ch) => ({
+      chapterNumber: ch.chapterNumber,
+      title: ch.title,
+      status: hasProse.has(ch.chapterNumber) ? ("complete" as const) : ("pending" as const),
+      iterationCount: 0,
+    }));
     writeCheckpoint(state);
 
-    while (state.status === "running" && state.currentChapter <= state.totalChapters) {
-      if (state.abortController?.signal.aborted) break;
+    for (const ch of outline) {
+      if (state.status !== "running" || state.abortController?.signal.aborted) break;
+      if (hasProse.has(ch.chapterNumber)) continue;
 
-      const chapterProgress = state.chapters.find(
-        (c) => c.chapterNumber === state.currentChapter,
-      );
-      if (!chapterProgress) break;
+      const chapterProgress = state.chapters.find((c) => c.chapterNumber === ch.chapterNumber);
+      if (!chapterProgress) continue;
+      state.currentChapter = ch.chapterNumber;
 
-      // --- Phase: Assembling ---
+      // --- Phase: Assembling (fresh context packet per chapter, spec §5) ---
       state.phase = "assembling";
       chapterProgress.status = "drafting";
       writeCheckpoint(state);
+      const ctx = await compileChapterContext(
+        db,
+        state.bookId,
+        ch.chapterNumber,
+        state.guidance ?? undefined, // steer guidance honored at each chapter
+      );
 
-      // Get previous chapter summary for continuity
-      const prevChapter = existingChapters.length > 0
-        ? existingChapters[existingChapters.length - 1]
-        : null;
-      const previousChapterSummary = prevChapter
-        ? `"${prevChapter.title}"`
-        : undefined;
-
-      // --- Phase: Drafting ---
+      // --- Phase: Drafting (prose — Gemini → DeepSeek → Anthropic) ---
       state.phase = "drafting";
       writeCheckpoint(state);
-
-      const draft = await generateChapterDraft({
-        bookTitle: state.bookTitle,
-        chapterNumber: state.currentChapter,
-        previousChapterSummary,
-        userPrompt: state.guidance ?? undefined,
-      });
-
-      // Estimate draft cost
+      const prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
+      if (!prose || !prose.trim()) {
+        throw new Error(`Writer returned empty prose for chapter ${ch.chapterNumber}`);
+      }
       state.spendCents += 5; // rough estimate per draft call
-      chapterProgress.title = draft.title;
-      writeCheckpoint(state);
 
-      // --- Phase: Critiquing ---
-      state.phase = "critiquing";
-      writeCheckpoint(state);
-
-      const beatsText = draft.beats.map(beatToText).join("\n");
-      const critiqueRaw = await callLLM(
-        CRITIQUE_SYSTEM_PROMPT,
-        buildCritiqueUserPrompt(draft.title, beatsText, state.guidance),
-      );
-      const critique = parseCritique(critiqueRaw);
-      state.spendCents += 3; // rough estimate per critique call
-      writeCheckpoint(state);
-
-      // --- Phase: Revising (loop) ---
-      let iterationCount = 0;
-      while (critique.hasIssues && iterationCount < state.iterationCapPerChapter) {
-        iterationCount++;
-        state.currentIteration = iterationCount + 1;
-
-        // Check chapter not locked
-        const existing = await db
-          .select({ locked: storyBibleOutline.locked })
-          .from(storyBibleOutline)
-          .where(
-            and(
-              eq(storyBibleOutline.bookId, state.bookId),
-              eq(storyBibleOutline.chapterNumber, state.currentChapter),
-            ),
-          )
-          .then((r) => r[0]);
-        if (existing?.locked) break;
-
-        state.phase = "revising";
+      // Re-check right before writing: if prose appeared meanwhile (e.g. a
+      // human edit or a manual draft), skip — autopilot never overwrites.
+      const existingNow = await db
+        .select({ id: manuscriptChapters.id, content: manuscriptChapters.content })
+        .from(manuscriptChapters)
+        .where(
+          and(
+            eq(manuscriptChapters.bookId, state.bookId),
+            eq(manuscriptChapters.chapterNumber, ch.chapterNumber),
+          ),
+        )
+        .then((r) => r[0]);
+      if (existingNow && (existingNow.content ?? "").trim().length > 0) {
+        chapterProgress.status = "complete";
         writeCheckpoint(state);
-
-        const reviseInstruction = `Revise based on feedback:\n${critique.issues.join("\n")}${state.guidance ? `\nAdditional guidance: ${state.guidance}` : ""}`;
-
-        const revised = await reviseChapterContent({
-          bookTitle: state.bookTitle,
-          chapterTitle: draft.title,
-          existingBeats: draft.beats as Record<string, unknown>[],
-          revisionInstruction: reviseInstruction,
-        });
-
-        state.spendCents += 5; // rough estimate per revise call
-        chapterProgress.iterationCount = iterationCount;
-
-        // Re-critique
-        state.phase = "critiquing";
-        writeCheckpoint(state);
-
-        const reCritiqueRaw = await callLLM(
-          CRITIQUE_SYSTEM_PROMPT,
-          buildCritiqueUserPrompt(revised.title, revised.beats.map(beatToText).join("\n"), state.guidance),
-        );
-        const reCritique = parseCritique(reCritiqueRaw);
-        state.spendCents += 3;
-
-        if (!reCritique.hasIssues) {
-          draft.beats = revised.beats;
-          draft.title = revised.title;
-          break;
-        }
-        // Copy issues for next iteration
-        critique.issues = reCritique.issues;
+        continue;
       }
 
-      // --- Phase: Advancing ---
+      // --- Phase: Advancing (persist via the shared prose path) ---
       state.phase = "advancing";
       writeCheckpoint(state);
-
-      // DB insert (point of truth)
-      const [inserted] = await db
-        .insert(storyBibleOutline)
-        .values({
-          bookId: state.bookId,
-          chapterNumber: state.currentChapter,
-          title: draft.title,
-          beats: draft.beats,
-          source: "ai-draft",
-          locked: false,
-        })
-        .returning({ id: storyBibleOutline.id });
-
-      // Mark chapter complete
+      const persisted = await persistChapterProse(db, {
+        bookId: state.bookId,
+        bookSlug,
+        chapterNumber: ch.chapterNumber,
+        prose,
+      });
+      chapterProgress.title = persisted.title;
       chapterProgress.status = "complete";
-      chapterProgress.iterationCount = iterationCount;
       writeCheckpoint(state);
 
-      // Re-read total chapters from DB
-      const countResult = await db
-        .select({ count: storyBibleOutline.id })
-        .from(storyBibleOutline)
-        .where(eq(storyBibleOutline.bookId, state.bookId));
-      state.totalChapters = countResult.length + 1; // +1 for the one we're working on
-      writeCheckpoint(state);
-
-      // Log chapter complete
       try {
-        const { logActivity } = await import("./index.js");
         await logActivity(db, {
           companyId: state.companyId,
           actorType: actor.actorType,
           actorId: actor.actorId,
           agentId: actor.agentId,
           runId: actor.runId,
-          action: "chapter.completed",
-          entityType: "story_bible_chapter",
-          entityId: inserted.id,
+          action: "chapter.prose_written",
+          entityType: "book",
+          entityId: state.bookId,
           details: {
             bookId: state.bookId,
-            chapterNumber: state.currentChapter,
-            iterations: iterationCount,
+            chapterNumber: ch.chapterNumber,
+            chars: prose.length,
+            source: "autopilot",
+            usedCharacters: ctx.usedCharacters,
+            hadStyle: ctx.hasStyle,
+            hadBeat: ctx.hasBeat,
           },
         });
       } catch { /* non-fatal */ }
 
-      // Budget check (after chapter completes)
+      // Budget soft-cap: pause (never cancel) with continue-prompt semantics.
       if (state.softCapCents !== null && state.spendCents >= state.softCapCents) {
         state.status = "paused";
         state.pausedAt = new Date().toISOString();
@@ -442,26 +341,19 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
         }).catch(() => {});
         return;
       }
-
-      // Advance to next chapter
-      state.currentChapter++;
-      state.currentIteration = 1;
-      state.chapters.push({
-        chapterNumber: state.currentChapter,
-        title: `Chapter ${state.currentChapter}`,
-        status: "pending",
-        iterationCount: 0,
-      });
-      writeCheckpoint(state);
     }
 
-    // All chapters complete
-    if (state.currentChapter > state.totalChapters) {
-      state.status = "completed";
-      state.phase = "idle";
+    // Book completion: every outlined chapter has prose.
+    if (state.status === "running") {
+      const remaining = state.chapters.filter((c) => c.status !== "complete").length;
+      if (remaining === 0) {
+        state.status = "completed";
+        state.phase = "idle";
+      }
       writeCheckpoint(state);
     }
   } catch (err) {
+    // Stop-on-error: surface the reason, do not silently continue the chain.
     state.status = "failed";
     state.failReason = err instanceof Error ? err.message : String(err);
     state.abortController = null;

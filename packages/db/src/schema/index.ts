@@ -256,3 +256,12 @@ export {
 export { creativeJobs, type CreativeJob, type NewCreativeJob } from "./creative_studio.js";
 export { creativeBrandKits, type CreativeBrandKit, type NewCreativeBrandKit } from "./creative_brand_kits.js";
 
+// ── Book Studio annotations (Fable, 2026-07-12) — migration 0151 GATED, not applied ──
+export {
+  bookAnnotations,
+  bookReviewRuns,
+  type BookAnnotation,
+  type NewBookAnnotation,
+  type BookReviewRun,
+  type NewBookReviewRun,
+} from "./book_annotations.js";

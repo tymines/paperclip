@@ -99,6 +99,34 @@ export type InboxAccountEntry = {
   platform: SocialPlatform;
 } & KeyedResponse<DirectMessageThread[]>;
 
+// ── Composer media uploads ──────────────────────────────────────────────────
+// POST /companies/:id/social/media stores files via the existing storage
+// machinery and returns per-file URLs. `mediaUrl` is what goes on the post's
+// mediaUrls; `publiclyFetchable: false` means only a loopback fallback URL
+// exists (no PAPERCLIP_PUBLIC_URL configured) — fine for X/Reddit (the server
+// uploads the bytes itself), honest pre-publish amber hint for IG/FB/Threads
+// (Meta must download the URL from the public internet).
+export interface SocialMediaUploadItem {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: "image" | "video";
+  /** Authenticated preview URL (already /api-prefixed) for <img>/<video>. */
+  contentUrl: string;
+  /** Absolute URL to place on the post's mediaUrls. */
+  mediaUrl: string;
+  publiclyFetchable: boolean;
+}
+
+export interface SocialMediaUploadResponse {
+  media: SocialMediaUploadItem[];
+  errors: Array<{ filename: string; reason: string }>;
+  publicBaseUrl: string | null;
+  /** Present when no public base URL is configured — show it to the user. */
+  publicUrlNotice?: string;
+}
+
 export const socialApi = {
   // ── Discovery ───────────────────────────────────────────────────────────
   platforms: () => api.get<SocialPlatformSupport>("/social/platforms"),
@@ -150,6 +178,16 @@ export const socialApi = {
 
   deletePost: (companyId: string, postId: string) =>
     api.delete<SocialPostDetail>(`/companies/${companyId}/social/posts/${postId}`),
+
+  // ── Media (composer uploads) ────────────────────────────────────────────
+  uploadMedia: (companyId: string, files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return api.postForm<SocialMediaUploadResponse>(
+      `/companies/${companyId}/social/media`,
+      form,
+    );
+  },
 
   validatePost: (
     companyId: string,

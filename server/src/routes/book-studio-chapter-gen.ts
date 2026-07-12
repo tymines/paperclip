@@ -5,30 +5,9 @@ import { eq, and, desc } from "drizzle-orm";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { generateChapterDraft, reviseChapterContent, callLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
+import { generateChapterDraft, reviseChapterContent, callLLM, streamLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
-import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { execSync } from "node:child_process";
-
-const BOOK_VAULT_ROOT =
-  process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
-
-function writeChapterToVault(slug: string, chapterNumber: number, title: string, prose: string) {
-  try {
-    const dir = path.join(BOOK_VAULT_ROOT, slug, "chapters");
-    fs.mkdirSync(dir, { recursive: true });
-    const pad = String(chapterNumber).padStart(2, "0");
-    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: false\nupdated: ${new Date().toISOString()}\n---\n\n`;
-    fs.writeFileSync(path.join(dir, `ch${pad}.md`), fm + prose, "utf8");
-    const vaultDir = path.join(BOOK_VAULT_ROOT, slug);
-    try {
-      execSync("git add .", { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
-      execSync(`git commit -m "draft: ch${pad}"`, { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
-    } catch { /* best-effort: skip if not a git repo */ }
-  } catch { /* vault write is best-effort; DB is authoritative */ }
-}
+import { persistChapterProse } from "../services/book-prose-writer.js";
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
@@ -77,22 +56,10 @@ export function bookStudioChapterGenRoutes(db: Db) {
         }
         if (!prose || !prose.trim()) throw serviceUnavailable("Writer returned empty prose — check provider keys (GOOGLE/DeepSeek/Anthropic).");
 
-        // Derive a title: first heading line, else keep existing / default.
-        const firstLine = prose.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
-        const derivedTitle = firstLine.replace(/^#+\s*/, "").slice(0, 120).trim();
-        const title = existing?.title?.trim() || derivedTitle || `Chapter ${chapterNumber}`;
-
-        if (existing) {
-          await db.update(manuscriptChapters)
-            .set({ content: prose, title, updatedAt: new Date() })
-            .where(eq(manuscriptChapters.id, existing.id));
-        } else {
-          await db.insert(manuscriptChapters).values({
-            id: randomUUID(), bookId, chapterNumber, title, content: prose,
-          });
-        }
-
-        writeChapterToVault(book.slug, chapterNumber, title, prose);
+        // Single source of truth: same persistence as the SSE streaming path.
+        const { title } = await persistChapterProse(db, {
+          bookId, bookSlug: book.slug, chapterNumber, prose,
+        });
 
         await logActivity(db, {
           companyId, actorType: getActorInfo(req).actorType, actorId: getActorInfo(req).actorId,
@@ -104,6 +71,207 @@ export function bookStudioChapterGenRoutes(db: Db) {
         res.json({
           chapterNumber, title, content: prose,
           context: { usedCharacters: ctx.usedCharacters, usedLocations: ctx.usedLocations, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat },
+        });
+      } catch (err) { next(err); }
+    },
+  );
+
+  // ── POST .../chapters/:chapterNumber/write-prose/stream ─────────────
+  // SSE token streaming for the writer lane (same conventions as the App Dev
+  // design-chat stream in routes/app-dev.ts). Events:
+  //   meta  { chapterNumber, providerChain, context }
+  //   delta { text }
+  //   done  { chapterNumber, title, content, context }   ← persisted result
+  //   error { message }                                   ← failures are loud
+  // On completion the prose lands via persistChapterProse — the exact same
+  // persistence as the non-streaming endpoint (single source of truth). A
+  // client disconnect aborts generation and persists NOTHING (no silent
+  // partial saves).
+  router.post(
+    "/companies/:companyId/book-studio/books/:bookId/chapters/:chapterNumber/write-prose/stream",
+    async (req, res, next) => {
+      const { companyId, bookId } = req.params;
+      let headersSent = false;
+      try {
+        assertCompanyAccess(req, companyId);
+        const chapterNumber = Number(req.params.chapterNumber);
+        if (!Number.isFinite(chapterNumber) || chapterNumber < 1) throw badRequest("Invalid chapter number");
+        const { guidance } = (req.body ?? {}) as { guidance?: string };
+
+        const [book] = await db
+          .select({ id: books.id, title: books.title, slug: books.slug })
+          .from(books).where(eq(books.id, bookId));
+        if (!book) throw notFound("Book not found");
+
+        // Same overwrite guard as the non-streaming path (invariant §2.2).
+        const [existing] = await db
+          .select().from(manuscriptChapters)
+          .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+        const overwrite = req.query.overwrite === "1";
+        if (existing && existing.content && existing.content.trim().length > 0 && !overwrite) {
+          throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
+        }
+
+        const ctx = await compileChapterContext(db, bookId, chapterNumber, guidance);
+
+        res.writeHead(200, {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Accel-Buffering": "no",
+        });
+        res.flushHeaders?.();
+        headersSent = true;
+        const send = (event: string, data: unknown) => {
+          if (!res.writable) return;
+          res.write(`event: ${event}\n`);
+          res.write(`data: ${JSON.stringify(data)}\n\n`);
+        };
+        res.write(":ok\n\n");
+
+        const controller = new AbortController();
+        res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+
+        send("meta", {
+          chapterNumber,
+          providerChain: [BOOK_WRITER_PRIMARY, "deepseek", "anthropic"],
+          context: { usedCharacters: ctx.usedCharacters, usedLocations: ctx.usedLocations, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat },
+        });
+
+        let prose = "";
+        try {
+          for await (const delta of streamLLM(ctx.systemPrompt, ctx.userPrompt, controller.signal)) {
+            prose += delta;
+            send("delta", { text: delta });
+          }
+        } catch (err) {
+          if (controller.signal.aborted) {
+            // Client cancelled — do NOT persist a partial draft.
+            try { res.end(); } catch { /* ignore */ }
+            return;
+          }
+          send("error", { message: String((err as Error)?.message || err).slice(0, 300) });
+          res.end();
+          return;
+        }
+
+        if (controller.signal.aborted) { try { res.end(); } catch { /* ignore */ } return; }
+        if (!prose.trim()) {
+          send("error", { message: "Writer returned empty prose — check provider keys (GOOGLE/DeepSeek/Anthropic)." });
+          res.end();
+          return;
+        }
+
+        // Persist via the exact same path as the non-streaming endpoint.
+        const { title } = await persistChapterProse(db, {
+          bookId, bookSlug: book.slug, chapterNumber, prose,
+        });
+
+        await logActivity(db, {
+          companyId, actorType: getActorInfo(req).actorType, actorId: getActorInfo(req).actorId,
+          action: "chapter.prose_written",
+          entityType: "book", entityId: bookId,
+          details: { bookId, chapterNumber, chars: prose.length, usedCharacters: ctx.usedCharacters, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat, streamed: true },
+        }).catch(() => {});
+
+        send("done", {
+          chapterNumber, title, content: prose,
+          context: { usedCharacters: ctx.usedCharacters, usedLocations: ctx.usedLocations, hadStyle: ctx.hasStyle, hadBeat: ctx.hasBeat },
+        });
+        res.end();
+      } catch (err) {
+        if (!headersSent) return next(err);
+        try {
+          res.write(`event: error\n`);
+          res.write(`data: ${JSON.stringify({ message: String((err as Error)?.message || err).slice(0, 300) })}\n\n`);
+          res.end();
+        } catch { /* ignore */ }
+      }
+    },
+  );
+
+  // ── POST .../chapters/:chapterNumber/mark-done ───────────────────────
+  // Autonomy dial, Assisted state: marking a chapter done triggers ONE draft
+  // for the next outlined chapter, parked for review — it never chains and
+  // never advances on its own. Manual: just records the status. Autopilot has
+  // its own loop (autopilot-orchestrator). Statuses persist in books.metadata
+  // (chapterStatus map) — no new migration needed for the dial.
+  router.post(
+    "/companies/:companyId/book-studio/books/:bookId/chapters/:chapterNumber/mark-done",
+    async (req, res, next) => {
+      try {
+        const { companyId, bookId } = req.params;
+        assertCompanyAccess(req, companyId);
+        const chapterNumber = Number(req.params.chapterNumber);
+        if (!Number.isFinite(chapterNumber) || chapterNumber < 1) throw badRequest("Invalid chapter number");
+
+        const [book] = await db.select().from(books).where(eq(books.id, bookId));
+        if (!book) throw notFound("Book not found");
+
+        const meta = (book.metadata ?? {}) as Record<string, unknown>;
+        const autonomyMode = meta.autonomyMode === "assisted" || meta.autonomyMode === "autopilot"
+          ? (meta.autonomyMode as string)
+          : "manual";
+        const chapterStatus = { ...((meta.chapterStatus as Record<string, string>) ?? {}) };
+        chapterStatus[String(chapterNumber)] = "done";
+
+        let nextDraft: { chapterNumber: number; title: string; chars: number } | null = null;
+        let nextDraftSkipped: string | null = null;
+        let nextDraftError: string | null = null;
+
+        if (autonomyMode === "assisted") {
+          const nextNumber = chapterNumber + 1;
+          const [nextBeat] = await db
+            .select({ id: storyBibleOutline.id, title: storyBibleOutline.title })
+            .from(storyBibleOutline)
+            .where(and(eq(storyBibleOutline.bookId, bookId), eq(storyBibleOutline.chapterNumber, nextNumber)));
+          const [nextChapter] = await db
+            .select({ id: manuscriptChapters.id, content: manuscriptChapters.content })
+            .from(manuscriptChapters)
+            .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, nextNumber)));
+
+          if (!nextBeat) {
+            nextDraftSkipped = `No outline beat for chapter ${nextNumber} — nothing to draft.`;
+          } else if (nextChapter && nextChapter.content && nextChapter.content.trim().length > 0) {
+            nextDraftSkipped = `Chapter ${nextNumber} already has prose — assisted mode never overwrites.`;
+          } else {
+            try {
+              const ctx = await compileChapterContext(db, bookId, nextNumber);
+              const prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
+              if (!prose || !prose.trim()) throw new Error("Writer returned empty prose");
+              const persisted = await persistChapterProse(db, {
+                bookId, bookSlug: book.slug, chapterNumber: nextNumber, prose,
+              });
+              chapterStatus[String(nextNumber)] = "draft-pending-review";
+              nextDraft = { chapterNumber: nextNumber, title: persisted.title, chars: prose.length };
+            } catch (err) {
+              nextDraftError = String((err as Error)?.message || err).slice(0, 300);
+            }
+          }
+        }
+
+        await db
+          .update(books)
+          .set({ metadata: { ...meta, chapterStatus }, updatedAt: new Date() })
+          .where(eq(books.id, bookId));
+
+        const actor = getActorInfo(req);
+        await logActivity(db, {
+          companyId, actorType: actor.actorType, actorId: actor.actorId,
+          agentId: actor.agentId, runId: actor.runId,
+          action: "chapter.marked_done",
+          entityType: "book", entityId: bookId,
+          details: { bookId, chapterNumber, autonomyMode, nextDraft, nextDraftSkipped, nextDraftError },
+        }).catch(() => {});
+
+        res.json({
+          chapterNumber,
+          status: "done",
+          autonomyMode,
+          chapterStatus,
+          nextDraft,
+          nextDraftSkipped,
+          nextDraftError,
         });
       } catch (err) { next(err); }
     },

@@ -23,9 +23,15 @@
  *      { media_type: TEXT|IMAGE, text?, image_url? } → { id: <container> }
  *   2. POST https://graph.threads.net/v1.0/{threads-user-id}/threads_publish
  *      { creation_id } → { id: <threads-media-id> }
- *   Carousels (2–10 images) and video need child containers / the async
- *   container-status poll — punted; `publishPost` throws
- *   `ThreadsApiError(501)` for those rather than dropping media.
+ *   Carousels (2–10 images) = N child containers (is_carousel_item=true)
+ *   + a CAROUSEL parent with children=[...]. Video = { media_type: VIDEO,
+ *   video_url }. Both poll container status (GET /{id}?fields=status,
+ *   error_message) until FINISHED before publish — ERROR/EXPIRED/timeout
+ *   throw, never a fake publish.
+ *
+ *   Threads downloads image_url/video_url itself, so media URLs must be
+ *   publicly reachable — `assertPubliclyFetchableMediaUrl` fails loudly
+ *   (naming PAPERCLIP_PUBLIC_URL) when handed a localhost/LAN URL.
  *
  * Connect is NOT done through this adapter: `startConnect`/`finishConnect`
  * throw `NotSupportedError` — the wizard flow (`routes/social.ts` +
@@ -42,11 +48,14 @@ import type {
 } from "./types.js";
 import { caption } from "./stub-helpers.js";
 import { NotSupportedError, requireRealAccessToken } from "./errors.js";
+import { assertPubliclyFetchableMediaUrl, mediaPollSleep } from "./media.js";
 
 const THREADS_MAX = 500;
 const THREADS_MEDIA_MAX = 10;
 
 const THREADS_GRAPH = "https://graph.threads.net/v1.0";
+const THREADS_CONTAINER_POLL_INTERVAL_MS = 2_000;
+const THREADS_CONTAINER_POLL_MAX_ATTEMPTS = 90; // ~3 min of processing
 
 export class ThreadsApiError extends Error {
   readonly statusCode: number;
@@ -94,6 +103,37 @@ function readId(json: Record<string, unknown>, context: string): string {
   const id = typeof json.id === "string" ? json.id : null;
   if (!id) throw new ThreadsApiError(`Threads ${context} returned no id`, 502, json);
   return id;
+}
+
+/**
+ * Poll a container until Threads finishes processing it (video + carousel
+ * parents are async). FINISHED → return; ERROR/EXPIRED or a poll timeout
+ * → throw with the platform's error_message. Never publish an unfinished
+ * container.
+ */
+async function waitForThreadsContainer(containerId: string, accessToken: string): Promise<void> {
+  for (let attempt = 0; attempt < THREADS_CONTAINER_POLL_MAX_ATTEMPTS; attempt += 1) {
+    const url = new URL(`${THREADS_GRAPH}/${containerId}`);
+    url.searchParams.set("fields", "status,error_message");
+    url.searchParams.set("access_token", accessToken);
+    const res = await fetch(url);
+    const json = await parseThreadsJson(res, `GET /${containerId} (container status)`);
+    const status = typeof json.status === "string" ? json.status : null;
+    if (status === "FINISHED" || status === "PUBLISHED") return;
+    if (status === "ERROR" || status === "EXPIRED") {
+      const detail = typeof json.error_message === "string" ? ` — ${json.error_message}` : "";
+      throw new ThreadsApiError(
+        `Threads container ${containerId} processing ${status}${detail}`,
+        422,
+        json,
+      );
+    }
+    await mediaPollSleep(THREADS_CONTAINER_POLL_INTERVAL_MS);
+  }
+  throw new ThreadsApiError(
+    `Threads container ${containerId} did not finish processing in time`,
+    504,
+  );
 }
 
 /** Best-effort permalink lookup for the published thread — null on failure. */
@@ -154,30 +194,69 @@ export const threadsAdapter: SocialPlatformAdapter = {
     const userId = account.platformAccountId;
     const text = caption(post);
 
-    if (post.mediaUrls.length > 1) {
-      throw new ThreadsApiError(
-        "Threads carousel posts not yet implemented (child containers — next iteration)",
-        501,
-      );
-    }
-    if (post.postType === "video" || post.postType === "reel") {
-      throw new ThreadsApiError(
-        "Threads video publishing not yet implemented (async container-status poll — next iteration)",
-        501,
-      );
-    }
     if (!text && post.mediaUrls.length === 0) {
       throw new ThreadsApiError("Threads post needs either text or media", 400);
     }
+    const isVideo = post.postType === "video" || post.postType === "reel";
+    if (isVideo && post.mediaUrls.length !== 1) {
+      throw new ThreadsApiError("Threads video posts take exactly one video file", 400);
+    }
+    if (post.mediaUrls.length > THREADS_MEDIA_MAX) {
+      throw new ThreadsApiError(
+        `Threads allows at most ${THREADS_MEDIA_MAX} media items per post`,
+        400,
+      );
+    }
+    // Threads downloads image_url/video_url itself — hard-fail with the
+    // config fix when the URL can never be reached from the public internet.
+    for (const url of post.mediaUrls) {
+      assertPubliclyFetchableMediaUrl(url, {
+        platform: "threads",
+        action: "publish media (Threads downloads image_url/video_url)",
+      });
+    }
 
-    const container = await threadsPost(`/${userId}/threads`, {
-      ...(post.mediaUrls.length === 1
-        ? { media_type: "IMAGE", image_url: post.mediaUrls[0] as string }
-        : { media_type: "TEXT" }),
-      ...(text ? { text } : {}),
-      access_token: accessToken,
-    });
-    const containerId = readId(container, "container create");
+    let containerId: string;
+    if (post.mediaUrls.length > 1) {
+      // Carousel: N child containers, then a CAROUSEL parent.
+      const childIds: string[] = [];
+      for (const mediaUrl of post.mediaUrls) {
+        const child = await threadsPost(`/${userId}/threads`, {
+          media_type: "IMAGE",
+          image_url: mediaUrl,
+          is_carousel_item: "true",
+          access_token: accessToken,
+        });
+        childIds.push(readId(child, "carousel child container"));
+      }
+      const parent = await threadsPost(`/${userId}/threads`, {
+        media_type: "CAROUSEL",
+        children: childIds.join(","),
+        ...(text ? { text } : {}),
+        access_token: accessToken,
+      });
+      containerId = readId(parent, "carousel container");
+      await waitForThreadsContainer(containerId, accessToken);
+    } else if (isVideo) {
+      const container = await threadsPost(`/${userId}/threads`, {
+        media_type: "VIDEO",
+        video_url: post.mediaUrls[0] as string,
+        ...(text ? { text } : {}),
+        access_token: accessToken,
+      });
+      containerId = readId(container, "video container");
+      // Video containers process async — publish only after FINISHED.
+      await waitForThreadsContainer(containerId, accessToken);
+    } else {
+      const container = await threadsPost(`/${userId}/threads`, {
+        ...(post.mediaUrls.length === 1
+          ? { media_type: "IMAGE", image_url: post.mediaUrls[0] as string }
+          : { media_type: "TEXT" }),
+        ...(text ? { text } : {}),
+        access_token: accessToken,
+      });
+      containerId = readId(container, "container create");
+    }
 
     const published = await threadsPost(`/${userId}/threads_publish`, {
       creation_id: containerId,
@@ -206,7 +285,11 @@ export const threadsAdapter: SocialPlatformAdapter = {
     if (text.length === 0 && post.mediaUrls.length === 0) {
       errors.push("Threads post needs either text or media.");
     }
-    if (post.mediaUrls.length > THREADS_MEDIA_MAX) {
+    if (post.postType === "video" || post.postType === "reel") {
+      if (post.mediaUrls.length !== 1) {
+        errors.push("Threads video posts take exactly one video file (mp4).");
+      }
+    } else if (post.mediaUrls.length > THREADS_MEDIA_MAX) {
       errors.push(`Threads allows at most ${THREADS_MEDIA_MAX} images per post.`);
     }
     return { ok: errors.length === 0, errors, warnings };

@@ -78,6 +78,7 @@ import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
 import { issueService } from "./services/index.js";
 import { bulkUploadRoutes } from "./routes/bulk-upload.js";
+import { socialMediaRoutes } from "./routes/social-media.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
@@ -282,6 +283,7 @@ export async function createApp(
   api.use(gymObservabilityRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
+  api.use(socialMediaRoutes(db, opts.storageService));
   api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(designRoutes(db));
   api.use(designAssetsRoutes(db));
