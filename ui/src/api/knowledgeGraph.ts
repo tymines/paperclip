@@ -73,7 +73,8 @@ export interface FleetKbNote {
   promoted: string | null;
   wikilinks: string[];
   path: string;
-  body: string;
+  /** Full markdown body. Only present when the graph was fetched with bodies=true. */
+  body?: string;
   excerpt: string;
   updatedAt: string;
 }
@@ -120,13 +121,16 @@ export interface FleetDreamsResponse {
   available: boolean;
   date: string | null;
   content: string;
-  dirsConsolidated: number;
-  failures: number;
+  /** Parsed from the consolidation log when stated; null when unknown (never fabricated). */
+  dirsConsolidated: number | null;
+  failures: number | null;
+  noteCount: number;
   filename: string | null;
 }
 
 export const fleetKbApi = {
-  getGraph: () => api.get<FleetKbGraphResponse>(`/fleet-kb/graph`),
+  getGraph: (opts?: { bodies?: boolean }) =>
+    api.get<FleetKbGraphResponse>(`/fleet-kb/graph${opts?.bodies ? "?bodies=1" : ""}`),
   getNote: (id: string) => api.get<FleetKbNoteResponse>(`/fleet-kb/notes/${encodeURIComponent(id)}`),
   getDreams: () => api.get<FleetDreamsResponse>(`/fleet-kb/dreams`),
 };
