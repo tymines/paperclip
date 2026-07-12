@@ -32,7 +32,6 @@ import {
   MessageSquare,
   Send,
   TriangleAlert,
-  Filter,
   LayoutGrid,
   List as ListIcon,
   Play,
@@ -213,25 +212,23 @@ function NewPersonaCard({ onClick, loading }: { onClick: () => void; loading?: b
       type="button"
       onClick={onClick}
       disabled={loading}
-      className="flex w-[150px] shrink-0 flex-col items-center justify-center gap-2 rounded-[16px] transition-colors hover:brightness-110 disabled:opacity-60 disabled:cursor-wait"
-      style={{ border: `1px dashed ${DS.border3}`, color: DS.textFaint, minHeight: 188 }}
+      className="flex h-[52px] shrink-0 items-center gap-2 rounded-xl px-3 transition-colors hover:brightness-110 disabled:opacity-60 disabled:cursor-wait"
+      style={{ border: `1px dashed ${DS.border3}`, color: DS.textFaint }}
       data-testid="new-persona"
+      title={loading ? "Setting up character" : "Create new character"}
     >
       <span
-        className="flex h-11 w-11 items-center justify-center rounded-full"
+        className="flex h-7 w-7 items-center justify-center rounded-full"
         style={{ background: DS.surface3, border: `1px solid ${DS.border2}` }}
       >
         {loading ? (
-          <Loader2 className="h-5 w-5 animate-spin" style={{ color: DS.primary }} />
+          <Loader2 className="h-3.5 w-3.5 animate-spin" style={{ color: DS.primary }} />
         ) : (
-          <Plus className="h-5 w-5" style={{ color: DS.primary }} />
+          <Plus className="h-3.5 w-3.5" style={{ color: DS.primary }} />
         )}
       </span>
-      <span className="text-[13px] font-semibold" style={{ color: DS.text }}>
+      <span className="whitespace-nowrap text-[12px] font-semibold" style={{ color: DS.text }}>
         {loading ? "Creating…" : "New Persona"}
-      </span>
-      <span className="text-[11px]" style={{ color: DS.textFaint }}>
-        {loading ? "Setting up character" : "Create new character"}
       </span>
     </button>
   );
@@ -250,89 +247,63 @@ function PersonaRowCard({
   onOpen: () => void;
   onTrain: () => void;
 }) {
-  const avatar = persona.avatarPath ? uploadUrl(persona.avatarPath) : null;
   return (
     <div
-      className="relative flex w-[170px] shrink-0 flex-col overflow-hidden rounded-[16px] transition-all"
+      className="relative flex h-[52px] shrink-0 items-center gap-2 rounded-xl pl-2 pr-2.5 transition-all"
       style={{
         background: DS.surface3,
         border: `1px solid ${selected ? DS.primary : DS.border}`,
-        boxShadow: selected ? `0 0 0 1px ${DS.primary}, 0 8px 24px -16px rgba(59,130,255,0.6)` : undefined,
+        boxShadow: selected ? `0 0 0 1px ${DS.primary}` : undefined,
       }}
       data-testid={`persona-card-${persona.id}`}
     >
-      {/* Portrait */}
-      <div className="relative h-[108px] w-full overflow-hidden" style={{ background: DS.surface }}>
-        {avatar ? (
-          <img src={avatar} alt={persona.name} className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-2xl font-bold" style={{ color: DS.textFaint }}>
-            {personaInitial(persona)}
-          </div>
-        )}
-        <div
-          className="absolute inset-x-0 bottom-0 h-12"
-          style={{ background: "linear-gradient(180deg, transparent, rgba(6,9,15,0.85))" }}
-        />
-      </div>
-
-      {/* Info */}
-      <div className="flex flex-1 flex-col gap-1.5 p-2.5">
-        <div className="flex items-center justify-between gap-1">
-          <span className="truncate text-[13px] font-semibold" style={{ color: DS.text }}>
-            {persona.name}
-          </span>
-          <span
-            className="h-2 w-2 shrink-0 rounded-full"
-            style={{ background: status.color }}
-            title={status.label}
-          />
-        </div>
-        <span className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
-          <Sparkles className="h-2.5 w-2.5" />
-          Flux + LoRA
-        </span>
-        <div className="flex items-center justify-between gap-1">
-          <span className="text-[10px] font-medium" style={{ color: status.color }}>
-            {status.label}
-          </span>
-          <RatingTag persona={persona} />
-        </div>
-
-        {status.progress != null ? (
-          <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full" style={{ background: DS.surface }}>
-            <div
-              className="h-full rounded-full transition-all"
-              style={{ width: `${status.progress}%`, background: status.color }}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="flex min-w-0 items-center gap-2 text-left"
+        data-testid={`open-studio-${persona.id}`}
+        title={`${persona.name} — ${status.label} · Flux + LoRA`}
+      >
+        <PersonaAvatar persona={persona} size={36} />
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="flex items-center gap-1.5">
+            <span className="max-w-[120px] truncate text-[12px] font-semibold leading-tight" style={{ color: DS.text }}>
+              {persona.name}
+            </span>
+            <span
+              className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: status.color }}
+              title={status.label}
             />
-          </div>
-        ) : status.ready ? (
-          <button
-            type="button"
-            onClick={onOpen}
-            className="mt-0.5 w-full rounded-lg py-1.5 text-[11px] font-semibold transition-colors"
-            style={
-              selected
-                ? { background: DS.primary, color: "#04122E" }
-                : { background: DS.surface, color: DS.text, border: `1px solid ${DS.border2}` }
-            }
-            data-testid={`open-studio-${persona.id}`}
-          >
-            Open Studio
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onTrain}
-            className="mt-0.5 flex w-full items-center justify-center gap-1 rounded-lg py-1.5 text-[11px] font-semibold transition-colors"
-            style={{ background: DS.surface, color: DS.text, border: `1px solid ${DS.border2}` }}
-            data-testid={`train-${persona.id}`}
-          >
-            <Cloud className="h-3 w-3" />
-            Train
-          </button>
-        )}
-      </div>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="whitespace-nowrap text-[10px] font-medium leading-none" style={{ color: status.color }}>
+              {status.label}
+            </span>
+            <RatingTag persona={persona} />
+          </span>
+        </span>
+      </button>
+
+      {status.progress != null ? (
+        <span className="h-1 w-10 shrink-0 overflow-hidden rounded-full" style={{ background: DS.surface }}>
+          <span
+            className="block h-full rounded-full transition-all"
+            style={{ width: `${status.progress}%`, background: status.color }}
+          />
+        </span>
+      ) : !status.ready ? (
+        <button
+          type="button"
+          onClick={onTrain}
+          className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-[10px] font-semibold transition-colors"
+          style={{ background: DS.surface, color: DS.text, border: `1px solid ${DS.border2}` }}
+          data-testid={`train-${persona.id}`}
+        >
+          <Cloud className="h-3 w-3" />
+          Train
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -453,7 +424,7 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
   const labelCls = "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.1em]";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <SectionLabel>Generate Content</SectionLabel>
 
       {/* Image / Video toggle */}
@@ -503,6 +474,10 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
         </div>
       ) : (
         <>
+          {/* TEMPLATE SHELF SLOT (TYL-194 L3 / Fable Ruling §3 templates-over-prompting):
+              the preset/photoshoot template shelf lands HERE, above the prompt box,
+              when Phase 2.1 ships. No template features yet — placeholder slot only. */}
+
           {/* Prompt */}
           <div>
             <label className={labelCls} style={{ color: DS.textFaint }}>
@@ -512,7 +487,7 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value.slice(0, 1000))}
-                rows={4}
+                rows={3}
                 placeholder="Describe the scene, pose, lighting, mood, outfit…"
                 className="w-full resize-none rounded-lg p-2.5 pr-2.5 text-[13px] focus:outline-none"
                 style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
@@ -522,12 +497,17 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
                 <button
                   type="button"
                   disabled
-                  title="Prompt enhancement — coming soon"
-                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium opacity-60"
-                  style={{ color: DS.textMuted, border: `1px solid ${DS.border}`, cursor: "not-allowed" }}
+                  title="Prompt enhancement — no LLM endpoint wired yet"
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium"
+                  style={{
+                    color: DS.warning,
+                    background: "rgba(244,185,64,0.08)",
+                    border: `1px solid rgba(244,185,64,0.3)`,
+                    cursor: "not-allowed",
+                  }}
                 >
                   <Wand2 className="h-3 w-3" />
-                  Enhance prompt
+                  Enhance prompt — soon
                 </button>
                 <span className="text-[10px]" style={{ color: DS.textFaint, fontFamily: FONT_MONO }}>
                   {prompt.length} / 1000
@@ -536,93 +516,93 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
             </div>
           </div>
 
-          {/* Settings */}
-          <div className="flex flex-col gap-4">
+          {/* Settings — 2-col compact grid (TYL-194 L3) */}
+          <div className="flex flex-col gap-2.5">
             <SectionLabel>Settings</SectionLabel>
 
-            {/* LoRA strength */}
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <span className="text-[12px]" style={{ color: DS.textMuted }}>
-                  LoRA Strength
+            {/* Dimensions + Count — one row */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <span className="mb-1 block text-[11px]" style={{ color: DS.textMuted }}>
+                  Dimensions
                 </span>
-                <span className="text-[12px] font-semibold" style={{ color: DS.text, fontFamily: FONT_MONO }}>
-                  {loraStrength.toFixed(2)}
-                </span>
+                <div className="relative">
+                  <select
+                    value={aspect}
+                    onChange={(e) => setAspect(e.target.value)}
+                    className="w-full appearance-none rounded-lg px-2 py-1.5 text-[12px] focus:outline-none"
+                    style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
+                    data-testid="dimensions"
+                  >
+                    {DIMENSIONS.map((d) => (
+                      <option key={d.ar} value={d.ar} style={{ background: DS.surface2 }}>
+                        {d.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2"
+                    style={{ color: DS.textFaint }}
+                  />
+                </div>
               </div>
-              <input
-                type="range"
-                min={0.5}
-                max={1.2}
-                step={0.05}
-                value={loraStrength}
-                onChange={(e) => setLoraStrength(Number(e.target.value))}
-                className="w-full"
-                style={{ accentColor: DS.primary }}
-                data-testid="lora-strength"
-              />
+              <div>
+                <span className="mb-1 block text-[11px]" style={{ color: DS.textMuted }}>
+                  Count
+                </span>
+                <div className="grid grid-cols-4 gap-1">
+                  {COUNTS.map((c) => {
+                    const active = count === c;
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCount(c)}
+                        data-testid={`count-${c}`}
+                        className="rounded-lg py-1.5 text-[12px] font-semibold transition-colors"
+                        style={
+                          active
+                            ? { background: DS.primary, color: "#04122E" }
+                            : { background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }
+                        }
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
 
-            {/* Dimensions */}
-            <div>
-              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
-                Dimensions
-              </span>
-              <div className="relative">
-                <select
-                  value={aspect}
-                  onChange={(e) => setAspect(e.target.value)}
-                  className="w-full appearance-none rounded-lg px-3 py-2 text-[13px] focus:outline-none"
-                  style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.text }}
-                  data-testid="dimensions"
-                >
-                  {DIMENSIONS.map((d) => (
-                    <option key={d.ar} value={d.ar} style={{ background: DS.surface2 }}>
-                      {d.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown
-                  className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2"
-                  style={{ color: DS.textFaint }}
+            {/* LoRA strength + Gender — one row */}
+            <div className="grid grid-cols-2 items-end gap-2.5">
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-[11px]" style={{ color: DS.textMuted }}>
+                    LoRA Strength
+                  </span>
+                  <span className="text-[11px] font-semibold" style={{ color: DS.text, fontFamily: FONT_MONO }}>
+                    {loraStrength.toFixed(2)}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0.5}
+                  max={1.2}
+                  step={0.05}
+                  value={loraStrength}
+                  onChange={(e) => setLoraStrength(Number(e.target.value))}
+                  className="w-full"
+                  style={{ accentColor: DS.primary }}
+                  data-testid="lora-strength"
                 />
               </div>
-            </div>
-
-            {/* Count */}
-            <div>
-              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
-                Count
-              </span>
-              <div className="grid grid-cols-4 gap-1.5">
-                {COUNTS.map((c) => {
-                  const active = count === c;
-                  return (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setCount(c)}
-                      data-testid={`count-${c}`}
-                      className="rounded-lg py-1.5 text-[13px] font-semibold transition-colors"
-                      style={
-                        active
-                          ? { background: DS.primary, color: "#04122E" }
-                          : { background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }
-                      }
-                    >
-                      {c}
-                    </button>
-                  );
-                })}
+              <div>
+                <span className="mb-1 block text-[11px]" style={{ color: DS.textMuted }}>
+                  Gender
+                </span>
+                <GenderFilter value={gender} onChange={setGender} />
               </div>
-            </div>
-
-            {/* Gender filter */}
-            <div>
-              <span className="mb-1.5 block text-[12px]" style={{ color: DS.textMuted }}>
-                Gender
-              </span>
-              <GenderFilter value={gender} onChange={setGender} />
             </div>
 
             {/* Advanced studio — preserves the full existing workbench
@@ -647,7 +627,7 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
             type="button"
             onClick={() => generateMut.mutate()}
             disabled={generateMut.isPending || !prompt.trim()}
-            className="flex items-center justify-center gap-2 rounded-xl py-3 text-[14px] font-semibold transition-colors disabled:opacity-50"
+            className="flex items-center justify-center gap-2 rounded-xl py-2.5 text-[14px] font-semibold transition-colors disabled:opacity-50"
             style={{ background: DS.primary, color: "#04122E" }}
             data-testid="generate-submit"
           >
@@ -781,7 +761,7 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
         type="button"
         onClick={() => setFilter(value)}
         data-testid={`filter-${value}`}
-        className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12px] font-semibold transition-colors"
+        className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors"
         style={
           active
             ? { background: DS.primary, color: "#04122E" }
@@ -805,13 +785,16 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <SectionLabel>Content Gallery</SectionLabel>
-        <div className="flex items-center gap-1.5">
+      {/* Single-row toolbar (TYL-194 L4): filters + sort + view in one ~32px strip */}
+      <div className="mb-2 flex flex-wrap items-center gap-1.5">
+        {chip("all", "All", counts.all)}
+        {chip("test", "Test", counts.test)}
+        {chip("production", "Production", counts.production)}
+        <div className="ml-auto flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => setNewestFirst((v) => !v)}
-            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12px]"
+            className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px]"
             style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
           >
             {newestFirst ? "Newest" : "Oldest"}
@@ -826,7 +809,7 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
                   key={v}
                   type="button"
                   onClick={() => setView(v)}
-                  className="px-2 py-1.5"
+                  className="px-2 py-1"
                   style={{ background: active ? DS.primary : DS.surface, color: active ? "#04122E" : DS.textMuted }}
                 >
                   <Icon className="h-3.5 w-3.5" />
@@ -837,21 +820,14 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
         </div>
       </div>
 
-      {/* Filter chips */}
-      <div className="mb-3 flex items-center gap-1.5">
-        {chip("all", "All", counts.all)}
-        {chip("test", "Test", counts.test)}
-        {chip("production", "Production", counts.production)}
-      </div>
-
       {genQ.isLoading ? (
-        <div className="flex items-center gap-2 py-10 text-[13px]" style={{ color: DS.textMuted }}>
+        <div className="flex items-center gap-2 py-6 text-[13px]" style={{ color: DS.textMuted }}>
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading gallery…
         </div>
       ) : visible.length === 0 ? (
         <div
-          className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl py-16 text-center"
+          className="flex flex-1 flex-col items-center justify-center gap-2 rounded-xl py-6 text-center"
           style={{ border: `1px dashed ${DS.border3}` }}
         >
           <ImageIcon className="h-7 w-7" style={{ color: DS.textFaint }} />
@@ -866,7 +842,7 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
         <div
           className={cn(
             view === "grid"
-              ? "grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+              ? "grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7"
               : "flex flex-col gap-2",
           )}
         >
@@ -929,11 +905,11 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
       )}
 
       {!genQ.isLoading && visible.length < total && (
-        <div className="mt-4 flex justify-center">
+        <div className="mt-3 flex justify-center">
           <button
             type="button"
             onClick={() => setLimit((l) => l + 40)}
-            className="rounded-lg px-4 py-2 text-[12px] font-medium"
+            className="rounded-lg px-4 py-1.5 text-[12px] font-medium"
             style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
           >
             Load more
@@ -1023,7 +999,7 @@ function ProfileTab({ persona }: { persona: ImageProvider }) {
   useEffect(() => setBio(persona.bio ?? ""), [persona.id, persona.bio]);
 
   return (
-    <div className="max-w-2xl space-y-5 p-6">
+    <div className="max-w-2xl space-y-4 p-4">
       <div className="flex items-center gap-4">
         <PersonaAvatar persona={persona} size={64} />
         <div>
@@ -1065,7 +1041,7 @@ function KnowledgeTab({ persona }: { persona: ImageProvider }) {
   const attrs = (persona.attributes ?? {}) as Record<string, unknown>;
   const entries = Object.entries(attrs);
   return (
-    <div className="max-w-2xl space-y-4 p-6">
+    <div className="max-w-2xl space-y-4 p-4">
       <p className="text-[13px]" style={{ color: DS.textMuted }}>
         The trained knowledge backing this persona's model — trigger word and the
         structured attributes baked into its prompts.
@@ -1111,16 +1087,18 @@ function SettingsTab({
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] }),
   });
   return (
-    <div className="max-w-2xl space-y-4 p-6">
-      <div className="flex items-center justify-between rounded-xl p-4" style={innerCard}>
+    <div className="max-w-2xl space-y-4 p-4">
+      {/* Hosted providers per Tyler override (Fable Ruling v2 §4): Replicate /
+          Atlas Cloud / WaveSpeed AI — not the local 3090/ComfyUI. */}
+      <div className="flex items-center justify-between rounded-xl p-3.5" style={innerCard}>
         <div className="flex items-center gap-2">
           <Server className="h-4 w-4" style={{ color: DS.automation }} />
           <div>
             <div className="text-[13px] font-medium" style={{ color: DS.text }}>
-              Local generation backend
+              Hosted generation backend
             </div>
             <div className="text-[11px]" style={{ color: DS.textFaint, fontFamily: FONT_MONO }}>
-              ComfyUI :18801 · model {persona.model ?? "Flux + LoRA"}
+              Replicate · Atlas Cloud · WaveSpeed AI · model {persona.model ?? "Flux + LoRA"}
             </div>
           </div>
         </div>
@@ -1129,7 +1107,7 @@ function SettingsTab({
         </span>
       </div>
 
-      <div className="flex items-center justify-between rounded-xl p-4" style={innerCard}>
+      <div className="flex items-center justify-between rounded-xl p-3.5" style={innerCard}>
         <div className="flex items-center gap-2">
           <Star className="h-4 w-4" style={{ color: DS.warning }} />
           <div className="text-[13px] font-medium" style={{ color: DS.text }}>
@@ -1211,7 +1189,7 @@ function ContentPanel({
   }
 
   return (
-    <div className="flex flex-col gap-5 p-5">
+    <div className="flex flex-col gap-3 p-3">
       {/* Topic input */}
       <div
         className="flex flex-col gap-3 rounded-xl p-4"
@@ -1505,82 +1483,70 @@ function PersonaWorkspace({
 
   return (
     <section style={surfaceCard} className="overflow-hidden">
-      {/* Workspace header */}
+      {/* Workspace header + tabs — single ≤48px bar (TYL-194 L5) */}
       <div
-        className="flex flex-wrap items-center justify-between gap-3 px-5 py-4"
-        style={{ borderBottom: `1px solid ${DS.border}` }}
+        className="flex flex-wrap items-stretch gap-x-2 px-3"
+        style={{ borderBottom: `1px solid ${DS.border}`, minHeight: 44 }}
       >
-        <div className="flex items-center gap-3">
-          <PersonaAvatar persona={persona} size={44} />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-[17px] font-semibold" style={{ color: DS.text }}>
-                {persona.name}
-              </span>
-              <span className="h-2 w-2 rounded-full" style={{ background: status.color }} />
-              <span className="text-[12px] font-medium" style={{ color: status.color }}>
-                {status.label}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 text-[11px]" style={{ color: DS.textFaint }}>
-              <Sparkles className="h-3 w-3" /> Flux + LoRA
-              <RatingTag persona={persona} />
-            </div>
-          </div>
+        <div className="flex min-w-0 items-center gap-2 py-1.5">
+          <PersonaAvatar persona={persona} size={28} />
+          <span className="max-w-[180px] truncate text-[14px] font-semibold" style={{ color: DS.text }}>
+            {persona.name}
+          </span>
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: status.color }} />
+          <span className="whitespace-nowrap text-[11px] font-medium" style={{ color: status.color }}>
+            {status.label}
+          </span>
+          <RatingTag persona={persona} />
         </div>
-
-      </div>
-
-      {/* Tabs */}
-      <div className="flex items-center gap-1 px-5 pt-3" style={{ borderBottom: `1px solid ${DS.border}` }}>
-        {WORKSPACE_TABS.map(({ key, label, icon: Icon }) => {
-          const active = tab === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(key)}
-              data-testid={`ws-tab-${key}`}
-              className="flex items-center gap-1.5 px-3 pb-3 text-[13px] font-medium transition-colors"
-              style={{
-                color: active ? DS.text : DS.textMuted,
-                borderBottom: `2px solid ${active ? DS.primary : "transparent"}`,
-                marginBottom: -1,
-              }}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
-            </button>
-          );
-        })}
+        <div className="ml-auto flex items-stretch gap-0.5">
+          {WORKSPACE_TABS.map(({ key, label, icon: Icon }) => {
+            const active = tab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                data-testid={`ws-tab-${key}`}
+                className="flex items-center gap-1.5 px-2.5 text-[12px] font-medium transition-colors"
+                style={{
+                  color: active ? DS.text : DS.textMuted,
+                  borderBottom: `2px solid ${active ? DS.primary : "transparent"}`,
+                  marginBottom: -1,
+                }}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Body */}
       {tab === "studio" ? (
-        <div className={cn("grid grid-cols-1 gap-5 p-5", !advancedOpen && "lg:grid-cols-[380px_minmax(0,1fr)]")}>
+        <div className={cn("grid grid-cols-1 gap-3 p-3", !advancedOpen && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
           <div
-            className={cn("rounded-xl p-4", advancedOpen && "overflow-y-auto max-h-[75vh]")}
+            className={cn("rounded-xl p-3", advancedOpen && "overflow-y-auto max-h-[75vh]")}
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <GenerateContentPanel persona={persona} advancedOpen={advancedOpen} onAdvancedChange={setAdvancedOpen} />
           </div>
           <div
-            className={cn("rounded-xl p-4", advancedOpen && "max-h-[75vh] overflow-y-auto")}
+            className={cn("rounded-xl p-3", advancedOpen && "max-h-[75vh] overflow-y-auto")}
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
-            <div className="mb-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] font-semibold" style={{ color: DS.text }}>Content Gallery</span>
-                <button
-                  type="button"
-                  onClick={() => setGalleryMinimized(!galleryMinimized)}
-                  className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors"
-                  style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
-                >
-                  {galleryMinimized ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                  {galleryMinimized ? "Show" : "Hide"}
-                </button>
-              </div>
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-[13px] font-semibold" style={{ color: DS.text }}>Content Gallery</span>
+              <button
+                type="button"
+                onClick={() => setGalleryMinimized(!galleryMinimized)}
+                className="flex items-center gap-1 rounded-lg px-2 py-0.5 text-[11px] transition-colors"
+                style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
+              >
+                {galleryMinimized ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                {galleryMinimized ? "Show" : "Hide"}
+              </button>
             </div>
             {!galleryMinimized && <ContentGallery persona={persona} />}
           </div>
@@ -1667,36 +1633,35 @@ export function ImageStudio() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full flex-col gap-3 p-4"
       style={{ background: DS.canvas }}
       data-pp-page-v2="ai-influencer-studio"
     >
-      {/* Header */}
-      <div>
-        <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
+      {/* Header — compact inline band (TYL-194 L1: ≤56px) */}
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <h1 className="text-[20px] font-semibold leading-tight" style={{ color: DS.text }}>
           AI Influencer Studio
         </h1>
-        <p className="text-[14px]" style={{ color: DS.textMuted }}>
-          Create and run AI personas. Generate images and video for social content.
+        <p className="text-[12px]" style={{ color: DS.textMuted }}>
+          Create and run AI personas — images and video for social content.
         </p>
       </div>
 
-      {/* Trained Personas row */}
-      <section style={surfaceCard} className="p-5">
-        <div className="mb-4 flex items-center gap-2.5">
-          <SectionLabel>Trained Personas</SectionLabel>
-          <span className="text-[12px] font-medium" style={{ color: DS.textFaint }}>
-            · {personas.length} personas · Flux + LoRA
-          </span>
-        </div>
-
+      {/* Persona rail — dense chip strip (TYL-194 L2: ≤72px) */}
+      <section style={surfaceCard} className="p-2.5">
         {providersQ.isLoading ? (
-          <div className="flex items-center gap-2 py-6 text-[13px]" style={{ color: DS.textMuted }}>
+          <div className="flex items-center gap-2 py-2 text-[13px]" style={{ color: DS.textMuted }}>
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading personas…
           </div>
         ) : (
-          <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-auto-hide">
+          <div className="flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-auto-hide">
+            <span className="flex shrink-0 items-center gap-1.5 pl-1 pr-1">
+              <SectionLabel>Personas</SectionLabel>
+              <span className="text-[11px] font-medium" style={{ color: DS.textFaint, fontFamily: FONT_MONO }}>
+                {personas.length}
+              </span>
+            </span>
             <NewPersonaCard
               onClick={() => setWizardOpen(true)}
             />
