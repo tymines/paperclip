@@ -5,9 +5,10 @@ export interface LearningFeedItem {
   agent: string;
   date: string;
   title: string;
-  type: "deep-dream" | "session-end";
+  type: "deep-dream" | "session-end" | "handoff";
   summary: string;
   path: string;
+  sessionId: string;
 }
 
 export interface SkillProposal {
@@ -31,10 +32,21 @@ export interface SkillProposal {
   created_at: string;
 }
 
+export interface TimelineVersion {
+  id: string;
+  version: string;
+  status: "approved" | "pending";
+  title: string;
+  detail: string | null;
+  agent: string | null;
+  at: string | null;
+  sourceFile: string | null;
+}
+
 export interface SkillTimeline {
   target: string;
   type: string;
-  versions: { version: string; title: string; agent: string | null; at: string | null }[];
+  versions: TimelineVersion[];
 }
 
 export const gymObservabilityApi = {
@@ -42,7 +54,7 @@ export const gymObservabilityApi = {
     api.get<{ items: LearningFeedItem[] }>(`/companies/${companyId}/gym/learning-feed`),
 
   proposals: (companyId: string, status?: string) =>
-    api.get<{ proposals: SkillProposal[] }>(
+    api.get<{ proposals: SkillProposal[]; migrationPending?: boolean }>(
       `/companies/${companyId}/gym/proposals${status ? `?status=${status}` : ""}`,
     ),
 
@@ -56,5 +68,10 @@ export const gymObservabilityApi = {
     api.patch<{ proposal: SkillProposal }>(`/companies/${companyId}/gym/proposals/${id}`, data),
 
   timeline: (companyId: string) =>
-    api.get<{ timelines: SkillTimeline[] }>(`/companies/${companyId}/gym/skill-timeline`),
+    api.get<{ timelines: SkillTimeline[]; migrationPending?: boolean }>(`/companies/${companyId}/gym/skill-timeline`),
+
+  reflection: (companyId: string, path: string) =>
+    api.get<{ path: string; content: string }>(
+      `/companies/${companyId}/gym/reflection?path=${encodeURIComponent(path)}`,
+    ),
 };

@@ -54,7 +54,8 @@ function listConsolidationFiles(): { file: string; rel: string; abs: string }[] 
 
 export interface FeedItem {
   id: string; agent: string; date: string; title: string;
-  type: "deep-dream" | "session-end"; summary: string; path: string;
+  type: "deep-dream" | "session-end" | "handoff"; summary: string; path: string;
+  sessionId: string;
 }
 
 export function readLearningFeed(): FeedItem[] {
@@ -63,15 +64,17 @@ export function readLearningFeed(): FeedItem[] {
     let raw = "";
     try { raw = fs.readFileSync(abs, "utf8"); } catch { continue; }
     const { fm, body } = parseFrontmatter(raw);
-    const isDream = (fm.type || "").toLowerCase().includes("dream");
+    const t = (fm.type || "").toLowerCase();
+    const kind = t.includes("dream") ? "deep-dream" : t.includes("handoff") ? "handoff" : "session-end";
     items.push({
       id: file,
       agent: fm.source_agent || "Fleet",
       date: fm.created || "",
       title: fm.title || file.replace(/\.md$/i, ""),
-      type: isDream ? "deep-dream" : "session-end",
+      type: kind as FeedItem["type"],
       summary: extractSummary(body),
       path: rel,
+      sessionId: fm.session_id || fm.session || "",
     });
   }
   items.sort((a, b) => String(b.date).localeCompare(String(a.date)));
@@ -80,7 +83,7 @@ export function readLearningFeed(): FeedItem[] {
 
 export interface ParsedProposal {
   agent: string; targetType: "skill" | "soul" | "workflow"; targetName: string;
-  title: string; effort: string; valueNote: string; confidence: string;
+  title: string; detail: string; effort: string; valueNote: string; confidence: string;
   sourceFile: string; sourceRef: string;
 }
 
@@ -129,11 +132,12 @@ export function parseProposalsFromFile(relPath: string, raw: string): ParsedProp
     const ref = (cells[0] && cells[0].length <= 8 ? cells[0] : `${targetType}-${rowSeq}`).trim();
     const title = pick((h) => h.includes("improvement") || h.includes("change") || h.includes("proposal") || h.includes("suggestion"), 1);
     const target = pick((h) => h.includes("target") || h.includes("skill") || h.includes("soul") || h.includes("file"), 2);
+    const detail = pick((h) => h.includes("detail") || h.includes("description") || h.includes("diff") || h.includes("how") || h.includes("change"), 2);
     const effort = pick((h) => h.includes("effort"), 3);
     const valueNote = pick((h) => h.includes("value") || h.includes("benefit") || h.includes("reason") || h.includes("why"), 4);
     if (!title) continue;
     out.push({
-      agent, targetType, targetName: target || targetType, title,
+      agent, targetType, targetName: target || targetType, title, detail,
       effort, valueNote, confidence, sourceFile: relPath, sourceRef: ref,
     });
   }
@@ -148,4 +152,17 @@ export function generateProposals(): { proposals: ParsedProposal[] } {
     proposals.push(...parseProposalsFromFile(rel, raw));
   }
   return { proposals };
+}
+
+// Read a single reflection file (vault-relative path constrained to the
+// consolidation dir — no traversal). Returns null when outside/missing.
+export function readReflection(rel: string): { path: string; content: string } | null {
+  const clean = String(rel || "").replace(/\\/g, "/");
+  if (!clean.startsWith(`${CONSOLIDATION_DIR}/`) || clean.includes("..")) return null;
+  const abs = path.join(gymVaultRoot(), clean);
+  try {
+    return { path: clean, content: fs.readFileSync(abs, "utf8") };
+  } catch {
+    return null;
+  }
 }

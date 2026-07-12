@@ -33,4 +33,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS "skill_proposals_source_uniq"
 
 -- Fast lookups for the queue (pending first) and per-company reads.
 CREATE INDEX IF NOT EXISTS "skill_proposals_company_status_idx"
-  ON "skill_proposals" ("com
+  ON "skill_proposals" ("company_id", "status", "created_at");

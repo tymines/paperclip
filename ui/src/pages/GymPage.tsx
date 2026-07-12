@@ -4,7 +4,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Sparkles, RefreshCw, Check, X, Pencil, FileText, Crown, TrendingUp, Brain,
+  Sparkles, RefreshCw, Check, X, Pencil, FileText, Crown, TrendingUp, Brain, Eye, EyeOff, ExternalLink,
 } from "lucide-react";
 import { gymObservabilityApi, type SkillProposal } from "../api/gymObservability";
 import { useCompany } from "../context/CompanyContext";
@@ -37,6 +37,20 @@ export function GymPage() {
   const qc = useQueryClient();
 
   const [agentFilter, setAgentFilter] = useState<string>("All");
+  const DISMISS_KEY = "gym-dismissed-reflections";
+  const [dismissed, setDismissed] = useState<Set<string>>(() => {
+    try { return new Set(JSON.parse(localStorage.getItem(DISMISS_KEY) ?? "[]")); } catch { return new Set(); }
+  });
+  const dismiss = (id: string) => {
+    setDismissed((prev) => {
+      const next = new Set(prev); next.add(id);
+      try { localStorage.setItem(DISMISS_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  };
+  const [showDismissed, setShowDismissed] = useState(false);
+  const [viewing, setViewing] = useState<{ path: string; title: string } | null>(null);
+  const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
   const [editing, setEditing] = useState<SkillProposal | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editTarget, setEditTarget] = useState("");
@@ -72,8 +86,15 @@ export function GymPage() {
     enabled: !!cid,
   });
 
+  const reflectionQ = useQuery({
+    queryKey: ["gym-reflection", cid, viewing?.path],
+    queryFn: () => gymObservabilityApi.reflection(cid!, viewing!.path),
+    enabled: !!cid && !!viewing,
+  });
+
   const feed = (feedQ.data as any)?.items ?? [];
   const proposals: SkillProposal[] = (proposalsQ.data as any)?.proposals ?? [];
+  const migrationPending = Boolean((proposalsQ.data as any)?.migrationPending || (timelineQ.data as any)?.migrationPending);
   const timelines = (timelineQ.data as any)?.timelines ?? [];
 
   const agents = useMemo(() => {
@@ -81,7 +102,11 @@ export function GymPage() {
     feed.forEach((f: any) => f.agent && s.add(f.agent));
     return ["All", ...Array.from(s)];
   }, [feed]);
-  const filteredFeed = agentFilter === "All" ? feed : feed.filter((f: any) => f.agent === agentFilter);
+  const byAgent = agentFilter === "All" ? feed : feed.filter((f: any) => f.agent === agentFilter);
+  const filteredFeed = showDismissed ? byAgent : byAgent.filter((f: any) => !dismissed.has(f.id));
+  const dismissedCount = byAgent.length - byAgent.filter((f: any) => !dismissed.has(f.id)).length;
+  const obsidianHref = (rel: string) =>
+    `obsidian://open?vault=${encodeURIComponent("Augi Vault")}&file=${encodeURIComponent(rel.replace(/\.md$/i, ""))}`;
 
   const pending = proposals.filter((p) => p.status === "pending");
   const reviewed = proposals.filter((p) => p.status !== "pending");
@@ -135,9 +160,18 @@ export function GymPage() {
         <div style={{ fontSize: 12, color: DS.textFaint, marginBottom: 8 }}>
           Target: <span style={{ color: DS.textMuted }}>{p.target_name}</span>
           {p.value_note && <> · {p.value_note}</>}
+          {p.confidence && <span style={{ marginLeft: 6, color: DS.textMuted, background: DS.surface3, padding: "1px 6px", borderRadius: 5, fontSize: 10.5 }}>confidence: {p.confidence}</span>}
         </div>
+        {p.detail && (
+          <pre style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', ui-monospace, monospace", color: DS.textMuted, background: DS.surface2, border: `1px solid ${DS.border}`, borderLeft: `2px solid ${tc}`, borderRadius: 8, padding: "8px 10px", marginBottom: 8, whiteSpace: "pre-wrap", lineHeight: 1.5, maxHeight: 140, overflowY: "auto" }}>{p.detail}</pre>
+        )}
         <div style={{ fontSize: 10.5, color: DS.textFaint, marginBottom: p.status === "pending" ? 12 : 0 }}>
-          {p.source_file?.split("/").pop()} {p.source_ref ? `· ${p.source_ref}` : ""}
+          {p.source_file ? (
+            <a href={`obsidian://open?vault=${encodeURIComponent("Augi Vault")}&file=${encodeURIComponent(p.source_file.replace(/\.md$/i, ""))}`}
+              style={{ color: DS.primary, textDecoration: "none" }} title="Open source in Obsidian">
+              [[{p.source_file.split("/").pop()?.replace(/\.md$/i, "")}]]
+            </a>
+          ) : null} {p.source_ref ? `· ${p.source_ref}` : ""}
         </div>
         {p.status === "pending" ? (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -177,6 +211,13 @@ export function GymPage() {
         </Button>
       </div>
 
+      {migrationPending && (
+        <div style={{ marginTop: 14, background: `${DS.amber}14`, border: `1px solid ${DS.amber}55`, borderRadius: 10, padding: "10px 14px", fontSize: 12.5, color: DS.amber }}>
+          Proposal persistence is offline — migration 0145 (skill_proposals) is held pending journal
+          reconciliation. The Learning Feed works; Scan/Approve/Reject unlock once the migration is applied.
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: isMobile ? "column" : "row", gap: 18, marginTop: 18 }}>
         {/* ── Learning Feed ── */}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -202,19 +243,41 @@ export function GymPage() {
             <div style={{ color: DS.textFaint, fontSize: 13 }}>No reflections yet.</div>
           )}
           {filteredFeed.map((f: any) => (
-            <div key={f.id} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 12, padding: 14, marginBottom: 10 }}>
+            <div key={f.id} style={{ background: DS.surface, border: `1px solid ${DS.border}`, borderRadius: 12, padding: 14, marginBottom: 10, opacity: dismissed.has(f.id) ? 0.55 : 1 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
                 <span style={{ fontSize: 12, fontWeight: 600, color: DS.text }}>{f.agent}</span>
-                {badge(f.type, f.type === "deep-dream" ? DS.purple : DS.textFaint)}
-                <span style={{ marginLeft: "auto", fontSize: 11, color: DS.textFaint }}>{fmtDate(f.date)}</span>
+                {badge(f.type, f.type === "deep-dream" ? DS.purple : f.type === "handoff" ? DS.amber : DS.textFaint)}
+                <span style={{ marginLeft: "auto", fontSize: 11, color: DS.textFaint }}>
+                  {f.sessionId ? `${f.sessionId} · ` : ""}{fmtDate(f.date)}
+                </span>
               </div>
               <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, marginBottom: 4 }}>{f.title}</div>
               {f.summary && <div style={{ fontSize: 12, color: DS.textMuted, lineHeight: 1.5 }}>{f.summary}</div>}
-              <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 8, display: "flex", alignItems: "center", gap: 5 }}>
-                <FileText size={11} /> {f.path}
+              <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 8, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                <FileText size={11} />
+                <a href={obsidianHref(f.path)} style={{ color: DS.primary, textDecoration: "none" }}
+                  title="Open in Obsidian">[[{f.path.split("/").pop()?.replace(/\.md$/i, "")}]]</a>
+                <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                  <button onClick={() => setViewing({ path: f.path, title: f.title })}
+                    style={{ fontSize: 10.5, color: DS.primary, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}>
+                    <Eye size={11} /> View full reflection
+                  </button>
+                  {!dismissed.has(f.id) && (
+                    <button onClick={() => dismiss(f.id)}
+                      style={{ fontSize: 10.5, color: DS.textFaint, background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}>
+                      <EyeOff size={11} /> Dismiss
+                    </button>
+                  )}
+                </span>
               </div>
             </div>
           ))}
+          {dismissedCount > 0 && (
+            <button onClick={() => setShowDismissed((v) => !v)}
+              style={{ fontSize: 11, color: DS.textFaint, background: "none", border: "none", cursor: "pointer", marginTop: 2 }}>
+              {showDismissed ? "Hide" : "Show"} {dismissedCount} dismissed
+            </button>
+          )}
         </div>
 
         {/* ── Proposed Changes ── */}
@@ -258,22 +321,69 @@ export function GymPage() {
                 {badge(t.type, TARGET_COLOR[t.type] ?? DS.textFaint)}
                 <span style={{ fontSize: 13, fontWeight: 600 }}>{t.target}</span>
               </div>
-              <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 4 }}>
-                {t.versions.map((v: any, i: number) => (
-                  <div key={i} style={{ minWidth: 150, flexShrink: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                      <span style={{ width: 9, height: 9, borderRadius: "50%", background: DS.success }} />
-                      <span style={{ fontSize: 12, fontWeight: 600, color: DS.success }}>{v.version}</span>
+              <div style={{ display: "flex", gap: 16, overflowX: "auto", paddingBottom: 4, position: "relative" }}>
+                {t.versions.map((v: any, i: number) => {
+                  const dotColor = v.status === "approved" ? DS.primary : DS.amber;
+                  const vid = v.id ?? `${t.target}-${i}`;
+                  const isOpen = expandedVersion === vid;
+                  return (
+                    <div key={vid} style={{ minWidth: 150, flexShrink: 0, cursor: "pointer" }}
+                      onClick={() => setExpandedVersion(isOpen ? null : vid)}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span style={{ width: 9, height: 9, borderRadius: "50%", background: dotColor, boxShadow: isOpen ? `0 0 0 3px ${dotColor}33` : "none" }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, color: dotColor, fontFamily: "'IBM Plex Mono', ui-monospace, monospace" }}>{v.version}</span>
+                      </div>
+                      <div style={{ fontSize: 11.5, color: DS.textMuted, lineHeight: 1.4 }}>{v.title}</div>
+                      <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 3 }}>{v.agent} · {fmtDate(v.at)}</div>
                     </div>
-                    <div style={{ fontSize: 11.5, color: DS.textMuted, lineHeight: 1.4 }}>{v.title}</div>
-                    <div style={{ fontSize: 10.5, color: DS.textFaint, marginTop: 3 }}>{v.agent} · {fmtDate(v.at)}</div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
+              {t.versions.filter((v: any, i: number) => expandedVersion === (v.id ?? `${t.target}-${i}`)).map((v: any) => (
+                <div key={`x-${v.id}`} style={{ marginTop: 10, background: DS.surface2, border: `1px solid ${DS.border2}`, borderRadius: 10, padding: 12 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>
+                    <span style={{ fontFamily: "'IBM Plex Mono', ui-monospace, monospace", color: v.status === "approved" ? DS.primary : DS.amber }}>{v.version}</span> — {v.title}
+                  </div>
+                  {v.detail ? (
+                    <pre style={{ fontSize: 11, fontFamily: "'IBM Plex Mono', ui-monospace, monospace", color: DS.textMuted, whiteSpace: "pre-wrap", lineHeight: 1.5, margin: 0 }}>{v.detail}</pre>
+                  ) : (
+                    <div style={{ fontSize: 11.5, color: DS.textFaint }}>No diff detail captured for this change.</div>
+                  )}
+                  {v.sourceFile && (
+                    <div style={{ fontSize: 10.5, marginTop: 8 }}>
+                      <a href={`obsidian://open?vault=${encodeURIComponent("Augi Vault")}&file=${encodeURIComponent(String(v.sourceFile).replace(/\.md$/i, ""))}`}
+                        style={{ color: DS.primary, textDecoration: "none" }}>
+                        [[{String(v.sourceFile).split("/").pop()?.replace(/\.md$/i, "")}]] — originating session
+                      </a>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           ))
         )}
       </div>
+
+      {/* Full-reflection viewer */}
+      <Dialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)}>
+        <DialogContent style={{ maxWidth: 720, maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+          <DialogHeader><DialogTitle>{viewing?.title}</DialogTitle></DialogHeader>
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {reflectionQ.isLoading && <div style={{ fontSize: 13, color: DS.textFaint }}>Loading…</div>}
+            {reflectionQ.isError && <div style={{ fontSize: 13, color: DS.critical }}>Couldn't load this reflection.</div>}
+            {reflectionQ.data && (
+              <pre style={{ fontSize: 12, fontFamily: "'IBM Plex Mono', ui-monospace, monospace", whiteSpace: "pre-wrap", lineHeight: 1.6, margin: 0 }}>{(reflectionQ.data as any).content}</pre>
+            )}
+          </div>
+          {viewing && (
+            <div style={{ fontSize: 11, marginTop: 8 }}>
+              <a href={obsidianHref(viewing.path)} style={{ color: DS.primary, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <ExternalLink size={11} /> Open in Obsidian
+              </a>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Edit dialog */}
       <Dialog open={!!editing} onOpenChange={(o) => !o && setEditing(null)}>
