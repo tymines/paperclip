@@ -42,6 +42,9 @@ export interface GateResult {
   missing: string[];
   provided: string[];
   shadow: boolean; // always true in current mode
+  // Tyler-gate flags — set by consumers (rooms.ts) after checkGate().
+  needs_tyler?: boolean;
+  blocked?: boolean;
 }
 
 /**

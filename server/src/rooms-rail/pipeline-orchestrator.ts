@@ -3,7 +3,7 @@
 // SHADOW mode: full pipeline executes, gates evaluated, zero real transitions.
 
 import type { Db } from "@paperclipai/db";
-import { checkGate, type GateResult } from "./gate-checker";
+import { checkGate, type GateResult } from "./gate-checker.js";
 
 // ── Pipeline stage order ──
 export const STAGE_ORDER = ["plan", "critique", "code", "review", "merge"] as const;

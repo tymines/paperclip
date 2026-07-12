@@ -48,7 +48,7 @@ export function gateRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
 
-    if (actor.actorType !== "board") {
+    if (req.actor.type !== "board") {
       emitEvent({ type: "gate_denied", reason: "agent_blocked", actorType: actor.actorType });
       res.status(403).json({ error: "agents cannot advance gates", actorType: actor.actorType });
       return;
@@ -123,7 +123,7 @@ export function gateRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
     const actor = getActorInfo(req);
 
-    if (actor.actorType !== "board") {
+    if (req.actor.type !== "board") {
       res.status(403).json({ error: "only Tyler can kill runs" });
       return;
     }

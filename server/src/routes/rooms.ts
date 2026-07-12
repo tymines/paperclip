@@ -562,7 +562,7 @@ export function roomRoutes(db: Db) {
     const actor = getActorInfo(req);
 
     // ponytail: agents structurally cannot advance gates
-    if (actor.actorType !== "board") {
+    if (req.actor.type !== "board") {
       res.status(403).json({ error: "agents cannot advance gates", actorType: actor.actorType });
       return;
     }
