@@ -49,6 +49,8 @@ import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
 import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -990,7 +992,16 @@ function OverviewEditor({
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function BookWritingPage() {
-  const companySlug = "414c172d-7013-4728-b781-aad604d8e2d7"; // ponytail: hardcoded CID, use CompanyContext when multi-company
+  // 2026-07-12 (Fable hot-fix): was a hardcoded, non-existent company UUID which
+  // made every book API call target a company Tyler isn't a member of → 403 on
+  // create + books never surfaced. Use the selected company from context (resolves
+  // to the AugiAI company the user actually owns).
+  const { selectedCompanyId } = useCompany();
+  const companySlug = selectedCompanyId ?? "";
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Book Writing" }]);
+  }, [setBreadcrumbs]);
   const [activeBibleTab, setActiveBibleTab] = useState<StoryBibleTab>("overview");
   const [jumpToChapter, setJumpToChapter] = useState<number | null>(null);
   const [highlightRange, setHighlightRange] = useState<{ chapterNumber: number; startOffset: number; endOffset: number } | null>(null);
@@ -1134,7 +1145,7 @@ export function BookWritingPage() {
 
   const createBook = useCallback(async (title: string) => {
     try {
-      const book = await apiFetch<BookData>(`/companies/${companySlug}/book-studio/books`, {
+      const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books`, {
         method: "POST", body: JSON.stringify({ title }),
       });
       setBooksList((prev) => [book, ...prev]);
