@@ -63,7 +63,6 @@ import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
 import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
-import { OrgChart } from "./pages/OrgChart";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
 import { WarRoom } from "./pages/WarRoom";
