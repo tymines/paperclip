@@ -1,5 +1,13 @@
 import { getRawKey } from "../services/provider-api-keys/index.js";
 
+// Tyler's ruling (2026-07-12): Gemini is THE Book Studio writer model — the
+// pinned PRIMARY, not a coin-flip. DeepSeek/Anthropic are explicit FALLBACKS
+// only, used when Gemini is unconfigured or errors. Override the primary via
+// BOOK_WRITER_PRIMARY if ever needed; default stays gemini. callLLM() below
+// honors this order (Gemini first, fallbacks after).
+export const BOOK_WRITER_PRIMARY = (process.env.BOOK_WRITER_PRIMARY || "gemini") as
+  | "gemini" | "deepseek" | "anthropic";
+
 const MAX_RETRIES = 2;
 
 interface GenerateDraftInput {

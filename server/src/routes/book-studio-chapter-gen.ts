@@ -5,7 +5,7 @@ import { eq, and, desc } from "drizzle-orm";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { generateChapterDraft, reviseChapterContent, callLLM } from "../services/chapter-generator.js";
+import { generateChapterDraft, reviseChapterContent, callLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -68,6 +68,9 @@ export function bookStudioChapterGenRoutes(db: Db) {
 
         let prose: string;
         try {
+          // Writer lane pinned to Gemini (BOOK_WRITER_PRIMARY); callLLM tries it
+          // first and only falls back to DeepSeek/Anthropic if it is unavailable.
+          void BOOK_WRITER_PRIMARY;
           prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
         } catch (err) {
           throw serviceUnavailable(`Writer lane unavailable: ${(err as Error).message}`);
