@@ -105,6 +105,9 @@ interface BrainNode extends FleetKbGraphNode {
   val: number;        // from real degree
   isHub: boolean;
   recent: boolean;    // really updated in the last 24h
+  /** Per-node anchor override (category hubs get ring slots so they don't
+   *  all collapse onto the CORE origin — the cause of the "white blob"). */
+  hubAnchor?: [number, number, number];
   x?: number; y?: number; z?: number;
   vx?: number; vy?: number; vz?: number;
 }
@@ -122,8 +125,8 @@ function makeRegionForce(strength: number) {
   let nodes: BrainNode[] = [];
   const force = (alpha: number) => {
     for (const n of nodes) {
-      const [ax, ay, az] = REGIONS[n.region].anchor;
-      const k = (n.isHub ? strength * 1.8 : strength) * alpha;
+      const [ax, ay, az] = n.hubAnchor ?? REGIONS[n.region].anchor;
+      const k = (n.isHub ? strength * 1.4 : strength) * alpha;
       n.vx = (n.vx ?? 0) + (ax - (n.x ?? 0)) * k;
       n.vy = (n.vy ?? 0) + (ay - (n.y ?? 0)) * k;
       n.vz = (n.vz ?? 0) + (az - (n.z ?? 0)) * k;
@@ -234,6 +237,21 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
       degree.set(e.target, (degree.get(e.target) ?? 0) + 1);
     }
 
+    // Category hubs each get their own slot on a ring around the origin,
+    // ordered by real member count (their degree). Without this every hub
+    // shared the CORE anchor at (0,0,0) and the center collapsed into one
+    // overlapping glowing blob.
+    const categoryHubIds = rawNodes
+      .filter((n) => n.kind === "category")
+      .sort((a, b) => (degree.get(b.id) ?? 0) - (degree.get(a.id) ?? 0))
+      .map((n) => n.id);
+    const hubAnchors = new Map<string, [number, number, number]>();
+    const RING_R = 130;
+    categoryHubIds.forEach((id, i) => {
+      const angle = (i / Math.max(1, categoryHubIds.length)) * Math.PI * 2;
+      hubAnchors.set(id, [Math.cos(angle) * RING_R, ((i % 3) - 1) * 30, Math.sin(angle) * RING_R]);
+    });
+
     const regionOf = new Map<string, RegionKey>();
     const nodes: BrainNode[] = rawNodes.map((n) => {
       const region = regionForNode(n);
@@ -242,6 +260,7 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
       const note = n.noteId ? notesById.get(n.noteId) : undefined;
       const recent = !!note && now - Date.parse(note.updatedAt) < RECENT_MS;
       const isHub = n.kind !== "note";
+      const hubAnchor = hubAnchors.get(n.id);
       // size: hubs scale with real member count (their degree); notes with real
       // connectivity. sqrt keeps the CORE index from dwarfing everything.
       const val = isHub
@@ -254,6 +273,7 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
         val,
         isHub,
         recent,
+        ...(hubAnchor ? { hubAnchor } : {}),
       };
     });
 
@@ -266,7 +286,9 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
         const isFlow = e.kind === "link" || e.kind === "related";
         // particles ONLY on real relationships; count/width from real weight.
         // Explicit authored wikilinks are the strongest signal → 2 particles.
-        const particles = !isFlow ? 0 : e.kind === "link" ? 2 : w >= 0.45 ? 2 : 1;
+        // Weak related edges (w<0.3) get none — fewer moving lights, calmer
+        // scene, better FPS, and the flows you do see mean something.
+        const particles = !isFlow ? 0 : e.kind === "link" ? 2 : w >= 0.6 ? 2 : w >= 0.3 ? 1 : 0;
         return {
           source: e.source,
           target: e.target,
@@ -470,7 +492,7 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
         st.backgroundColor = false as unknown as string;
         st.strokeColor = reg.color;
         st.strokeWidth = 0.4;
-        st.material.opacity = 0.55;
+        st.material.opacity = 0.8; // readable at rest against the darker scene
         st.material.depthWrite = false;
         (st as unknown as { __rk: RegionKey }).__rk = rk;
         st.position.set(cx, cy + 46, cz);
@@ -485,7 +507,7 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
           const mat = new THREE.MeshBasicMaterial({
             color: new THREE.Color(reg.color),
             transparent: true,
-            opacity: 0.055,
+            opacity: 0.03,
             blending: THREE.AdditiveBlending,
             depthWrite: false,
           });
@@ -505,14 +527,14 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
       }
       const group = new THREE.Group();
 
-      // outer glow sphere
-      const outerGeo = new THREE.SphereGeometry(18, 24, 24);
-      const outerMat = new THREE.MeshBasicMaterial({ color: 0x3b82ff, transparent: true, opacity: 0.22 });
+      // outer glow sphere — subtle halo, not a floodlight
+      const outerGeo = new THREE.SphereGeometry(12, 24, 24);
+      const outerMat = new THREE.MeshBasicMaterial({ color: 0x3b82ff, transparent: true, opacity: 0.1 });
       group.add(new THREE.Mesh(outerGeo, outerMat));
 
       // inner core
-      const innerGeo = new THREE.SphereGeometry(6, 16, 16);
-      const innerMat = new THREE.MeshBasicMaterial({ color: 0x9cc2ff });
+      const innerGeo = new THREE.SphereGeometry(4, 16, 16);
+      const innerMat = new THREE.MeshBasicMaterial({ color: 0x6ea8ff });
       group.add(new THREE.Mesh(innerGeo, innerMat));
 
       // filaments — one per REAL category hub, radiating from the index
@@ -526,7 +548,7 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
           new THREE.Vector3(Math.cos(angle) * 40, lift, Math.sin(angle) * 40),
         ]);
         const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(12));
-        const mat = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.18 });
+        const mat = new THREE.LineBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.12 });
         group.add(new THREE.Line(geo, mat));
       }
 
@@ -553,13 +575,18 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
       if (!bloomAddedRef.current) {
         bloomAddedRef.current = true;
         renderer.toneMapping = THREE.ReinhardToneMapping;
-        renderer.toneMappingExposure = 1.2;
+        renderer.toneMappingExposure = 1.05;
         const composer = (fg as unknown as { postProcessingComposer: () => { addPass: (p: unknown) => void } }).postProcessingComposer();
+        // Glow as ACCENT, not floodlight. Threshold 0.18 means only the
+        // brightest materials bloom — hubs, hot (<24h) notes, pulses, the
+        // selection highlight — while the thousand ambient neurons stay
+        // crisp against the dark canvas. (1.6/0.9/0.0 bloomed every pixel
+        // and washed the whole scene out.)
         const bloom = new UnrealBloomPass(
           new THREE.Vector2(dim.w, dim.h),
-          1.6,   // maximal sci-fi glow (Tyler's call) — tamed by tone mapping
-          0.9,
-          0.0,
+          0.55,
+          0.55,
+          0.18,
         );
         composer.addPass(bloom);
       }
@@ -580,38 +607,54 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
         fg.d3ReheatSimulation?.();
       } catch { /* best effort */ }
 
-      const RADIUS = 460;
       let angle = 0;
-      fg.cameraPosition({ x: 0, y: 60, z: RADIUS });
+      fg.cameraPosition({ x: 0, y: 60, z: 420 + Math.sqrt(graph.nodes.length) * 4 });
       rotTimer = setInterval(() => {
         if (document.hidden) return; // hidden tabs: no camera churn
+        const cam = fg.camera?.();
+        if (!cam) return;
         if (Date.now() - lastInteractRef.current < IDLE_MS) {
-          const cam = fg.camera?.();
-          if (cam) angle = Math.atan2(cam.position.x, cam.position.z);
+          angle = Math.atan2(cam.position.x, cam.position.z);
           return;
         }
+        // Orbit at the CURRENT camera distance so user zoom (and zoomToFit)
+        // is preserved — the old fixed-radius orbit snapped the camera back
+        // and made zooming feel broken.
+        const r = Math.hypot(cam.position.x, cam.position.z);
         angle += Math.PI / 1500;
         fg.cameraPosition({
-          x: RADIUS * Math.sin(angle),
-          y: 110 * Math.sin(angle * 0.35),
-          z: RADIUS * Math.cos(angle),
+          x: r * Math.sin(angle),
+          y: cam.position.y,
+          z: r * Math.cos(angle),
         });
       }, 30);
 
+      // Energy core is the visual for the REAL Fleet KB index node — if this
+      // vault has no index, there is no core (data-honesty: no source, no element).
       const categoryHubs = graph.nodes.filter((n) => n.kind === "category").length;
-      buildEnergyCore(scene, categoryHubs);
+      const hasIndex = graph.nodes.some((n) => n.kind === "index");
+      if (hasIndex) buildEnergyCore(scene, categoryHubs);
       buildRegionDecor(scene, graph.nodes);
     }
     raf = requestAnimationFrame(setup);
+    // Reliable first paint: frame the whole brain once the layout has mostly
+    // settled, then refresh lobe decor at full settle.
+    const fit = setTimeout(() => {
+      try { fgRef.current?.zoomToFit?.(800, 80); } catch { /* best effort */ }
+    }, 1800);
     const settle = setTimeout(() => {
       const fg = fgRef.current; const scene = fg?.scene?.() as THREE.Scene | undefined;
       if (scene) buildRegionDecor(scene, graph.nodes);
+      if (Date.now() - lastInteractRef.current > IDLE_MS) {
+        try { fg?.zoomToFit?.(800, 80); } catch { /* best effort */ }
+      }
     }, 4500);
 
     return () => {
       cancelled = true;
       cancelAnimationFrame(raf);
       cancelAnimationFrame(coreRafRef.current);
+      clearTimeout(fit);
       clearTimeout(settle);
       if (rotTimer) clearInterval(rotTimer);
       const scene = fgRef.current?.scene?.() as THREE.Scene | undefined;
@@ -631,11 +674,11 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
   useEffect(() => {
     for (const s of regionLabelsRef.current) {
       const rk = (s as unknown as { __rk?: RegionKey }).__rk;
-      s.material.opacity = !focusRegion || rk === focusRegion ? 0.55 : 0.08;
+      s.material.opacity = !focusRegion || rk === focusRegion ? 0.8 : 0.12;
     }
     for (const m of regionShellsRef.current) {
       const rk = (m as unknown as { __rk?: RegionKey }).__rk;
-      (m.material as THREE.MeshBasicMaterial).opacity = !focusRegion || rk === focusRegion ? 0.055 : 0.012;
+      (m.material as THREE.MeshBasicMaterial).opacity = !focusRegion || rk === focusRegion ? 0.03 : 0.008;
     }
   }, [focusRegion, pulseVersion]);
 
@@ -1023,16 +1066,16 @@ export function FleetBrainView({ onShowKb }: { onShowKb: () => void; }) {
             nodeThreeObject={nodeThreeObject}
             nodeLabel={(n) => `${n.label} · ${REGIONS[n.region].label}`}
             linkColor={linkColorFn}
-            linkOpacity={0.14}
+            linkOpacity={0.1}
             linkWidth={0.4}
-            linkCurvature={0.22}
+            linkCurvature={0.15}
             linkDirectionalParticles={linkParticlesFn}
             linkDirectionalParticleWidth="pwidth"
             linkDirectionalParticleSpeed="pspeed"
             linkDirectionalParticleColor="color"
             linkDirectionalParticleResolution={4}
-            warmupTicks={120}
-            cooldownTime={8000}
+            warmupTicks={30}
+            cooldownTime={6000}
             onNodeHover={(n) => { setHover((n as BrainNode) ?? null); bump(); }}
             onNodeClick={(n) => handleNodeClick(n as BrainNode)}
           />
