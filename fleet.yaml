@@ -159,3 +159,10 @@ agents:
     role: designer
     model: gemini-3.1-flash-image
     framework: hermes
+  - name: Hermes UI Designer
+    box: windows
+    orchestrator: Zeus
+    role: designer
+    model: gpt-5.4-mini
+    framework: hermes
+    profile: hermes-ui-designer

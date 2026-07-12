@@ -69,5 +69,8 @@
     "overrides": {
       "rollup": ">=4.59.0"
     }
+  },
+  "dependencies": {
+    "nodemailer": "^9.0.3"
   }
 }
