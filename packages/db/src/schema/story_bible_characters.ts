@@ -10,6 +10,8 @@ export const storyBibleCharacters = pgTable("story_bible_characters", {
   voiceCard: jsonb("voice_card").$type<Record<string, unknown>>().notNull().default({}),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
+  // migration 0154 (gated): character icon + misc UI metadata (imageUrl, iconJobId)
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

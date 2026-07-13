@@ -338,6 +338,7 @@ interface CharacterCardProps {
 }
 
 function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
+  const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(char.name);
   const [editRole, setEditRole] = useState(char.role);
@@ -347,15 +348,31 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
 
-  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+  const handleImageGenerate = async (_endpointType: string, _prompt: string) => {
+    // Book Media round 2: character icons run through the provider registry
+    // (book-media/character-icon) and persist as the character avatar
+    // (metadata.imageUrl — migration 0154). Falls back to the legacy path if
+    // the media route is unavailable.
     setImageGenerating(true);
     try {
-      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
-      if (imageUrl) {
-        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl } });
-        // Show the image inline via a re-render (card reads char.metadata.imageUrl)
+      const cidForMedia = mediaCompanyId ?? companySlug;
+      const dispatched = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+        `/companies/${cidForMedia}/book-media/${bookId}/character-icon`,
+        { method: "POST", body: JSON.stringify({ characterId: char.id }) },
+      );
+      let job = dispatched.job;
+      for (let i = 0; i < 45 && job.status !== "completed" && job.status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const poll = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+          `/companies/${cidForMedia}/creative-studio/jobs/${job.id}`,
+        );
+        job = poll.job;
       }
-    } catch { /* noop */ }
+      const imageUrl = job.status === "completed" ? job.outputs[0]?.url : undefined;
+      if (imageUrl) {
+        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl, iconJobId: job.id } });
+      }
+    } catch { /* keyed-off or dispatch failure — surface stays quiet, media panel shows the real state */ }
     setImageGenerating(false);
   };
 
@@ -412,9 +429,17 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
-        {initials}
-      </div>
+      {(char.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
+        <img
+          src={String((char.metadata as Record<string, unknown>).imageUrl)}
+          alt={char.name}
+          className="h-9 w-9 shrink-0 rounded-full object-cover border border-gray-700"
+        />
+      ) : (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
+          {initials}
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-200 truncate">{char.name}</span>
@@ -1553,6 +1578,14 @@ export function BookWritingPage() {
           <span className="text-gray-700">/</span>
           <h1 className="text-sm font-semibold text-gray-100">Book Studio</h1>
           <span className="text-gray-700">·</span>
+          {(activeBook as any)?.metadata?.coverUrl && (
+            <img
+              src={String((activeBook as any).metadata.coverUrl)}
+              alt="Book cover"
+              title="Book cover — manage in the Media panel"
+              className="h-7 w-5 rounded-sm object-cover border border-gray-700 shrink-0"
+            />
+          )}
           <span className="text-sm text-gray-400 italic">
             {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>

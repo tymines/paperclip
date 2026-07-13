@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { creativeJobs, books, manuscriptChapters, bookExports } from "@paperclipai/db";
+import { creativeJobs, books, manuscriptChapters, bookExports, storyBibleCharacters } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
@@ -211,6 +211,24 @@ export function bookMediaRoutes(db: Db) {
         await db.update(books).set({ metadata: meta, updatedAt: new Date() }).where(eq(books.id, book.id));
       }
 
+      // reconcile character icons: newest completed character-icon job per character
+      // -> storyBibleCharacters.metadata.imageUrl (idempotent via metadata.iconJobId)
+      const bibleChars = await db.select().from(storyBibleCharacters)
+        .where(eq(storyBibleCharacters.bookId, book.id));
+      for (const ch of bibleChars) {
+        const iconJob = jobs.find((j) => j.purpose === "character-icon"
+          && (j.params as any)?.character_id === ch.id
+          && j.status === "completed" && j.outputs.length > 0);
+        const chMeta = (ch.metadata ?? {}) as Record<string, unknown>;
+        if (iconJob && chMeta.iconJobId !== iconJob.id) {
+          chMeta.imageUrl = iconJob.outputs[0]!.url;
+          chMeta.iconJobId = iconJob.id;
+          (ch as any).metadata = chMeta;
+          await db.update(storyBibleCharacters).set({ metadata: chMeta, updatedAt: new Date() })
+            .where(eq(storyBibleCharacters.id, ch.id));
+        }
+      }
+
       const chapterSummaries = chapters.map((ch) => {
         const chunks = jobs.filter((j) => j.chapterId === ch.id && j.purpose === "narration-chunk");
         const total = chunks.length;
@@ -239,6 +257,18 @@ export function bookMediaRoutes(db: Db) {
 
       res.json({
         book: { id: book.id, slug: book.slug, title: book.title, coverUrl: (meta.coverUrl as string) ?? null },
+        characters: bibleChars.map((c) => ({
+          id: c.id, name: c.name, role: c.role,
+          iconUrl: ((c.metadata ?? {}) as any).imageUrl ?? null,
+        })),
+        assets: jobs
+          .filter((j) => j.purpose && j.purpose !== "narration-chunk-superseded")
+          .map((j) => ({
+            id: j.id, purpose: j.purpose, mode: j.mode, status: j.status,
+            outputs: j.outputs, prompt: j.prompt, provider: j.provider,
+            characterId: (j.params as any)?.character_id ?? null,
+            chapterId: j.chapterId, createdAt: j.createdAt,
+          })),
         chapters: chapterSummaries,
         trailerJobs: jobs.filter((j) => j.purpose === "trailer"),
         coverJobs: jobs.filter((j) => j.purpose === "cover"),
@@ -280,6 +310,78 @@ export function bookMediaRoutes(db: Db) {
       });
       await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.cover_generate", entityType: "creative_job", entityId: job.id, details: { bookId: book.id } });
       res.status(job.status === "failed" ? 502 : 201).json({ job });
+    } catch (err) { next(err); }
+  });
+
+  // ── POST .../book-media/:bookId/character-icon ─────────────────────────
+  // Bible per-card Generate-image: completed asset becomes the character avatar
+  // (reconciled into storyBibleCharacters.metadata.imageUrl by the overview).
+  router.post("/companies/:companyId/book-media/:bookId/character-icon", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const book = await getBook(db, companyId, req.params.bookId as string);
+      if (!book) return res.status(404).json({ error: "book not found" });
+      const characterId = req.body?.characterId as string | undefined;
+      if (!characterId) return res.status(422).json({ error: "characterId is required" });
+      const [character] = await db.select().from(storyBibleCharacters)
+        .where(and(eq(storyBibleCharacters.id, characterId), eq(storyBibleCharacters.bookId, book.id))).limit(1);
+      if (!character) return res.status(404).json({ error: "character not found" });
+      const explicit = typeof req.body?.provider === "string" ? (req.body.provider as ProviderId) : undefined;
+      const { provider, defaultModel } = await resolveImageProvider("Character icon generation", explicit);
+      const model = typeof req.body?.model === "string" ? req.body.model : defaultModel;
+      const prompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
+        ? req.body.prompt.trim()
+        : `Character portrait of ${character.name}${character.role ? `, ${character.role}` : ""}${character.description ? `. ${character.description.slice(0, 400)}` : ""}. Square head-and-shoulders portrait, single character, clean simple background, consistent with the tone of "${book.title}". No text.`;
+      const actor = (req as any).actor;
+      const job = await dispatchJob(db, {
+        companyId, provider, mode: "image", model, prompt,
+        params: { aspect_ratio: "1:1", character_id: character.id, ...(req.body?.params ?? {}) }, refs: [],
+        bookId: book.id, purpose: "character-icon", createdBy: actor?.actorId ?? "unknown",
+      });
+      await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.character_icon_generate", entityType: "creative_job", entityId: job.id, details: { bookId: book.id, characterId: character.id } });
+      res.status(job.status === "failed" ? 502 : 201).json({ job });
+    } catch (err) { next(err); }
+  });
+
+  // ── POST .../book-media/:bookId/assets/:jobId/apply ────────────────────
+  // Library actions: set-cover / set-character-icon from any completed asset.
+  router.post("/companies/:companyId/book-media/:bookId/assets/:jobId/apply", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const book = await getBook(db, companyId, req.params.bookId as string);
+      if (!book) return res.status(404).json({ error: "book not found" });
+      const [job] = await db.select().from(creativeJobs)
+        .where(and(eq(creativeJobs.id, req.params.jobId as string), eq(creativeJobs.companyId, companyId), eq(creativeJobs.bookId, book.id))).limit(1);
+      if (!job) return res.status(404).json({ error: "asset not found for this book" });
+      const url = job.outputs[0]?.url;
+      if (job.status !== "completed" || !url) return res.status(422).json({ error: "asset has no completed output" });
+      const action = req.body?.action;
+      const actor = (req as any).actor;
+      if (action === "set-cover") {
+        const meta = (book.metadata ?? {}) as Record<string, unknown>;
+        meta.coverUrl = url;
+        meta.coverJobId = job.id;
+        await db.update(books).set({ metadata: meta, updatedAt: new Date() }).where(eq(books.id, book.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.cover_set", entityType: "book", entityId: book.id, details: { jobId: job.id } });
+        return res.json({ applied: "set-cover", coverUrl: url });
+      }
+      if (action === "set-character-icon") {
+        const characterId = req.body?.characterId as string | undefined;
+        if (!characterId) return res.status(422).json({ error: "characterId is required for set-character-icon" });
+        const [character] = await db.select().from(storyBibleCharacters)
+          .where(and(eq(storyBibleCharacters.id, characterId), eq(storyBibleCharacters.bookId, book.id))).limit(1);
+        if (!character) return res.status(404).json({ error: "character not found" });
+        const chMeta = (character.metadata ?? {}) as Record<string, unknown>;
+        chMeta.imageUrl = url;
+        chMeta.iconJobId = job.id;
+        await db.update(storyBibleCharacters).set({ metadata: chMeta, updatedAt: new Date() })
+          .where(eq(storyBibleCharacters.id, character.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.character_icon_set", entityType: "story_bible_character", entityId: character.id, details: { jobId: job.id } });
+        return res.json({ applied: "set-character-icon", characterId, iconUrl: url });
+      }
+      return res.status(422).json({ error: "action must be 'set-cover' | 'set-character-icon'" });
     } catch (err) { next(err); }
   });
 

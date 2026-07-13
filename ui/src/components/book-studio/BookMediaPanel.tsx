@@ -7,7 +7,9 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clapperboard, ImageIcon, Film, Mic, RefreshCw, AlertTriangle, X, Download, Sparkles,
+  // eslint-disable-next-line no-duplicate-imports
 } from "lucide-react";
+import { FolderOpen, ImagePlus, BookImage } from "lucide-react";
 import { bookMediaApi, type BookMediaChapter } from "../../api/bookMedia";
 import { creativeStudioApi } from "../../api/creativeStudio";
 import { useCompany } from "../../context/CompanyContext";
@@ -20,7 +22,9 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   const { pushToast } = useToast();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [section, setSection] = useState<"cover" | "illustrations" | "trailer" | "narration">("cover");
+  const [section, setSection] = useState<"cover" | "illustrations" | "trailer" | "narration" | "library">("cover");
+  const [assetFilter, setAssetFilter] = useState<string>("all");
+  const [iconTarget, setIconTarget] = useState<Record<string, string>>({}); // jobId -> characterId
   const [voiceId, setVoiceId] = useState("");
   const [trailerModel, setTrailerModel] = useState("");
 
@@ -69,6 +73,13 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
     onSuccess: (r) => { invalidate(); pushToast({ title: `Narration dispatched (${r.chunks} chunk${r.chunks === 1 ? "" : "s"})`, tone: "success" }); },
     onError: onErr,
   });
+  const applyMut = useMutation({
+    mutationFn: ({ jobId, action, characterId }: { jobId: string; action: "set-cover" | "set-character-icon"; characterId?: string }) =>
+      bookMediaApi.applyAsset(cid!, bookId, jobId, { action, characterId }),
+    onSuccess: (r) => { invalidate(); pushToast({ title: r.applied === "set-cover" ? "Cover updated" : "Character icon updated", tone: "success" }); },
+    onError: onErr,
+  });
+
   const stitchMut = useMutation({
     mutationFn: () => bookMediaApi.stitchNarration(cid!, bookId),
     onSuccess: (r) => { invalidate(); pushToast({ title: r.stitched ? "Audiobook stitched" : "Exported per-chapter files (ffmpeg unavailable)", tone: r.stitched ? "success" : "info" }); },
@@ -106,7 +117,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
           )}
 
           <div className="flex gap-1 border-b border-gray-800 px-3 py-2">
-            {([["cover", ImageIcon, "Cover"], ["illustrations", Sparkles, "Illustrations"], ["trailer", Film, "Trailer"], ["narration", Mic, "Narration"]] as const).map(([key, Icon, label]) => (
+            {([["cover", ImageIcon, "Cover"], ["illustrations", Sparkles, "Illustrations"], ["trailer", Film, "Trailer"], ["narration", Mic, "Narration"], ["library", FolderOpen, "Library"]] as const).map(([key, Icon, label]) => (
               <button key={key} onClick={() => setSection(key)}
                 className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${section === key ? "bg-gray-800 text-gray-100" : "text-gray-500 hover:text-gray-300"}`}>
                 <Icon size={12} /> {label}
@@ -185,6 +196,80 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                         </div>}
                   </div>
                 ))}
+              </div>
+            )}
+
+            {section === "library" && ov && (
+              <div className="space-y-3">
+                {/* per-book asset library: every asset generated for this book */}
+                <div className="flex flex-wrap gap-1.5">
+                  {["all", "cover", "character-icon", "illustration", "trailer", "narration"].map((f) => (
+                    <button key={f} onClick={() => setAssetFilter(f)}
+                      className={`rounded px-2 py-1 text-[10px] ${assetFilter === f ? "bg-blue-600/20 text-blue-400 border border-blue-500/50" : "bg-gray-800 text-gray-400 border border-gray-700"}`}>
+                      {f === "character-icon" ? "icons" : f}
+                    </button>
+                  ))}
+                </div>
+                {(ov.assets ?? [])
+                  .filter((a) => assetFilter === "all"
+                    || (assetFilter === "narration" ? a.purpose.startsWith("narration") : a.purpose === assetFilter))
+                  .map((a) => {
+                    const out = a.outputs[0];
+                    const ch = a.characterId ? ov.characters?.find((c) => c.id === a.characterId) : null;
+                    const isImage = a.mode === "image" && a.status === "completed" && !!out;
+                    return (
+                      <div key={a.id} className="flex gap-2.5 rounded-lg border border-gray-800 p-2">
+                        <div className="h-14 w-14 shrink-0 overflow-hidden rounded bg-gray-900 flex items-center justify-center">
+                          {out && a.mode === "image" && <img src={out.thumbUrl ?? out.url} className="h-full w-full object-cover" />}
+                          {out && a.mode === "video" && <video src={out.url} muted className="h-full w-full object-cover" />}
+                          {(!out || a.mode === "audio") && <span className="text-[9px] text-gray-600">{a.status}</span>}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-gray-800 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-gray-400">{a.purpose}</span>
+                            {ch && <span className="truncate text-[10px] text-gray-500">{ch.name}</span>}
+                            <span className="ml-auto text-[9px]" style={{ color: a.status === "completed" ? "#2FE38A" : a.status === "failed" ? "#FF5B5B" : AMBER }}>{a.status}</span>
+                          </div>
+                          <div className="mt-0.5 truncate text-[10px] text-gray-500">{a.prompt || "(no prompt)"}</div>
+                          <div className="mt-1.5 flex items-center gap-1.5">
+                            {out && (
+                              <a href={out.url} target="_blank" rel="noreferrer"
+                                className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700">
+                                <Download size={9} /> download
+                              </a>
+                            )}
+                            {isImage && (
+                              <button onClick={() => applyMut.mutate({ jobId: a.id, action: "set-cover" })}
+                                disabled={applyMut.isPending}
+                                className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700 disabled:opacity-40">
+                                <BookImage size={9} /> set cover
+                              </button>
+                            )}
+                            {isImage && (ov.characters?.length ?? 0) > 0 && (
+                              <span className="flex items-center gap-1">
+                                <select value={iconTarget[a.id] ?? ""} onChange={(e) => setIconTarget({ ...iconTarget, [a.id]: e.target.value })}
+                                  className="rounded border border-gray-800 bg-gray-900 px-1 py-0.5 text-[9px] text-gray-300">
+                                  <option value="">icon for…</option>
+                                  {ov.characters.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                </select>
+                                <button
+                                  onClick={() => iconTarget[a.id] && applyMut.mutate({ jobId: a.id, action: "set-character-icon", characterId: iconTarget[a.id] })}
+                                  disabled={!iconTarget[a.id] || applyMut.isPending}
+                                  className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700 disabled:opacity-40">
+                                  <ImagePlus size={9} /> set
+                                </button>
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                {(ov.assets ?? []).length === 0 && (
+                  <div className="rounded-lg border border-dashed border-gray-800 p-6 text-center text-[11px] text-gray-600">
+                    No assets yet — covers, icons, illustrations, trailers, and narration all land here.
+                  </div>
+                )}
               </div>
             )}
 
