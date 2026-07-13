@@ -55,7 +55,10 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
     "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // Gemini native generateContent needs the key explicitly (x-goog-api-key).
+      // Without it the endpoint 403s "unregistered caller" — this was the bug
+      // that made callLLM fall through Gemini to the fallbacks.
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
         contents: [
           {
