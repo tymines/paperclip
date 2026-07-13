@@ -39,7 +39,11 @@ export function storyBibleRoutes(db: Db) {
       ...(description !== undefined && { description }),
       ...(voiceCard !== undefined && { voiceCard }),
       ...(locked !== undefined && { locked }),
-      ...(metadata !== undefined && { metadata }),
+      // shallow-merge (same as books PATCH) — a partial metadata update must
+      // never wipe sibling keys like iconLocked/imageUrl
+      ...(metadata !== undefined && typeof metadata === "object" && metadata !== null && {
+        metadata: { ...((row[0]!.metadata ?? {}) as Record<string, unknown>), ...(metadata as Record<string, unknown>) },
+      }),
       updatedAt: new Date(),
     }).where(eq(storyBibleCharacters.id, req.params.id)).returning();
     res.json(updated);
@@ -69,6 +73,9 @@ export function storyBibleRoutes(db: Db) {
     const [updated] = await db.update(storyBibleWorldLocations).set({
       ...(name !== undefined && { name }),
       ...(description !== undefined && { description }),
+      // NOTE: story_bible_world_locations has no metadata column yet — this key
+      // is silently dropped by drizzle (kept for API-shape compat; a future
+      // migration can add jsonb like 0154 did for characters).
       ...(metadata !== undefined && { metadata }),
       ...(locked !== undefined && { locked }),
       updatedAt: new Date(),

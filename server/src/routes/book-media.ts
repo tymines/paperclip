@@ -21,6 +21,7 @@ import { assertCompanyAccess } from "./authz.js";
 import { serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { creativeProviders, providerStatus, type ProviderId, type CreativeMode } from "../services/creative-studio/providers.js";
+import { saveAssetFromUrl, assetUrlPath } from "../services/creative-studio/asset-store.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -105,6 +106,58 @@ export function chunkChapterText(content: string): string[] {
   return chunks.filter(Boolean);
 }
 
+// ── Durable asset persistence (Tyler, 2026-07-12: "the images generated also
+// need to save") ─────────────────────────────────────────────────────────────
+// Provider output URLs (replicate.delivery etc.) EXPIRE — an applied cover or
+// icon that hotlinks one goes broken within hours/days. Any image that gets
+// APPLIED (cover / character icon) is downloaded into the local asset store
+// and referenced by its permanent app-relative URL. The provider URL is kept
+// on the job outputs for provenance.
+function extFromUrl(url: string): string {
+  const m = url.split("?")[0]?.match(/\.([a-z0-9]{2,5})$/i);
+  const ext = (m?.[1] ?? "png").toLowerCase();
+  return ["png", "jpg", "jpeg", "webp", "gif", "avif"].includes(ext) ? ext : "png";
+}
+
+function isLocalAssetUrl(url: unknown): boolean {
+  return typeof url === "string" && url.startsWith("/api/");
+}
+
+/**
+ * Ensure a completed job's primary output is stored locally; returns the
+ * permanent app-relative URL, or null if the download failed (e.g. the
+ * provider URL already expired) — callers then keep whatever they had.
+ * Idempotent via outputs[0].localUrl.
+ */
+async function persistJobAssetLocally(
+  db: Db,
+  companyId: string,
+  job: { id: string; outputs: Array<Record<string, any>> },
+): Promise<string | null> {
+  const out = job.outputs?.[0];
+  if (!out?.url) return null;
+  if (typeof out.localUrl === "string" && out.localUrl) return out.localUrl;
+  if (isLocalAssetUrl(out.url)) return out.url as string;
+  try {
+    const { filename } = await saveAssetFromUrl(out.url as string, extFromUrl(out.url as string));
+    const localUrl = assetUrlPath(companyId, filename);
+    const newOutputs = [{ ...out, localUrl }, ...job.outputs.slice(1)];
+    await db.update(creativeJobs).set({ outputs: newOutputs as any, updatedAt: new Date() })
+      .where(eq(creativeJobs.id, job.id));
+    job.outputs = newOutputs;
+    return localUrl;
+  } catch (e) {
+    console.warn(`[book-media] asset persist failed for job ${job.id}:`, (e as Error)?.message);
+    return null;
+  }
+}
+
+// Dispatches that died between the insert and the provider call (e.g. a server
+// crash mid-dispatch) leave a 'pending' row with no providerJobId — nothing can
+// ever complete it, and the panel shows "cover job: pending" forever.
+const STALE_DISPATCH_MS = 15 * 60 * 1000;
+const STALE_JOB_MS = 24 * 60 * 60 * 1000;
+
 async function getBook(db: Db, companyId: string, bookId: string) {
   const [book] = await db.select().from(books)
     .where(and(eq(books.id, bookId), eq(books.companyId, companyId))).limit(1);
@@ -175,6 +228,27 @@ export function bookMediaRoutes(db: Db) {
           .orderBy(desc(creativeJobs.createdAt)),
       ]);
 
+      // Fail-out zombie jobs first: (a) dispatches that died before getting a
+      // providerJobId (server crash mid-dispatch) can never complete — the
+      // eternal "cover job: pending"; (b) anything still pending after 24h.
+      const now = Date.now();
+      const zombies = jobs.filter(
+        (j) => (j.status === "pending" || j.status === "running")
+          && ((!j.providerJobId && now - new Date(j.createdAt as any).getTime() > STALE_DISPATCH_MS)
+            || now - new Date(j.createdAt as any).getTime() > STALE_JOB_MS),
+      );
+      for (const j of zombies) {
+        const reason = !j.providerJobId
+          ? "dispatch interrupted (server restarted mid-dispatch) — regenerate"
+          : "stale: no provider result within 24h";
+        try {
+          await db.update(creativeJobs).set({ status: "failed", error: reason, updatedAt: new Date() })
+            .where(eq(creativeJobs.id, j.id));
+          j.status = "failed";
+          j.error = reason;
+        } catch { /* best-effort — retried next tick */ }
+      }
+
       // Reconcile still-running image jobs that carry a providerJobId (Replicate
       // async predictions that exceeded the wait=30 window). The panel refetches
       // this overview on an interval, so this doubles as the poll loop. Best-effort
@@ -202,27 +276,58 @@ export function bookMediaRoutes(db: Db) {
         }));
       }
 
-      // reconcile cover slot from the newest completed cover job
+      // Reconcile the cover slot — FILL-ONLY (Tyler, 2026-07-12): a later
+      // generation must NEVER silently replace an applied/chosen cover. The
+      // reconcile only (a) fills an EMPTY slot from the newest completed cover
+      // job (unless locked), and (b) self-heals an existing choice whose URL is
+      // still an ephemeral provider URL by re-pointing THE SAME job's image at
+      // durable local storage.
       const meta = (book.metadata ?? {}) as Record<string, unknown>;
-      const coverJob = jobs.find((j) => j.purpose === "cover" && j.status === "completed" && j.outputs.length > 0);
-      if (coverJob && meta.coverJobId !== coverJob.id) {
-        meta.coverUrl = coverJob.outputs[0]!.url;
-        meta.coverJobId = coverJob.id;
+      let metaDirty = false;
+      if (!meta.coverUrl && !meta.coverLocked) {
+        const coverJob = jobs.find((j) => j.purpose === "cover" && j.status === "completed" && j.outputs.length > 0);
+        if (coverJob) {
+          const localUrl = await persistJobAssetLocally(db, companyId, coverJob as any);
+          meta.coverUrl = localUrl ?? coverJob.outputs[0]!.url;
+          meta.coverJobId = coverJob.id;
+          metaDirty = true;
+        }
+      } else if (meta.coverUrl && !isLocalAssetUrl(meta.coverUrl) && meta.coverJobId) {
+        const chosen = jobs.find((j) => j.id === meta.coverJobId && j.status === "completed" && j.outputs.length > 0);
+        if (chosen) {
+          const localUrl = await persistJobAssetLocally(db, companyId, chosen as any);
+          if (localUrl) { meta.coverUrl = localUrl; metaDirty = true; }
+        }
+      }
+      if (metaDirty) {
         await db.update(books).set({ metadata: meta, updatedAt: new Date() }).where(eq(books.id, book.id));
       }
 
-      // reconcile character icons: newest completed character-icon job per character
-      // -> storyBibleCharacters.metadata.imageUrl (idempotent via metadata.iconJobId)
+      // Reconcile character icons — same FILL-ONLY + self-heal semantics per
+      // character (lock: metadata.iconLocked; idempotent via metadata.iconJobId).
       const bibleChars = await db.select().from(storyBibleCharacters)
         .where(eq(storyBibleCharacters.bookId, book.id));
       for (const ch of bibleChars) {
-        const iconJob = jobs.find((j) => j.purpose === "character-icon"
-          && (j.params as any)?.character_id === ch.id
-          && j.status === "completed" && j.outputs.length > 0);
         const chMeta = (ch.metadata ?? {}) as Record<string, unknown>;
-        if (iconJob && chMeta.iconJobId !== iconJob.id) {
-          chMeta.imageUrl = iconJob.outputs[0]!.url;
-          chMeta.iconJobId = iconJob.id;
+        let chDirty = false;
+        if (!chMeta.imageUrl && !chMeta.iconLocked) {
+          const iconJob = jobs.find((j) => j.purpose === "character-icon"
+            && (j.params as any)?.character_id === ch.id
+            && j.status === "completed" && j.outputs.length > 0);
+          if (iconJob) {
+            const localUrl = await persistJobAssetLocally(db, companyId, iconJob as any);
+            chMeta.imageUrl = localUrl ?? iconJob.outputs[0]!.url;
+            chMeta.iconJobId = iconJob.id;
+            chDirty = true;
+          }
+        } else if (chMeta.imageUrl && !isLocalAssetUrl(chMeta.imageUrl) && chMeta.iconJobId) {
+          const chosen = jobs.find((j) => j.id === chMeta.iconJobId && j.status === "completed" && j.outputs.length > 0);
+          if (chosen) {
+            const localUrl = await persistJobAssetLocally(db, companyId, chosen as any);
+            if (localUrl) { chMeta.imageUrl = localUrl; chDirty = true; }
+          }
+        }
+        if (chDirty) {
           (ch as any).metadata = chMeta;
           await db.update(storyBibleCharacters).set({ metadata: chMeta, updatedAt: new Date() })
             .where(eq(storyBibleCharacters.id, ch.id));
@@ -256,10 +361,15 @@ export function bookMediaRoutes(db: Db) {
       status.replicate = { ...status.replicate, configured: await isImageProviderConfigured("replicate") };
 
       res.json({
-        book: { id: book.id, slug: book.slug, title: book.title, coverUrl: (meta.coverUrl as string) ?? null },
+        book: {
+          id: book.id, slug: book.slug, title: book.title,
+          coverUrl: (meta.coverUrl as string) ?? null,
+          coverLocked: meta.coverLocked === true,
+        },
         characters: bibleChars.map((c) => ({
           id: c.id, name: c.name, role: c.role,
           iconUrl: ((c.metadata ?? {}) as any).imageUrl ?? null,
+          iconLocked: ((c.metadata ?? {}) as any).iconLocked === true,
         })),
         assets: jobs
           .filter((j) => j.purpose && j.purpose !== "narration-chunk-superseded")
@@ -355,17 +465,22 @@ export function bookMediaRoutes(db: Db) {
       const [job] = await db.select().from(creativeJobs)
         .where(and(eq(creativeJobs.id, req.params.jobId as string), eq(creativeJobs.companyId, companyId), eq(creativeJobs.bookId, book.id))).limit(1);
       if (!job) return res.status(404).json({ error: "asset not found for this book" });
-      const url = job.outputs[0]?.url;
-      if (job.status !== "completed" || !url) return res.status(422).json({ error: "asset has no completed output" });
+      if (job.status !== "completed" || !job.outputs[0]?.url) return res.status(422).json({ error: "asset has no completed output" });
       const action = req.body?.action;
       const actor = (req as any).actor;
+      // Persist to durable local storage FIRST — applied images must survive
+      // provider URL expiry ("the images generated also need to save").
+      const localUrl = await persistJobAssetLocally(db, companyId, job as any);
+      const url = localUrl ?? job.outputs[0]!.url;
       if (action === "set-cover") {
+        // Explicit user action — allowed even when locked (lock guards AUTO
+        // replacement only). Shallow-merge to preserve other metadata keys.
         const meta = (book.metadata ?? {}) as Record<string, unknown>;
         meta.coverUrl = url;
         meta.coverJobId = job.id;
         await db.update(books).set({ metadata: meta, updatedAt: new Date() }).where(eq(books.id, book.id));
-        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.cover_set", entityType: "book", entityId: book.id, details: { jobId: job.id } });
-        return res.json({ applied: "set-cover", coverUrl: url });
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.cover_set", entityType: "book", entityId: book.id, details: { jobId: job.id, persisted: !!localUrl } });
+        return res.json({ applied: "set-cover", coverUrl: url, persisted: !!localUrl });
       }
       if (action === "set-character-icon") {
         const characterId = req.body?.characterId as string | undefined;
@@ -378,10 +493,48 @@ export function bookMediaRoutes(db: Db) {
         chMeta.iconJobId = job.id;
         await db.update(storyBibleCharacters).set({ metadata: chMeta, updatedAt: new Date() })
           .where(eq(storyBibleCharacters.id, character.id));
-        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.character_icon_set", entityType: "story_bible_character", entityId: character.id, details: { jobId: job.id } });
-        return res.json({ applied: "set-character-icon", characterId, iconUrl: url });
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.character_icon_set", entityType: "story_bible_character", entityId: character.id, details: { jobId: job.id, persisted: !!localUrl } });
+        return res.json({ applied: "set-character-icon", characterId, iconUrl: url, persisted: !!localUrl });
       }
       return res.status(422).json({ error: "action must be 'set-cover' | 'set-character-icon'" });
+    } catch (err) { next(err); }
+  });
+
+  // ── POST .../book-media/:bookId/lock ────────────────────────────────────
+  // Image locks (Tyler, 2026-07-12): a locked cover/icon is never auto-filled
+  // or auto-replaced by the overview reconcile — only explicit set-as-cover /
+  // set-as-icon (or unlock) changes it. Consistent with the bible Lock concept.
+  // body: { target: "cover" } | { target: "character-icon", characterId }, locked: boolean
+  router.post("/companies/:companyId/book-media/:bookId/lock", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const book = await getBook(db, companyId, req.params.bookId as string);
+      if (!book) return res.status(404).json({ error: "book not found" });
+      const target = req.body?.target;
+      const locked = req.body?.locked === true;
+      const actor = (req as any).actor;
+      if (target === "cover") {
+        const meta = (book.metadata ?? {}) as Record<string, unknown>;
+        meta.coverLocked = locked;
+        await db.update(books).set({ metadata: meta, updatedAt: new Date() }).where(eq(books.id, book.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: locked ? "book.cover_locked" : "book.cover_unlocked", entityType: "book", entityId: book.id, details: {} });
+        return res.json({ target: "cover", locked });
+      }
+      if (target === "character-icon") {
+        const characterId = req.body?.characterId as string | undefined;
+        if (!characterId) return res.status(422).json({ error: "characterId is required" });
+        const [character] = await db.select().from(storyBibleCharacters)
+          .where(and(eq(storyBibleCharacters.id, characterId), eq(storyBibleCharacters.bookId, book.id))).limit(1);
+        if (!character) return res.status(404).json({ error: "character not found" });
+        const chMeta = (character.metadata ?? {}) as Record<string, unknown>;
+        chMeta.iconLocked = locked;
+        await db.update(storyBibleCharacters).set({ metadata: chMeta, updatedAt: new Date() })
+          .where(eq(storyBibleCharacters.id, character.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: locked ? "book.character_icon_locked" : "book.character_icon_unlocked", entityType: "story_bible_character", entityId: character.id, details: {} });
+        return res.json({ target: "character-icon", characterId, locked });
+      }
+      return res.status(422).json({ error: "target must be 'cover' | 'character-icon'" });
     } catch (err) { next(err); }
   });
 

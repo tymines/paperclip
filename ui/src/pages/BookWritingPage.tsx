@@ -370,7 +370,18 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
       }
       const imageUrl = job.status === "completed" ? job.outputs[0]?.url : undefined;
       if (imageUrl) {
-        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl, iconJobId: job.id } });
+        // Persist permanently through the apply route: it downloads the image
+        // into the local asset store (provider URLs expire) and sets
+        // metadata.imageUrl server-side. Client PATCH is the fallback only.
+        try {
+          const applied = await apiFetch<{ iconUrl?: string }>(
+            `/companies/${cidForMedia}/book-media/${bookId}/assets/${job.id}/apply`,
+            { method: "POST", body: JSON.stringify({ action: "set-character-icon", characterId: char.id }) },
+          );
+          onUpdate(char.id, { metadata: { imageUrl: applied.iconUrl ?? imageUrl, iconJobId: job.id } });
+        } catch {
+          onUpdate(char.id, { metadata: { imageUrl, iconJobId: job.id } });
+        }
       }
     } catch { /* keyed-off or dispatch failure — surface stays quiet, media panel shows the real state */ }
     setImageGenerating(false);
@@ -430,11 +441,26 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   return (
     <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
       {(char.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
-        <img
-          src={String((char.metadata as Record<string, unknown>).imageUrl)}
-          alt={char.name}
-          className="h-9 w-9 shrink-0 rounded-full object-cover border border-gray-700"
-        />
+        <button
+          type="button"
+          onClick={() => onUpdate(char.id, { metadata: { iconLocked: !(char.metadata as Record<string, unknown>)?.iconLocked } })}
+          title={(char.metadata as Record<string, unknown>)?.iconLocked
+            ? "Icon locked — never auto-replaced by new generations. Click to unlock."
+            : "Click to lock this icon so new generations never auto-replace it"}
+          className="relative h-9 w-9 shrink-0"
+        >
+          <img
+            src={String((char.metadata as Record<string, unknown>).imageUrl)}
+            alt={char.name}
+            className="h-9 w-9 rounded-full object-cover border border-gray-700"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+          {Boolean((char.metadata as Record<string, unknown>)?.iconLocked) && (
+            <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-gray-900 p-0.5 text-yellow-400 border border-gray-700">
+              <Lock className="w-2.5 h-2.5" />
+            </span>
+          )}
+        </button>
       ) : (
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
           {initials}
@@ -1598,9 +1624,10 @@ export function BookWritingPage() {
           {(activeBook as any)?.metadata?.coverUrl && (
             <img
               src={String((activeBook as any).metadata.coverUrl)}
-              alt="Book cover"
+              alt=""
               title="Book cover — manage in the Media panel"
               className="h-7 w-5 rounded-sm object-cover border border-gray-700 shrink-0"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
             />
           )}
           <span className="text-sm text-gray-400 italic">

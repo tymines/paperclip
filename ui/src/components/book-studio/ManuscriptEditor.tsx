@@ -322,29 +322,36 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   }, [selectedCh, markingDone, API_PREFIX]);
 
   const wordCount = content.split(/\s+/).filter(Boolean).length;
-  const chapterTitle = selectedCh == null
-    ? "No chapters yet — add one in the Outline tab to start writing"
-    : (chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`);
+  // Empty-state copy lives in the editor BODY (not the header strip, where it
+  // rendered squished into a skinny column — Tyler, 2026-07-12).
+  const noChapters = chapters.length === 0;
+  const chapterTitle = noChapters
+    ? "Manuscript"
+    : selectedCh == null
+      ? "Loading chapter…"
+      : (chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`);
 
   return (
     <div className="flex flex-col min-h-0 h-full">
       {/* Toolbar */}
-      <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
-        <div className="flex items-center gap-3">
-          <select
-            className="rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50"
-            value={selectedCh ?? ""}
-            onChange={(e) => setSelectedCh(parseInt(e.target.value, 10) || null)}
-          >
-            {chapters.map((ch) => (
-              <option key={ch.id} value={ch.chapterNumber}>
-                Ch.{ch.chapterNumber}: {ch.title}
-              </option>
-            ))}
-          </select>
-          <div>
-            <h2 className="text-sm font-semibold text-gray-100">{chapterTitle}</h2>
-            <p className="text-xs text-gray-500">{wordCount.toLocaleString()} words</p>
+      <div className="flex items-center justify-between gap-3 border-b border-gray-800 px-5 py-3 shrink-0">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          {!noChapters && (
+            <select
+              className="shrink-0 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50"
+              value={selectedCh ?? ""}
+              onChange={(e) => setSelectedCh(parseInt(e.target.value, 10) || null)}
+            >
+              {chapters.map((ch) => (
+                <option key={ch.id} value={ch.chapterNumber}>
+                  Ch.{ch.chapterNumber}: {ch.title}
+                </option>
+              ))}
+            </select>
+          )}
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold text-gray-100" title={chapterTitle}>{chapterTitle}</h2>
+            <p className="text-xs text-gray-500 whitespace-nowrap">{noChapters ? "No chapters" : `${wordCount.toLocaleString()} words`}</p>
           </div>
         </div>
 
@@ -419,7 +426,19 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       {/* Editor / Preview (+ annotation sidebar) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
-          {preview ? (
+          {noChapters ? (
+            <div className="flex h-full items-center justify-center p-8">
+              <div className="max-w-md text-center">
+                <div className="mb-3 text-2xl opacity-40">✍️</div>
+                <p className="text-sm font-medium text-gray-300">No chapters yet</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-gray-500">
+                  Add a chapter in the <span className="text-gray-300">Outline</span> tab —
+                  or use <span className="text-gray-300">Generate with AI</span> there to draft
+                  a full outline — and the manuscript editor will open on it.
+                </p>
+              </div>
+            </div>
+          ) : preview ? (
             <div
               className="h-full overflow-y-auto p-5 prose prose-invert prose-sm max-w-none text-gray-200"
               dangerouslySetInnerHTML={{ __html: markdownToHtml(content) }}

@@ -3,13 +3,13 @@
 // slide-over drawer: BookWritingPage integration is one import + one JSX line, keeping
 // the diff additive vs fable-book-build. Data-honest amber states when providers are
 // keyed off — no mock output, ever.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clapperboard, ImageIcon, Film, Mic, RefreshCw, AlertTriangle, X, Download, Sparkles,
   // eslint-disable-next-line no-duplicate-imports
 } from "lucide-react";
-import { FolderOpen, ImagePlus, BookImage } from "lucide-react";
+import { FolderOpen, ImagePlus, BookImage, Lock, Unlock } from "lucide-react";
 import { bookMediaApi, type BookMediaChapter } from "../../api/bookMedia";
 import { creativeStudioApi } from "../../api/creativeStudio";
 import { useCompany } from "../../context/CompanyContext";
@@ -76,9 +76,25 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   const applyMut = useMutation({
     mutationFn: ({ jobId, action, characterId }: { jobId: string; action: "set-cover" | "set-character-icon"; characterId?: string }) =>
       bookMediaApi.applyAsset(cid!, bookId, jobId, { action, characterId }),
-    onSuccess: (r) => { invalidate(); pushToast({ title: r.applied === "set-cover" ? "Cover updated" : "Character icon updated", tone: "success" }); },
+    onSuccess: (r) => {
+      invalidate();
+      pushToast({
+        title: r.applied === "set-cover" ? "Cover updated" : "Character icon updated",
+        body: r.persisted === false ? "Warning: could not save a permanent copy — the source URL may expire." : "Saved permanently.",
+        tone: r.persisted === false ? "info" : "success",
+      });
+    },
     onError: onErr,
   });
+  const lockMut = useMutation({
+    mutationFn: (body: { target: "cover" | "character-icon"; characterId?: string; locked: boolean }) =>
+      bookMediaApi.setLock(cid!, bookId, body),
+    onSuccess: (r) => { invalidate(); pushToast({ title: r.locked ? "Locked — won't be auto-replaced" : "Unlocked", tone: "success" }); },
+    onError: onErr,
+  });
+  const [coverImgBroken, setCoverImgBroken] = useState(false);
+  // A new cover URL gets a fresh chance to load (e.g. after self-heal to local storage).
+  useEffect(() => { setCoverImgBroken(false); }, [overviewQ.data?.book.coverUrl]);
 
   const stitchMut = useMutation({
     mutationFn: () => bookMediaApi.stitchNarration(cid!, bookId),
@@ -130,13 +146,30 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
 
             {section === "cover" && ov && (
               <div className="space-y-3">
-                {ov.book.coverUrl
-                  ? <img src={ov.book.coverUrl} alt="Book cover" className="mx-auto w-48 rounded-lg border border-gray-800" />
+                {ov.book.coverUrl && !coverImgBroken
+                  ? <img src={ov.book.coverUrl} alt="Book cover" onError={() => setCoverImgBroken(true)}
+                      className="mx-auto w-48 rounded-lg border border-gray-800" />
+                  : ov.book.coverUrl && coverImgBroken
+                  ? <div className="mx-auto flex h-64 w-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-3 text-center text-[11px]" style={{ borderColor: AMBER, color: AMBER }}>
+                      <AlertTriangle size={16} />
+                      Cover image unavailable — its source URL has expired. Regenerate, or pick one from the Library (new picks are saved permanently).
+                    </div>
                   : <div className="mx-auto flex h-64 w-48 items-center justify-center rounded-lg border border-dashed border-gray-700 text-xs text-gray-600">No cover yet</div>}
+                {ov.book.coverUrl && (
+                  <button onClick={() => lockMut.mutate({ target: "cover", locked: !ov.book.coverLocked })} disabled={lockMut.isPending}
+                    title={ov.book.coverLocked ? "Locked: this cover is never auto-replaced. Click to unlock." : "Lock this cover so nothing auto-replaces it"}
+                    className={`mx-auto flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] ${ov.book.coverLocked ? "border-amber-500/50 text-amber-400" : "border-gray-700 text-gray-400 hover:text-gray-200"}`}>
+                    {ov.book.coverLocked ? <Lock size={11} /> : <Unlock size={11} />}
+                    {ov.book.coverLocked ? "Cover locked" : "Lock cover"}
+                  </button>
+                )}
                 <button onClick={() => coverMut.mutate()} disabled={!imageProviderConfigured || coverMut.isPending}
                   className="w-full rounded-lg bg-blue-600 py-2 text-xs font-semibold text-white disabled:opacity-40">
                   {coverMut.isPending ? "Dispatching…" : ov.book.coverUrl ? "Regenerate cover" : "Generate cover"}
                 </button>
+                {ov.book.coverUrl && !ov.book.coverLocked && (
+                  <p className="text-center text-[10px] text-gray-600">Regenerating adds to the Library — your current cover only changes when you pick "Set as cover".</p>
+                )}
                 {!ps?.openart.configured && !ps?.higgsfield.configured && ps?.replicate?.configured && (
                   <p className="text-[10px] text-gray-500">Using Replicate (Flux) — OpenArt/Higgsfield not keyed.</p>
                 )}

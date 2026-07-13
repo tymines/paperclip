@@ -30,10 +30,11 @@ export interface BookMediaCharacter {
   name: string;
   role: string;
   iconUrl: string | null;
+  iconLocked?: boolean;
 }
 
 export interface BookMediaOverview {
-  book: { id: string; slug: string; title: string; coverUrl: string | null };
+  book: { id: string; slug: string; title: string; coverUrl: string | null; coverLocked?: boolean };
   characters: BookMediaCharacter[];
   assets: BookMediaAsset[];
   chapters: BookMediaChapter[];
@@ -66,7 +67,10 @@ export const bookMediaApi = {
     api.post<{ job: CreativeJob }>(`/companies/${companyId}/book-media/${bookId}/character-icon`, body),
 
   applyAsset: (companyId: string, bookId: string, jobId: string, body: { action: "set-cover" | "set-character-icon"; characterId?: string }) =>
-    api.post<{ applied: string; coverUrl?: string; iconUrl?: string }>(`/companies/${companyId}/book-media/${bookId}/assets/${jobId}/apply`, body),
+    api.post<{ applied: string; coverUrl?: string; iconUrl?: string; persisted?: boolean }>(`/companies/${companyId}/book-media/${bookId}/assets/${jobId}/apply`, body),
+
+  setLock: (companyId: string, bookId: string, body: { target: "cover" | "character-icon"; characterId?: string; locked: boolean }) =>
+    api.post<{ target: string; characterId?: string; locked: boolean }>(`/companies/${companyId}/book-media/${bookId}/lock`, body),
 
   generateIllustration: (companyId: string, bookId: string, body: { chapterId: string; prompt?: string; model?: string }) =>
     api.post<{ job: CreativeJob }>(`/companies/${companyId}/book-media/${bookId}/illustration`, body),
