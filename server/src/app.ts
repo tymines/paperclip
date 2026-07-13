@@ -515,7 +515,23 @@ export async function createApp(
     ];
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      // index.html must be re-read when a ui rebuild lands (mtime-memoized):
+      // it was previously read ONCE at boot, so every SPA route kept serving
+      // the boot-time copy after a redeploy — pointing at asset hashes the
+      // rebuild had deleted → blank page until the next server restart
+      // (2026-07-12: Tyler's stale-UI / blank book-writing sightings).
+      const indexPath = path.join(uiDist, "index.html");
+      let indexCache = { mtimeMs: 0, html: "" };
+      const getIndexHtml = (): string => {
+        try {
+          const mtimeMs = fs.statSync(indexPath).mtimeMs;
+          if (mtimeMs !== indexCache.mtimeMs) {
+            indexCache = { mtimeMs, html: applyUiBranding(fs.readFileSync(indexPath, "utf-8")) };
+          }
+        } catch { /* mid-rebuild: keep serving the last good copy */ }
+        return indexCache.html;
+      };
+      getIndexHtml(); // prime the cache at boot
       // Hashed asset files (Vite emits them under /assets/<name>.<hash>.<ext>)
       // never change once built, so they can be cached aggressively.
       app.use(
@@ -559,7 +575,7 @@ export async function createApp(
           .status(200)
           .set("Content-Type", "text/html")
           .set("Cache-Control", "no-cache")
-          .end(indexHtml);
+          .end(getIndexHtml());
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");
