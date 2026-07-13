@@ -253,8 +253,12 @@ export function bookMediaRoutes(db: Db) {
       // async predictions that exceeded the wait=30 window). The panel refetches
       // this overview on an interval, so this doubles as the poll loop. Best-effort
       // per job — a poll failure leaves the job untouched for the next tick.
+      // ALL still-running image jobs — cover, illustration, character-icon,
+      // location-image (the purpose allowlist previously skipped icons and
+      // location images, leaving async Replicate predictions pending forever;
+      // caught by the 0155 canary).
       const runningImages = jobs.filter(
-        (j) => (j.purpose === "cover" || j.purpose === "illustration")
+        (j) => j.mode === "image"
           && (j.status === "pending" || j.status === "running")
           && j.providerJobId,
       );
