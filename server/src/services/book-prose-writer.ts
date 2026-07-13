@@ -34,6 +34,27 @@ export function writeChapterToVault(slug: string, chapterNumber: number, title: 
   } catch { /* vault write is best-effort; DB is authoritative */ }
 }
 
+/**
+ * Normalize the chapter's leading heading (acceptance finding #7: drafts came
+ * back with `### Chapter 1`, plain `Chapter 2:`, `## Chapter 3`, `# Chapter 9`…
+ * making exports ragged). If the prose opens with any recognizable chapter
+ * heading, rewrite it to a consistent `## Chapter N: Title` (or `## Chapter N`
+ * when the model gave no title text). Prose that opens straight into narrative
+ * is left untouched.
+ */
+export function normalizeChapterHeading(prose: string, chapterNumber: number): string {
+  const lines = prose.split(/\r?\n/);
+  const idx = lines.findIndex((l) => l.trim().length > 0);
+  if (idx === -1) return prose;
+  const first = lines[idx].trim();
+  // Matches: "# Chapter 9", "Chapter 2:", "## Chapter 3 — Title", "Chapter 4 - Title" …
+  const m = first.match(/^#{0,6}\s*chapter\s+(\d+)\s*[:—–\-.]?\s*(.*)$/i);
+  if (!m) return prose;
+  const titleText = m[2].replace(/^#+\s*/, "").replace(/[*_]+/g, "").trim();
+  lines[idx] = titleText ? `## Chapter ${chapterNumber}: ${titleText}` : `## Chapter ${chapterNumber}`;
+  return lines.join("\n");
+}
+
 export interface PersistProseResult {
   chapterId: string;
   chapterNumber: number;
@@ -50,7 +71,9 @@ export async function persistChapterProse(
   db: Db,
   args: { bookId: string; bookSlug: string; chapterNumber: number; prose: string },
 ): Promise<PersistProseResult> {
-  const { bookId, bookSlug, chapterNumber, prose } = args;
+  const { bookId, bookSlug, chapterNumber } = args;
+  // Consistent `## Chapter N: Title` headings across every write path (#7).
+  const prose = normalizeChapterHeading(args.prose, chapterNumber);
 
   const [existing] = await db
     .select()

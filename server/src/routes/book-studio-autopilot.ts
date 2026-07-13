@@ -24,7 +24,10 @@ export function bookStudioAutopilotRoutes(db: Db) {
         const { companyId, bookId } = req.params;
         assertCompanyAccess(req, companyId);
         const state = getAutopilotState(bookId);
-        if (!state) throw notFound("No autopilot loop found for this book");
+        // No loop is a NORMAL state (e.g. after a server restart the in-memory
+        // job is gone) — return 200 { autopilot: null } so clients can stop
+        // polling instead of 404ing forever (acceptance finding #8).
+        if (!state) { res.json({ autopilot: null }); return; }
         const { abortController: _, ...serializable } = state;
         res.json({ autopilot: serializable });
       } catch (err) { next(err); }

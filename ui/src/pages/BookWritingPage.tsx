@@ -1125,7 +1125,10 @@ export function BookWritingPage() {
         `/companies/${companySlug}/book-studio/books`
       );
       setBooksList(bList);
-      const book = bList[0] || null;
+      // Restore the last-opened book on reload (acceptance finding #10b) —
+      // fall back to the first book when there is no/stale remembered id.
+      const rememberedId = localStorage.getItem("bookStudio.lastBookId");
+      const book = bList.find((b) => b.id === rememberedId) || bList[0] || null;
       setActiveBook(book);
 
       if (book) {
@@ -1176,6 +1179,7 @@ export function BookWritingPage() {
   const selectBook = useCallback(async (bookId: string) => {
     const b = booksList.find((x) => x.id === bookId) || null;
     setActiveBook(b);
+    if (b) { try { localStorage.setItem("bookStudio.lastBookId", b.id); } catch { /* private mode */ } }
     if (b) { try { await loadBookEntities(b.id); } catch (e) { console.error("load book entities failed", e); } }
     else { setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]); }
   }, [booksList, loadBookEntities]);
@@ -1187,6 +1191,7 @@ export function BookWritingPage() {
       });
       setBooksList((prev) => [book, ...prev]);
       setActiveBook(book);
+      try { localStorage.setItem("bookStudio.lastBookId", book.id); } catch { /* private mode */ }
       setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]);
     } catch (e) {
       console.error("create book failed", e);
@@ -1335,9 +1340,21 @@ export function BookWritingPage() {
           if (statusRes.autopilot.status === "failed" && statusRes.autopilot.failReason) {
             setDialError(`Autopilot stopped: ${statusRes.autopilot.failReason}`);
           }
+        } else {
+          // 200 { autopilot: null } — the in-memory loop is gone (e.g. server
+          // restarted). Stop polling and honestly reset the dial instead of
+          // 404-polling forever (acceptance finding #8).
+          stopStatusPolling();
+          setAutopilotState("idle");
+          setAutopilotPaused(false);
+          setAutopilotPhase("");
+          setAutopilotCurrentChapter(0);
+          setAutopilotTotalChapters(0);
+          setDialError("Autopilot loop was lost (server restarted) — dial reset to Manual.");
+          updateBook({ metadata: { autonomyMode: "manual" } }).catch(() => {});
         }
       } catch {
-        // Silently handle poll errors (404 = no loop yet)
+        // Silently handle transient poll errors
       }
     }, 5000);
   };
@@ -2111,13 +2128,20 @@ export function BookWritingPage() {
                         entityType="outline-beats"
                         bookId={activeBook.id}
                         companySlug={companySlug}
-                        onAccept={(draft) => {
-                          createOutline({
-                            chapterNumber: (draft.chapterNumber as number) || 1,
-                            title: (draft.title as string) || "New Chapter",
-                            beats: Array.isArray(draft.beats) ? (draft.beats as Record<string, unknown>[]) : [],
-                            source: "co_created",
-                          });
+                        onAccept={async (draft) => {
+                          // Multi-chapter drafts arrive as { chapters: [...] }
+                          // (finding #3); a bare single chapter still works.
+                          const chapters: Record<string, unknown>[] = Array.isArray(draft.chapters)
+                            ? (draft.chapters as Record<string, unknown>[])
+                            : [draft];
+                          for (const ch of chapters) {
+                            await createOutline({
+                              chapterNumber: (ch.chapterNumber as number) || 1,
+                              title: (ch.title as string) || "New Chapter",
+                              beats: Array.isArray(ch.beats) ? (ch.beats as Record<string, unknown>[]) : [],
+                              source: "co_created",
+                            });
+                          }
                           setShowGenOutlineBeats(false);
                         }}
                         onDiscard={() => setShowGenOutlineBeats(false)}

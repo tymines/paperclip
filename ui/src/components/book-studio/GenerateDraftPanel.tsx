@@ -8,6 +8,20 @@ import { Sparkles, X, Check, RotateCcw, Loader2 } from "lucide-react";
 
 // ── Inline apiFetch (same pattern as BookWritingPage) ────────────────────────
 
+/** True when a proxy (e.g. Cloudflare) answered with an HTML error page. */
+function looksLikeHtml(text: string): boolean {
+  const t = text.trimStart().slice(0, 200).toLowerCase();
+  return t.startsWith("<!doctype") || t.startsWith("<html") || t.includes("<head>");
+}
+
+class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${url}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
@@ -15,7 +29,20 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    // Never dump a raw gateway HTML page into the UI (acceptance finding #2):
+    // prefer the JSON error field; otherwise a friendly status-based message.
+    let message: string;
+    try {
+      const j = JSON.parse(text);
+      message = (j.error || j.message || res.statusText || `HTTP ${res.status}`).slice(0, 300);
+    } catch {
+      message = looksLikeHtml(text) || !text
+        ? res.status === 502 || res.status === 504
+          ? "The server took too long to respond (gateway timeout). Long generations can trip the proxy — try again."
+          : `Server error (HTTP ${res.status}). Try again in a moment.`
+        : `API ${res.status}: ${text.slice(0, 200)}`;
+    }
+    throw new ApiError(res.status, message);
   }
   if (res.status === 204) return undefined as unknown as T;
   return res.json();
@@ -95,10 +122,23 @@ export function GenerateDraftPanel({
 
     try {
       const route = generateRoute(entityType);
-      const res = await apiFetch<{ draft: Record<string, unknown> }>(
-        `/companies/${companySlug}/book-studio/books/${bookId}${route}`,
-        { method: "POST", body: JSON.stringify({ prompt }), signal: controller.signal },
-      );
+      const doFetch = () =>
+        apiFetch<{ draft: Record<string, unknown> }>(
+          `/companies/${companySlug}/book-studio/books/${bookId}${route}`,
+          { method: "POST", body: JSON.stringify({ prompt }), signal: controller.signal },
+        );
+      let res: { draft: Record<string, unknown> };
+      try {
+        res = await doFetch();
+      } catch (firstErr: unknown) {
+        // One automatic retry on transient gateway failures (finding #2 —
+        // a 502 mid-generation succeeded on manual retry).
+        const status = firstErr instanceof ApiError ? firstErr.status : 0;
+        if (status !== 502 && status !== 503 && status !== 504) throw firstErr;
+        await new Promise((r) => setTimeout(r, 1500));
+        if (controller.signal.aborted) throw firstErr;
+        res = await doFetch();
+      }
       setDraft(res.draft);
       setState("draft");
     } catch (err: unknown) {
@@ -156,9 +196,20 @@ export function GenerateDraftPanel({
                 {(draft as Record<string, unknown>).description as string}
               </p>
             )}
-            {(draft as Record<string, unknown>).rules && (
+            {(draft as Record<string, unknown>).rules != null && (
               <div className="text-[10px] text-gray-600">
-                Rules: {JSON.stringify((draft as Record<string, unknown>).rules).slice(0, 80)}...
+                {/* finding #4: render rule text, never raw serialized JSON */}
+                Rules: {(() => {
+                  const r = (draft as Record<string, unknown>).rules;
+                  const text = typeof r === "string"
+                    ? r
+                    : Array.isArray(r)
+                      ? r.map(String).join("; ")
+                      : r && typeof r === "object"
+                        ? Object.values(r as Record<string, unknown>).map(String).join("; ")
+                        : String(r);
+                  return text.length > 120 ? `${text.slice(0, 120)}…` : text;
+                })()}
               </div>
             )}
           </>
@@ -180,18 +231,30 @@ export function GenerateDraftPanel({
           </>
         )}
 
-        {/* Outline-beats draft */}
-        {entityType === "outline-beats" && (
-          <>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Ch.{(draft as Record<string, unknown>).chapterNumber as number || "?"}</span>
-              <span className="text-sm font-medium text-gray-200">{(draft as Record<string, unknown>).title as string || "Untitled"}</span>
+        {/* Outline-beats draft — supports multi-chapter { chapters: [...] } */}
+        {entityType === "outline-beats" && (() => {
+          const chapters: Record<string, unknown>[] = Array.isArray((draft as Record<string, unknown>).chapters)
+            ? ((draft as Record<string, unknown>).chapters as Record<string, unknown>[])
+            : [draft as Record<string, unknown>];
+          return (
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {chapters.length > 1 && (
+                <div className="text-[10px] text-purple-300">{chapters.length} chapters</div>
+              )}
+              {chapters.map((ch, i) => (
+                <div key={i}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-500">Ch.{(ch.chapterNumber as number) || "?"}</span>
+                    <span className="text-sm font-medium text-gray-200">{(ch.title as string) || "Untitled"}</span>
+                  </div>
+                  <div className="text-[10px] text-gray-600">
+                    {Array.isArray(ch.beats) ? `${(ch.beats as unknown[]).length} beats` : "No beats"}
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="text-[10px] text-gray-600">
-              {Array.isArray((draft as Record<string, unknown>).beats) ? `${((draft as Record<string, unknown>).beats as unknown[]).length} beats` : "No beats"}
-            </div>
-          </>
-        )}
+          );
+        })()}
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 pt-1">

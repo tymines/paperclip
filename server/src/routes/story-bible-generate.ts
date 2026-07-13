@@ -26,6 +26,7 @@ interface GeminiResponse {
     content?: {
       parts?: { text?: string }[];
     };
+    finishReason?: string;
   }[];
 }
 
@@ -56,7 +57,10 @@ async function callGemini(
       ],
       generationConfig: {
         temperature: 0.9,
-        maxOutputTokens: 2048,
+        // gemini-2.5-pro is a THINKING model: reasoning tokens count against
+        // this budget. 2048 caused silent truncation (broken JSON) on bigger
+        // asks like multi-chapter outlines — keep this generous.
+        maxOutputTokens: 16384,
       },
     }),
   });
@@ -70,14 +74,25 @@ async function callGemini(
   }
 
   const data = (await res.json()) as GeminiResponse;
+  const cand = data.candidates?.[0];
   const text =
-    data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ??
-    "";
+    cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
 
   if (!text) {
     throw Object.assign(new Error("Gemini returned an empty response"), {
       status: 502,
     });
+  }
+
+  if (cand?.finishReason === "MAX_TOKENS") {
+    // Truncated JSON is unusable — surface a clear, actionable error instead
+    // of a downstream parse failure.
+    throw Object.assign(
+      new Error(
+        "Generation was cut off by the output limit — try asking for fewer chapters/items at once.",
+      ),
+      { status: 502 },
+    );
   }
 
   return text;
@@ -227,8 +242,9 @@ function normalizeEntityOutput(
 // ── JSON extraction helper ──────────────────────────────────────────────────
 
 function extractJson(text: string): Record<string, unknown> {
-  // Try to find a JSON object in the response (handles markdown code fences)
-  const jsonMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  // Try to find a JSON object in the response (handles markdown code fences).
+  // Greedy match — a non-greedy one cuts nested objects at the first `}`.
+  const jsonMatch = text.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/);
   const raw = jsonMatch ? jsonMatch[1] : text;
 
   // Find the first { and last }
@@ -374,14 +390,93 @@ export function storyBibleGenerateRoutes(db: Db) {
     ]),
   );
 
-  // Outline beats
+  // Outline beats — dedicated multi-chapter handler (acceptance finding #3:
+  // the generic single-entity handler ignored "N chapters" requests and let
+  // the model pick arbitrary chapter numbers, e.g. Ch.6 on an empty outline).
+  // Returns { draft: { chapters: [{ chapterNumber, title, beats }] } } —
+  // numbering is assigned server-side, sequentially after the existing outline.
   router.post(
     "/companies/:companyId/book-studio/books/:bookId/generate/outline-beats",
-    buildGenerateHandler("outline-beats", [
-      "chapterNumber",
-      "title",
-      "beats",
-    ]),
+    async (req: any, res: any, next: any) => {
+      try {
+        const { companyId, bookId } = req.params;
+        assertCompanyAccess(req, companyId);
+
+        const userPrompt: string | undefined =
+          typeof req.body?.prompt === "string" && req.body.prompt.trim()
+            ? req.body.prompt.trim()
+            : undefined;
+
+        const book = await db
+          .select({ id: books.id, title: books.title })
+          .from(books)
+          .where(eq(books.id, bookId))
+          .then((r) => r[0]);
+        if (!book) {
+          throw Object.assign(new Error("Book not found"), { status: 404 });
+        }
+
+        const ctx = await loadBibleContext(db, bookId);
+        const nextNumber =
+          ctx.outline.length > 0
+            ? Math.max(...ctx.outline.map((o) => o.chapterNumber)) + 1
+            : 1;
+
+        const systemInstruction = [
+          `You are a creative writing assistant developing the chapter outline for the book "${book.title}".`,
+          "Return ONLY valid JSON with no additional text and no markdown code fences, shaped EXACTLY like:",
+          `{ "chapters": [ { "chapterNumber": ${nextNumber}, "title": "…", "beats": ["…", "…"] } ] }`,
+          "If the user asks for multiple chapters (e.g. \"10 chapters\"), generate ALL of them in one response.",
+          "If the user does not specify a count, generate exactly 1 chapter.",
+          `Number chapters sequentially starting at ${nextNumber} (the outline already has ${ctx.outline.length} chapter(s)).`,
+          "Each chapter gets 4-6 beats; each beat is a short narrative moment (1-2 sentences).",
+        ].join("\n");
+
+        const userMessage = [
+          `EXISTING BIBLE CONTEXT:\n${formatContext(ctx)}`,
+          userPrompt ? `\nUSER REQUEST: ${userPrompt}` : "",
+          "\nGenerate the outline chapters as JSON now.",
+        ].join("\n");
+
+        const raw = await callGemini(systemInstruction, userMessage);
+        const parsed = extractJson(raw);
+
+        // Accept both shapes: { chapters: [...] } or a bare single chapter.
+        const rawChapters: Record<string, unknown>[] = Array.isArray(parsed.chapters)
+          ? (parsed.chapters as Record<string, unknown>[])
+          : [parsed];
+
+        if (rawChapters.length === 0) {
+          throw Object.assign(new Error("Gemini returned no chapters"), { status: 502 });
+        }
+
+        // Deterministic numbering: sequential after the existing outline —
+        // never trust model-picked numbers (mis-numbering was finding #3).
+        const chapters = rawChapters.map((ch, i) => {
+          const normalized = normalizeEntityOutput("outline-beats", ch);
+          return {
+            chapterNumber: nextNumber + i,
+            title: typeof normalized.title === "string" && normalized.title ? normalized.title : `Chapter ${nextNumber + i}`,
+            beats: Array.isArray(normalized.beats) ? normalized.beats : [],
+          };
+        });
+
+        res.json({
+          draft: { chapters },
+          status: "draft",
+          entityType: "outline-beats",
+        });
+      } catch (err: any) {
+        if (err.status) {
+          res.status(err.status).json({
+            error: err.message,
+            ...(err.status >= 500 ? {} : { details: err.details }),
+          });
+        } else {
+          next(err);
+        }
+      }
+    },
   );
 
   return router;

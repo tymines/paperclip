@@ -84,6 +84,20 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   const [assistNotice, setAssistNotice] = useState<string | null>(null);
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${bookId}`;
+  // Last content loaded from / saved to the server — used to detect whether
+  // the user has local unsaved divergence before applying a background refresh.
+  const lastLoadedRef = useRef<string>("");
+
+  // Acceptance finding #5: selectedCh was initialized ONCE at mount, before
+  // outlineEntries loaded — leaving the editor stuck on "No chapters yet"
+  // until a manual book re-select. Keep it synced as the outline arrives.
+  useEffect(() => {
+    if (chapters.length === 0) return;
+    if (selectedCh == null || !chapters.some((c) => c.chapterNumber === selectedCh)) {
+      setSelectedCh(chapters[0].chapterNumber);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outlineEntries]);
 
   // Load chapter content when selected chapter changes
   useEffect(() => {
@@ -97,11 +111,39 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
         const ch = res.chapters?.find((c) => c.chapterNumber === selectedCh);
         setContent(ch?.content ?? "");
         setTitle(ch?.title ?? "");
+        lastLoadedRef.current = ch?.content ?? "";
         setSaveStatus("saved");
       })
       .catch(() => { if (!cancelled) setSaveStatus("error"); });
     return () => { cancelled = true; };
   }, [selectedCh, bookId]);
+
+  // While Autopilot is writing chapters server-side, refresh the open chapter
+  // so the editor tracks reality (finding #5) — but never clobber local edits:
+  // only apply when the pane still matches the last server-loaded content.
+  useEffect(() => {
+    if (autonomyMode !== "autopilot" || selectedCh == null) return;
+    const t = setInterval(async () => {
+      if (streamingRef.current) return;
+      try {
+        const res = await apiFetch<{ chapters: Array<{ chapterNumber: number; title: string; content: string }> }>(
+          `${API_PREFIX}/chapters`
+        );
+        const ch = res.chapters?.find((c) => c.chapterNumber === selectedCh);
+        const fresh = ch?.content ?? "";
+        setContent((current) => {
+          if (fresh !== lastLoadedRef.current && current === lastLoadedRef.current) {
+            lastLoadedRef.current = fresh;
+            if (ch?.title) setTitle(ch.title);
+            return fresh;
+          }
+          return current;
+        });
+      } catch { /* transient poll failure — next tick */ }
+    }, 8000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autonomyMode, selectedCh, bookId]);
 
   // Jump to chapter from external signal (e.g. review note click)
   useEffect(() => {
@@ -129,6 +171,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
         method: "PATCH",
         body: JSON.stringify({ content: text, title: t }),
       });
+      lastLoadedRef.current = text;
       setSaveStatus("saved");
     } catch {
       setSaveStatus("error");
@@ -183,6 +226,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
         );
         setContent(fallback.content ?? "");
         if (fallback.title) setTitle(fallback.title);
+        lastLoadedRef.current = fallback.content ?? "";
         setSaveStatus("saved");
         return;
       }
@@ -221,6 +265,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
             gotDone = true;
             setContent(typeof j.content === "string" ? j.content : "");
             if (typeof j.title === "string" && j.title) setTitle(j.title);
+            lastLoadedRef.current = typeof j.content === "string" ? j.content : "";
             setSaveStatus("saved");
           } else if (ev === "error") {
             throw new Error(typeof j.message === "string" ? j.message : "Stream error");

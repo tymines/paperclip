@@ -263,11 +263,24 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
       // --- Phase: Drafting (prose — Gemini → DeepSeek → Anthropic) ---
       state.phase = "drafting";
       writeCheckpoint(state);
-      const prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
+      let prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
       if (!prose || !prose.trim()) {
         throw new Error(`Writer returned empty prose for chapter ${ch.chapterNumber}`);
       }
       state.spendCents += 5; // rough estimate per draft call
+
+      // Suspiciously-short guard (acceptance finding #6: a 122-word "chapter"
+      // sailed through). One redraft attempt before accepting a stub.
+      const wordCount = prose.split(/\s+/).filter(Boolean).length;
+      if (wordCount < 350) {
+        console.warn(
+          `[autopilot] chapter ${ch.chapterNumber} draft only ${wordCount} words — redrafting once`,
+        );
+        const retry = await callLLM(ctx.systemPrompt, ctx.userPrompt);
+        state.spendCents += 5;
+        const retryWords = retry.split(/\s+/).filter(Boolean).length;
+        if (retryWords > wordCount) prose = retry;
+      }
 
       // Re-check right before writing: if prose appeared meanwhile (e.g. a
       // human edit or a manual draft), skip — autopilot never overwrites.
