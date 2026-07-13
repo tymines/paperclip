@@ -296,22 +296,31 @@ function EditableField({
   onChange,
   multiline = false,
   placeholder = "",
+  rows = 2,
+  autoGrow = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   multiline?: boolean;
   placeholder?: string;
+  rows?: number;
+  autoGrow?: boolean;
 }) {
   return (
     <div className="mb-2">
       <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">{label}</label>
       {multiline ? (
         <textarea
-          className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500/50"
-          rows={2}
+          className={`w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50 ${autoGrow ? "resize-y overflow-hidden" : "resize-none"}`}
+          rows={rows}
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          onInput={autoGrow ? (e) => {
+            const t = e.currentTarget;
+            t.style.height = "auto";
+            t.style.height = `${Math.min(t.scrollHeight + 2, 480)}px`;
+          } : undefined}
           placeholder={placeholder}
         />
       ) : (
@@ -347,18 +356,23 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   const [editSource, setEditSource] = useState(char.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  // Optional custom prompt (Tyler: "if I want a specific cover I can just
+  // describe it" — same for icons). Empty = server's auto-prompt.
+  const [showIconPrompt, setShowIconPrompt] = useState(false);
+  const [iconPrompt, setIconPrompt] = useState("");
 
-  const handleImageGenerate = async (_endpointType: string, _prompt: string) => {
+  const handleImageGenerate = async (customPrompt?: string) => {
     // Book Media round 2: character icons run through the provider registry
     // (book-media/character-icon) and persist as the character avatar
     // (metadata.imageUrl — migration 0154). Falls back to the legacy path if
     // the media route is unavailable.
     setImageGenerating(true);
+    setShowIconPrompt(false);
     try {
       const cidForMedia = mediaCompanyId ?? companySlug;
       const dispatched = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
         `/companies/${cidForMedia}/book-media/${bookId}/character-icon`,
-        { method: "POST", body: JSON.stringify({ characterId: char.id }) },
+        { method: "POST", body: JSON.stringify({ characterId: char.id, ...(customPrompt?.trim() ? { prompt: customPrompt.trim() } : {}) }) },
       );
       let job = dispatched.job;
       for (let i = 0; i < 45 && job.status !== "completed" && job.status !== "failed"; i++) {
@@ -439,7 +453,7 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   }
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
+    <div className="relative flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
       {(char.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
         <button
           type="button"
@@ -502,11 +516,31 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
           <Trash2 className="w-3 h-3" />
         </button>
         <CameraButton
-          onClick={() => handleImageGenerate("image", `Character portrait of ${char.name}${char.role ? `, ${char.role}` : ""}${char.description ? `. ${char.description}` : ""}`)}
+          onClick={() => setShowIconPrompt((v) => !v)}
           loading={imageGenerating}
-          title={`Generate image for ${char.name}`}
+          title={`Generate image for ${char.name} — optional custom prompt`}
         />
       </div>
+
+      {/* Optional custom prompt for icon generation */}
+      {showIconPrompt && !imageGenerating && (
+        <div className="absolute inset-x-2 bottom-2 z-10 flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-950/95 p-1.5 shadow-lg">
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+            placeholder={`Optional: describe ${char.name}'s icon… (empty = auto)`}
+            value={iconPrompt}
+            onChange={(e) => setIconPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleImageGenerate(iconPrompt); if (e.key === "Escape") setShowIconPrompt(false); }}
+          />
+          <button
+            onClick={() => void handleImageGenerate(iconPrompt)}
+            className="shrink-0 rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-500"
+          >
+            Generate
+          </button>
+        </div>
+      )}
 
       {/* Delete confirmation overlay */}
       {deleting && (
@@ -1039,6 +1073,8 @@ function OverviewEditor({
           value={editDesc}
           onChange={setEditDesc}
           multiline
+          rows={8}
+          autoGrow
           placeholder="What's this book about?"
         />
         <button

@@ -27,6 +27,10 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   const [iconTarget, setIconTarget] = useState<Record<string, string>>({}); // jobId -> characterId
   const [voiceId, setVoiceId] = useState("");
   const [trailerModel, setTrailerModel] = useState("");
+  // Optional custom prompts (Tyler: "if I want a specific cover I can just
+  // describe it"). Empty = the server's auto-prompt from title/context.
+  const [coverPrompt, setCoverPrompt] = useState("");
+  const [illPrompt, setIllPrompt] = useState("");
 
   const overviewQ = useQuery({
     queryKey: ["book-media", cid, bookId],
@@ -62,8 +66,14 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   const invalidate = () => qc.invalidateQueries({ queryKey: ["book-media", cid, bookId] });
   const onErr = (e: any) => pushToast({ title: "Request failed", body: String(e?.message ?? e).slice(0, 180), tone: "error" });
 
-  const coverMut = useMutation({ mutationFn: () => bookMediaApi.generateCover(cid!, bookId), onSuccess: invalidate, onError: onErr });
-  const illMut = useMutation({ mutationFn: (chapterId: string) => bookMediaApi.generateIllustration(cid!, bookId, { chapterId }), onSuccess: invalidate, onError: onErr });
+  const coverMut = useMutation({
+    mutationFn: () => bookMediaApi.generateCover(cid!, bookId, coverPrompt.trim() ? { prompt: coverPrompt.trim() } : undefined),
+    onSuccess: invalidate, onError: onErr,
+  });
+  const illMut = useMutation({
+    mutationFn: (chapterId: string) => bookMediaApi.generateIllustration(cid!, bookId, { chapterId, ...(illPrompt.trim() ? { prompt: illPrompt.trim() } : {}) }),
+    onSuccess: invalidate, onError: onErr,
+  });
   const trailerMut = useMutation({
     mutationFn: () => bookMediaApi.generateTrailer(cid!, bookId, { model: trailerModel }),
     onSuccess: invalidate, onError: onErr,
@@ -163,9 +173,16 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                     {ov.book.coverLocked ? "Cover locked" : "Lock cover"}
                   </button>
                 )}
+                <textarea
+                  value={coverPrompt}
+                  onChange={(e) => setCoverPrompt(e.target.value)}
+                  rows={3}
+                  placeholder="Optional: describe the cover you want — style, scene, mood… (empty = auto from title/premise)"
+                  className="w-full resize-y rounded-lg border border-gray-700 bg-gray-800/50 px-2.5 py-2 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
+                />
                 <button onClick={() => coverMut.mutate()} disabled={!imageProviderConfigured || coverMut.isPending}
                   className="w-full rounded-lg bg-blue-600 py-2 text-xs font-semibold text-white disabled:opacity-40">
-                  {coverMut.isPending ? "Dispatching…" : ov.book.coverUrl ? "Regenerate cover" : "Generate cover"}
+                  {coverMut.isPending ? "Dispatching…" : coverPrompt.trim() ? "Generate cover from my prompt" : ov.book.coverUrl ? "Regenerate cover" : "Generate cover"}
                 </button>
                 {ov.book.coverUrl && !ov.book.coverLocked && (
                   <p className="text-center text-[10px] text-gray-600">Regenerating adds to the Library — your current cover only changes when you pick "Set as cover".</p>
@@ -184,6 +201,13 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
 
             {section === "illustrations" && ov && (
               <div className="space-y-3">
+                <textarea
+                  value={illPrompt}
+                  onChange={(e) => setIllPrompt(e.target.value)}
+                  rows={2}
+                  placeholder="Optional: custom prompt for the next Illustrate click… (empty = auto from the chapter)"
+                  className="w-full resize-y rounded-lg border border-gray-700 bg-gray-800/50 px-2.5 py-2 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-500/50 focus:outline-none"
+                />
                 {ov.chapters.length === 0 && <div className="text-xs text-gray-500">No chapters yet.</div>}
                 {ov.chapters.map((ch) => (
                   <div key={ch.id} className="rounded-lg border border-gray-800 p-3">
