@@ -32,13 +32,14 @@ export function storyBibleRoutes(db: Db) {
     const row = await db.select().from(storyBibleCharacters)
       .where(and(eq(storyBibleCharacters.id, req.params.id), eq(storyBibleCharacters.bookId, req.params.bookId))).limit(1);
     if (!row.length) throw notFound("character");
-    const { name, role, description, voiceCard, locked } = req.body ?? {};
+    const { name, role, description, voiceCard, locked, metadata } = req.body ?? {};
     const [updated] = await db.update(storyBibleCharacters).set({
       ...(name !== undefined && { name }),
       ...(role !== undefined && { role }),
       ...(description !== undefined && { description }),
       ...(voiceCard !== undefined && { voiceCard }),
       ...(locked !== undefined && { locked }),
+      ...(metadata !== undefined && { metadata }),
       updatedAt: new Date(),
     }).where(eq(storyBibleCharacters.id, req.params.id)).returning();
     res.json(updated);
