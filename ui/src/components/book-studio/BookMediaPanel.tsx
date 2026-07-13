@@ -116,17 +116,17 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
 
   return (
     <>
-      {/* toggle — fixed, layout-independent */}
+      {/* toggle — fixed, layout-independent; safe-area aware on mobile */}
       <button
         onClick={() => setOpen(!open)}
         title="Book media — cover, illustrations, trailer, narration"
-        className="fixed bottom-20 right-5 z-40 flex items-center gap-2 rounded-full border border-gray-700 bg-gray-900/95 px-4 py-2 text-xs font-semibold text-gray-200 shadow-lg backdrop-blur hover:border-blue-500"
+        className="fixed bottom-20 right-5 z-40 mb-[env(safe-area-inset-bottom)] flex items-center gap-2 rounded-full border border-gray-700 bg-gray-900/95 px-4 py-2 text-xs font-semibold text-gray-200 shadow-lg backdrop-blur hover:border-blue-500"
       >
         <Clapperboard size={14} className="text-blue-400" /> Media
       </button>
 
       {open && (
-        <div className="fixed inset-y-0 right-0 z-50 flex w-[420px] max-w-full flex-col border-l border-gray-800 bg-gray-950 shadow-2xl">
+        <div className="fixed z-50 flex flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
           <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-gray-100">
               <Clapperboard size={15} className="text-blue-400" /> Book Media
@@ -142,10 +142,10 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
             </div>
           )}
 
-          <div className="flex gap-1 border-b border-gray-800 px-3 py-2">
+          <div className="flex gap-1 border-b border-gray-800 px-3 py-2 overflow-x-auto">
             {([["cover", ImageIcon, "Cover"], ["illustrations", Sparkles, "Illustrations"], ["trailer", Film, "Trailer"], ["narration", Mic, "Narration"], ["library", FolderOpen, "Library"]] as const).map(([key, Icon, label]) => (
               <button key={key} onClick={() => setSection(key)}
-                className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${section === key ? "bg-gray-800 text-gray-100" : "text-gray-500 hover:text-gray-300"}`}>
+                className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${section === key ? "bg-gray-800 text-gray-100" : "text-gray-500 hover:text-gray-300"}`}>
                 <Icon size={12} /> {label}
               </button>
             ))}

@@ -355,7 +355,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-full items-center gap-2 overflow-x-auto pb-1 md:w-auto md:flex-wrap md:justify-end md:overflow-visible md:pb-0 [&>button]:shrink-0 [&>button]:whitespace-nowrap">
           <button
             onClick={draftProse}
             disabled={drafting || selectedCh == null}

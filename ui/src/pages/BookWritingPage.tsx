@@ -1202,6 +1202,11 @@ export function BookWritingPage() {
   const [notesCollapsed, setNotesCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("bookStudio.notesCollapsed") === "1"; } catch { return false; }
   });
+  // Mobile (<md): single-column flow with a Bible | Write | Notes pane switcher
+  // (Tyler, 2026-07-12: desktop three-pane layout crushed to a mess on phone).
+  const [mobilePane, setMobilePane] = useState<"bible" | "write" | "notes">("write");
+  // Mobile header overflow ("⋯") menu holding the secondary actions.
+  const [moreOpen, setMoreOpen] = useState(false);
 
   // Autopilot loop status (server-side orchestrator)
   const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
@@ -1726,16 +1731,16 @@ export function BookWritingPage() {
 
   return (
     <ErrorBoundary>
-      <div className="h-full flex flex-col bg-gray-950 text-gray-100">
+      <div className="h-full flex flex-col bg-gray-950 text-gray-100 pb-[env(safe-area-inset-bottom)]">
       {/* ── Top Bar ────────────────────────────────────────────────────── */}
-      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-5 py-3 shrink-0">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
-          <span className="text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-3 md:px-5 py-3 shrink-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 md:gap-x-4 gap-y-2">
+          <span className="hidden sm:inline text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
             PAPERCLIP
           </span>
-          <span className="text-gray-700">/</span>
+          <span className="hidden sm:inline text-gray-700">/</span>
           <h1 className="text-sm font-semibold text-gray-100">Book Studio</h1>
-          <span className="text-gray-700">·</span>
+          <span className="hidden sm:inline text-gray-700">·</span>
           {(activeBook as any)?.metadata?.coverUrl && (
             <img
               src={String((activeBook as any).metadata.coverUrl)}
@@ -1745,7 +1750,7 @@ export function BookWritingPage() {
               onError={(e) => { e.currentTarget.style.display = "none"; }}
             />
           )}
-          <span className="max-w-56 truncate text-sm text-gray-400 italic" title={activeBook?.title || undefined}>
+          <span className="hidden md:inline max-w-56 truncate text-sm text-gray-400 italic" title={activeBook?.title || undefined}>
             {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>
           {booksList.length > 0 && (
@@ -1774,7 +1779,7 @@ export function BookWritingPage() {
           <div className="flex items-center rounded-md border border-gray-700 text-xs">
             <button
               className={cn(
-                "flex items-center gap-1.5 rounded-l-md px-3 py-1.5 border-r border-gray-700",
+                "flex items-center gap-1.5 rounded-l-md px-2 md:px-3 py-1.5 border-r border-gray-700",
                 autonomyMode === "manual" ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
               )}
               disabled={dialSaving || !activeBook}
@@ -1786,7 +1791,7 @@ export function BookWritingPage() {
             </button>
             <button
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 border-r border-gray-700",
+                "flex items-center gap-1.5 px-2 md:px-3 py-1.5 border-r border-gray-700",
                 assistedMode ? "bg-purple-600/20 text-purple-300" : "text-gray-400 hover:text-gray-200",
               )}
               disabled={dialSaving || !activeBook}
@@ -1798,7 +1803,7 @@ export function BookWritingPage() {
             </button>
             <button
               className={cn(
-                "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
+                "flex items-center gap-1.5 rounded-r-md px-2 md:px-3 py-1.5 relative",
                 autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
               )}
               disabled={dialSaving || !activeBook}
@@ -1833,7 +1838,7 @@ export function BookWritingPage() {
           <button
             onClick={handleAutopilotPauseResume}
             disabled={!autopilotMode}
-            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+            className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
               autopilotMode ? "border-amber-700 text-amber-400 hover:text-amber-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
             )}
             title={autopilotMode ? "Pause/Resume autopilot" : "Enable Autopilot mode"}
@@ -1868,7 +1873,7 @@ export function BookWritingPage() {
           ) : (
             <button
               onClick={() => { if (autopilotMode) setShowGuidanceInput(!showGuidanceInput); }}
-              className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
                 autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
               )}
               title={autopilotMode ? "Send steering guidance to autopilot" : "Enable Autopilot mode"}
@@ -1878,7 +1883,7 @@ export function BookWritingPage() {
           )}
           <button
             onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
-            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+            className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
               autopilotMode ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
             )}
             title={autopilotMode ? "Review current chapter draft" : "Enable Autopilot mode"}
@@ -1887,21 +1892,21 @@ export function BookWritingPage() {
           </button>
           <button
             onClick={() => setIsChatOpen(true)}
-            className="rounded-md border border-purple-700 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-200 hover:border-purple-500 flex items-center gap-1.5"
+            className="rounded-md border border-purple-700 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-200 hover:border-purple-500 hidden md:flex items-center gap-1.5"
           >
             <Sparkles className="w-3 h-3" /> Brainstorm
           </button>
           <button
             onClick={() => { setShowExportModal(true); void handleCheckConsistency(); }}
             disabled={!activeBook || checkingConsistency}
-            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 flex items-center gap-1.5 disabled:opacity-50"
+            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 hidden md:flex items-center gap-1.5 disabled:opacity-50"
           >
             <AlertTriangle className="w-3 h-3" /> {checkingConsistency ? "Checking…" : "Check Consistency"}
           </button>
           <button
             onClick={handleNarrateEstimate}
             disabled={narrating}
-            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 flex items-center gap-1.5 disabled:opacity-50"
+            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 hidden md:flex items-center gap-1.5 disabled:opacity-50"
           >
             {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
             {narrating ? "Generating…" : "Narrate Book"}
@@ -1912,6 +1917,43 @@ export function BookWritingPage() {
           >
             <Download className="w-3 h-3" /> Export
           </button>
+
+          {/* Mobile overflow menu — the secondary action crowd lives here <md
+              (Tyler, 2026-07-12: header actions piled into a ragged 4-row mess
+              on the phone). The mode dial + Export stay visible. */}
+          <div className="relative md:hidden">
+            <button
+              onClick={() => setMoreOpen((v) => !v)}
+              className="rounded-md border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100"
+              title="More actions"
+            >
+              ⋯
+            </button>
+            {moreOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-md border border-gray-700 bg-gray-950 py-1 shadow-2xl">
+                  {([
+                    { label: autopilotPaused ? "Resume autopilot" : "Pause autopilot", icon: autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />, disabled: !autopilotMode, run: handleAutopilotPauseResume },
+                    { label: "Steer autopilot", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setShowGuidanceInput(true) },
+                    { label: "Review draft", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setAutopilotState("reviewing") },
+                    { label: "Brainstorm", icon: <Sparkles className="w-3 h-3" />, disabled: false, run: () => setIsChatOpen(true) },
+                    { label: checkingConsistency ? "Checking…" : "Check consistency", icon: <AlertTriangle className="w-3 h-3" />, disabled: !activeBook || checkingConsistency, run: () => { setShowExportModal(true); void handleCheckConsistency(); } },
+                    { label: narrating ? "Generating…" : "Narrate book", icon: <Volume2 className="w-3 h-3" />, disabled: narrating, run: handleNarrateEstimate },
+                  ] as const).map((item) => (
+                    <button
+                      key={item.label}
+                      disabled={item.disabled}
+                      onClick={() => { setMoreOpen(false); void item.run(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40"
+                    >
+                      {item.icon} {item.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Narrate cost-confirm dialog */}
@@ -1985,14 +2027,39 @@ export function BookWritingPage() {
       <div className={cn(
         "flex-1 min-h-0 overflow-x-hidden",
         focusMode
-          ? ""
-          : notesCollapsed
-            ? "grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_2.75rem]"
-            : "grid grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,0.9fr)]",
+          ? "flex flex-col"
+          : cn(
+              // <md: single-column flow driven by the mobile pane switcher.
+              "flex flex-col md:grid",
+              notesCollapsed
+                ? "md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_2.75rem]"
+                : "md:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,0.9fr)]",
+            ),
       )}>
+        {/* Mobile pane switcher (Bible | Write | Notes) */}
+        {!focusMode && (
+          <div className="flex md:hidden border-b border-gray-800 shrink-0">
+            {([["bible", "Bible"], ["write", "Write"], ["notes", "Notes"]] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setMobilePane(id)}
+                className={cn(
+                  "flex-1 py-2 text-xs font-medium border-b-2 transition-colors",
+                  mobilePane === id ? "border-blue-500 text-blue-300" : "border-transparent text-gray-500",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* LEFT PANE — Story Bible */}
         {!focusMode && (
-        <aside className="flex min-w-0 flex-col border-r border-gray-800 min-h-0">
+        <aside className={cn(
+          "min-w-0 flex-col md:border-r border-gray-800 min-h-0 md:flex",
+          mobilePane === "bible" ? "flex flex-1 md:flex-initial" : "hidden",
+        )}>
           {/* ── Readiness Bar ──────────────────────────────────────────────── */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
             <div className={cn("flex items-center gap-1", characters.length >= READINESS_TARGETS.characters ? "text-green-400" : "text-yellow-400")}>
@@ -2322,7 +2389,10 @@ export function BookWritingPage() {
         )}
 
         {/* CENTER PANE — Manuscript */}
-        <div className="flex min-w-0 flex-col min-h-0">
+        <div className={cn(
+          "min-w-0 flex-col min-h-0 md:flex",
+          (focusMode || mobilePane === "write") ? "flex flex-1 md:flex-initial" : "hidden",
+        )}>
           <ManuscriptEditor
             bookId={activeBook?.id ?? ""}
             companySlug={companySlug}
@@ -2337,19 +2407,24 @@ export function BookWritingPage() {
 
         {/* RIGHT PANE — Review Notes (collapsible; collapsed persists) */}
         {!focusMode && activeBook && (
-          <ReviewNotesPanel
-            bookId={activeBook.id}
-            companySlug={companySlug}
-            onSelectChapter={(ch) => setJumpToChapter(ch)}
-            onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
-            collapsed={notesCollapsed}
-            onToggleCollapse={() => {
-              setNotesCollapsed((v) => {
-                try { localStorage.setItem("bookStudio.notesCollapsed", v ? "0" : "1"); } catch { /* private mode */ }
-                return !v;
-              });
-            }}
-          />
+          <div className={cn(
+            "min-w-0 min-h-0 flex-col md:flex",
+            mobilePane === "notes" ? "flex flex-1 md:flex-initial" : "hidden",
+          )}>
+            <ReviewNotesPanel
+              bookId={activeBook.id}
+              companySlug={companySlug}
+              onSelectChapter={(ch) => { setJumpToChapter(ch); setMobilePane("write"); }}
+              onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
+              collapsed={notesCollapsed}
+              onToggleCollapse={() => {
+                setNotesCollapsed((v) => {
+                  try { localStorage.setItem("bookStudio.notesCollapsed", v ? "0" : "1"); } catch { /* private mode */ }
+                  return !v;
+                });
+              }}
+            />
+          </div>
         )}
       </div>
 

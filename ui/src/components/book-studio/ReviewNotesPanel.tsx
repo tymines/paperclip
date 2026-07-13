@@ -186,7 +186,7 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
   // ── Render ─────────────────────────────────────────────────────────────
   if (collapsed) {
     return (
-      <aside className="flex min-w-0 flex-col items-center gap-2 border-l border-gray-800 min-h-0 py-3">
+      <aside className="flex h-full flex-1 min-w-0 flex-col items-center gap-2 md:border-l border-gray-800 min-h-0 py-3">
         <button
           onClick={onToggleCollapse}
           title={`Expand review notes${notes.length > 0 ? ` (${notes.length})` : ""}`}
@@ -203,7 +203,7 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
     );
   }
   return (
-    <aside className="flex min-w-0 flex-col border-l border-gray-800 min-h-0">
+    <aside className="flex h-full flex-1 min-w-0 flex-col md:border-l border-gray-800 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-800 shrink-0">
         <h3 className="truncate text-xs font-semibold uppercase tracking-wider text-gray-400">
