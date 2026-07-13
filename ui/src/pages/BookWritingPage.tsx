@@ -580,6 +580,7 @@ interface LocationCardProps {
 }
 
 function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
+  const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
   const [editDesc, setEditDesc] = useState(loc.description);
@@ -588,15 +589,43 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
   const [editSource, setEditSource] = useState(loc.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [showImagePrompt, setShowImagePrompt] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
 
-  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+  // Location images run through the provider registry + persist via the apply
+  // route (permanent local copy + metadata.imageUrl — migration 0155). Exactly
+  // the character-icon pattern; the old path PATCHed metadata the table didn't
+  // have, so images silently never stuck ("isn't letting me generate images").
+  const handleImageGenerate = async (customPrompt?: string) => {
     setImageGenerating(true);
+    setShowImagePrompt(false);
     try {
-      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
-      if (imageUrl) {
-        onUpdate(loc.id, { metadata: { ...((loc.metadata as Record<string, unknown>) || {}), imageUrl } });
+      const cidForMedia = mediaCompanyId ?? companySlug;
+      const dispatched = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+        `/companies/${cidForMedia}/book-media/${bookId}/location-image`,
+        { method: "POST", body: JSON.stringify({ locationId: loc.id, ...(customPrompt?.trim() ? { prompt: customPrompt.trim() } : {}) }) },
+      );
+      let job = dispatched.job;
+      for (let i = 0; i < 45 && job.status !== "completed" && job.status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const poll = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+          `/companies/${cidForMedia}/creative-studio/jobs/${job.id}`,
+        );
+        job = poll.job;
       }
-    } catch { /* noop */ }
+      const imageUrl = job.status === "completed" ? job.outputs[0]?.url : undefined;
+      if (imageUrl) {
+        try {
+          const applied = await apiFetch<{ imageUrl?: string }>(
+            `/companies/${cidForMedia}/book-media/${bookId}/assets/${job.id}/apply`,
+            { method: "POST", body: JSON.stringify({ action: "set-location-image", locationId: loc.id }) },
+          );
+          onUpdate(loc.id, { metadata: { imageUrl: applied.imageUrl ?? imageUrl, imageJobId: job.id } });
+        } catch {
+          onUpdate(loc.id, { metadata: { imageUrl, imageJobId: job.id } });
+        }
+      }
+    } catch { /* keyed-off or dispatch failure — media panel shows the real state */ }
     setImageGenerating(false);
   };
 
@@ -644,9 +673,32 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group relative">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-900/50 text-sm">
-        🏔️
-      </div>
+      {(loc.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
+        <button
+          type="button"
+          onClick={() => onUpdate(loc.id, { metadata: { imageLocked: !(loc.metadata as Record<string, unknown>)?.imageLocked } })}
+          title={(loc.metadata as Record<string, unknown>)?.imageLocked
+            ? "Image locked — never auto-replaced by new generations. Click to unlock."
+            : "Click to lock this image so new generations never auto-replace it"}
+          className="relative h-9 w-9 shrink-0"
+        >
+          <img
+            src={String((loc.metadata as Record<string, unknown>).imageUrl)}
+            alt={loc.name}
+            className="h-9 w-9 rounded-md object-cover border border-gray-700"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+          {Boolean((loc.metadata as Record<string, unknown>)?.imageLocked) && (
+            <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-gray-900 p-0.5 text-yellow-400 border border-gray-700">
+              <Lock className="w-2.5 h-2.5" />
+            </span>
+          )}
+        </button>
+      ) : (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-900/50 text-sm">
+          🏔️
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-200 truncate">{loc.name}</span>
@@ -670,11 +722,31 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
           <Trash2 className="w-3 h-3" />
         </button>
         <CameraButton
-          onClick={() => handleImageGenerate("image", `Scene of ${loc.name}${loc.description ? `: ${loc.description.slice(0, 80)}` : ""}`)}
+          onClick={() => setShowImagePrompt((v) => !v)}
           loading={imageGenerating}
-          title={`Generate image for ${loc.name}`}
+          title={`Generate image for ${loc.name} — optional custom prompt`}
         />
       </div>
+
+      {/* Optional custom prompt for location image generation */}
+      {showImagePrompt && !imageGenerating && (
+        <div className="absolute inset-x-2 bottom-2 z-10 flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-950/95 p-1.5 shadow-lg">
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+            placeholder={`Optional: describe ${loc.name}… (empty = auto)`}
+            value={imagePrompt}
+            onChange={(e) => setImagePrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleImageGenerate(imagePrompt); if (e.key === "Escape") setShowImagePrompt(false); }}
+          />
+          <button
+            onClick={() => void handleImageGenerate(imagePrompt)}
+            className="shrink-0 rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-500"
+          >
+            Generate
+          </button>
+        </div>
+      )}
 
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">

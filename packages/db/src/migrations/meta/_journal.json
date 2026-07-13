@@ -1058,6 +1058,13 @@
       "when": 1783600700000,
       "tag": "0154_character_metadata",
       "breakpoints": true
+    },
+    {
+      "idx": 151,
+      "version": "7",
+      "when": 1783600800000,
+      "tag": "0155_location_metadata",
+      "breakpoints": true
     }
   ]
 }

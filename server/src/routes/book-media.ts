@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { eq, and, desc, asc, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { creativeJobs, books, manuscriptChapters, bookExports, storyBibleCharacters } from "@paperclipai/db";
+import { creativeJobs, books, manuscriptChapters, bookExports, storyBibleCharacters, storyBibleWorldLocations } from "@paperclipai/db";
 import { assertCompanyAccess } from "./authz.js";
 import { serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
@@ -334,6 +334,37 @@ export function bookMediaRoutes(db: Db) {
         }
       }
 
+      // Reconcile location images — same FILL-ONLY + self-heal semantics as
+      // characters (migration 0155: metadata.imageUrl/imageJobId/imageLocked).
+      const bibleLocs = await db.select().from(storyBibleWorldLocations)
+        .where(eq(storyBibleWorldLocations.bookId, book.id));
+      for (const loc of bibleLocs) {
+        const locMeta = (loc.metadata ?? {}) as Record<string, unknown>;
+        let locDirty = false;
+        if (!locMeta.imageUrl && !locMeta.imageLocked) {
+          const imgJob = jobs.find((j) => j.purpose === "location-image"
+            && (j.params as any)?.location_id === loc.id
+            && j.status === "completed" && j.outputs.length > 0);
+          if (imgJob) {
+            const localUrl = await persistJobAssetLocally(db, companyId, imgJob as any);
+            locMeta.imageUrl = localUrl ?? imgJob.outputs[0]!.url;
+            locMeta.imageJobId = imgJob.id;
+            locDirty = true;
+          }
+        } else if (locMeta.imageUrl && !isLocalAssetUrl(locMeta.imageUrl) && locMeta.imageJobId) {
+          const chosen = jobs.find((j) => j.id === locMeta.imageJobId && j.status === "completed" && j.outputs.length > 0);
+          if (chosen) {
+            const localUrl = await persistJobAssetLocally(db, companyId, chosen as any);
+            if (localUrl) { locMeta.imageUrl = localUrl; locDirty = true; }
+          }
+        }
+        if (locDirty) {
+          (loc as any).metadata = locMeta;
+          await db.update(storyBibleWorldLocations).set({ metadata: locMeta, updatedAt: new Date() })
+            .where(eq(storyBibleWorldLocations.id, loc.id));
+        }
+      }
+
       const chapterSummaries = chapters.map((ch) => {
         const chunks = jobs.filter((j) => j.chapterId === ch.id && j.purpose === "narration-chunk");
         const total = chunks.length;
@@ -370,6 +401,11 @@ export function bookMediaRoutes(db: Db) {
           id: c.id, name: c.name, role: c.role,
           iconUrl: ((c.metadata ?? {}) as any).imageUrl ?? null,
           iconLocked: ((c.metadata ?? {}) as any).iconLocked === true,
+        })),
+        locations: bibleLocs.map((l) => ({
+          id: l.id, name: l.name,
+          imageUrl: ((l.metadata ?? {}) as any).imageUrl ?? null,
+          imageLocked: ((l.metadata ?? {}) as any).imageLocked === true,
         })),
         assets: jobs
           .filter((j) => j.purpose && j.purpose !== "narration-chunk-superseded")
@@ -454,6 +490,38 @@ export function bookMediaRoutes(db: Db) {
     } catch (err) { next(err); }
   });
 
+  // ── POST .../book-media/:bookId/location-image ─────────────────────────
+  // Bible location-card Generate-image: completed asset becomes the location
+  // image (reconciled into storyBibleWorldLocations.metadata.imageUrl by the
+  // overview — migration 0155). Mirrors the character-icon flow exactly.
+  router.post("/companies/:companyId/book-media/:bookId/location-image", async (req, res, next) => {
+    try {
+      const companyId = req.params.companyId as string;
+      assertCompanyAccess(req, companyId);
+      const book = await getBook(db, companyId, req.params.bookId as string);
+      if (!book) return res.status(404).json({ error: "book not found" });
+      const locationId = req.body?.locationId as string | undefined;
+      if (!locationId) return res.status(422).json({ error: "locationId is required" });
+      const [location] = await db.select().from(storyBibleWorldLocations)
+        .where(and(eq(storyBibleWorldLocations.id, locationId), eq(storyBibleWorldLocations.bookId, book.id))).limit(1);
+      if (!location) return res.status(404).json({ error: "location not found" });
+      const explicit = typeof req.body?.provider === "string" ? (req.body.provider as ProviderId) : undefined;
+      const { provider, defaultModel } = await resolveImageProvider("Location image generation", explicit);
+      const model = typeof req.body?.model === "string" ? req.body.model : defaultModel;
+      const prompt = typeof req.body?.prompt === "string" && req.body.prompt.trim()
+        ? req.body.prompt.trim()
+        : `Establishing shot of ${location.name}${location.description ? `: ${location.description.slice(0, 400)}` : ""}. Atmospheric environment art, single cohesive scene, no characters in focus, consistent with the tone of "${book.title}". No text.`;
+      const actor = (req as any).actor;
+      const job = await dispatchJob(db, {
+        companyId, provider, mode: "image", model, prompt,
+        params: { aspect_ratio: "16:9", location_id: location.id, ...(req.body?.params ?? {}) }, refs: [],
+        bookId: book.id, purpose: "location-image", createdBy: actor?.actorId ?? "unknown",
+      });
+      await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.location_image_generate", entityType: "creative_job", entityId: job.id, details: { bookId: book.id, locationId: location.id } });
+      res.status(job.status === "failed" ? 502 : 201).json({ job });
+    } catch (err) { next(err); }
+  });
+
   // ── POST .../book-media/:bookId/assets/:jobId/apply ────────────────────
   // Library actions: set-cover / set-character-icon from any completed asset.
   router.post("/companies/:companyId/book-media/:bookId/assets/:jobId/apply", async (req, res, next) => {
@@ -496,7 +564,21 @@ export function bookMediaRoutes(db: Db) {
         await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.character_icon_set", entityType: "story_bible_character", entityId: character.id, details: { jobId: job.id, persisted: !!localUrl } });
         return res.json({ applied: "set-character-icon", characterId, iconUrl: url, persisted: !!localUrl });
       }
-      return res.status(422).json({ error: "action must be 'set-cover' | 'set-character-icon'" });
+      if (action === "set-location-image") {
+        const locationId = req.body?.locationId as string | undefined;
+        if (!locationId) return res.status(422).json({ error: "locationId is required for set-location-image" });
+        const [location] = await db.select().from(storyBibleWorldLocations)
+          .where(and(eq(storyBibleWorldLocations.id, locationId), eq(storyBibleWorldLocations.bookId, book.id))).limit(1);
+        if (!location) return res.status(404).json({ error: "location not found" });
+        const locMeta = (location.metadata ?? {}) as Record<string, unknown>;
+        locMeta.imageUrl = url;
+        locMeta.imageJobId = job.id;
+        await db.update(storyBibleWorldLocations).set({ metadata: locMeta, updatedAt: new Date() })
+          .where(eq(storyBibleWorldLocations.id, location.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: "book.location_image_set", entityType: "story_bible_world_location", entityId: location.id, details: { jobId: job.id, persisted: !!localUrl } });
+        return res.json({ applied: "set-location-image", locationId, imageUrl: url, persisted: !!localUrl });
+      }
+      return res.status(422).json({ error: "action must be 'set-cover' | 'set-character-icon' | 'set-location-image'" });
     } catch (err) { next(err); }
   });
 
@@ -534,7 +616,20 @@ export function bookMediaRoutes(db: Db) {
         await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: locked ? "book.character_icon_locked" : "book.character_icon_unlocked", entityType: "story_bible_character", entityId: character.id, details: {} });
         return res.json({ target: "character-icon", characterId, locked });
       }
-      return res.status(422).json({ error: "target must be 'cover' | 'character-icon'" });
+      if (target === "location-image") {
+        const locationId = req.body?.locationId as string | undefined;
+        if (!locationId) return res.status(422).json({ error: "locationId is required" });
+        const [location] = await db.select().from(storyBibleWorldLocations)
+          .where(and(eq(storyBibleWorldLocations.id, locationId), eq(storyBibleWorldLocations.bookId, book.id))).limit(1);
+        if (!location) return res.status(404).json({ error: "location not found" });
+        const locMeta = (location.metadata ?? {}) as Record<string, unknown>;
+        locMeta.imageLocked = locked;
+        await db.update(storyBibleWorldLocations).set({ metadata: locMeta, updatedAt: new Date() })
+          .where(eq(storyBibleWorldLocations.id, location.id));
+        await logActivity(db, { companyId, actorType: actor?.type === "agent" ? "agent" : "user", actorId: actor?.actorId ?? "unknown", action: locked ? "book.location_image_locked" : "book.location_image_unlocked", entityType: "story_bible_world_location", entityId: location.id, details: {} });
+        return res.json({ target: "location-image", locationId, locked });
+      }
+      return res.status(422).json({ error: "target must be 'cover' | 'character-icon' | 'location-image'" });
     } catch (err) { next(err); }
   });
 

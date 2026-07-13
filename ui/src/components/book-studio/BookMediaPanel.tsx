@@ -25,6 +25,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   const [section, setSection] = useState<"cover" | "illustrations" | "trailer" | "narration" | "library">("cover");
   const [assetFilter, setAssetFilter] = useState<string>("all");
   const [iconTarget, setIconTarget] = useState<Record<string, string>>({}); // jobId -> characterId
+  const [locTarget, setLocTarget] = useState<Record<string, string>>({}); // jobId -> locationId
   const [voiceId, setVoiceId] = useState("");
   const [trailerModel, setTrailerModel] = useState("");
   // Optional custom prompts (Tyler: "if I want a specific cover I can just
@@ -84,12 +85,12 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
     onError: onErr,
   });
   const applyMut = useMutation({
-    mutationFn: ({ jobId, action, characterId }: { jobId: string; action: "set-cover" | "set-character-icon"; characterId?: string }) =>
-      bookMediaApi.applyAsset(cid!, bookId, jobId, { action, characterId }),
+    mutationFn: ({ jobId, action, characterId, locationId }: { jobId: string; action: "set-cover" | "set-character-icon" | "set-location-image"; characterId?: string; locationId?: string }) =>
+      bookMediaApi.applyAsset(cid!, bookId, jobId, { action, characterId, locationId }),
     onSuccess: (r) => {
       invalidate();
       pushToast({
-        title: r.applied === "set-cover" ? "Cover updated" : "Character icon updated",
+        title: r.applied === "set-cover" ? "Cover updated" : r.applied === "set-location-image" ? "Location image updated" : "Character icon updated",
         body: r.persisted === false ? "Warning: could not save a permanent copy — the source URL may expire." : "Saved permanently.",
         tone: r.persisted === false ? "info" : "success",
       });
@@ -260,10 +261,10 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
               <div className="space-y-3">
                 {/* per-book asset library: every asset generated for this book */}
                 <div className="flex flex-wrap gap-1.5">
-                  {["all", "cover", "character-icon", "illustration", "trailer", "narration"].map((f) => (
+                  {["all", "cover", "character-icon", "location-image", "illustration", "trailer", "narration"].map((f) => (
                     <button key={f} onClick={() => setAssetFilter(f)}
                       className={`rounded px-2 py-1 text-[10px] ${assetFilter === f ? "bg-blue-600/20 text-blue-400 border border-blue-500/50" : "bg-gray-800 text-gray-400 border border-gray-700"}`}>
-                      {f === "character-icon" ? "icons" : f}
+                      {f === "character-icon" ? "icons" : f === "location-image" ? "locations" : f}
                     </button>
                   ))}
                 </div>
@@ -312,6 +313,21 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                                 <button
                                   onClick={() => iconTarget[a.id] && applyMut.mutate({ jobId: a.id, action: "set-character-icon", characterId: iconTarget[a.id] })}
                                   disabled={!iconTarget[a.id] || applyMut.isPending}
+                                  className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700 disabled:opacity-40">
+                                  <ImagePlus size={9} /> set
+                                </button>
+                              </span>
+                            )}
+                            {isImage && (ov.locations?.length ?? 0) > 0 && (
+                              <span className="flex items-center gap-1">
+                                <select value={locTarget[a.id] ?? ""} onChange={(e) => setLocTarget({ ...locTarget, [a.id]: e.target.value })}
+                                  className="rounded border border-gray-800 bg-gray-900 px-1 py-0.5 text-[9px] text-gray-300">
+                                  <option value="">location…</option>
+                                  {ov.locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                                </select>
+                                <button
+                                  onClick={() => locTarget[a.id] && applyMut.mutate({ jobId: a.id, action: "set-location-image", locationId: locTarget[a.id] })}
+                                  disabled={!locTarget[a.id] || applyMut.isPending}
                                   className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700 disabled:opacity-40">
                                   <ImagePlus size={9} /> set
                                 </button>
