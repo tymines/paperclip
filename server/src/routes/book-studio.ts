@@ -10,6 +10,7 @@ import {
   manuscriptChapters,
   bookAnnotations,
   bookReviewRuns,
+  creativeJobs,
 } from "@paperclipai/db";
 import {
   createStoryBibleCharacterSchema,
@@ -434,6 +435,42 @@ export function bookStudioRoutes(db: Db) {
     if (!updated) throw notFound("Book not found");
 
     res.json({ book: updated });
+  });
+
+  // DELETE /api/companies/:cid/book-studio/books/:bookId — delete a book and
+  // ALL its DB children (Tyler, 2026-07-12: "need to be able to delete books").
+  // bible entities / chapters / annotations / exports / chat cascade via FK
+  // (onDelete: cascade); creative_jobs.book_id has NO cascade, so its rows are
+  // deleted explicitly first. Vault markdown files are NEVER touched — they
+  // remain on disk as an archive.
+  router.delete("/companies/:companyId/book-studio/books/:bookId", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+
+    const [book] = await db
+      .select()
+      .from(books)
+      .where(and(eq(books.id, bookId), eq(books.companyId, companyId)))
+      .limit(1);
+    if (!book) throw notFound("Book not found");
+
+    // creative_jobs.book_id has no ON DELETE — clear the book's media jobs first.
+    await db.delete(creativeJobs).where(eq(creativeJobs.bookId, bookId));
+    // Everything else (bible, chapters, annotations, exports, chat) cascades.
+    await db.delete(books).where(eq(books.id, bookId));
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId, actorType: actor.actorType, actorId: actor.actorId,
+      action: "book.deleted",
+      entityType: "book", entityId: bookId,
+      details: { title: book.title, slug: book.slug },
+    }).catch(() => {});
+
+    res.json({
+      deleted: true, id: bookId, title: book.title,
+      note: "Database records removed. Vault markdown files remain on disk as archive.",
+    });
   });
 
   // ── Story Bible Entity CRUD (nested under /companies/:cid/book-studio/books/:bookId) ──

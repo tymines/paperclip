@@ -1026,15 +1026,21 @@ function OverviewEditor({
   book,
   loading,
   onUpdate,
+  onDelete,
 }: {
   book: BookData | null;
   loading: boolean;
   onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => void;
+  onDelete?: () => Promise<void>;
 }) {
   const [editTitle, setEditTitle] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  // Delete confirmation: type the exact title to arm the button.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteText, setDeleteText] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   // Latch initial values from book on first load
   if (book && !initialized) {
@@ -1085,6 +1091,56 @@ function OverviewEditor({
           {saving ? "Saving..." : "Save Changes"}
         </button>
       </div>
+
+      {/* Danger zone — delete book (Tyler, 2026-07-12). DB rows only; vault
+          markdown files stay on disk as archive. */}
+      {onDelete && (
+        <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3 space-y-2">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-red-400/80">Danger zone</div>
+          {!confirmingDelete ? (
+            <button
+              onClick={() => { setConfirmingDelete(true); setDeleteText(""); }}
+              className="flex items-center gap-1 rounded border border-red-800 px-2.5 py-1 text-[10px] font-medium text-red-400 hover:text-red-200 hover:border-red-600"
+            >
+              <Trash2 className="w-3 h-3" /> Delete this book…
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-[11px] leading-relaxed text-gray-400">
+                This permanently deletes <span className="text-gray-200">"{book.title}"</span> from
+                the database — story bible, outline, chapters, annotations, and media job records.
+                The markdown files in the vault stay on disk as an archive.
+              </p>
+              <p className="text-[11px] text-gray-500">Type the book title to confirm:</p>
+              <input
+                autoFocus
+                className="w-full rounded border border-red-900/60 bg-gray-900 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-red-500/60"
+                placeholder={book.title}
+                value={deleteText}
+                onChange={(e) => setDeleteText(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={deleteText.trim() !== book.title.trim() || deleting}
+                  onClick={async () => {
+                    setDeleting(true);
+                    try { await onDelete(); } finally { setDeleting(false); setConfirmingDelete(false); }
+                  }}
+                  className="flex items-center gap-1 rounded bg-red-700 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-600 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3 h-3" /> {deleting ? "Deleting…" : "Delete permanently"}
+                </button>
+                <button
+                  onClick={() => setConfirmingDelete(false)}
+                  className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1269,6 +1325,25 @@ export function BookWritingPage() {
     const title = window.prompt("New book title:");
     if (title && title.trim()) void createBook(title.trim());
   }, [createBook]);
+
+  // Delete the active book (DB rows only — vault markdown stays as archive).
+  // Confirmation (type-the-title) happens in OverviewEditor's danger zone.
+  const deleteBook = useCallback(async () => {
+    if (!activeBook) return;
+    const deletedId = activeBook.id;
+    await apiFetch(`/companies/${companySlug}/book-studio/books/${deletedId}`, { method: "DELETE" });
+    const remaining = booksList.filter((b) => b.id !== deletedId);
+    setBooksList(remaining);
+    try {
+      if (localStorage.getItem("bookStudio.lastBookId") === deletedId) {
+        localStorage.removeItem("bookStudio.lastBookId");
+      }
+    } catch { /* private mode */ }
+    const next = remaining[0] ?? null;
+    setActiveBook(next);
+    if (next) { try { await loadBookEntities(next.id); } catch { /* loads on select */ } }
+    else { setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]); }
+  }, [activeBook, booksList, companySlug, loadBookEntities]);
 
   // ── CRUD helpers ───────────────────────────────────────────────────────
 
@@ -1968,6 +2043,7 @@ export function BookWritingPage() {
                 book={activeBook}
                 loading={loading}
                 onUpdate={updateBook}
+                onDelete={deleteBook}
               />
             )}
 
