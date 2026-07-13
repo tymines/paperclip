@@ -53,6 +53,9 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 interface Props {
   bookId: string;
   companySlug: string;
+  /** Collapsed to a slim rail (fit-in-viewport fix); parent owns the grid track width. */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
   onSelectChapter?: (chapterNumber: number) => void;
   /** ponytail: if a note has text offsets, clicking it calls this to highlight in editor */
   onHighlightOffset?: (chapterNumber: number, startOffset: number, endOffset: number) => void;
@@ -60,7 +63,7 @@ interface Props {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ReviewNotesPanel({ bookId, companySlug, onSelectChapter, onHighlightOffset }: Props) {
+export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onToggleCollapse, onSelectChapter, onHighlightOffset }: Props) {
   const [notes, setNotes] = useState<ReviewNote[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -181,19 +184,48 @@ export function ReviewNotesPanel({ bookId, companySlug, onSelectChapter, onHighl
     : notes;
 
   // ── Render ─────────────────────────────────────────────────────────────
+  if (collapsed) {
+    return (
+      <aside className="flex min-w-0 flex-col items-center gap-2 border-l border-gray-800 min-h-0 py-3">
+        <button
+          onClick={onToggleCollapse}
+          title={`Expand review notes${notes.length > 0 ? ` (${notes.length})` : ""}`}
+          className="relative rounded p-1.5 text-gray-500 hover:text-gray-200"
+        >
+          <MessageSquare className="w-4 h-4" />
+          {notes.length > 0 && (
+            <span className="absolute -right-0.5 -top-0.5 rounded-full bg-blue-600 px-1 text-[8px] font-semibold leading-3 text-white">
+              {notes.length > 99 ? "99+" : notes.length}
+            </span>
+          )}
+        </button>
+      </aside>
+    );
+  }
   return (
-    <aside className="flex flex-col border-l border-gray-800 min-h-0">
+    <aside className="flex min-w-0 flex-col border-l border-gray-800 min-h-0">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0">
-        <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 border-b border-gray-800 shrink-0">
+        <h3 className="truncate text-xs font-semibold uppercase tracking-wider text-gray-400">
           Review Notes
         </h3>
-        <button
-          onClick={() => { setShowForm(!showForm); setEditingId(null); }}
-          className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 hover:border-gray-600"
-        >
-          <Plus className="w-3 h-3" /> Add Note
-        </button>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            onClick={() => { setShowForm(!showForm); setEditingId(null); }}
+            className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 hover:border-gray-600"
+          >
+            <Plus className="w-3 h-3" /> Add Note
+          </button>
+          {onToggleCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              title="Collapse review notes"
+              className="rounded p-1 text-gray-500 hover:text-gray-200"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Category filters */}

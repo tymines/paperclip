@@ -1142,6 +1142,10 @@ export function BookWritingPage() {
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
+  // Review Notes panel collapse (persists) — part of the fit-in-viewport fix.
+  const [notesCollapsed, setNotesCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("bookStudio.notesCollapsed") === "1"; } catch { return false; }
+  });
 
   // Autopilot loop status (server-side orchestrator)
   const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
@@ -1649,8 +1653,8 @@ export function BookWritingPage() {
     <ErrorBoundary>
       <div className="h-full flex flex-col bg-gray-950 text-gray-100">
       {/* ── Top Bar ────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
-        <div className="flex items-center gap-4">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-5 py-3 shrink-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
           <span className="text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
             PAPERCLIP
           </span>
@@ -1666,7 +1670,7 @@ export function BookWritingPage() {
               onError={(e) => { e.currentTarget.style.display = "none"; }}
             />
           )}
-          <span className="text-sm text-gray-400 italic">
+          <span className="max-w-56 truncate text-sm text-gray-400 italic" title={activeBook?.title || undefined}>
             {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>
           {booksList.length > 0 && (
@@ -1690,7 +1694,7 @@ export function BookWritingPage() {
           </button>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
           {/* ── Autonomy dial: Manual | Assisted | Autopilot (persisted per-book) ── */}
           <div className="flex items-center rounded-md border border-gray-700 text-xs">
             <button
@@ -1898,13 +1902,24 @@ export function BookWritingPage() {
         />
       )}
 
-      {/* ── Three-Pane Layout ──────────────────────────────────────────── */}
-      <div className={cn("flex-1 min-h-0", focusMode ? "" : "grid grid-cols-[1fr_2fr_1fr]")}>
+      {/* ── Three-Pane Layout ──────────────────────────────────────────────
+          minmax(0,…) tracks: grid items default to min-width:auto, so wide
+          toolbar/chip rows were forcing the columns past 100vw → horizontal
+          scrollbar + the Review Notes panel clipping off-screen (Tyler,
+          2026-07-12). minmax(0,·) lets every track shrink to the viewport. */}
+      <div className={cn(
+        "flex-1 min-h-0 overflow-x-hidden",
+        focusMode
+          ? ""
+          : notesCollapsed
+            ? "grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)_2.75rem]"
+            : "grid grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,0.9fr)]",
+      )}>
         {/* LEFT PANE — Story Bible */}
         {!focusMode && (
-        <aside className="flex flex-col border-r border-gray-800 min-h-0">
+        <aside className="flex min-w-0 flex-col border-r border-gray-800 min-h-0">
           {/* ── Readiness Bar ──────────────────────────────────────────────── */}
-          <div className="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
             <div className={cn("flex items-center gap-1", characters.length >= READINESS_TARGETS.characters ? "text-green-400" : "text-yellow-400")}>
               <User className="w-3 h-3" />
               <span>Characters {characters.length}/{READINESS_TARGETS.characters}</span>
@@ -2231,7 +2246,7 @@ export function BookWritingPage() {
         )}
 
         {/* CENTER PANE — Manuscript */}
-        <div className="flex flex-col min-h-0">
+        <div className="flex min-w-0 flex-col min-h-0">
           <ManuscriptEditor
             bookId={activeBook?.id ?? ""}
             companySlug={companySlug}
@@ -2244,13 +2259,20 @@ export function BookWritingPage() {
           />
         </div>
 
-        {/* RIGHT PANE — Review Notes */}
+        {/* RIGHT PANE — Review Notes (collapsible; collapsed persists) */}
         {!focusMode && activeBook && (
           <ReviewNotesPanel
             bookId={activeBook.id}
             companySlug={companySlug}
             onSelectChapter={(ch) => setJumpToChapter(ch)}
             onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
+            collapsed={notesCollapsed}
+            onToggleCollapse={() => {
+              setNotesCollapsed((v) => {
+                try { localStorage.setItem("bookStudio.notesCollapsed", v ? "0" : "1"); } catch { /* private mode */ }
+                return !v;
+              });
+            }}
           />
         )}
       </div>
