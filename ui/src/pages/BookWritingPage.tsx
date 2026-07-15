@@ -124,6 +124,7 @@ interface StyleEntity {
   comps: string;
   sampleParagraph: string;
   bannedCliches: string[];
+  tropes: string[];
   locked: boolean;
   source: string;
   createdAt: string;
@@ -801,6 +802,7 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
   const [editComps, setEditComps] = useState(entry.comps);
   const [editSample, setEditSample] = useState(entry.sampleParagraph);
   const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
+  const [editTropes, setEditTropes] = useState((entry.tropes || []).join(", "));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
@@ -820,6 +822,7 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
     onUpdate(entry.id, {
       pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample,
       bannedCliches: editCliches.split(",").map((s) => s.trim()).filter(Boolean),
+      tropes: editTropes.split(",").map((s) => s.trim()).filter(Boolean),
       source: editSource,
     });
     setEditing(false);
@@ -833,6 +836,7 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
         <EditableField label="Comparisons" value={editComps} onChange={setEditComps} />
         <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline />
         <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} placeholder="suddenly, very unique" />
+        <EditableField label="Tropes (comma-separated)" value={editTropes} onChange={setEditTropes} placeholder="Enemies to Lovers, The Chosen One" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -858,6 +862,12 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
       {entry.comps && <p className="text-[11px] text-gray-500 mb-1">Comps: {entry.comps}</p>}
       {entry.sampleParagraph && (
         <p className="text-[11px] text-gray-400 italic line-clamp-2">"{entry.sampleParagraph}"</p>
+      )}
+      {entry.bannedCliches && entry.bannedCliches.length > 0 && (
+        <p className="text-[11px] text-red-400/70 mt-1">🚫 {entry.bannedCliches.join(", ")}</p>
+      )}
+      {entry.tropes && entry.tropes.length > 0 && (
+        <p className="text-[11px] text-blue-400/70 mt-1">🎭 {entry.tropes.join(", ")}</p>
       )}
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
@@ -1048,12 +1058,13 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   );
 }
 
-function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => void; onCancel: () => void }) {
+function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => void; onCancel: () => void }) {
   const [pov, setPov] = useState("");
   const [tense, setTense] = useState("");
   const [comps, setComps] = useState("");
   const [sample, setSample] = useState("");
   const [cliches, setCliches] = useState("");
+  const [tropes, setTropes] = useState("");
   const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
@@ -1062,6 +1073,7 @@ function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; t
       <EditableField label="Comparisons" value={comps} onChange={setComps} placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
       <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline placeholder="A short sample of your prose style" />
       <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} placeholder="suddenly, very unique" />
+      <EditableField label="Tropes (comma-separated)" value={tropes} onChange={setTropes} placeholder="Enemies to Lovers, The Chosen One" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -1069,7 +1081,7 @@ function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; t
         </select>
       </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample, bannedCliches: cliches.split(",").map((s) => s.trim()).filter(Boolean), source })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample, bannedCliches: cliches.split(",").map((s) => s.trim()).filter(Boolean), tropes: tropes.split(",").map((s) => s.trim()).filter(Boolean), source })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -1503,7 +1515,7 @@ export function BookWritingPage() {
     setStyleEntries((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => {
+  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => {
     const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -2384,6 +2396,7 @@ export function BookWritingPage() {
                             comps: (draft.comps as string) || "",
                             sampleParagraph: (draft.sampleParagraph as string) || "",
                             bannedCliches: Array.isArray(draft.bannedCliches) ? (draft.bannedCliches as string[]) : [],
+                            tropes: Array.isArray(draft.tropes) ? (draft.tropes as string[]) : [],
                             source: "co_created",
                           });
                           setShowGenStyle(false);

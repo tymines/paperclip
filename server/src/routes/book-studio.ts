@@ -1119,7 +1119,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       bookTitle: book.title,
       characters: characters.map(c => ({ name: c.name, role: c.role, description: c.description })),
       locations: locations.map(l => ({ name: l.name, description: l.description })),
-      styles: styles.map(s => ({ pov: s.pov, tense: s.tense, comps: s.comps, sampleParagraph: s.sampleParagraph })),
+      styles: styles.map(s => ({ pov: s.pov, tense: s.tense, comps: s.comps, sampleParagraph: s.sampleParagraph, tropes: s.tropes })),
       outlines: outlines.map(o => ({ chapterNumber: o.chapterNumber, title: o.title, beats: o.beats as Record<string, unknown>[] })),
     };
     const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
@@ -1191,7 +1191,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         case "world-location":
           return { name: "", description: msg.content.slice(0, 500), rules: {}, sensoryNotes: {}, source: "co_created" } as Record<string, unknown>;
         case "style":
-          return { pov: "", tense: "", comps: "", sampleParagraph: msg.content.slice(0, 500), bannedCliches: [], source: "co_created" } as Record<string, unknown>;
+          return { pov: "", tense: "", comps: "", sampleParagraph: msg.content.slice(0, 500), bannedCliches: [], tropes: [], source: "co_created" } as Record<string, unknown>;
         case "outline":
           return { chapterNumber: 1, title: "", beats: [{ description: msg.content.slice(0, 2000) }], source: "co_created" } as Record<string, unknown>;
       }
