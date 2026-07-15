@@ -671,9 +671,9 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
     return (
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Name" value={editName} onChange={setEditName} />
-        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
-        <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline placeholder="{}" />
-        <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline placeholder="{}" />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
+        <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline rows={8} autoGrow large placeholder="{}" />
+        <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline rows={8} autoGrow large placeholder="{}" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -833,10 +833,10 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="POV" value={editPov} onChange={setEditPov} />
         <EditableField label="Tense" value={editTense} onChange={setEditTense} />
-        <EditableField label="Comparisons" value={editComps} onChange={setEditComps} />
-        <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline />
-        <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} placeholder="suddenly, very unique" />
-        <EditableField label="Tropes (comma-separated)" value={editTropes} onChange={setEditTropes} placeholder="Enemies to Lovers, The Chosen One" />
+        <EditableField label="Comparisons" value={editComps} onChange={setEditComps} multiline rows={3} autoGrow large />
+        <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline rows={8} autoGrow large />
+        <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} multiline rows={3} autoGrow large placeholder="suddenly, very unique" />
+        <EditableField label="Tropes (comma-separated)" value={editTropes} onChange={setEditTropes} multiline rows={3} autoGrow large placeholder="Enemies to Lovers, The Chosen One" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -942,7 +942,7 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Chapter #" value={editCh} onChange={setEditCh} />
         <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
-        <EditableField label="Beats (JSON array)" value={editBeats} onChange={setEditBeats} multiline placeholder="[]" />
+        <EditableField label="Beats (JSON array)" value={editBeats} onChange={setEditBeats} multiline rows={10} autoGrow large placeholder="[]" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -1037,9 +1037,9 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Location name" />
-      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Description" />
-      <EditableField label="Rules (JSON)" value={rules} onChange={setRules} multiline placeholder="{}" />
-      <EditableField label="Sensory Notes (JSON)" value={sensory} onChange={setSensory} multiline placeholder="{}" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline rows={6} autoGrow large placeholder="Description" />
+      <EditableField label="Rules (JSON)" value={rules} onChange={setRules} multiline rows={8} autoGrow large placeholder="{}" />
+      <EditableField label="Sensory Notes (JSON)" value={sensory} onChange={setSensory} multiline rows={8} autoGrow large placeholder="{}" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -1070,10 +1070,10 @@ function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; t
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="POV" value={pov} onChange={setPov} placeholder="e.g. Third Person Limited" />
       <EditableField label="Tense" value={tense} onChange={setTense} placeholder="e.g. Past" />
-      <EditableField label="Comparisons" value={comps} onChange={setComps} placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
-      <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline placeholder="A short sample of your prose style" />
-      <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} placeholder="suddenly, very unique" />
-      <EditableField label="Tropes (comma-separated)" value={tropes} onChange={setTropes} placeholder="Enemies to Lovers, The Chosen One" />
+      <EditableField label="Comparisons" value={comps} onChange={setComps} multiline rows={3} autoGrow large placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
+      <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline rows={8} autoGrow large placeholder="A short sample of your prose style" />
+      <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} multiline rows={3} autoGrow large placeholder="suddenly, very unique" />
+      <EditableField label="Tropes (comma-separated)" value={tropes} onChange={setTropes} multiline rows={3} autoGrow large placeholder="Enemies to Lovers, The Chosen One" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -1101,7 +1101,7 @@ function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumbe
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Chapter #" value={ch} onChange={setCh} />
       <EditableField label="Title" value={title} onChange={setTitle} placeholder="Chapter title" />
-      <EditableField label="Beats (JSON array)" value={beats} onChange={setBeats} multiline placeholder="[]" />
+      <EditableField label="Beats (JSON array)" value={beats} onChange={setBeats} multiline rows={10} autoGrow large placeholder="[]" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
