@@ -8,7 +8,7 @@
  * Layout: grid-cols-[1fr_2fr_1fr] (~25/50/25 split), non-resizable, full-height
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
   BookOpen,
   User,
@@ -290,6 +290,9 @@ function SourceBadge({ source }: { source: string }) {
 
 // ── Editable Text Field ──────────────────────────────────────────────────────
 
+/** Ceiling for auto-grow textareas; past this they scroll instead of pushing the panel. */
+const AUTOGROW_MAX_PX = 480;
+
 function EditableField({
   label,
   value,
@@ -298,6 +301,7 @@ function EditableField({
   placeholder = "",
   rows = 2,
   autoGrow = false,
+  large = false,
 }: {
   label: string;
   value: string;
@@ -306,21 +310,37 @@ function EditableField({
   placeholder?: string;
   rows?: number;
   autoGrow?: boolean;
+  /** Roomier type/padding for long-form fields. Off by default so existing call sites are unchanged. */
+  large?: boolean;
 }) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Size to content on mount and whenever `value` changes from outside - e.g. opening
+  // edit mode on a character that already has a long description. The old onInput-only
+  // handler fired on keystrokes, so pre-filled long text stayed stuck at `rows`.
+  useLayoutEffect(() => {
+    const t = taRef.current;
+    if (!t || !autoGrow) return;
+    t.style.height = "auto";
+    t.style.height = `${Math.min(t.scrollHeight + 2, AUTOGROW_MAX_PX)}px`;
+  }, [value, autoGrow]);
+
   return (
     <div className="mb-2">
       <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">{label}</label>
       {multiline ? (
         <textarea
-          className={`w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50 ${autoGrow ? "resize-y overflow-hidden" : "resize-none"}`}
+          ref={taRef}
+          className={cn(
+            "w-full rounded border border-gray-700 bg-gray-800/50 text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50",
+            large ? "px-2.5 py-1.5 text-[13px] leading-relaxed" : "px-2 py-1 text-xs",
+            // overflow-auto (not hidden) so text past AUTOGROW_MAX_PX stays reachable.
+            autoGrow ? "resize-y overflow-auto" : "resize-none",
+          )}
+          style={autoGrow ? { maxHeight: AUTOGROW_MAX_PX } : undefined}
           rows={rows}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          onInput={autoGrow ? (e) => {
-            const t = e.currentTarget;
-            t.style.height = "auto";
-            t.style.height = `${Math.min(t.scrollHeight + 2, 480)}px`;
-          } : undefined}
           placeholder={placeholder}
         />
       ) : (
@@ -432,8 +452,8 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Name" value={editName} onChange={setEditName} />
         <EditableField label="Role" value={editRole} onChange={setEditRole} />
-        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
-        <EditableField label="Voice Card (JSON)" value={editVoiceCard} onChange={setEditVoiceCard} multiline placeholder="{}" />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
+        <EditableField label="Voice" value={editVoiceCard} onChange={setEditVoiceCard} multiline rows={10} autoGrow large placeholder="{}" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -978,8 +998,8 @@ function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: stri
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Character name" />
       <EditableField label="Role" value={role} onChange={setRole} placeholder="e.g. Protagonist" />
-      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Brief description" />
-      <EditableField label="Voice Card (JSON)" value={voiceCard} onChange={setVoiceCard} multiline placeholder="{}" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline rows={6} autoGrow large placeholder="Brief description" />
+      <EditableField label="Voice" value={voiceCard} onChange={setVoiceCard} multiline rows={10} autoGrow large placeholder="{}" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
