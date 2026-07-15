@@ -222,7 +222,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                     {ch.illustrations.length > 0 && (
                       <div className="mt-2 grid grid-cols-3 gap-1.5">
                         {ch.illustrations.slice(0, 6).map((j) => j.outputs[0]
-                          ? <img key={j.id} src={j.outputs[0].thumbUrl ?? j.outputs[0].url} className="aspect-video rounded object-cover" />
+                          ? <img key={j.id} src={j.outputs[0].localUrl ?? j.outputs[0].thumbUrl ?? j.outputs[0].url} className="aspect-video rounded object-cover" />
                           : <div key={j.id} className="flex aspect-video items-center justify-center rounded bg-gray-900 text-[9px]" style={{ color: j.status === "failed" ? "#FF5B5B" : AMBER }}>{j.status}</div>)}
                       </div>
                     )}
@@ -278,8 +278,8 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                     return (
                       <div key={a.id} className="flex gap-2.5 rounded-lg border border-gray-800 p-2">
                         <div className="h-14 w-14 shrink-0 overflow-hidden rounded bg-gray-900 flex items-center justify-center">
-                          {out && a.mode === "image" && <img src={out.thumbUrl ?? out.url} className="h-full w-full object-cover" />}
-                          {out && a.mode === "video" && <video src={out.url} muted className="h-full w-full object-cover" />}
+                          {out && a.mode === "image" && <img src={out.localUrl ?? out.thumbUrl ?? out.url} className="h-full w-full object-cover" />}
+                          {out && a.mode === "video" && <video src={out.localUrl ?? out.url} muted className="h-full w-full object-cover" />}
                           {(!out || a.mode === "audio") && <span className="text-[9px] text-gray-600">{a.status}</span>}
                         </div>
                         <div className="min-w-0 flex-1">
@@ -291,7 +291,7 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
                           <div className="mt-0.5 truncate text-[10px] text-gray-500">{a.prompt || "(no prompt)"}</div>
                           <div className="mt-1.5 flex items-center gap-1.5">
                             {out && (
-                              <a href={out.url} target="_blank" rel="noreferrer"
+                              <a href={out.localUrl ?? out.url} target="_blank" rel="noreferrer"
                                 className="flex items-center gap-1 rounded bg-gray-800 px-1.5 py-0.5 text-[9px] text-gray-300 hover:bg-gray-700">
                                 <Download size={9} /> download
                               </a>

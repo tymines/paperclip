@@ -17,7 +17,7 @@ export interface BookMediaAsset {
   purpose: string;
   mode: string;
   status: string;
-  outputs: Array<{ url: string; kind: string; thumbUrl?: string }>;
+  outputs: Array<{ url: string; kind: string; thumbUrl?: string; localUrl?: string | null }>;
   prompt: string;
   provider: string;
   characterId: string | null;

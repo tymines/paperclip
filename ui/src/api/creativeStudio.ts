@@ -21,7 +21,7 @@ export interface CreativeJob {
   params: Record<string, unknown>;
   refs: Array<{ role: string; url: string }>;
   status: "pending" | "running" | "completed" | "failed";
-  outputs: Array<{ url: string; kind: string; thumbUrl?: string }>;
+  outputs: Array<{ url: string; kind: string; thumbUrl?: string; localUrl?: string | null }>;
   costCredits: number | null;
   error: string | null;
   folder: string | null;
