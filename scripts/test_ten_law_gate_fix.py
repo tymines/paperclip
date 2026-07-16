@@ -27,7 +27,6 @@ rc.stage_plan = lambda t: True
 rc.stage_critique = lambda t: True
 rc.stage_code = lambda t: True
 rc.stage_review = lambda t: "approved"
-rc.stage_merge = lambda t: True
 
 # ── Test 1: gate passes → normal flow ──
 orig_check = rc._check_ten_law_gate

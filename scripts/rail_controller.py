@@ -6,9 +6,11 @@ Zero-LLM scheduler. Claims tasks, routes through pipeline, enforces gate classes
 Tyler's master switch: RAIL_ENABLED in .rail_config.json (OFF by default).
 Toggle:  python3 rail_controller.py --enable | --disable | --status
 
-Pipeline per task: claim → plan → critique → code(worktree) → review → merge → close
+Pipeline per task: claim → plan → critique → code(worktree) → review → gate → close
 One-writer-per-tree invariant. Tests MUST pass for changed files (hardened gate).
 No continue-on-error fallback — failing stages block, no fake commits.
+
+Phase 1: All approved work is gated. No automatic merge path exists.
 """
 from __future__ import annotations
 
@@ -47,28 +49,24 @@ DEFAULT_CONFIG = {
     "api_key": "",                # Paperclip API key for board access
 }
 
-# ── gate classes: auto merges itself, rest hold for Tyler ──────
-AUTO_MERGE_CLASSES = {"auto"}
+# ── gate classes: all approved work is gated for operator review ──────────
 GATED_CLASSES = {"schema", "ui", "spend", "security", "agent_config"}
 
-# ── pipeline stages with timeouts ───────────────────────────────
+# ── pipeline stages with timeouts ─────────────────────────────────────────
 STAGE_TIMEOUTS = {
     "plan":     180,
     "critique": 180,
     "code":     600,    # hardened: give coder real time
     "review":   180,
-    "merge":    120,    # includes test run
 }
 
-# ── Ten Laws enforcement ─────────────────────────────────────────
-# ponytail: direct dict, no classes. stage_name → law name.
-# state_on_disk_not_context auto-appended to every stage at check time.
+# ── Ten Laws enforcement ──────────────────────────────────────────
+# stage_name → law name. state_on_disk_not_context auto-appended to every stage.
 TEN_LAW_STAGE_MAP = {
     "plan":     "intent_before_code",
     "critique": "adversarial_review",
     "code":     "smallest_diff_wins",
     "review":   "two_person_rule",
-    "merge":    "verified_artifact",
 }
 DEFAULT_TEN_LAWS_CONFIG = {
     "session_max_age_hours": 8,
@@ -97,17 +95,11 @@ def _check_ten_law_gate(task_id: str, stage: str, state: dict, cfg: dict) -> dic
         checks.append({"law": "require_critique_before_code", "passed": had_critique,
                        "detail": "critique recorded" if had_critique else "no critique before code"})
     
-    # Law: require_review_before_merge
-    if stage == "merge" and laws_cfg.get("require_review_before_merge"):
-        had_review = state.get("had_review", False)
-        checks.append({"law": "require_review_before_merge", "passed": had_review,
-                       "detail": "review recorded" if had_review else "no review before merge"})
+    # Law: require_review_before_merge (enforced at gate, not merge stage)
+    # Phase 1: merge stage removed; review gate blocks before approval.
     
-    # Law: require_test_for_changed_files
-    if stage in ("merge",) and laws_cfg.get("require_test_for_changed_files"):
-        tests_passed = state.get("tests_passed", False)
-        checks.append({"law": "require_test_for_changed_files", "passed": tests_passed,
-                       "detail": "tests passed" if tests_passed else "tests not verified"})
+    # Law: require_test_for_changed_files (enforced at review gate)
+    # Phase 1: no automatic merge; tests must pass before review approval.
     
     all_passed = all(c["passed"] for c in checks)
     return {"passed": all_passed, "checks": checks, "stage": stage, "law": law_name}
@@ -150,10 +142,10 @@ def _write_rail_event_db(event: dict):
 
 STATES = [
     "ready", "claimed", "planning", "plan_ready", "critiqued",
-    "coding", "in_review", "merging", "merged", "closed",
+    "coding", "in_review", "closed",
     "rework", "blocked", "gated",
 ]
-ACTIVE_STATES = {"claimed", "planning", "plan_ready", "critiqued", "coding", "in_review", "merging"}
+ACTIVE_STATES = {"claimed", "planning", "plan_ready", "critiqued", "coding", "in_review"}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -416,50 +408,6 @@ def stage_review(task: dict) -> Optional[str]:
     emit_event("stage.done", task["id"], stage="review", verdict="changes")
     return "changes"
 
-def stage_merge(task: dict) -> bool:
-    """HARDENED: run tests, then merge worktree branch."""
-    ident = task.get("identifier", task["id"][:8])
-    branch = f"feat/{ident}"
-    wt_path = str(REPO / ".paperclip" / "worktrees" / ident)
-
-    emit_event("stage.start", task["id"], stage="merge", branch=branch)
-
-    # HARDENED GATE 1: run tests for changed files before merge
-    # ponytail: vitest --changed only tests modified files; doc-only changes pass trivially
-    _log("merge", f"{ident}: running pre-merge tests (changed files only)...")
-    test_out, test_err, test_rc = run(
-        "npx vitest run --changed --passWithNoTests 2>&1 | tail -30",
-        cwd=wt_path,
-        timeout=STAGE_TIMEOUTS["merge"],
-    )
-    emit_event("stage.progress", task["id"], stage="merge", step="test",
-               rc=test_rc, test_output=test_out[:500] if test_out else test_err[:500])
-
-    if test_rc != 0:
-        emit_event("stage.fail", task["id"], stage="merge",
-                   reason=f"pre-merge tests failed (rc={test_rc})",
-                   test_output=test_out[:500] if test_out else test_err[:500])
-        return False
-
-    # HARDENED GATE 2: merge via merge-queue.sh
-    merge_script = str(SCRIPTS / "merge-queue.sh")
-    stdout, stderr, rc = run(
-        f'bash "{merge_script}" {branch}',
-        cwd=str(REPO),
-        timeout=STAGE_TIMEOUTS["merge"],
-    )
-    if rc == 0:
-        # HARDENED GATE 3: verify merge actually landed
-        log_after, _, log_rc = run("git log --oneline -3", cwd=str(REPO), timeout=10)
-        emit_event("stage.done", task["id"], stage="merge", result="ok",
-                   log_after=log_after[:300])
-        return True
-
-    emit_event("stage.fail", task["id"], stage="merge", rc=rc,
-               stderr=stderr[:300], conflict=(rc == 1))
-    return False
-
-
 def update_task(task_id, **fields):
     """PATCH task via Paperclip API."""
     return api("PATCH", f"/api/issues/{task_id}", fields)
@@ -570,9 +518,9 @@ def process_task(task, cfg):
     # ── gate class check ──
     gate_class = task.get("labels", []) or []
     if isinstance(gate_class, list):
-        gate_class = next((g for g in gate_class if g in GATED_CLASSES | AUTO_MERGE_CLASSES), "auto")
+        gate_class = next((g for g in gate_class if g in GATED_CLASSES), "manual")
     else:
-        gate_class = "auto"
+        gate_class = "manual"
 
     _log("task", f"{ident} state={state} gate={gate_class}")
 
@@ -590,7 +538,6 @@ def process_task(task, cfg):
             ("critique", {"would_profile": "zeus-critic"}),
             ("code", {"would_worktree": str(REPO / ".paperclip" / "worktrees" / ident), "would_profile": "zeus-coding"}),
             ("review", {"would_profile": "zeus-reviewer"}),
-            ("merge", {"would_branch": f"feat/{ident}"}),
         ]
         # Shadow path: interleave Ten Laws checks between stages
         task_state = load_state().get(tid, {})
@@ -604,8 +551,15 @@ def process_task(task, cfg):
 
     # ── state machine ──
     task_state = load_state().get(tid, {})
+
+    # Phase 1 fail-safe: legacy auto-merge states immediately gate
+    if state in ("merging", "merged"):
+        state = "gated"
+        update_task(tid, status="needs_approval")
+        add_comment(tid, "🔒 Legacy auto-merge state retired — held for operator approval.")
+        emit_event("gated", tid, reason="legacy_state_failsafe", original_state=state)
     
-    if state == "claimed":
+    elif state == "claimed":
         law_check = _check_ten_law_gate(tid, "plan", task_state, cfg)
         if not law_check["passed"]:
             emit_event("ten_law_blocked", tid, stage="plan", checks=law_check["checks"])
@@ -655,37 +609,16 @@ def process_task(task, cfg):
             verdict = stage_review(task)
             if verdict == "approved":
                 task_state["had_review"] = True
-                if gate_class in AUTO_MERGE_CLASSES:
-                    state = "merging"
-                else:
-                    state = "gated"
-                    add_comment(tid, f"🔒 **Gate class `{gate_class}`** — held for Tyler approval.")
-                    emit_event("gated", tid, gate_class=gate_class)
+                state = "gated"
+                update_task(tid, status="needs_approval")
+                add_comment(tid, f"🔒 **Gate class `{gate_class}`** — held for operator approval.")
+                emit_event("gated", tid, gate_class=gate_class)
             elif verdict == "changes":
                 state = "rework"
                 rework_count += 1
             else:
                 state = "rework"
                 rework_count += 1
-
-    elif state == "merging":
-        law_check = _check_ten_law_gate(tid, "merge", task_state, cfg)
-        if not law_check["passed"]:
-            emit_event("ten_law_blocked", tid, stage="merge", checks=law_check["checks"])
-            state = "rework"
-            rework_count += 1
-        elif stage_merge(task):
-            state = "merged"
-            add_comment(tid, "✅ Merged by RAIL controller (auto). Pre-merge tests passed.")
-        else:
-            state = "rework"
-            rework_count += 1
-
-    elif state == "merged":
-        update_task(tid, status="done")
-        add_comment(tid, "🏁 Task closed by RAIL controller.")
-        state = "closed"
-        emit_event("closed", tid)
 
     elif state == "gated":
         _log("task", f"{ident} waiting at gate — class={gate_class}")
