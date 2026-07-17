@@ -126,20 +126,26 @@ def format_drift(manifest: dict, drift: dict) -> str:
 
 
 def accept_live_as_intent(manifest: dict, payload: dict) -> dict:
-    """Return a proposed manifest update; the caller must review and write it."""
+    """Return a revision-pinned field proposal; never rewrite the manifest."""
     declared = {a["name"]: dict(a) for a in manifest["agents"] if a.get("name")}
     live_rows = payload.get("agents", payload if isinstance(payload, list) else [])
+    changes = []
     for row in map(_live_agent, live_rows):
         if not row.get("name"):
             continue
         target = declared.setdefault(row["name"], {"name": row["name"]})
         for field in FIELDS:
-            if row.get(field) is not None:
-                target[field] = row[field]
+            live = row.get(field)
+            if live is not None and target.get(field) != live:
+                changes.append({
+                    "agent": row["name"], "field": field,
+                    "declared": target.get(field), "live": live,
+                })
     return {
-        "revision": manifest.get("revision"),
-        "updated": datetime.now(timezone.utc).date().isoformat(),
-        "agents": list(declared.values()),
+        "kind": "accept-live-as-intent-proposal",
+        "expected_revision": manifest.get("revision"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "changes": changes,
     }
 
 
@@ -149,7 +155,8 @@ def _self_check() -> None:
     drift = compare_intent(manifest, live)
     assert {row["field"] for row in drift} == {"model", "provider", "profile", "adapter", "auth_mode", "health"}
     proposed = accept_live_as_intent(manifest, live)
-    assert proposed["agents"][0]["model"] == "openai/gpt-5.6-sol"
+    assert proposed["expected_revision"] == "2"
+    assert any(change["field"] == "model" and change["live"] == "openai/gpt-5.6-sol" for change in proposed["changes"])
     assert manifest["agents"][0]["model"] == "deepseek-v4-pro"
     print("RAIL_INTENT_OK drift=6 accept_live=proposal_only")
 
@@ -158,7 +165,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", nargs="?", type=Path)
     parser.add_argument("live", nargs="?", type=Path)
-    parser.add_argument("--accept-live", action="store_true")
+    parser.add_argument("--accept-live", "--accept-live-as-intent", dest="accept_live", action="store_true")
     args = parser.parse_args()
     if not args.manifest or not args.live:
         _self_check()
