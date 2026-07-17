@@ -761,6 +761,9 @@ def claim_task(cfg=None):
     """Claim one ready task through Paperclip's atomic checkout/lease CAS."""
     cfg = cfg or {}
     enforcement = cfg.get("enforcement", "shadow")
+    if enforcement == "off":
+        _log("claim", "Enforcement is off — claiming nothing")
+        return None
     eligible_ids = [str(issue_id) for issue_id in cfg.get("eligible_issue_ids", [])]
     if not eligible_ids:
         _log("claim", "No explicitly fresh issue IDs configured — claiming nothing")
@@ -1084,7 +1087,10 @@ def main():
                     task = api("GET", f"/api/issues/{task['id']}") or task
                     time.sleep(2)
             else:
-                _log("claim", f"handed off to run {task['checkoutRunId']} — no duplicate local pipeline")
+                if cfg.get("enforcement") == "shadow":
+                    process_task(task, cfg)
+                else:
+                    _log("claim", f"handed off to run {task['checkoutRunId']} — no duplicate local pipeline")
         else:
             # ── resume existing in-flight tasks ──
             st = load_state()
