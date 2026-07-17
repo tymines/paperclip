@@ -691,8 +691,10 @@ def enforce_global_invariants():
     return True
 
 
-def query_board_direct(limit=5):
+def query_board_direct(issue_ids):
     """Direct PG fallback. Fail closed unless the server confirms production port 5432."""
+    if not issue_ids:
+        return []
     try:
         conn = open_db()
         try:
@@ -701,9 +703,9 @@ def query_board_direct(limit=5):
                     "SELECT id, identifier, title, description, status, "
                     "assignee_agent_id, created_at, parent_id, iteration_count, "
                     "last_verdict "
-                    "FROM issues WHERE status = %s "
-                    "ORDER BY priority DESC, created_at ASC LIMIT %s",
-                    ("backlog", limit)
+                    "FROM issues WHERE company_id = %s AND status = %s AND id = ANY(%s::uuid[]) "
+                    "ORDER BY priority DESC, created_at ASC",
+                    (CID, "backlog", list(issue_ids))
                 )
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -759,16 +761,22 @@ def claim_task(cfg=None):
     """Claim one ready task through Paperclip's atomic checkout/lease CAS."""
     cfg = cfg or {}
     enforcement = cfg.get("enforcement", "shadow")
-    eligible_ids = {str(issue_id) for issue_id in cfg.get("eligible_issue_ids", [])}
+    eligible_ids = [str(issue_id) for issue_id in cfg.get("eligible_issue_ids", [])]
     if not eligible_ids:
         _log("claim", "No explicitly fresh issue IDs configured — claiming nothing")
         return None
-    issues = api("GET", f"/api/companies/{CID}/issues?status=backlog&limit=100")
-    if not issues:
+    issues = []
+    api_missed = False
+    for issue_id in eligible_ids:
+        issue = api("GET", f"/api/issues/{issue_id}")
+        if issue is None:
+            api_missed = True
+        elif issue.get("status") == "backlog":
+            issues.append(issue)
+    if not issues and api_missed:
         # Fallback: direct PG access when API is unreachable (shadow mode or no valid key)
-        _log("rail", "API returned no tasks — trying direct PG fallback")
-        issues = query_board_direct(100)
-    issues = [issue for issue in issues if str(issue["id"]) in eligible_ids]
+        _log("rail", "API missed allowlisted tasks — trying direct PG fallback")
+        issues = query_board_direct(eligible_ids)
     if enforcement == "shadow":
         if not issues:
             return None
