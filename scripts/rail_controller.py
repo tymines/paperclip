@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from rail_durability import append_event, atomic_write_json, load_projection
+from rail_intent import compare_intent, format_drift, load_manifest, manifest_age_days
 
 # ── config ──────────────────────────────────────────────────────
 BASE       = os.environ.get("PAPERCLIP_URL", "http://127.0.0.1:3100")
@@ -194,6 +195,40 @@ def load_state():
 
 def save_state(st):
     atomic_write_json(STATE_FILE, st)
+
+
+def report_intent_drift():
+    """Emit each live intent drift immediately, after one hour, then daily."""
+    manifest = load_manifest(REPO / "fleet.yaml")
+    payload = api("GET", f"/api/acp/fleet?companyId={CID}")
+    if payload is None:
+        return
+
+    clock = now_ts()
+    state = load_state()
+    previous = state.get("_meta", {}).get("intent_drift", {})
+    active = {}
+    for drift in compare_intent(manifest, payload):
+        key = json.dumps(drift, sort_keys=True, separators=(",", ":"), default=str)
+        record = dict(previous.get(key, {"first_seen": clock, "last_alert": 0, "alerts": 0}))
+        alerts = record["alerts"]
+        due = alerts == 0 or (alerts == 1 and clock - record["first_seen"] >= 3600) or (
+            alerts >= 2 and clock - record["last_alert"] >= 86400
+        )
+        if due:
+            cadence = "immediate" if alerts == 0 else "one_hour" if alerts == 1 else "daily"
+            drift_age_s = int(clock - record["first_seen"])
+            emit_event(
+                "intent.drift", "system", **drift, cadence=cadence,
+                drift_age_s=drift_age_s, manifest_revision=manifest.get("revision"),
+                manifest_age_days=manifest_age_days(manifest),
+            )
+            _log("intent", f"{format_drift(manifest, drift)} drift_age_s={drift_age_s} cadence={cadence}")
+            record.update({"last_alert": clock, "alerts": alerts + 1})
+        active[key] = record
+
+    state.setdefault("_meta", {})["intent_drift"] = active
+    save_state(state)
 
 
 def acquire_controller_lock():
@@ -975,6 +1010,7 @@ def main():
             continue
 
         controller_heartbeat()
+        report_intent_drift()
         if cfg.get("enforcement") == "on":
             for reclaimed in reclaim_expired_leases():
                 emit_event("claim_lost", str(reclaimed["id"]), **reclaimed)
