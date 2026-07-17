@@ -40,6 +40,8 @@ PAPERCLIP_HOME = Path(os.environ.get("PAPERCLIP_HOME", str(Path.home() / ".paper
 EVENTS_LOG = Path(os.environ.get("RAIL_EVENTS_LOG", str(PAPERCLIP_HOME / "rail" / "rail-events.jsonl")))
 CONFIG_FILE = Path(os.environ.get("RAIL_CONFIG", str(REPO / ".rail_config.json")))
 STATE_FILE  = Path(os.environ.get("RAIL_STATE", str(REPO / ".rail_state.json")))
+CONTROLLER_LOCK = None
+CONTROLLER_EPOCH = None
 
 DEFAULT_CONFIG = {
     "rail_enabled": False,        # OFF by default — Tyler must explicitly enable
@@ -165,6 +167,8 @@ def _log(category, msg):
     print(line, file=sys.stderr, flush=True)
 
 def emit_event(event_type, task_id, **extra):
+    if CONTROLLER_EPOCH is not None:
+        extra.setdefault("controller_epoch", CONTROLLER_EPOCH)
     ev = append_event(EVENTS_LOG, {"ts": now_iso(), "type": event_type, "task_id": task_id, **extra})
     if VERBOSE:
         _log("event", f"{event_type} {task_id} cursor={ev['cursor']} {json.dumps(extra, default=str)[:120]}")
@@ -189,6 +193,48 @@ def load_state():
 
 def save_state(st):
     atomic_write_json(STATE_FILE, st)
+
+
+def acquire_controller_lock():
+    """Hold one OS-released lock for the lifetime of the scheduler process."""
+    lock_path = PAPERCLIP_HOME / "rail" / "controller.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = lock_path.open("a+b")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            stream.seek(0)
+            if stream.tell() == 0 and lock_path.stat().st_size == 0:
+                stream.write(b"0")
+                stream.flush()
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+        stream.close()
+        raise RuntimeError("another RAIL scheduler owns the controller lock")
+    return stream
+
+
+def next_controller_epoch():
+    state = load_state()
+    meta = state.setdefault("_meta", {})
+    epoch = int(meta.get("controller_epoch", 0)) + 1
+    meta.update({"controller_epoch": epoch, "controller_heartbeat_at": now_iso()})
+    save_state(state)
+    return epoch
+
+
+def controller_heartbeat():
+    state = load_state()
+    state.setdefault("_meta", {}).update({
+        "controller_epoch": CONTROLLER_EPOCH,
+        "controller_heartbeat_at": now_iso(),
+    })
+    save_state(state)
+
 
 def run(cmd, cwd=None, timeout=120):
     """Run shell command, return (stdout, stderr, rc)."""
@@ -392,10 +438,10 @@ def add_comment(task_id, body):
 
 
 # ═══════════════════════════════════════════════════════════════
-# heartbeats
+# progress watchdog (separate from ownership lease renewal)
 # ═══════════════════════════════════════════════════════════════
 
-def check_heartbeat(task_id, worktree_path, stall_count, last_artifact_at, cfg):
+def check_progress_watchdog(task_id, worktree_path, stall_count, last_artifact_at, cfg):
     """Check if task has produced artifacts recently."""
     warn_ttl = cfg.get("warn_ttl_min", 20) * 60
     revoke_ttl = cfg.get("revoke_ttl_min", 40) * 60
@@ -412,17 +458,33 @@ def check_heartbeat(task_id, worktree_path, stall_count, last_artifact_at, cfg):
         except ValueError:
             pass
 
+    latest = load_state().get(task_id, {}).get("last_event", {})
+    if str(latest.get("type", "")).startswith("stage.") and latest.get("ts"):
+        try:
+            last_artifact_at = max(last_artifact_at, datetime.fromisoformat(latest["ts"]).timestamp())
+        except (TypeError, ValueError):
+            pass
+
+    status_out, _, status_rc = run("git status --porcelain", cwd=worktree_path, timeout=10)
+    if status_rc == 0:
+        for line in status_out.splitlines():
+            candidate = line[3:].split(" -> ")[-1].strip('"')
+            artifact = Path(worktree_path) / candidate
+            if artifact.is_file():
+                last_artifact_at = max(last_artifact_at, artifact.stat().st_mtime)
+                stall_count = 0
+
     if last_artifact_at:
         since_last = now_ts() - last_artifact_at
         if since_last > revoke_ttl:
             stall_count += 1
-            emit_event("heartbeat.revoke", task_id, stall_count=stall_count,
+            emit_event("progress.stalled", task_id, stall_count=stall_count,
                        since_last_s=int(since_last))
             return stall_count, last_artifact_at
         if since_last > warn_ttl:
-            emit_event("heartbeat.warn", task_id, since_last_s=int(since_last))
+            emit_event("progress.warn", task_id, since_last_s=int(since_last))
     else:
-        emit_event("heartbeat.no_artifact", task_id)
+        emit_event("progress.no_activity", task_id)
         stall_count += 1
 
     return stall_count, last_artifact_at
@@ -624,6 +686,7 @@ def process_task(task, cfg):
     # ── save persistent state ──
     all_state = load_state()
     all_state[tid] = {
+        **all_state.get(tid, {}),
         "state": state, "stall_count": stall, "last_artifact_at": last_artifact,
         "rework_count": rework_count, "gate_class": gate_class,
         "claimed_at": load_state().get(tid, {}).get("claimed_at") or now_ts(),
@@ -631,10 +694,10 @@ def process_task(task, cfg):
     }
     save_state(all_state)
 
-    # ── heartbeat check (for active states) ──
+    # ── progress check (for active states) ──
     if state in ACTIVE_STATES:
-        new_stall, last_artifact = check_heartbeat(tid, wt_path, stall, last_artifact, cfg)
-        if new_stall != stall:
+        new_stall, last_artifact = check_progress_watchdog(tid, wt_path, stall, last_artifact, cfg)
+        if new_stall != stall or last_artifact != all_state[tid].get("last_artifact_at"):
             all_state[tid]["stall_count"] = new_stall
             all_state[tid]["last_artifact_at"] = last_artifact
             save_state(all_state)
@@ -643,6 +706,7 @@ def process_task(task, cfg):
 
 
 def main():
+    global CONTROLLER_LOCK, CONTROLLER_EPOCH
     # ── CLI toggle subcommands (exit immediately) ──
     if "--enable" in sys.argv:
         toggle_enable()
@@ -686,7 +750,9 @@ def main():
                 _log("rail", "RAIL_ENABLED flipped ON — resuming operations")
                 break
 
-    _log("rail", f"RAIL controller starting. rail_enabled=ON enforcement={cfg['enforcement']} poll={POLL_SEC}s")
+    CONTROLLER_LOCK = acquire_controller_lock()
+    CONTROLLER_EPOCH = next_controller_epoch()
+    _log("rail", f"RAIL controller starting. epoch={CONTROLLER_EPOCH} rail_enabled=ON enforcement={cfg['enforcement']} poll={POLL_SEC}s")
     emit_event("controller.start", "system", config={k: v for k, v in cfg.items() if k != "rail_enabled"},
                polling_interval_s=POLL_SEC, dry=DRY, once=ONCE, e2e=E2E)
 
@@ -710,6 +776,8 @@ def main():
                 break
             time.sleep(POLL_SEC)
             continue
+
+        controller_heartbeat()
 
         # ── claim new tasks ──
         task = claim_task(cfg)
@@ -741,7 +809,7 @@ def main():
                 if ts.get("state") in ACTIVE_STATES:
                     ident = ts.get("identifier", tid[:8])
                     wt = str(REPO / ".paperclip" / "worktrees" / ident)
-                    ns, la = check_heartbeat(
+                    ns, la = check_progress_watchdog(
                         tid, wt, ts.get("stall_count", 0),
                         ts.get("last_artifact_at", 0), cfg
                     )
@@ -750,7 +818,7 @@ def main():
                     if rot.get("needs_rotation"):
                         emit_event("session.rotation_needed", tid, rotation=rot)
                         _log("session", f"{ident}: session age {rot['age_hours']}h > {rot['max_hours']}h max — rotation needed")
-                    if ns != ts.get("stall_count", 0):
+                    if ns != ts.get("stall_count", 0) or la != ts.get("last_artifact_at", 0):
                         st[tid]["stall_count"] = ns
                         st[tid]["last_artifact_at"] = la
                         save_state(st)

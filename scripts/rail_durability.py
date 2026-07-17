@@ -103,7 +103,12 @@ def load_projection(journal: Path, state_file: Path) -> dict:
         if event["cursor"] <= cursor:
             continue
         cursor = event["cursor"]
-        state["_meta"] = {"cursor": cursor, "last_event": event}
+        meta = state.setdefault("_meta", {})
+        meta.update({"cursor": cursor, "last_event": event})
+        if event.get("controller_epoch") is not None:
+            meta["controller_epoch"] = event["controller_epoch"]
+        if str(event.get("type", "")).startswith("controller."):
+            meta["controller_heartbeat_at"] = event.get("ts")
         task_id = event.get("task_id")
         if task_id and task_id != "system":
             state.setdefault(task_id, {})["last_event"] = {
@@ -122,7 +127,7 @@ def _self_check() -> None:
         root = Path(directory)
         journal = root / "rail-events.jsonl"
         state = root / ".rail_state.json"
-        append_event(journal, {"type": "claim_acquired", "task_id": "A"})
+        append_event(journal, {"type": "claim_acquired", "task_id": "A", "controller_epoch": 7})
         append_event(journal, {"type": "claim_renewed", "task_id": "A"})
         with journal.open("ab") as stream:
             stream.write(b'{"cursor":3')
@@ -131,6 +136,7 @@ def _self_check() -> None:
         projected = load_projection(journal, state)
         assert third["cursor"] == 3
         assert projected["_meta"]["cursor"] == 3
+        assert projected["_meta"]["controller_epoch"] == 7
         assert projected["A"]["last_event"]["type"] == "claim_lost"
         assert json.loads(state.read_text(encoding="utf-8"))["_meta"]["cursor"] == 3
         assert not list(root.glob(".*.tmp"))
