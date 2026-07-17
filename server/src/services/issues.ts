@@ -4684,8 +4684,17 @@ export function issueService(db: Db) {
       const executionLockCondition = checkoutRunId
         ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
         : isNull(issues.executionRunId);
-      const updated = await db
-        .update(issues)
+      const updated = await db.transaction(async (tx) => {
+        // ponytail: one global RAIL claim lock; split by company only if checkout throughput needs it.
+        const lockRows = await tx.execute(sql<{ acquired: boolean }>`
+          SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
+        `);
+        const lock = Array.isArray(lockRows)
+          ? lockRows[0] as { acquired?: boolean }
+          : (lockRows as { rows?: Array<{ acquired?: boolean }> }).rows?.[0];
+        if (!lock?.acquired) return null;
+        return tx
+          .update(issues)
         .set({
           assigneeAgentId: agentId,
           assigneeUserId: null,
@@ -4706,6 +4715,7 @@ export function issueService(db: Db) {
         )
         .returning()
         .then((rows) => rows[0] ?? null);
+      });
 
       if (updated) {
         const [enriched] = await withIssueLabels(db, [updated]);
