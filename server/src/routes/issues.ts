@@ -1278,7 +1278,16 @@ export function issueRoutes(
       return false;
     }
     if (issue.assigneeAgentId === null) {
-      return true;
+      res.status(409).json({
+        error: "Agent must check out issue before mutation",
+        details: {
+          issueId: issue.id,
+          actorAgentId,
+          status: issue.status,
+          securityPrinciples: ["Least Privilege", "Complete Mediation", "Fail Securely"],
+        },
+      });
+      return false;
     }
     if (issue.assigneeAgentId !== actorAgentId) {
       if (await hasActiveCheckoutManagementOverride(actorAgentId, issue.companyId, issue.assigneeAgentId)) {
