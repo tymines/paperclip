@@ -6027,10 +6027,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       await db
         .update(issues)
         .set({
+          checkoutRunId: claimed.id,
           executionRunId: claimed.id,
           executionAgentNameKey: normalizeAgentNameKey(claimedAgent?.name),
           executionLockedAt: claimedAt,
-          updatedAt: claimedAt,
+          leaseExpiresAt: sql`now() + interval '15 minutes'`,
+          updatedAt: sql`now()`,
         })
         .where(
           and(
@@ -6039,6 +6041,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             // Mention/context runs can touch an issue, but only the current assignee
             // owns the issue execution lock shown as the active run.
             eq(issues.assigneeAgentId, claimed.agentId),
+            or(isNull(issues.checkoutRunId), eq(issues.checkoutRunId, claimed.id)),
             or(isNull(issues.executionRunId), eq(issues.executionRunId, claimed.id)),
           ),
         );
