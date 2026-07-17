@@ -4,8 +4,6 @@ on:
   pull_request:
   push:
     branches: [integration]
-  schedule:
-    - cron: '*/5 * * * *'   # autonomous daemon: tick every 5 min
   workflow_dispatch:
     inputs:
       action:
