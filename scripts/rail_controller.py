@@ -789,13 +789,27 @@ def claim_task(cfg=None):
                 "agentId": agent["id"],
                 "expectedStatuses": ["backlog"],
             })
-            if claimed:
-                emit_event("claim_acquired", issue["id"], identifier=ident,
-                           title=issue.get("title"), assignee_agent_id=agent["id"],
-                           checkout_run_id=claimed.get("checkoutRunId"),
-                           lease_expires_at=claimed.get("leaseExpiresAt"))
-                return claimed
+            deadline = time.monotonic() + 30
+            while claimed and time.monotonic() < deadline:
+                lease = claimed.get("leaseExpiresAt")
+                try:
+                    lease_live = datetime.fromisoformat(lease.replace("Z", "+00:00")) > datetime.now(timezone.utc)
+                except (AttributeError, ValueError):
+                    lease_live = False
+                if (claimed.get("status") == "in_progress"
+                        and claimed.get("assigneeAgentId") == agent["id"]
+                        and claimed.get("checkoutRunId") and lease_live):
+                    emit_event("claim_acquired", issue["id"], identifier=ident,
+                               title=issue.get("title"), assignee_agent_id=agent["id"],
+                               checkout_run_id=claimed["checkoutRunId"],
+                               lease_expires_at=lease)
+                    return claimed
+                time.sleep(0.5)
+                claimed = api("GET", f"/api/issues/{issue['id']}")
+            _log("claim", f"{ident}: checkout did not settle to a live run-backed lease")
+            return None
     return None
+
 
 def process_task(task, cfg):
     """Drive one task through the full pipeline."""
