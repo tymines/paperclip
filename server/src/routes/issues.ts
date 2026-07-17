@@ -22,6 +22,7 @@ import {
   createIssueWorkProductSchema,
   createIssueLabelSchema,
   checkoutIssueSchema,
+  renewIssueLeaseSchema,
   createChildIssueSchema,
   createIssueSchema,
   resolveCreateIssueStatusDefault,
@@ -4359,7 +4360,7 @@ export function issueRoutes(
     res.json(updated);
   });
 
-  router.post("/issues/:id/renew-lease", async (req, res) => {
+  router.post("/issues/:id/renew-lease", validate(renewIssueLeaseSchema), async (req, res) => {
     if (req.actor.type !== "agent" || !req.actor.agentId) {
       res.status(403).json({ error: "Agent access required" });
       return;
@@ -4374,6 +4375,10 @@ export function issueRoutes(
     const runId = requireAgentRunId(req, res);
     if (!runId) return;
     const renewed = await svc.renewLease(id, req.actor.agentId, runId);
+    if (!renewed) {
+      res.status(409).json({ error: "Issue lease renewal conflict" });
+      return;
+    }
     const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: issue.companyId,

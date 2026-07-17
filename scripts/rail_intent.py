@@ -81,20 +81,27 @@ def _live_agent(agent: dict) -> dict:
     }
 
 
+def _agent_key(name: object) -> str:
+    return str(name).strip().casefold()
+
+
 def compare_intent(manifest: dict, payload: dict) -> list[dict]:
-    declared = {a["name"]: a for a in manifest["agents"] if a.get("name")}
+    declared = {_agent_key(a["name"]): a for a in manifest["agents"] if a.get("name")}
     live_rows = payload.get("agents", payload if isinstance(payload, list) else [])
-    live = {a["name"]: a for a in map(_live_agent, live_rows) if a.get("name")}
+    live = {_agent_key(a["name"]): a for a in map(_live_agent, live_rows) if a.get("name")}
     drift = []
-    for name in sorted(declared.keys() | live.keys()):
-        if name not in live:
+    for key in sorted(declared.keys() | live.keys()):
+        if key not in live:
+            name = declared[key]["name"]
             drift.append({"agent": name, "field": "name", "declared": name, "live": None})
             continue
-        if name not in declared:
+        if key not in declared:
+            name = live[key]["name"]
             drift.append({"agent": name, "field": "name", "declared": None, "live": name})
             continue
-        declared_row = declared[name]
-        live_row = live[name]
+        declared_row = declared[key]
+        live_row = live[key]
+        name = declared_row["name"]
         declared_row = {**declared_row, "provider": declared_row.get("provider") or _provider(declared_row.get("model"))}
         for field in FIELDS:
             expected = declared_row.get(field)
@@ -127,18 +134,19 @@ def format_drift(manifest: dict, drift: dict) -> str:
 
 def accept_live_as_intent(manifest: dict, payload: dict) -> dict:
     """Return a revision-pinned field proposal; never rewrite the manifest."""
-    declared = {a["name"]: dict(a) for a in manifest["agents"] if a.get("name")}
+    declared = {_agent_key(a["name"]): dict(a) for a in manifest["agents"] if a.get("name")}
     live_rows = payload.get("agents", payload if isinstance(payload, list) else [])
     changes = []
     for row in map(_live_agent, live_rows):
         if not row.get("name"):
             continue
-        target = declared.setdefault(row["name"], {"name": row["name"]})
+        key = _agent_key(row["name"])
+        target = declared.setdefault(key, {"name": row["name"]})
         for field in FIELDS:
             live = row.get(field)
             if live is not None and target.get(field) != live:
                 changes.append({
-                    "agent": row["name"], "field": field,
+                    "agent": target["name"], "field": field,
                     "declared": target.get(field), "live": live,
                 })
     return {

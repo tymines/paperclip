@@ -33,6 +33,12 @@ with tempfile.TemporaryDirectory() as home:
         def execute(self, query, params=None):
             self.queries.append((query, params))
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
         def fetchone(self):
             return (self.port,)
 
@@ -58,7 +64,7 @@ with tempfile.TemporaryDirectory() as home:
         return good
 
     sys.modules["psycopg2"] = types.SimpleNamespace(connect=connect_good)
-    result = rc.query_board_direct(1)
+    result = rc.query_board_direct(["task-id"])
     assert result == [{"id": "task-id", "identifier": "AUG-TEST"}]
     assert calls == [{
         "host": "127.0.0.1",
@@ -71,7 +77,7 @@ with tempfile.TemporaryDirectory() as home:
 
     wrong = Connection("54329")
     sys.modules["psycopg2"] = types.SimpleNamespace(connect=lambda **_: wrong)
-    assert rc.query_board_direct(1) == []
+    assert rc.query_board_direct(["task-id"]) == []
     assert [q[0] for q in wrong.cursor_value.queries] == ["SHOW port"]
 
 print("PHASE3_PYTHON_CHECKS_OK")

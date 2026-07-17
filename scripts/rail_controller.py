@@ -147,6 +147,9 @@ def now_ts():
     return time.time()
 
 def api(method, path, body=None, timeout=15):
+    if method.upper() != "GET" and CONTROLLER_EPOCH is not None and not controller_epoch_is_current():
+        _log("fence", f"stale controller epoch {CONTROLLER_EPOCH} blocked {method} {path}")
+        return None
     url = f"{BASE}{path}"
     data = json.dumps(body).encode() if body else None
     req = urllib.request.Request(url, data=data, method=method)
@@ -169,8 +172,18 @@ def _log(category, msg):
     line = f"[{ts}] [{category}] {msg}"
     print(line, file=sys.stderr, flush=True)
 
+
+def controller_epoch_is_current():
+    try:
+        return int(load_state().get("_meta", {}).get("controller_epoch", 0)) == CONTROLLER_EPOCH
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def emit_event(event_type, task_id, **extra):
     if CONTROLLER_EPOCH is not None:
+        if not controller_epoch_is_current():
+            raise RuntimeError(f"stale controller epoch fenced: {CONTROLLER_EPOCH}")
         extra.setdefault("controller_epoch", CONTROLLER_EPOCH)
     ev = append_event(EVENTS_LOG, {"ts": now_iso(), "type": event_type, "task_id": task_id, **extra})
     if VERBOSE:
@@ -233,26 +246,20 @@ def report_intent_drift():
 
 
 def acquire_controller_lock():
-    """Hold one OS-released lock for the lifetime of the scheduler process."""
-    lock_path = PAPERCLIP_HOME / "rail" / "controller.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    stream = lock_path.open("a+b")
+    """Hold one PostgreSQL session advisory lock for the scheduler lifetime."""
+    conn = open_db()
     try:
-        if os.name == "nt":
-            import msvcrt
-            stream.seek(0)
-            if stream.tell() == 0 and lock_path.stat().st_size == 0:
-                stream.write(b"0")
-                stream.flush()
-            stream.seek(0)
-            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        conn.rollback()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s, %s)", (1380010316, 0))
+            acquired = bool(cur.fetchone()[0])
+        if not acquired:
+            raise RuntimeError("another RAIL scheduler owns the PostgreSQL advisory lock")
     except Exception:
-        stream.close()
-        raise RuntimeError("another RAIL scheduler owns the controller lock")
-    return stream
+        conn.close()
+        raise
+    return conn
 
 
 def next_controller_epoch():
@@ -271,6 +278,7 @@ def controller_heartbeat():
         "controller_heartbeat_at": now_iso(),
     })
     save_state(state)
+    emit_event("controller.heartbeat", "system")
 
 
 def run(cmd, cwd=None, timeout=120):
@@ -757,6 +765,28 @@ def reclaim_expired_leases():
     finally:
         conn.close()
 
+
+def refresh_run_backed_claim(task_id, claim):
+    """Project native lease renewals into the single controller-owned journal."""
+    issue = api("GET", f"/api/issues/{task_id}")
+    if issue is None:
+        return
+    expected_run = claim.get("checkout_run_id")
+    live_run = issue.get("checkoutRunId")
+    live_lease = issue.get("leaseExpiresAt")
+    if issue.get("status") != "in_progress" or live_run != expected_run or not live_lease:
+        emit_event(
+            "claim_lost", task_id, checkout_run_id=expected_run,
+            observed_status=issue.get("status"), observed_checkout_run_id=live_run,
+        )
+        return
+    if live_lease != claim.get("lease_expires_at"):
+        emit_event(
+            "claim_renewed", task_id, checkout_run_id=live_run,
+            lease_expires_at=live_lease,
+        )
+
+
 def claim_task(cfg=None):
     """Claim one ready task through Paperclip's atomic checkout/lease CAS."""
     cfg = cfg or {}
@@ -1066,6 +1096,10 @@ def main():
             for reclaimed in reclaim_expired_leases():
                 emit_event("claim_lost", str(reclaimed["id"]), **reclaimed)
                 emit_event("claim_reclaimed", str(reclaimed["id"]), **reclaimed)
+
+        for task_id, claim in load_state().items():
+            if isinstance(claim, dict) and claim.get("state") == "run_backed_claim":
+                refresh_run_backed_claim(task_id, claim)
 
         if not enforce_global_invariants():
             if ONCE:

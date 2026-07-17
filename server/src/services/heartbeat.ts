@@ -69,7 +69,7 @@ import { applyIssueGoalContext } from "../lib/goal-context.js";
 import { companySkillService } from "./company-skills.js";
 import { budgetService, type BudgetEnforcementScope } from "./budgets.js";
 import { secretService } from "./secrets.js";
-import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir, resolveRailEventsPath } from "../home-paths.js";
+import { resolveDefaultAgentWorkspaceDir, resolveManagedProjectWorkspaceDir } from "../home-paths.js";
 import {
   buildHeartbeatRunIssueComment,
   HEARTBEAT_RUN_RESULT_OUTPUT_MAX_CHARS,
@@ -6964,13 +6964,17 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (issueId && issueContext?.checkoutRunId === run.id) {
       issueLeaseRenewalTimer = setInterval(() => {
         void issuesSvc.renewLease(issueId, agent.id, run.id).then((renewed) => {
-          const eventsLog = resolveRailEventsPath();
-          void fs.mkdir(path.dirname(eventsLog), { recursive: true })
-            .then(() => fs.appendFile(eventsLog, `${JSON.stringify({
-              ts: new Date().toISOString(), type: "claim_renewed", task_id: issueId,
-              checkout_run_id: run.id, lease_expires_at: renewed.leaseExpiresAt,
-            })}\n`, "utf8"))
-            .catch((err) => logger.warn({ err, issueId, runId: run.id }, "failed to journal issue lease renewal"));
+          void logActivity(db, {
+            companyId: run.companyId,
+            actorType: "agent",
+            actorId: agent.id,
+            agentId: agent.id,
+            runId: run.id,
+            action: "issue.lease_renewed",
+            entityType: "issue",
+            entityId: issueId,
+            details: { leaseExpiresAt: renewed.leaseExpiresAt },
+          }).catch((err) => logger.warn({ err, issueId, runId: run.id }, "failed to log issue lease renewal"));
         }).catch((err) => {
           if (issueLeaseRenewalTimer) {
             clearInterval(issueLeaseRenewalTimer);

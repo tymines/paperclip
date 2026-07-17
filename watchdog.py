@@ -132,9 +132,16 @@ def check_paperclip_fleet() -> list[str]:
         data = json.loads(body)
         agents = data.get("agents", data if isinstance(data, list) else [])
         transport = data.get("transport", "")
-        if len(agents) != CONFIG["expected_roster_count"]:
+        expected_roster_count = CONFIG["expected_roster_count"]
+        try:
+            intent = load_manifest(Path(CONFIG["fleet_yaml"]))
+            if isinstance(intent.get("agents"), list):
+                expected_roster_count = len(intent["agents"])
+        except (OSError, UnicodeError, ValueError):
+            pass
+        if len(agents) != expected_roster_count:
             fails.append(
-                f"PAPERCLIP: expected {CONFIG['expected_roster_count']} agents, got {len(agents)}"
+                f"PAPERCLIP: expected {expected_roster_count} agents, got {len(agents)}"
             )
         if transport != CONFIG["expected_transport"]:
             fails.append(

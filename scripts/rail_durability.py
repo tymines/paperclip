@@ -7,6 +7,22 @@ import os
 import tempfile
 from pathlib import Path
 
+CLAIM_EVENTS = frozenset({"claim_acquired", "claim_renewed", "claim_lost", "claim_reclaimed"})
+
+
+def _validate_event(event: dict) -> None:
+    event_type = event.get("type")
+    task_id = event.get("task_id")
+    if not isinstance(event_type, str) or not event_type:
+        raise ValueError("RAIL event type must be a non-empty string")
+    if not isinstance(task_id, str) or not task_id:
+        raise ValueError("RAIL task_id must be a non-empty string")
+    if event_type.startswith("claim_") and event_type not in CLAIM_EVENTS:
+        raise ValueError(f"unknown RAIL claim event type: {event_type}")
+    epoch = event.get("controller_epoch")
+    if epoch is not None and (not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 1):
+        raise ValueError("controller_epoch must be a positive integer")
+
 
 def _events(path: Path):
     if not path.exists():
@@ -18,11 +34,21 @@ def _events(path: Path):
         try:
             event = json.loads(raw)
         except json.JSONDecodeError:
-            if index == len(lines) - 1 and not raw.endswith((b"\n", b"\r")):
+            if index == len(lines) - 1 and not raw.endswith(b"\n"):
                 break
             raise
         cursor = event.get("cursor")
-        if not isinstance(cursor, int) or cursor != last_cursor + 1:
+        if cursor is None:
+            event = dict(event)
+            cursor = last_cursor + 1
+            event["cursor"] = cursor
+            event.setdefault("type", "legacy.event")
+            event["task_id"] = (
+                event.get("task_id") or event.get("issue_id") or event.get("run_id") or "legacy"
+            )
+            event["legacy_uncursored"] = True
+        _validate_event(event)
+        if not isinstance(cursor, int) or isinstance(cursor, bool) or cursor != last_cursor + 1:
             raise ValueError(f"non-monotonic RAIL cursor at line {index + 1}: {cursor!r}")
         last_cursor = cursor
         events.append(event)
@@ -51,6 +77,9 @@ def _repair_tail(path: Path) -> None:
 
 def append_event(path: Path, event: dict) -> dict:
     """Append one fsynced event and assign the next monotonic cursor."""
+    if "cursor" in event:
+        raise ValueError("cursor is journal-managed")
+    _validate_event(event)
     path.parent.mkdir(parents=True, exist_ok=True)
     _repair_tail(path)
     # ponytail: one controller owns this journal; scan the small file until rotation is needed.
@@ -104,18 +133,52 @@ def load_projection(journal: Path, state_file: Path) -> dict:
             continue
         cursor = event["cursor"]
         meta = state.setdefault("_meta", {})
-        meta.update({"cursor": cursor, "last_event": event})
-        if event.get("controller_epoch") is not None:
-            meta["controller_epoch"] = event["controller_epoch"]
+        meta["cursor"] = cursor
+        current_epoch = int(meta.get("controller_epoch", 0))
+        event_epoch = event.get("controller_epoch")
+        if event_epoch is not None and event_epoch < current_epoch:
+            meta["ignored_stale_epoch_events"] = int(meta.get("ignored_stale_epoch_events", 0)) + 1
+            meta["last_ignored_event"] = event
+            changed = True
+            continue
+        meta["last_event"] = event
+        if event_epoch is not None:
+            meta["controller_epoch"] = event_epoch
         if str(event.get("type", "")).startswith("controller."):
             meta["controller_heartbeat_at"] = event.get("ts")
         task_id = event.get("task_id")
         if task_id and task_id != "system":
-            state.setdefault(task_id, {})["last_event"] = {
+            task = state.setdefault(task_id, {})
+            task["last_event"] = {
                 "cursor": cursor,
                 "ts": event.get("ts"),
                 "type": event.get("type"),
             }
+            for key in ("checkout_run_id", "lease_expires_at", "worktree_path", "branch_name", "identifier"):
+                if key in event:
+                    task[key] = event[key]
+            event_type = event["type"]
+            if event_type == "claim_acquired":
+                task["state"] = "run_backed_claim"
+            elif event_type == "claim_renewed":
+                task.setdefault("state", "run_backed_claim")
+            elif event_type == "claim_lost":
+                task["state"] = "claim_lost"
+            elif event_type == "claim_reclaimed":
+                task.update({"state": "ready", "checkout_run_id": None, "lease_expires_at": None})
+            elif event_type == "gated":
+                task["state"] = "gated"
+            elif event_type == "blocked":
+                task["state"] = "blocked"
+            elif event_type == "stage.done":
+                next_state = {
+                    "plan": "plan_ready",
+                    "critique": "critiqued",
+                    "code": "in_review",
+                    "review": "gated" if event.get("verdict") == "approved" else "rework",
+                }.get(event.get("stage"))
+                if next_state:
+                    task["state"] = next_state
         changed = True
     if changed or not state_file.exists():
         atomic_write_json(state_file, state)

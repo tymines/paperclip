@@ -5,20 +5,12 @@ import type { Db } from "@paperclipai/db";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { checkGate } from "../rooms-rail/gate-checker.js";
 import { logger } from "../middleware/logger.js";
-import { resolveRailEventsPath } from "../home-paths.js";
-import fs from "node:fs";
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 
-const EVENTS_LOG = resolveRailEventsPath();
 const MANUAL_STAGES = ["idea", "spec", "design", "architecture", "build", "review", "ship", "retro"];
 
 function emitEvent(evt: Record<string, unknown>) {
-  const line = JSON.stringify({ ts: new Date().toISOString(), ...evt }) + "\n";
-  try {
-    fs.mkdirSync(path.dirname(EVENTS_LOG), { recursive: true });
-    fs.appendFileSync(EVENTS_LOG, line);
-  } catch {}
+  logger.info({ manualPipelineEvent: { ts: new Date().toISOString(), ...evt } }, "manual pipeline event");
 }
 
 // ponytail: drizzle-compatible raw-SQL helper (same pattern as gym-observability.ts)
