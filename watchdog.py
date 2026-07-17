@@ -24,6 +24,7 @@ Daily summary flag:   0 9 * * *  /usr/bin/python3 /opt/fleet/watchdog.py --daily
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -31,6 +32,9 @@ import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+from rail_intent import compare_intent, format_drift, load_manifest
 
 # ============================== CONFIG =======================================
 CONFIG = {
@@ -59,8 +63,8 @@ CONFIG = {
         # these are checked via HTTP/Paperclip when running remotely
     },
 
-    # Drift check
-    "fleet_yaml": "",  # set to path when fleet.yaml is accessible
+    # Drift check — report-only intent; this script never applies it.
+    "fleet_yaml": str(Path(__file__).resolve().with_name("fleet.yaml")),
 
     "timeout_sec": 10,
     "state_file": "/tmp/fleet_watchdog_state.json",
@@ -197,34 +201,17 @@ def check_heartbeats() -> list[str]:
 
 
 def check_drift() -> list[str]:
-    """fleet.yaml roster names vs live /api/acp/fleet names."""
-    fy = CONFIG.get("fleet_yaml")
-    if not fy:
-        return []  # skipped when no fleet.yaml path configured
-    fy = Path(fy)
-    if not fy.exists():
-        return [f"DRIFT CHECK SKIPPED: {fy} not found"]
-    expected = set()
-    for line in fy.read_text(encoding="utf-8").splitlines():
-        s = line.strip()
-        if s.startswith("- name:"):
-            expected.add(s.split(":", 1)[1].strip().strip('"').strip("'"))
+    """Compare report-only fleet intent with observable live fields."""
+    manifest_path = Path(CONFIG["fleet_yaml"])
+    if not manifest_path.exists():
+        return [f"DRIFT CHECK SKIPPED: {manifest_path} not found"]
     try:
+        manifest = load_manifest(manifest_path)
         _, body = http_get(CONFIG["paperclip_fleet_url"])
-        data = json.loads(body)
-        agents = data.get("agents", data if isinstance(data, list) else [])
-        live = {a.get("name", "") for a in agents if isinstance(a, dict)}
+        payload = json.loads(body)
+        return [format_drift(manifest, row) for row in compare_intent(manifest, payload)]
     except Exception as e:
-        return [f"DRIFT CHECK: could not read live roster: {e}"]
-    fleet_expected = {n for n in expected if n not in ("Baily AI",)}
-    missing = fleet_expected - live
-    extra = live - expected
-    fails = []
-    if missing:
-        fails.append(f"DRIFT: in fleet.yaml but not on the board: {sorted(missing)}")
-    if extra:
-        fails.append(f"DRIFT: on the board but not in fleet.yaml: {sorted(extra)}")
-    return fails
+        return [f"DRIFT CHECK: {e}"]
 
 
 def load_state() -> dict:
@@ -253,14 +240,31 @@ def main() -> None:
 
     if failures:
         fresh = []
-        for f in failures:
-            last = state.get(f, 0)
-            if time.time() - last > CONFIG["realert_after_min"] * 60:
-                fresh.append(f)
-                state[f] = time.time()
+        clock = time.time()
+        active_keys = {re.sub(r" age_days=[^ ]+", "", failure) for failure in failures}
+        state = {key: value for key, value in state.items() if key in active_keys}
+        for failure in failures:
+            key = re.sub(r" age_days=[^ ]+", "", failure)
+            if failure.startswith("DRIFT:"):
+                record = state.get(key) if isinstance(state.get(key), dict) else {}
+                first_seen = record.get("first_seen", clock)
+                alerts = record.get("alerts", 0)
+                due = alerts == 0 or (alerts == 1 and clock - first_seen >= 3600) or (
+                    alerts >= 2 and clock - record.get("last_alert", 0) >= 86400
+                )
+                if due:
+                    fresh.append(failure)
+                    state[key] = {"first_seen": first_seen, "last_alert": clock, "alerts": alerts + 1}
+                elif not record:
+                    state[key] = {"first_seen": first_seen, "last_alert": 0, "alerts": 0}
+                continue
+            last = state.get(key, 0)
+            if not isinstance(last, (int, float)) or clock - last > CONFIG["realert_after_min"] * 60:
+                fresh.append(failure)
+                state[key] = clock
         if fresh:
             slack(f":rotating_light: *Fleet watchdog — {len(failures)} issue(s)* ({ts})\n" +
-                  "\n".join(f"• {f}" for f in fresh) +
+                  "\n".join(f"• {failure}" for failure in fresh) +
                   ("" if len(fresh) == len(failures) else f"\n(+{len(failures)-len(fresh)} still failing, muted)"))
     else:
         state = {}

@@ -1,8 +1,8 @@
-# fleet.yaml — SINGLE SOURCE OF TRUTH for the Tyler Co roster.
-# Souls, Hermes profiles, and Paperclip roster entries are GENERATED from this file.
-# Edit here, regenerate, commit. If a soul or the DB disagrees with this file, this file wins.
-# Watchdog runs a drift check against this file.
-#
+# fleet.yaml — REPORT-ONLY INTENT manifest for the Tyler Co roster.
+# Tyler's explicit approval is policy authority; live runtime is operational truth.
+# Compare this file with runtime/Paperclip and report drift. Never auto-apply or reconcile it.
+# Manual changes are reviewable intent updates only.
+
 # Last correction (2026-07-09, Zeus):
 #   1. REVIEWERS: R1 (Gemini), R2 (DeepSeek), EV (OpenAI) — 3 distinct families. Verified OpenAI 200.
 #   2. Bosses: Ares on kimi-k2.6 (smart). Zeus moved to deepseek-v4-pro (Tyler 2026-07-13 — was
