@@ -42,6 +42,7 @@ CONFIG_FILE = Path(os.environ.get("RAIL_CONFIG", str(REPO / ".rail_config.json")
 STATE_FILE  = Path(os.environ.get("RAIL_STATE", str(REPO / ".rail_state.json")))
 CONTROLLER_LOCK = None
 CONTROLLER_EPOCH = None
+LAST_INVARIANT_FINGERPRINT = None
 
 DEFAULT_CONFIG = {
     "rail_enabled": False,        # OFF by default — Tyler must explicitly enable
@@ -512,6 +513,148 @@ def open_db():
         raise
 
 
+def check_global_invariants():
+    """Return high-confidence cross-task violations; DB failure is itself a violation."""
+    checks = [
+        ("orphaned_in_progress", """
+            SELECT i.id::text, NULL::text,
+                   concat_ws(', ',
+                     CASE WHEN i.assignee_agent_id IS NULL THEN 'assignee missing' END,
+                     CASE WHEN i.checkout_run_id IS NULL THEN 'checkout run missing' END,
+                     CASE WHEN i.lease_expires_at IS NULL THEN 'lease missing' END,
+                     CASE WHEN i.lease_expires_at <= now() THEN 'lease expired' END,
+                     CASE WHEN hr.id IS NULL THEN 'heartbeat run missing' END,
+                     CASE WHEN hr.id IS NOT NULL AND hr.status NOT IN ('queued', 'running') THEN 'heartbeat run terminal' END,
+                     CASE WHEN hr.id IS NOT NULL AND hr.agent_id IS DISTINCT FROM i.assignee_agent_id THEN 'run agent mismatch' END,
+                     CASE WHEN hr.id IS NOT NULL AND hr.company_id IS DISTINCT FROM i.company_id THEN 'run company mismatch' END,
+                     CASE WHEN hr.id IS NOT NULL AND coalesce(hr.context_snapshot->>'issueId', hr.context_snapshot->>'taskId') IS DISTINCT FROM i.id::text THEN 'run task mismatch' END
+                   )
+            FROM issues i
+            LEFT JOIN heartbeat_runs hr ON hr.id = i.checkout_run_id
+            WHERE i.company_id = %s
+              AND i.status = 'in_progress'
+              AND (
+                i.assignee_agent_id IS NULL OR i.checkout_run_id IS NULL
+                OR i.lease_expires_at IS NULL OR i.lease_expires_at <= now()
+                OR hr.id IS NULL OR hr.status NOT IN ('queued', 'running')
+                OR hr.agent_id IS DISTINCT FROM i.assignee_agent_id
+                OR hr.company_id IS DISTINCT FROM i.company_id
+                OR coalesce(hr.context_snapshot->>'issueId', hr.context_snapshot->>'taskId') IS DISTINCT FROM i.id::text
+              )
+            ORDER BY i.updated_at
+            LIMIT 100
+        """),
+        ("duplicate_active_run", """
+            SELECT i.id::text, NULL::text,
+                   count(*)::text || ' active runs: ' || string_agg(hr.id::text || ':' || hr.status, ', ' ORDER BY hr.created_at)
+            FROM heartbeat_runs hr
+            JOIN issues i
+              ON i.company_id = hr.company_id
+             AND i.id::text = coalesce(hr.context_snapshot->>'issueId', hr.context_snapshot->>'taskId')
+            WHERE hr.company_id = %s
+              AND hr.status IN ('queued', 'running')
+            GROUP BY i.id
+            HAVING count(*) > 1
+            LIMIT 100
+        """),
+        ("terminal_parent_active_child", """
+            SELECT child.id::text, parent.id::text,
+                   'parent=' || parent.status || ', child=' || child.status
+            FROM issues child
+            JOIN issues parent ON parent.id = child.parent_id
+            WHERE child.company_id = %s
+              AND child.hidden_at IS NULL
+              AND parent.status IN ('done', 'cancelled')
+              AND child.status NOT IN ('done', 'cancelled')
+            ORDER BY child.updated_at
+            LIMIT 100
+        """),
+        ("dependency_state_inconsistent", """
+            SELECT dependent.id::text, blocker.id::text,
+                   'dependent=' || dependent.status || ', blocker=' || blocker.status
+            FROM issue_relations relation
+            JOIN issues blocker ON blocker.id = relation.issue_id
+            JOIN issues dependent ON dependent.id = relation.related_issue_id
+            WHERE relation.company_id = %s
+              AND relation.type = 'blocks'
+              AND dependent.status IN ('in_progress', 'in_review', 'needs_approval', 'done')
+              AND blocker.status <> 'done'
+            ORDER BY dependent.updated_at
+            LIMIT 100
+        """),
+        ("malformed_chain", """
+            SELECT malformed.issue_id, malformed.related_id, malformed.detail
+            FROM (
+              SELECT child.id::text AS issue_id, parent.id::text AS related_id,
+                     CASE WHEN child.id = parent.id THEN 'self parent' ELSE 'cross-company parent' END AS detail
+              FROM issues child
+              JOIN issues parent ON parent.id = child.parent_id
+              WHERE child.company_id = %s
+                AND (child.id = parent.id OR child.company_id <> parent.company_id)
+              UNION ALL
+              SELECT relation.issue_id::text, relation.related_issue_id::text,
+                     CASE WHEN relation.issue_id = relation.related_issue_id THEN 'self dependency' ELSE 'cross-company dependency' END
+              FROM issue_relations relation
+              JOIN issues blocker ON blocker.id = relation.issue_id
+              JOIN issues dependent ON dependent.id = relation.related_issue_id
+              WHERE relation.company_id = %s
+                AND (
+                  relation.issue_id = relation.related_issue_id
+                  OR relation.company_id <> blocker.company_id
+                  OR relation.company_id <> dependent.company_id
+                )
+            ) malformed
+            LIMIT 100
+        """),
+    ]
+    violations = []
+    try:
+        conn = open_db()
+        try:
+            with conn.cursor() as cur:
+                for kind, query in checks:
+                    params = (CID, CID) if kind == "malformed_chain" else (CID,)
+                    cur.execute(query, params)
+                    for issue_id, related_id, detail in cur.fetchall():
+                        violations.append({
+                            "kind": kind,
+                            "issue_id": issue_id,
+                            "related_id": related_id,
+                            "detail": detail,
+                        })
+        finally:
+            conn.close()
+    except Exception as exc:
+        return [{
+            "kind": "invariant_check_failed",
+            "issue_id": None,
+            "related_id": None,
+            "detail": str(exc)[:300],
+        }]
+    return violations
+
+
+def enforce_global_invariants():
+    """Check every cycle; emit on state change and fail closed while violations exist."""
+    global LAST_INVARIANT_FINGERPRINT
+    violations = check_global_invariants()
+    fingerprint = json.dumps(violations, sort_keys=True, default=str)
+    changed = fingerprint != LAST_INVARIANT_FINGERPRINT
+    previously_blocked = LAST_INVARIANT_FINGERPRINT not in (None, "[]")
+    LAST_INVARIANT_FINGERPRINT = fingerprint
+
+    if violations:
+        if changed:
+            emit_event("invariant.violation", "system", count=len(violations), violations=violations)
+            kinds = sorted({item["kind"] for item in violations})
+            _log("invariant", f"FAIL CLOSED: {len(violations)} violation(s): {', '.join(kinds)}")
+        return False
+    if previously_blocked:
+        emit_event("invariant.restored", "system")
+        _log("invariant", "global invariants restored")
+    return True
+
+
 def query_board_direct(limit=5):
     """Direct PG fallback. Fail closed unless the server confirms production port 5432."""
     try:
@@ -835,6 +978,13 @@ def main():
         if cfg.get("enforcement") == "on":
             for reclaimed in reclaim_expired_leases():
                 emit_event("claim.expired_reclaimed", str(reclaimed["id"]), **reclaimed)
+
+        if not enforce_global_invariants():
+            if ONCE:
+                _log("rail", "--once mode: invariant violation blocked cycle")
+                break
+            time.sleep(POLL_SEC)
+            continue
 
         # ── claim new tasks ──
         task = claim_task(cfg)
