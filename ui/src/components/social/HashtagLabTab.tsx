@@ -6,14 +6,19 @@
  *      (popular / medium / niche) with use counts and predicted reach
  *      lift. Built for the same niche-aware logic Later / Flick ship.
  *   2. Performance — table of every hashtag Tyler has used (drawn from
- *      his published_posts table by the real impl; stub returns mock
- *      rows). Sort by avg engagement to find the best-performing tags.
+ *      published posts once adapters report metrics). Sort by avg
+ *      engagement to find the best-performing tags.
+ *
+ * Data-honest (spec §7): if the suggestion corpus isn't available yet the
+ * endpoint returns a keyed-off state — rendered as an explicit amber
+ * notice with the homework that unlocks it, never mock tag tiers.
  */
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Copy, Sparkles } from "lucide-react";
+import { Copy, Hash, Sparkles } from "lucide-react";
 import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
-import { socialApi, type HashtagSuggestion } from "../../api/social";
+import { socialApi, type HashtagSuggestion, type KeyedOff } from "../../api/social";
+import { KeyedOffNotice } from "./data-honesty";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -45,11 +50,20 @@ export function HashtagLabTab({ companyId, accounts: _accounts }: HashtagLabTabP
   const [text, setText] = useState("");
   const [niche, setNiche] = useState("");
   const [results, setResults] = useState<HashtagSuggestion[]>([]);
+  const [keyedOff, setKeyedOff] = useState<KeyedOff | null>(null);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
 
   const suggestMutation = useMutation({
     mutationFn: () => socialApi.suggestHashtags(companyId, platform, text, niche || undefined),
-    onSuccess: (data) => setResults(data),
+    onSuccess: (res) => {
+      if (res.available) {
+        setResults(res.data);
+        setKeyedOff(null);
+      } else {
+        setResults([]);
+        setKeyedOff(res);
+      }
+    },
   });
 
   const grouped = useMemo(() => {
@@ -146,6 +160,17 @@ export function HashtagLabTab({ companyId, accounts: _accounts }: HashtagLabTabP
             </Button>
           </div>
         </div>
+
+        {keyedOff ? (
+          <div className="mt-4">
+            <KeyedOffNotice
+              icon={Hash}
+              featurePitch={`Hashtag suggestions will return three tiers of real ${PLATFORM_META[platform].label} tags with use counts and predicted reach lift.`}
+              state={keyedOff}
+              compact
+            />
+          </div>
+        ) : null}
 
         {results.length > 0 ? (
           <>

@@ -25,6 +25,8 @@ import { goalRoutes } from "./routes/goals.js";
 import { knowledgeGraphRoutes } from "./routes/knowledge-graph.js";
 import { fleetKbRoutes } from "./routes/fleet-kb.js";
 import { roomRoutes } from "./routes/rooms.js";
+import { gateRoutes } from "./routes/gate.js";
+import { gymObservabilityRoutes } from "./routes/gym-observability.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
 import type { SocialScheduler } from "./workers/social-scheduler.js";
@@ -37,17 +39,26 @@ import { mlflowRoutes } from "./routes/mlflow.js";
 import { jarvisRoutes } from "./routes/jarvis.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { appDevRoutes } from "./routes/app-dev.js";
+import { appdevControlRoutes } from "./routes/appdev-control.js";
+import { appdevStudioRoutes, appdevWebhookRoutes } from "./routes/appdev-studio.js";
 import { promptsRoutes } from "./routes/prompts.js";
 import { bookWritingRoutes } from "./routes/book-writing.js";
 import { bookStudioRoutes } from "./routes/book-studio.js";
 import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
 import { bookStudioExportRoutes } from "./routes/book-studio-export.js";
 import { bookStudioChapterGenRoutes } from "./routes/book-studio-chapter-gen.js";
+import { bookStudioAutopilotRoutes } from "./routes/book-studio-autopilot.js";
+import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-generate.js";
 // Company import/export payloads can inline full portable packages.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const { createServer: createViteServer } = await import("vite");
 import { gymRoutes } from "./routes/gym.js";
+import { creativeStudioRoutes } from "./routes/creative-studio.js";
+import { bookMediaRoutes } from "./routes/book-media.js";
+import { creativeStudioToolsRoutes } from "./routes/creative-studio-tools.js";
+import { adStudioRoutes } from "./routes/ad-studio.js";
 import { storyBibleRoutes } from "./routes/story-bible.js";
+import { influencerStudioRoutes } from "./routes/influencer-studio.js";
 import { userProfileRoutes } from "./routes/user-profiles.js";
 import { sidebarBadgeRoutes } from "./routes/sidebar-badges.js";
 import { sidebarPreferenceRoutes } from "./routes/sidebar-preferences.js";
@@ -67,6 +78,7 @@ import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
 import { issueService } from "./services/index.js";
 import { bulkUploadRoutes } from "./routes/bulk-upload.js";
+import { socialMediaRoutes } from "./routes/social-media.js";
 import { accessRoutes } from "./routes/access.js";
 import { pluginRoutes } from "./routes/plugins.js";
 import { adapterRoutes } from "./routes/adapters.js";
@@ -256,12 +268,22 @@ export async function createApp(
   api.use(jarvisRoutes(db));
   api.use(dashboardRoutes(db));
   api.use(appDevRoutes(db));
+  api.use(appdevControlRoutes(db));
+  api.use(appdevStudioRoutes(db));
   api.use(promptsRoutes(db));
+  api.use(gymRoutes(db));
+  api.use(creativeStudioRoutes(db));
+  api.use(bookMediaRoutes(db));
+  api.use(creativeStudioToolsRoutes(db));
+  api.use(adStudioRoutes(db));
   api.use(knowledgeGraphRoutes(db));
   api.use(fleetKbRoutes());
   api.use(roomRoutes(db));
+  api.use(gateRoutes(db));
+  api.use(gymObservabilityRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
+  api.use(socialMediaRoutes(db, opts.storageService));
   api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(designRoutes(db));
   api.use(designAssetsRoutes(db));
@@ -278,8 +300,11 @@ export async function createApp(
   api.use(storyBibleGenerateRoutes(db));
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
-  api.use(gymRoutes(db));
+  api.use(bookStudioAutopilotRoutes(db));
+  api.use(bookStudioImageGenerateRoutes(db));
+  // (dup gym mounts removed 2026-07-12 Fable — merge cruft; mounted above)
   api.use(storyBibleRoutes(db));
+  api.use(influencerStudioRoutes(db, {}));
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
@@ -377,6 +402,9 @@ export async function createApp(
       fallthrough: false,
     }),
   );
+  // ── Public App Dev Sentry webhook (token-guarded, ingest-only scope; same
+  //    defense-in-depth pattern as the feedback intake below) ────────────────
+  app.use(appdevWebhookRoutes(db));
   // ── Public app-feedback intake (Baily's App "Request a Feature") ──────────
   // Mounted ahead of the guarded /api router so the app can POST off-Tailnet
   // with no session. Defense-in-depth: single-purpose token (a speed bump, NOT
@@ -487,7 +515,23 @@ export async function createApp(
     ];
     const uiDist = candidates.find((p) => fs.existsSync(path.join(p, "index.html")));
     if (uiDist) {
-      const indexHtml = applyUiBranding(fs.readFileSync(path.join(uiDist, "index.html"), "utf-8"));
+      // index.html must be re-read when a ui rebuild lands (mtime-memoized):
+      // it was previously read ONCE at boot, so every SPA route kept serving
+      // the boot-time copy after a redeploy — pointing at asset hashes the
+      // rebuild had deleted → blank page until the next server restart
+      // (2026-07-12: Tyler's stale-UI / blank book-writing sightings).
+      const indexPath = path.join(uiDist, "index.html");
+      let indexCache = { mtimeMs: 0, html: "" };
+      const getIndexHtml = (): string => {
+        try {
+          const mtimeMs = fs.statSync(indexPath).mtimeMs;
+          if (mtimeMs !== indexCache.mtimeMs) {
+            indexCache = { mtimeMs, html: applyUiBranding(fs.readFileSync(indexPath, "utf-8")) };
+          }
+        } catch { /* mid-rebuild: keep serving the last good copy */ }
+        return indexCache.html;
+      };
+      getIndexHtml(); // prime the cache at boot
       // Hashed asset files (Vite emits them under /assets/<name>.<hash>.<ext>)
       // never change once built, so they can be cached aggressively.
       app.use(
@@ -531,7 +575,7 @@ export async function createApp(
           .status(200)
           .set("Content-Type", "text/html")
           .set("Cache-Control", "no-cache")
-          .end(indexHtml);
+          .end(getIndexHtml());
       });
     } else {
       console.warn("[paperclip] UI dist not found; running in API-only mode");
@@ -549,7 +593,7 @@ export async function createApp(
       server: {
         middlewareMode: true,
         hmr: {
-          host: opts.bindHost,
+          host: "127.0.0.1",
           port: hmrPort,
           clientPort: hmrPort,
         },

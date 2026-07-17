@@ -95,9 +95,9 @@ export const CANONICAL_FLEET_MODELS: Record<string, CanonicalModel> = {
 
   // ── Ares cluster (Box 2, under Ares) ──────────────────────────────────
   "ares evidence verifier": {
-    model: "deepseek/deepseek-v4-pro",
-    catalogMatch: "deepseek-v4-pro",
-    source: "Ares Evidence Verifier on Box 2 = DeepSeek V4 Pro (deepseek)",
+    model: "openai/gpt-4o-mini",
+    catalogMatch: "gpt-4o-mini",
+    source: "Ares Evidence Verifier on Box 2 = GPT-4o-mini (OpenAI — cross-model independent verifier)",
   },
   "ares reviewer 1": {
     model: "kimi-coding/kimi-k2.6",

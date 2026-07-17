@@ -1,13 +1,54 @@
-# ponytail: disabled — no Docker/GHCR env on tymines fork.
-# Original workflow preserved in git history. Re-enable by reverting this commit.
-name: Docker (disabled)
+name: Docker
 
 on:
-  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  # push-to-master disabled (fork deploys via box, not ghcr) — was failing every commit + emailing Tyler
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-  noop:
-    if: false
+  build-and-push:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: docker-${{ github.ref }}
+      cancel-in-progress: true
     steps:
-      - run: exit 0
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

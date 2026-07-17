@@ -177,8 +177,8 @@ const CALLOUT_RE = /^\s*\[!(\w+)\]\s*(.*)$/s;
 
 export function FleetKbView({ onBack }: { onBack: () => void }) {
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ["fleet-kb", "graph"],
-    queryFn: () => fleetKbApi.getGraph(),
+    queryKey: ["fleet-kb", "graph", "bodies"],
+    queryFn: () => fleetKbApi.getGraph({ bodies: true }),
     staleTime: 60_000,
   });
 

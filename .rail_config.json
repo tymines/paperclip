@@ -1,0 +1,19 @@
+{
+  "rail_enabled": false,
+  "enforcement": "shadow",
+  "warn_ttl_min": 20,
+  "revoke_ttl_min": 40,
+  "sweep_interval_min": 5,
+  "rework_cap": 3,
+  "seats": ["zeus-coding"],
+  "api_key": "",
+  "ten_laws": {
+    "session_max_age_hours": 8,
+    "max_tokens_per_session": 200000,
+    "require_critique_before_code": true,
+    "require_review_before_merge": true,
+    "require_test_for_changed_files": true,
+    "state_on_disk_not_context": true,
+    "enforce_worktree_isolation": true
+  }
+}

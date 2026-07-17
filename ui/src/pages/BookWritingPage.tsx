@@ -8,7 +8,7 @@
  * Layout: grid-cols-[1fr_2fr_1fr] (~25/50/25 split), non-resizable, full-height
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import {
   BookOpen,
   User,
@@ -16,7 +16,6 @@ import {
   Palette,
   List,
   FileText,
-  Check,
   ChevronLeft,
   ChevronRight,
   Pause,
@@ -40,7 +39,6 @@ import {
   Loader2,
   FileDown,
   Volume2,
-  Play,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
@@ -49,6 +47,9 @@ import { ErrorBoundary } from "@/components/book-studio/ErrorBoundary";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
+import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
+import { useCompany } from "../context/CompanyContext";
+import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +99,7 @@ interface CharacterEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface WorldLocationEntity {
@@ -111,6 +113,7 @@ interface WorldLocationEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface StyleEntity {
@@ -121,10 +124,12 @@ interface StyleEntity {
   comps: string;
   sampleParagraph: string;
   bannedCliches: string[];
+  tropes: string[];
   locked: boolean;
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface OutlineEntity {
@@ -137,6 +142,7 @@ interface OutlineEntity {
   source: string;
   createdAt: string;
   updatedAt: string;
+  metadata?: Record<string, unknown> | null;
 }
 
 // ── Review Notes — now handled by ReviewNotesPanel component ─────────────
@@ -183,6 +189,20 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as unknown as T;
   return res.json();
+}
+
+// apiFetch throws Error("API 503: {\"error\":\"…\"}"). Pull the clean server
+// message out so honest errors (missing provider/tool) read nicely in the UI.
+function extractApiError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const jsonStart = raw.indexOf("{");
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(raw.slice(jsonStart));
+      if (parsed && typeof parsed.error === "string") return parsed.error;
+    } catch { /* not JSON — fall through */ }
+  }
+  return raw;
 }
 
 // ── CameraButton helper ────────────────────────────────────────────────────────
@@ -271,26 +291,55 @@ function SourceBadge({ source }: { source: string }) {
 
 // ── Editable Text Field ──────────────────────────────────────────────────────
 
+/** Ceiling for auto-grow textareas; past this they scroll instead of pushing the panel. */
+const AUTOGROW_MAX_PX = 480;
+
 function EditableField({
   label,
   value,
   onChange,
   multiline = false,
   placeholder = "",
+  rows = 2,
+  autoGrow = false,
+  large = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   multiline?: boolean;
   placeholder?: string;
+  rows?: number;
+  autoGrow?: boolean;
+  /** Roomier type/padding for long-form fields. Off by default so existing call sites are unchanged. */
+  large?: boolean;
 }) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Size to content on mount and whenever `value` changes from outside - e.g. opening
+  // edit mode on a character that already has a long description. The old onInput-only
+  // handler fired on keystrokes, so pre-filled long text stayed stuck at `rows`.
+  useLayoutEffect(() => {
+    const t = taRef.current;
+    if (!t || !autoGrow) return;
+    t.style.height = "auto";
+    t.style.height = `${Math.min(t.scrollHeight + 2, AUTOGROW_MAX_PX)}px`;
+  }, [value, autoGrow]);
+
   return (
     <div className="mb-2">
       <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">{label}</label>
       {multiline ? (
         <textarea
-          className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:border-blue-500/50"
-          rows={2}
+          ref={taRef}
+          className={cn(
+            "w-full rounded border border-gray-700 bg-gray-800/50 text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-500/50",
+            large ? "px-2.5 py-1.5 text-[13px] leading-relaxed" : "px-2 py-1 text-xs",
+            // overflow-auto (not hidden) so text past AUTOGROW_MAX_PX stays reachable.
+            autoGrow ? "resize-y overflow-auto" : "resize-none",
+          )}
+          style={autoGrow ? { maxHeight: AUTOGROW_MAX_PX } : undefined}
+          rows={rows}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
@@ -319,6 +368,7 @@ interface CharacterCardProps {
 }
 
 function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
+  const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(char.name);
   const [editRole, setEditRole] = useState(char.role);
@@ -327,23 +377,55 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   const [editSource, setEditSource] = useState(char.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  // Optional custom prompt (Tyler: "if I want a specific cover I can just
+  // describe it" — same for icons). Empty = server's auto-prompt.
+  const [showIconPrompt, setShowIconPrompt] = useState(false);
+  const [iconPrompt, setIconPrompt] = useState("");
 
-  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+  const handleImageGenerate = async (customPrompt?: string) => {
+    // Book Media round 2: character icons run through the provider registry
+    // (book-media/character-icon) and persist as the character avatar
+    // (metadata.imageUrl — migration 0154). Falls back to the legacy path if
+    // the media route is unavailable.
     setImageGenerating(true);
+    setShowIconPrompt(false);
     try {
-      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
-      if (imageUrl) {
-        onUpdate(char.id, { metadata: { ...((char.metadata as Record<string, unknown>) || {}), imageUrl } });
-        // Show the image inline via a re-render (card reads char.metadata.imageUrl)
+      const cidForMedia = mediaCompanyId ?? companySlug;
+      const dispatched = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+        `/companies/${cidForMedia}/book-media/${bookId}/character-icon`,
+        { method: "POST", body: JSON.stringify({ characterId: char.id, ...(customPrompt?.trim() ? { prompt: customPrompt.trim() } : {}) }) },
+      );
+      let job = dispatched.job;
+      for (let i = 0; i < 45 && job.status !== "completed" && job.status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const poll = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+          `/companies/${cidForMedia}/creative-studio/jobs/${job.id}`,
+        );
+        job = poll.job;
       }
-    } catch { /* noop */ }
+      const imageUrl = job.status === "completed" ? job.outputs[0]?.url : undefined;
+      if (imageUrl) {
+        // Persist permanently through the apply route: it downloads the image
+        // into the local asset store (provider URLs expire) and sets
+        // metadata.imageUrl server-side. Client PATCH is the fallback only.
+        try {
+          const applied = await apiFetch<{ iconUrl?: string }>(
+            `/companies/${cidForMedia}/book-media/${bookId}/assets/${job.id}/apply`,
+            { method: "POST", body: JSON.stringify({ action: "set-character-icon", characterId: char.id }) },
+          );
+          onUpdate(char.id, { metadata: { imageUrl: applied.iconUrl ?? imageUrl, iconJobId: job.id } });
+        } catch {
+          onUpdate(char.id, { metadata: { imageUrl, iconJobId: job.id } });
+        }
+      }
+    } catch { /* keyed-off or dispatch failure — surface stays quiet, media panel shows the real state */ }
     setImageGenerating(false);
   };
 
-  const initials = char.name
+  const initials = (char.name ?? "")
     .split(" ")
-    .map((n) => n[0])
-    .join("");
+    .map((n) => n[0] ?? "")
+    .join("") || "?";
 
   const handleSave = () => {
     onUpdate(char.id, {
@@ -371,8 +453,8 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Name" value={editName} onChange={setEditName} />
         <EditableField label="Role" value={editRole} onChange={setEditRole} />
-        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
-        <EditableField label="Voice Card (JSON)" value={editVoiceCard} onChange={setEditVoiceCard} multiline placeholder="{}" />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
+        <EditableField label="Voice" value={editVoiceCard} onChange={setEditVoiceCard} multiline rows={10} autoGrow large placeholder="{}" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -392,10 +474,33 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
   }
 
   return (
-    <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
-        {initials}
-      </div>
+    <div className="relative flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group">
+      {(char.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
+        <button
+          type="button"
+          onClick={() => onUpdate(char.id, { metadata: { iconLocked: !(char.metadata as Record<string, unknown>)?.iconLocked } })}
+          title={(char.metadata as Record<string, unknown>)?.iconLocked
+            ? "Icon locked — never auto-replaced by new generations. Click to unlock."
+            : "Click to lock this icon so new generations never auto-replace it"}
+          className="relative h-9 w-9 shrink-0"
+        >
+          <img
+            src={String((char.metadata as Record<string, unknown>).imageUrl)}
+            alt={char.name}
+            className="h-9 w-9 rounded-full object-cover border border-gray-700"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+          {Boolean((char.metadata as Record<string, unknown>)?.iconLocked) && (
+            <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-gray-900 p-0.5 text-yellow-400 border border-gray-700">
+              <Lock className="w-2.5 h-2.5" />
+            </span>
+          )}
+        </button>
+      ) : (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gray-800 text-xs font-semibold text-gray-400">
+          {initials}
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-200 truncate">{char.name}</span>
@@ -432,11 +537,31 @@ function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate,
           <Trash2 className="w-3 h-3" />
         </button>
         <CameraButton
-          onClick={() => handleImageGenerate("image", `Character portrait of ${char.name}${char.role ? `, ${char.role}` : ""}${char.description ? `. ${char.description}` : ""}`)}
+          onClick={() => setShowIconPrompt((v) => !v)}
           loading={imageGenerating}
-          title={`Generate image for ${char.name}`}
+          title={`Generate image for ${char.name} — optional custom prompt`}
         />
       </div>
+
+      {/* Optional custom prompt for icon generation */}
+      {showIconPrompt && !imageGenerating && (
+        <div className="absolute inset-x-2 bottom-2 z-10 flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-950/95 p-1.5 shadow-lg">
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+            placeholder={`Optional: describe ${char.name}'s icon… (empty = auto)`}
+            value={iconPrompt}
+            onChange={(e) => setIconPrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleImageGenerate(iconPrompt); if (e.key === "Escape") setShowIconPrompt(false); }}
+          />
+          <button
+            onClick={() => void handleImageGenerate(iconPrompt)}
+            className="shrink-0 rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-500"
+          >
+            Generate
+          </button>
+        </div>
+      )}
 
       {/* Delete confirmation overlay */}
       {deleting && (
@@ -476,6 +601,7 @@ interface LocationCardProps {
 }
 
 function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
+  const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
   const [editDesc, setEditDesc] = useState(loc.description);
@@ -484,15 +610,43 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
   const [editSource, setEditSource] = useState(loc.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [showImagePrompt, setShowImagePrompt] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
 
-  const handleImageGenerate = async (endpointType: string, prompt: string) => {
+  // Location images run through the provider registry + persist via the apply
+  // route (permanent local copy + metadata.imageUrl — migration 0155). Exactly
+  // the character-icon pattern; the old path PATCHed metadata the table didn't
+  // have, so images silently never stuck ("isn't letting me generate images").
+  const handleImageGenerate = async (customPrompt?: string) => {
     setImageGenerating(true);
+    setShowImagePrompt(false);
     try {
-      const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
-      if (imageUrl) {
-        onUpdate(loc.id, { metadata: { ...((loc.metadata as Record<string, unknown>) || {}), imageUrl } });
+      const cidForMedia = mediaCompanyId ?? companySlug;
+      const dispatched = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+        `/companies/${cidForMedia}/book-media/${bookId}/location-image`,
+        { method: "POST", body: JSON.stringify({ locationId: loc.id, ...(customPrompt?.trim() ? { prompt: customPrompt.trim() } : {}) }) },
+      );
+      let job = dispatched.job;
+      for (let i = 0; i < 45 && job.status !== "completed" && job.status !== "failed"; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const poll = await apiFetch<{ job: { id: string; status: string; outputs: Array<{ url: string }> } }>(
+          `/companies/${cidForMedia}/creative-studio/jobs/${job.id}`,
+        );
+        job = poll.job;
       }
-    } catch { /* noop */ }
+      const imageUrl = job.status === "completed" ? job.outputs[0]?.url : undefined;
+      if (imageUrl) {
+        try {
+          const applied = await apiFetch<{ imageUrl?: string }>(
+            `/companies/${cidForMedia}/book-media/${bookId}/assets/${job.id}/apply`,
+            { method: "POST", body: JSON.stringify({ action: "set-location-image", locationId: loc.id }) },
+          );
+          onUpdate(loc.id, { metadata: { imageUrl: applied.imageUrl ?? imageUrl, imageJobId: job.id } });
+        } catch {
+          onUpdate(loc.id, { metadata: { imageUrl, imageJobId: job.id } });
+        }
+      }
+    } catch { /* keyed-off or dispatch failure — media panel shows the real state */ }
     setImageGenerating(false);
   };
 
@@ -517,9 +671,9 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
     return (
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Name" value={editName} onChange={setEditName} />
-        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline />
-        <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline placeholder="{}" />
-        <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline placeholder="{}" />
+        <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
+        <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline rows={8} autoGrow large placeholder="{}" />
+        <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline rows={8} autoGrow large placeholder="{}" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -540,9 +694,32 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-gray-800 bg-gray-900/50 p-2.5 group relative">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-900/50 text-sm">
-        🏔️
-      </div>
+      {(loc.metadata as Record<string, unknown> | undefined)?.imageUrl ? (
+        <button
+          type="button"
+          onClick={() => onUpdate(loc.id, { metadata: { imageLocked: !(loc.metadata as Record<string, unknown>)?.imageLocked } })}
+          title={(loc.metadata as Record<string, unknown>)?.imageLocked
+            ? "Image locked — never auto-replaced by new generations. Click to unlock."
+            : "Click to lock this image so new generations never auto-replace it"}
+          className="relative h-9 w-9 shrink-0"
+        >
+          <img
+            src={String((loc.metadata as Record<string, unknown>).imageUrl)}
+            alt={loc.name}
+            className="h-9 w-9 rounded-md object-cover border border-gray-700"
+            onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+          />
+          {Boolean((loc.metadata as Record<string, unknown>)?.imageLocked) && (
+            <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-gray-900 p-0.5 text-yellow-400 border border-gray-700">
+              <Lock className="w-2.5 h-2.5" />
+            </span>
+          )}
+        </button>
+      ) : (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-900/50 text-sm">
+          🏔️
+        </div>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-gray-200 truncate">{loc.name}</span>
@@ -566,11 +743,31 @@ function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, o
           <Trash2 className="w-3 h-3" />
         </button>
         <CameraButton
-          onClick={() => handleImageGenerate("image", `Scene of ${loc.name}${loc.description ? `: ${loc.description.slice(0, 80)}` : ""}`)}
+          onClick={() => setShowImagePrompt((v) => !v)}
           loading={imageGenerating}
-          title={`Generate image for ${loc.name}`}
+          title={`Generate image for ${loc.name} — optional custom prompt`}
         />
       </div>
+
+      {/* Optional custom prompt for location image generation */}
+      {showImagePrompt && !imageGenerating && (
+        <div className="absolute inset-x-2 bottom-2 z-10 flex items-center gap-1.5 rounded-md border border-gray-700 bg-gray-950/95 p-1.5 shadow-lg">
+          <input
+            autoFocus
+            className="min-w-0 flex-1 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-[11px] text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
+            placeholder={`Optional: describe ${loc.name}… (empty = auto)`}
+            value={imagePrompt}
+            onChange={(e) => setImagePrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleImageGenerate(imagePrompt); if (e.key === "Escape") setShowImagePrompt(false); }}
+          />
+          <button
+            onClick={() => void handleImageGenerate(imagePrompt)}
+            className="shrink-0 rounded bg-purple-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-500"
+          >
+            Generate
+          </button>
+        </div>
+      )}
 
       {deleting && (
         <div className="absolute inset-0 flex items-center justify-center rounded-md bg-gray-950/90 z-10">
@@ -605,6 +802,7 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
   const [editComps, setEditComps] = useState(entry.comps);
   const [editSample, setEditSample] = useState(entry.sampleParagraph);
   const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
+  const [editTropes, setEditTropes] = useState((entry.tropes || []).join(", "));
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
@@ -624,6 +822,7 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
     onUpdate(entry.id, {
       pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample,
       bannedCliches: editCliches.split(",").map((s) => s.trim()).filter(Boolean),
+      tropes: editTropes.split(",").map((s) => s.trim()).filter(Boolean),
       source: editSource,
     });
     setEditing(false);
@@ -634,9 +833,10 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="POV" value={editPov} onChange={setEditPov} />
         <EditableField label="Tense" value={editTense} onChange={setEditTense} />
-        <EditableField label="Comparisons" value={editComps} onChange={setEditComps} />
-        <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline />
-        <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} placeholder="suddenly, very unique" />
+        <EditableField label="Comparisons" value={editComps} onChange={setEditComps} multiline rows={3} autoGrow large />
+        <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline rows={8} autoGrow large />
+        <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} multiline rows={3} autoGrow large placeholder="suddenly, very unique" />
+        <EditableField label="Tropes (comma-separated)" value={editTropes} onChange={setEditTropes} multiline rows={3} autoGrow large placeholder="Enemies to Lovers, The Chosen One" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -662,6 +862,12 @@ function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, on
       {entry.comps && <p className="text-[11px] text-gray-500 mb-1">Comps: {entry.comps}</p>}
       {entry.sampleParagraph && (
         <p className="text-[11px] text-gray-400 italic line-clamp-2">"{entry.sampleParagraph}"</p>
+      )}
+      {entry.bannedCliches && entry.bannedCliches.length > 0 && (
+        <p className="text-[11px] text-red-400/70 mt-1">🚫 {entry.bannedCliches.join(", ")}</p>
+      )}
+      {entry.tropes && entry.tropes.length > 0 && (
+        <p className="text-[11px] text-blue-400/70 mt-1">🎭 {entry.tropes.join(", ")}</p>
       )}
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
@@ -736,7 +942,7 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
       <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5">
         <EditableField label="Chapter #" value={editCh} onChange={setEditCh} />
         <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
-        <EditableField label="Beats (JSON array)" value={editBeats} onChange={setEditBeats} multiline placeholder="[]" />
+        <EditableField label="Beats (JSON array)" value={editBeats} onChange={setEditBeats} multiline rows={10} autoGrow large placeholder="[]" />
         <div className="mb-2">
           <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
           <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
@@ -802,8 +1008,8 @@ function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: stri
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Character name" />
       <EditableField label="Role" value={role} onChange={setRole} placeholder="e.g. Protagonist" />
-      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Brief description" />
-      <EditableField label="Voice Card (JSON)" value={voiceCard} onChange={setVoiceCard} multiline placeholder="{}" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline rows={6} autoGrow large placeholder="Brief description" />
+      <EditableField label="Voice" value={voiceCard} onChange={setVoiceCard} multiline rows={10} autoGrow large placeholder="{}" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -831,9 +1037,9 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Name" value={name} onChange={setName} placeholder="Location name" />
-      <EditableField label="Description" value={desc} onChange={setDesc} multiline placeholder="Description" />
-      <EditableField label="Rules (JSON)" value={rules} onChange={setRules} multiline placeholder="{}" />
-      <EditableField label="Sensory Notes (JSON)" value={sensory} onChange={setSensory} multiline placeholder="{}" />
+      <EditableField label="Description" value={desc} onChange={setDesc} multiline rows={6} autoGrow large placeholder="Description" />
+      <EditableField label="Rules (JSON)" value={rules} onChange={setRules} multiline rows={8} autoGrow large placeholder="{}" />
+      <EditableField label="Sensory Notes (JSON)" value={sensory} onChange={setSensory} multiline rows={8} autoGrow large placeholder="{}" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -852,20 +1058,22 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   );
 }
 
-function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => void; onCancel: () => void }) {
+function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => void; onCancel: () => void }) {
   const [pov, setPov] = useState("");
   const [tense, setTense] = useState("");
   const [comps, setComps] = useState("");
   const [sample, setSample] = useState("");
   const [cliches, setCliches] = useState("");
+  const [tropes, setTropes] = useState("");
   const [source, setSource] = useState("authored");
   return (
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="POV" value={pov} onChange={setPov} placeholder="e.g. Third Person Limited" />
       <EditableField label="Tense" value={tense} onChange={setTense} placeholder="e.g. Past" />
-      <EditableField label="Comparisons" value={comps} onChange={setComps} placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
-      <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline placeholder="A short sample of your prose style" />
-      <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} placeholder="suddenly, very unique" />
+      <EditableField label="Comparisons" value={comps} onChange={setComps} multiline rows={3} autoGrow large placeholder="e.g. Brandon Sanderson meets Ursula Le Guin" />
+      <EditableField label="Sample Paragraph" value={sample} onChange={setSample} multiline rows={8} autoGrow large placeholder="A short sample of your prose style" />
+      <EditableField label="Banned Clichés (comma-separated)" value={cliches} onChange={setCliches} multiline rows={3} autoGrow large placeholder="suddenly, very unique" />
+      <EditableField label="Tropes (comma-separated)" value={tropes} onChange={setTropes} multiline rows={3} autoGrow large placeholder="Enemies to Lovers, The Chosen One" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -873,7 +1081,7 @@ function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; t
         </select>
       </div>
       <div className="flex items-center gap-2 mt-1">
-        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample, bannedCliches: cliches.split(",").map((s) => s.trim()).filter(Boolean), source })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
+        <button onClick={() => onSave({ pov, tense, comps, sampleParagraph: sample, bannedCliches: cliches.split(",").map((s) => s.trim()).filter(Boolean), tropes: tropes.split(",").map((s) => s.trim()).filter(Boolean), source })} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
           <Plus className="w-2.5 h-2.5" /> Create
         </button>
         <button onClick={onCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
@@ -893,7 +1101,7 @@ function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumbe
     <div className="rounded-md border border-blue-500/40 bg-gray-900/80 p-2.5 mb-2">
       <EditableField label="Chapter #" value={ch} onChange={setCh} />
       <EditableField label="Title" value={title} onChange={setTitle} placeholder="Chapter title" />
-      <EditableField label="Beats (JSON array)" value={beats} onChange={setBeats} multiline placeholder="[]" />
+      <EditableField label="Beats (JSON array)" value={beats} onChange={setBeats} multiline rows={10} autoGrow large placeholder="[]" />
       <div className="mb-2">
         <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
         <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={source} onChange={(e) => setSource(e.target.value)}>
@@ -922,15 +1130,21 @@ function OverviewEditor({
   book,
   loading,
   onUpdate,
+  onDelete,
 }: {
   book: BookData | null;
   loading: boolean;
   onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => void;
+  onDelete?: () => Promise<void>;
 }) {
   const [editTitle, setEditTitle] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [initialized, setInitialized] = useState(false);
+  // Delete confirmation: type the exact title to arm the button.
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteText, setDeleteText] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   // Latch initial values from book on first load
   if (book && !initialized) {
@@ -969,6 +1183,8 @@ function OverviewEditor({
           value={editDesc}
           onChange={setEditDesc}
           multiline
+          rows={8}
+          autoGrow
           placeholder="What's this book about?"
         />
         <button
@@ -979,6 +1195,56 @@ function OverviewEditor({
           {saving ? "Saving..." : "Save Changes"}
         </button>
       </div>
+
+      {/* Danger zone — delete book (Tyler, 2026-07-12). DB rows only; vault
+          markdown files stay on disk as archive. */}
+      {onDelete && (
+        <div className="rounded-md border border-red-900/50 bg-red-950/20 p-3 space-y-2">
+          <div className="text-[10px] font-medium uppercase tracking-wider text-red-400/80">Danger zone</div>
+          {!confirmingDelete ? (
+            <button
+              onClick={() => { setConfirmingDelete(true); setDeleteText(""); }}
+              className="flex items-center gap-1 rounded border border-red-800 px-2.5 py-1 text-[10px] font-medium text-red-400 hover:text-red-200 hover:border-red-600"
+            >
+              <Trash2 className="w-3 h-3" /> Delete this book…
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-[11px] leading-relaxed text-gray-400">
+                This permanently deletes <span className="text-gray-200">"{book.title}"</span> from
+                the database — story bible, outline, chapters, annotations, and media job records.
+                The markdown files in the vault stay on disk as an archive.
+              </p>
+              <p className="text-[11px] text-gray-500">Type the book title to confirm:</p>
+              <input
+                autoFocus
+                className="w-full rounded border border-red-900/60 bg-gray-900 px-2 py-1 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-red-500/60"
+                placeholder={book.title}
+                value={deleteText}
+                onChange={(e) => setDeleteText(e.target.value)}
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  disabled={deleteText.trim() !== book.title.trim() || deleting}
+                  onClick={async () => {
+                    setDeleting(true);
+                    try { await onDelete(); } finally { setDeleting(false); setConfirmingDelete(false); }
+                  }}
+                  className="flex items-center gap-1 rounded bg-red-700 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-red-600 disabled:opacity-40"
+                >
+                  <Trash2 className="w-3 h-3" /> {deleting ? "Deleting…" : "Delete permanently"}
+                </button>
+                <button
+                  onClick={() => setConfirmingDelete(false)}
+                  className="rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-400 hover:text-gray-200"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -986,7 +1252,16 @@ function OverviewEditor({
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function BookWritingPage() {
-  const companySlug = "414c172d-7013-4728-b781-aad604d8e2d7"; // ponytail: hardcoded CID, use CompanyContext when multi-company
+  // 2026-07-12 (Fable hot-fix): was a hardcoded, non-existent company UUID which
+  // made every book API call target a company Tyler isn't a member of → 403 on
+  // create + books never surfaced. Use the selected company from context (resolves
+  // to the AugiAI company the user actually owns).
+  const { selectedCompanyId } = useCompany();
+  const companySlug = selectedCompanyId ?? "";
+  const { setBreadcrumbs } = useBreadcrumbs();
+  useEffect(() => {
+    setBreadcrumbs([{ label: "Book Writing" }]);
+  }, [setBreadcrumbs]);
   const [activeBibleTab, setActiveBibleTab] = useState<StoryBibleTab>("overview");
   const [jumpToChapter, setJumpToChapter] = useState<number | null>(null);
   const [highlightRange, setHighlightRange] = useState<{ chapterNumber: number; startOffset: number; endOffset: number } | null>(null);
@@ -1007,23 +1282,45 @@ export function BookWritingPage() {
   const [showCreateOutline, setShowCreateOutline] = useState(false);
 
   // Spend tracking (from book metadata)
-  const spendThisMonth = (activeBook?.metadata?.spendThisMonth as number) || 0;
-  const spendBudget = (activeBook?.metadata?.spendBudget as number) || 50.0;
-  const spendPercent = spendBudget > 0 ? (spendThisMonth / spendBudget) * 100 : 0;
 
   // Chat drawer state
   const [isChatOpen, setIsChatOpen] = useState(false);
 
-  // Assisted mode
-  const [assistedMode, setAssistedMode] = useState(false);
+  // ── Writing autonomy dial — 3 states, persisted per-book in
+  // books.metadata.autonomyMode (no migration needed; jsonb pattern).
+  // manual: nothing auto-generates. assisted: mark-done drafts the NEXT
+  // chapter and parks it for review. autopilot: chains prose drafts until
+  // error or completion, pausable.
+  const autonomyMode: "manual" | "assisted" | "autopilot" = (() => {
+    const m = activeBook?.metadata?.autonomyMode;
+    return m === "assisted" || m === "autopilot" ? m : "manual";
+  })();
+  const assistedMode = autonomyMode === "assisted";
+  const autopilotMode = autonomyMode === "autopilot";
+  const [dialSaving, setDialSaving] = useState(false);
+  const [dialError, setDialError] = useState<string | null>(null);
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
+  // Review Notes panel collapse (persists) — part of the fit-in-viewport fix.
+  const [notesCollapsed, setNotesCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem("bookStudio.notesCollapsed") === "1"; } catch { return false; }
+  });
+  // Mobile (<md): single-column flow with a Bible | Write | Notes pane switcher
+  // (Tyler, 2026-07-12: desktop three-pane layout crushed to a mess on phone).
+  const [mobilePane, setMobilePane] = useState<"bible" | "write" | "notes">("write");
+  // Mobile header overflow ("⋯") menu holding the secondary actions.
+  const [moreOpen, setMoreOpen] = useState(false);
 
-  // Autopilot state
-  const [autopilotMode, setAutopilotMode] = useState(false);
+  // Autopilot loop status (server-side orchestrator)
   const [autopilotState, setAutopilotState] = useState<"idle" | "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused">("idle");
   const [autopilotPaused, setAutopilotPaused] = useState(false);
+  const [showGuidanceInput, setShowGuidanceInput] = useState(false);
+  const [guidanceText, setGuidanceText] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [autopilotPhase, setAutopilotPhase] = useState("");
+  const [autopilotCurrentChapter, setAutopilotCurrentChapter] = useState(0);
+  const [autopilotTotalChapters, setAutopilotTotalChapters] = useState(0);
 
   // Generate panel per-tab state (ponytail: simple booleans, not a map)
   const [showGenCharacter, setShowGenCharacter] = useState(false);
@@ -1035,6 +1332,7 @@ export function BookWritingPage() {
   // Export modal
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Consistency check
   const [checkingConsistency, setCheckingConsistency] = useState(false);
@@ -1043,6 +1341,7 @@ export function BookWritingPage() {
   const [narrating, setNarrating] = useState(false);
   const [narrateEstimate, setNarrateEstimate] = useState<{ chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number } | null>(null);
   const [narrateComplete, setNarrateComplete] = useState<{ exportId: string; combinedPath: string } | null>(null);
+  const [narrateError, setNarrateError] = useState<string | null>(null);
   const [consistencyFindings, setConsistencyFindings] = useState<Array<{
     severity: string; category: string; description: string; suggestion: string;
   }> | null>(null);
@@ -1057,7 +1356,10 @@ export function BookWritingPage() {
         `/companies/${companySlug}/book-studio/books`
       );
       setBooksList(bList);
-      const book = bList[0] || null;
+      // Restore the last-opened book on reload (acceptance finding #10b) —
+      // fall back to the first book when there is no/stale remembered id.
+      const rememberedId = localStorage.getItem("bookStudio.lastBookId");
+      const book = bList.find((b) => b.id === rememberedId) || bList[0] || null;
       setActiveBook(book);
 
       if (book) {
@@ -1091,6 +1393,67 @@ export function BookWritingPage() {
     fetchData();
   }, [fetchData]);
 
+  // ── Book selection + creation (fixes: no create button, books not surfacing) ──
+  const loadBookEntities = useCallback(async (bookId: string) => {
+    const [charsRes, locsRes, styleRes, outlineRes] = await Promise.all([
+      apiFetch<{ characters: CharacterEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/characters`),
+      apiFetch<{ "world-locations": WorldLocationEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/world-locations`),
+      apiFetch<{ style: StyleEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/style`),
+      apiFetch<{ outline: OutlineEntity[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/outline`),
+    ]);
+    setCharacters(charsRes.characters || []);
+    setLocations(locsRes["world-locations"] || []);
+    setStyleEntries(styleRes.style || []);
+    setOutlineEntries(outlineRes.outline || []);
+  }, [companySlug]);
+
+  const selectBook = useCallback(async (bookId: string) => {
+    const b = booksList.find((x) => x.id === bookId) || null;
+    setActiveBook(b);
+    if (b) { try { localStorage.setItem("bookStudio.lastBookId", b.id); } catch { /* private mode */ } }
+    if (b) { try { await loadBookEntities(b.id); } catch (e) { console.error("load book entities failed", e); } }
+    else { setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]); }
+  }, [booksList, loadBookEntities]);
+
+  const createBook = useCallback(async (title: string) => {
+    try {
+      const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books`, {
+        method: "POST", body: JSON.stringify({ title }),
+      });
+      setBooksList((prev) => [book, ...prev]);
+      setActiveBook(book);
+      try { localStorage.setItem("bookStudio.lastBookId", book.id); } catch { /* private mode */ }
+      setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]);
+    } catch (e) {
+      console.error("create book failed", e);
+      alert("Could not create the book — see console. (You may need write access to this company.)");
+    }
+  }, [companySlug]);
+
+  const handleNewBook = useCallback(() => {
+    const title = window.prompt("New book title:");
+    if (title && title.trim()) void createBook(title.trim());
+  }, [createBook]);
+
+  // Delete the active book (DB rows only — vault markdown stays as archive).
+  // Confirmation (type-the-title) happens in OverviewEditor's danger zone.
+  const deleteBook = useCallback(async () => {
+    if (!activeBook) return;
+    const deletedId = activeBook.id;
+    await apiFetch(`/companies/${companySlug}/book-studio/books/${deletedId}`, { method: "DELETE" });
+    const remaining = booksList.filter((b) => b.id !== deletedId);
+    setBooksList(remaining);
+    try {
+      if (localStorage.getItem("bookStudio.lastBookId") === deletedId) {
+        localStorage.removeItem("bookStudio.lastBookId");
+      }
+    } catch { /* private mode */ }
+    const next = remaining[0] ?? null;
+    setActiveBook(next);
+    if (next) { try { await loadBookEntities(next.id); } catch { /* loads on select */ } }
+    else { setCharacters([]); setLocations([]); setStyleEntries([]); setOutlineEntries([]); }
+  }, [activeBook, booksList, companySlug, loadBookEntities]);
+
   // ── CRUD helpers ───────────────────────────────────────────────────────
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${activeBook?.id}`;
@@ -1109,11 +1472,11 @@ export function BookWritingPage() {
   };
 
   const createCharacter = async (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<CharacterEntity>(`${API_PREFIX}/characters`, {
+    const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setCharacters((prev) => [...prev, res]);
+    setCharacters((prev) => [...prev, res.character]);
     setShowCreateCharacter(false);
   };
 
@@ -1131,11 +1494,11 @@ export function BookWritingPage() {
   };
 
   const createLocation = async (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => {
-    const res = await apiFetch<WorldLocationEntity>(`${API_PREFIX}/world-locations`, {
+    const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setLocations((prev) => [...prev, res]);
+    setLocations((prev) => [...prev, res["world-location"]]);
     setShowCreateLocation(false);
   };
 
@@ -1152,12 +1515,12 @@ export function BookWritingPage() {
     setStyleEntries((prev) => prev.filter((s) => s.id !== id));
   };
 
-  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; source: string }) => {
-    const res = await apiFetch<StyleEntity>(`${API_PREFIX}/style`, {
+  const createStyle = async (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => {
+    const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    setStyleEntries((prev) => [...prev, res]);
+    setStyleEntries((prev) => [...prev, res["style-entry"]]);
     setShowCreateStyle(false);
   };
 
@@ -1197,18 +1560,187 @@ export function BookWritingPage() {
   const [chatDraft, setChatDraft] = useState<{ entityType: string; data: Record<string, unknown> } | null>(null);
   const [showChatDraftPanel, setShowChatDraftPanel] = useState(false);
 
+  // ── Autopilot handlers ───────────────────────────────────────────────────
+
+  const getAutopilotBase = () => {
+    if (!activeBook) return "";
+    return `/companies/${companySlug}/book-studio/books/${activeBook.id}/autopilot`;
+  };
+
+  const stopStatusPolling = () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const startStatusPolling = () => {
+    stopStatusPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const statusRes = await apiFetch<{ autopilot: { status: string; phase: string; currentChapter: number; totalChapters: number; paused: boolean; failReason?: string | null } }>(
+          `${getAutopilotBase()}/status`,
+        );
+        if (statusRes.autopilot) {
+          setAutopilotState(statusRes.autopilot.status as any);
+          setAutopilotPhase(statusRes.autopilot.phase || "");
+          setAutopilotCurrentChapter(statusRes.autopilot.currentChapter || 0);
+          setAutopilotTotalChapters(statusRes.autopilot.totalChapters || 0);
+          setAutopilotPaused(statusRes.autopilot.status === "paused");
+          if (statusRes.autopilot.status === "failed" && statusRes.autopilot.failReason) {
+            setDialError(`Autopilot stopped: ${statusRes.autopilot.failReason}`);
+          }
+        } else {
+          // 200 { autopilot: null } — the in-memory loop is gone (e.g. server
+          // restarted). Stop polling and honestly reset the dial instead of
+          // 404-polling forever (acceptance finding #8).
+          stopStatusPolling();
+          setAutopilotState("idle");
+          setAutopilotPaused(false);
+          setAutopilotPhase("");
+          setAutopilotCurrentChapter(0);
+          setAutopilotTotalChapters(0);
+          setDialError("Autopilot loop was lost (server restarted) — dial reset to Manual.");
+          updateBook({ metadata: { autonomyMode: "manual" } }).catch(() => {});
+        }
+      } catch {
+        // Silently handle transient poll errors
+      }
+    }, 5000);
+  };
+
+  const startAutopilotLoop = async () => {
+    const res = await apiFetch<{ autopilot: { status: string; phase: string; paused: boolean } }>(
+      `${getAutopilotBase()}/start`,
+      { method: "POST", body: JSON.stringify({ budgetCents: 500, iterationCapPerChapter: 3 }) },
+    );
+    if (res.autopilot) {
+      setAutopilotState(res.autopilot.status as "assembling" | "drafting" | "reviewing" | "revising" | "advancing" | "paused");
+      setAutopilotPhase(res.autopilot.phase || "");
+      setAutopilotPaused(false);
+    }
+    startStatusPolling();
+  };
+
+  const stopAutopilotLoop = async () => {
+    try {
+      await apiFetch(`${getAutopilotBase()}/pause`, { method: "POST" });
+    } catch (err) {
+      // 404/409 = no running loop — nothing to pause
+      console.error("Failed to pause autopilot:", err);
+    }
+    stopStatusPolling();
+    setAutopilotState("idle");
+    setAutopilotPaused(false);
+    setAutopilotPhase("");
+    setAutopilotCurrentChapter(0);
+    setAutopilotTotalChapters(0);
+  };
+
+  // The dial: persist per-book, then wire the side effects.
+  const setAutonomy = async (mode: "manual" | "assisted" | "autopilot") => {
+    if (!activeBook || dialSaving || mode === autonomyMode) return;
+    setDialSaving(true);
+    setDialError(null);
+    const prev = autonomyMode;
+    try {
+      await updateBook({ metadata: { autonomyMode: mode } });
+      if (mode === "autopilot") {
+        try {
+          await startAutopilotLoop();
+        } catch (err) {
+          // Honest rollback: don't leave the dial claiming autopilot is on.
+          setDialError(`Autopilot failed to start: ${(err as Error).message}`);
+          await updateBook({ metadata: { autonomyMode: prev } }).catch(() => {});
+          return;
+        }
+      } else if (prev === "autopilot") {
+        await stopAutopilotLoop();
+      }
+    } catch (err) {
+      setDialError((err as Error).message || "Failed to switch mode");
+    } finally {
+      setDialSaving(false);
+    }
+  };
+
+  // If the persisted dial says autopilot (e.g. after a reload), resume status
+  // polling — the server-side loop/checkpoint is the source of truth.
+  useEffect(() => {
+    if (!activeBook || !autopilotMode) return;
+    startStatusPolling();
+    return stopStatusPolling;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeBook?.id, autopilotMode]);
+
+  const handleAutopilotPauseResume = async () => {
+    if (!activeBook) return;
+    try {
+      if (autopilotPaused) {
+        const res = await apiFetch<{ autopilot: { status: string } }>(
+          `${getAutopilotBase()}/resume`,
+          { method: "POST" },
+        );
+        if (res.autopilot) {
+          setAutopilotState(res.autopilot.status as any);
+          setAutopilotPaused(res.autopilot.status === "paused");
+        }
+      } else {
+        const res = await apiFetch<{ autopilot: { status: string } }>(
+          `${getAutopilotBase()}/pause`,
+          { method: "POST" },
+        );
+        if (res.autopilot) {
+          setAutopilotState(res.autopilot.status as any);
+          setAutopilotPaused(res.autopilot.status === "paused");
+        }
+      }
+    } catch (err) {
+      console.error("Failed to pause/resume autopilot:", err);
+    }
+  };
+
+  const handleAutopilotSteer = async () => {
+    if (!activeBook || !guidanceText.trim()) return;
+    try {
+      await apiFetch(`${getAutopilotBase()}/steer`, {
+        method: "POST",
+        body: JSON.stringify({ guidance: guidanceText.trim() }),
+      });
+      setShowGuidanceInput(false);
+      setGuidanceText("");
+    } catch (err) {
+      console.error("Failed to steer autopilot:", err);
+    }
+  };
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
   // ── Export handlers ──────────────────────────────────────────────────────
 
   const handleNarrateEstimate = async () => {
     if (!activeBook) return;
     setNarrating(true);
+    setNarrateError(null);
     try {
       const res = await apiFetch<{ estimate: { chapters: number; totalChars: number; estimatedCostUsd: number; estimatedDurationSec: number }; requiresConfirm: boolean }>(
         `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
         { method: "POST", body: JSON.stringify({}) },
       );
       if (res.estimate) setNarrateEstimate(res.estimate);
-    } catch { /* handled by UI */ }
+    } catch (err) {
+      // Surface the honest server message (e.g. "Audiobook needs a voice
+      // provider. Set an ElevenLabs API key…") instead of failing silently.
+      setNarrateError(extractApiError(err));
+    }
     setNarrating(false);
   };
 
@@ -1216,6 +1748,7 @@ export function BookWritingPage() {
     if (!activeBook) return;
     setNarrating(true);
     setNarrateEstimate(null);
+    setNarrateError(null);
     try {
       const res = await apiFetch<{ narration: { id: string; outputPath: string; metadata: Record<string, unknown> } }>(
         `/companies/${companySlug}/book-studio/books/${activeBook.id}/narrate`,
@@ -1223,30 +1756,51 @@ export function BookWritingPage() {
       );
       const slug = activeBook.title?.toLowerCase().replace(/[^a-z0-9]+/g, "-") ?? "";
       setNarrateComplete({ exportId: res.narration.id, combinedPath: `/companies/${companySlug}/book-studio/narration-audio/${slug}/${res.narration.id}/combined.mp3` });
-    } catch { /* handled by UI */ }
+    } catch (err) {
+      setNarrateError(extractApiError(err));
+    }
     setNarrating(false);
   };
 
-  const handleExportMarkdown = async () => {
+  // Generic export download: hits GET /export/:format which generates the real
+  // file server-side (markdown / epub / pdf) and streams it back. Honest errors
+  // (e.g. PDF needs pandoc/LaTeX) come back as JSON { error } and are surfaced.
+  const handleExportDownload = async (format: string, ext: string) => {
     if (!activeBook) return;
-    setExportingFormat("markdown");
+    setExportError(null);
+    setExportingFormat(format);
     try {
       const res = await fetch(
-        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/export/markdown`,
+        `/api/companies/${companySlug}/book-studio/books/${activeBook.id}/export/${format}`,
       );
-      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`;
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch { /* non-JSON error body */ }
+        throw new Error(msg);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${activeBook.slug || "book"}.md`;
+      a.download = `${activeBook.slug || "book"}.${ext}`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Markdown export failed:", err);
+      setExportError(err instanceof Error ? err.message : String(err));
     } finally {
       setExportingFormat(null);
     }
+  };
+
+  // Audiobook export reuses the existing narrate pipeline (per-chapter ElevenLabs
+  // TTS → ffmpeg stitch). Close the export modal and open the narrate estimate
+  // dialog, which then confirms cost and produces the combined MP3.
+  const handleExportAudiobook = () => {
+    setShowExportModal(false);
+    void handleNarrateEstimate();
   };
 
   const handleCheckConsistency = async () => {
@@ -1281,51 +1835,84 @@ export function BookWritingPage() {
 
   return (
     <ErrorBoundary>
-      <div className="h-full flex flex-col bg-gray-950 text-gray-100">
+      <div className="h-full flex flex-col bg-gray-950 text-gray-100 pb-[env(safe-area-inset-bottom)]">
       {/* ── Top Bar ────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between border-b border-gray-800 px-5 py-3 shrink-0">
-        <div className="flex items-center gap-4">
-          <span className="text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
+      <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-gray-800 px-3 md:px-5 py-3 shrink-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 md:gap-x-4 gap-y-2">
+          <span className="hidden sm:inline text-xs font-bold tracking-[0.2em] text-gray-500 uppercase">
             PAPERCLIP
           </span>
-          <span className="text-gray-700">/</span>
+          <span className="hidden sm:inline text-gray-700">/</span>
           <h1 className="text-sm font-semibold text-gray-100">Book Studio</h1>
-          <span className="text-gray-700">·</span>
-          <span className="text-sm text-gray-400 italic">
+          <span className="hidden sm:inline text-gray-700">·</span>
+          {(activeBook as any)?.metadata?.coverUrl && (
+            <img
+              src={String((activeBook as any).metadata.coverUrl)}
+              alt=""
+              title="Book cover — manage in the Media panel"
+              className="h-7 w-5 rounded-sm object-cover border border-gray-700 shrink-0"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+            />
+          )}
+          <span className="hidden md:inline max-w-56 truncate text-sm text-gray-400 italic" title={activeBook?.title || undefined}>
             {activeBook?.title || (loading ? "Loading..." : "No book selected")}
           </span>
+          {booksList.length > 0 && (
+            <select
+              value={activeBook?.id ?? ""}
+              onChange={(e) => void selectBook(e.target.value)}
+              className="rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50 max-w-48"
+              title="Switch book"
+            >
+              {booksList.map((b) => (
+                <option key={b.id} value={b.id}>{b.title}</option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={handleNewBook}
+            className="rounded-md border border-blue-700 px-2.5 py-1 text-xs font-medium text-blue-300 hover:text-blue-100 hover:border-blue-500"
+            title="Create a new book"
+          >
+            + New Book
+          </button>
         </div>
 
-        <div className="flex items-center gap-3">
-          {/* ── Mode toggle: Manual | Assisted | Autopilot ── */}
+        <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+          {/* ── Autonomy dial: Manual | Assisted | Autopilot (persisted per-book) ── */}
           <div className="flex items-center rounded-md border border-gray-700 text-xs">
             <button
               className={cn(
-                "flex items-center gap-1.5 rounded-l-md px-3 py-1.5 border-r border-gray-700",
-                !assistedMode ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
+                "flex items-center gap-1.5 rounded-l-md px-2 md:px-3 py-1.5 border-r border-gray-700",
+                autonomyMode === "manual" ? "bg-blue-600/20 text-blue-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={() => setAssistedMode(false)}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("manual")}
+              title="Manual: nothing auto-generates"
             >
               <Pen className="w-3 h-3" />
               Manual
             </button>
             <button
               className={cn(
-                "flex items-center gap-1.5 px-3 py-1.5 border-r border-gray-700",
+                "flex items-center gap-1.5 px-2 md:px-3 py-1.5 border-r border-gray-700",
                 assistedMode ? "bg-purple-600/20 text-purple-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={() => setAssistedMode(true)}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("assisted")}
+              title="Assisted: marking a chapter done drafts the NEXT chapter and parks it for review (never auto-advances)"
             >
               <Sparkles className="w-3 h-3" />
               Assisted
             </button>
             <button
               className={cn(
-                "flex items-center gap-1.5 rounded-r-md px-3 py-1.5 relative",
+                "flex items-center gap-1.5 rounded-r-md px-2 md:px-3 py-1.5 relative",
                 autopilotMode ? "bg-green-600/20 text-green-300" : "text-gray-400 hover:text-gray-200",
               )}
-              onClick={() => { setAutopilotMode(!autopilotMode); setAssistedMode(false); setAutopilotState(autopilotMode ? "idle" : "assembling"); }}
-              title={autopilotMode ? "Autopilot active — click to disable" : "[Beta] Backend integration in progress"}
+              disabled={dialSaving || !activeBook}
+              onClick={() => setAutonomy("autopilot")}
+              title={autopilotMode ? "Autopilot active — switch to Manual/Assisted to stop" : "Autopilot: chains prose drafts over the outline until error or completion (pausable)"}
             >
               <Sparkles className="w-3 h-3" />
               Autopilot
@@ -1334,18 +1921,28 @@ export function BookWritingPage() {
               )}
             </button>
           </div>
-          <div className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400">
-            <span className={cn("inline-block h-2 w-2 rounded-full", (spendPercent ?? 0) >= 80 ? "bg-red-500" : (spendPercent ?? 0) >= 50 ? "bg-yellow-500" : "bg-green-500")} />
-            ${spendThisMonth.toFixed(2)} / ${spendBudget.toFixed(2)}
-          </div>
+          {dialError && (
+            <span className="text-[11px] text-red-400 bg-red-600/10 rounded-md px-2 py-1 border border-red-700/30 max-w-64 truncate" title={dialError}>
+              {dialError}
+            </span>
+          )}
+          {/* Autopilot status display */}
+          {autopilotMode && autopilotState !== "idle" && (
+            <span className="text-[11px] text-green-400/80 bg-green-600/10 rounded-md px-2 py-1 border border-green-700/30">
+              {autopilotPaused ? (
+                "⏸ Autopilot: Paused"
+              ) : (
+                <>Autopilot: {autopilotPhase || autopilotState}{autopilotCurrentChapter > 0 ? ` — Ch.${autopilotCurrentChapter}/${autopilotTotalChapters || "?"}` : ""}</>
+              )}
+            </span>
+          )}
+          {/* Budget chip removed from header (2026-07-12, Fable) per Tyler — the
+              autopilot spend guard stays server-side (budgetCents on /autopilot/start);
+              nothing about spend renders on the main header. */}
           <button
-            onClick={() => {
-              if (autopilotMode) {
-                setAutopilotPaused(!autopilotPaused);
-                setAutopilotState(autopilotPaused ? "drafting" : "paused");
-              }
-            }}
-            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+            onClick={handleAutopilotPauseResume}
+            disabled={!autopilotMode}
+            className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
               autopilotMode ? "border-amber-700 text-amber-400 hover:text-amber-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
             )}
             title={autopilotMode ? "Pause/Resume autopilot" : "Enable Autopilot mode"}
@@ -1353,18 +1950,44 @@ export function BookWritingPage() {
             {autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
             {autopilotPaused ? "Resume" : "Pause"}
           </button>
+          {showGuidanceInput && autopilotMode ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="text"
+                value={guidanceText}
+                onChange={(e) => setGuidanceText(e.target.value)}
+                placeholder="Type guidance for the AI..."
+                className="rounded-md border border-purple-700 bg-gray-900 px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 w-48 focus:outline-none focus:border-purple-500"
+                onKeyDown={(e) => { if (e.key === "Enter") handleAutopilotSteer(); }}
+              />
+              <button
+                onClick={handleAutopilotSteer}
+                disabled={!guidanceText.trim()}
+                className="rounded-md bg-purple-700 px-2 py-1.5 text-xs font-medium text-white hover:bg-purple-600 disabled:opacity-50"
+              >
+                Submit
+              </button>
+              <button
+                onClick={() => { setShowGuidanceInput(false); setGuidanceText(""); }}
+                className="rounded-md border border-gray-700 px-2 py-1.5 text-xs text-gray-400 hover:text-gray-200"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { if (autopilotMode) setShowGuidanceInput(!showGuidanceInput); }}
+              className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
+                autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+              )}
+              title={autopilotMode ? "Send steering guidance to autopilot" : "Enable Autopilot mode"}
+            >
+              <MessageSquare className="w-3 h-3" /> Steer
+            </button>
+          )}
           <button
             onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
-            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
-              autopilotMode ? "border-purple-700 text-purple-400 hover:text-purple-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
-            )}
-            title={autopilotMode ? "Request AI review of current chapter" : "Enable Autopilot mode"}
-          >
-            <Play className="w-3 h-3" /> Steer
-          </button>
-          <button
-            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
-            className={cn("rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+            className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
               autopilotMode ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
             )}
             title={autopilotMode ? "Review current chapter draft" : "Enable Autopilot mode"}
@@ -1373,23 +1996,21 @@ export function BookWritingPage() {
           </button>
           <button
             onClick={() => setIsChatOpen(true)}
-            className="rounded-md border border-purple-700 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-200 hover:border-purple-500 flex items-center gap-1.5"
+            className="rounded-md border border-purple-700 px-3 py-1.5 text-xs text-purple-400 hover:text-purple-200 hover:border-purple-500 hidden md:flex items-center gap-1.5"
           >
             <Sparkles className="w-3 h-3" /> Brainstorm
           </button>
           <button
-            onClick={() => {
-              setConsistencyFindings(null);
-              setShowExportModal(true);
-            }}
-            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 flex items-center gap-1.5"
+            onClick={() => { setShowExportModal(true); void handleCheckConsistency(); }}
+            disabled={!activeBook || checkingConsistency}
+            className="rounded-md border border-amber-700 px-3 py-1.5 text-xs text-amber-400 hover:text-amber-200 hover:border-amber-500 hidden md:flex items-center gap-1.5 disabled:opacity-50"
           >
-            <AlertTriangle className="w-3 h-3" /> Check Consistency
+            <AlertTriangle className="w-3 h-3" /> {checkingConsistency ? "Checking…" : "Check Consistency"}
           </button>
           <button
             onClick={handleNarrateEstimate}
             disabled={narrating}
-            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 flex items-center gap-1.5 disabled:opacity-50"
+            className="rounded-md border border-green-700 px-3 py-1.5 text-xs text-green-400 hover:text-green-200 hover:border-green-500 hidden md:flex items-center gap-1.5 disabled:opacity-50"
           >
             {narrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Volume2 className="w-3 h-3" />}
             {narrating ? "Generating…" : "Narrate Book"}
@@ -1400,6 +2021,43 @@ export function BookWritingPage() {
           >
             <Download className="w-3 h-3" /> Export
           </button>
+
+          {/* Mobile overflow menu — the secondary action crowd lives here <md
+              (Tyler, 2026-07-12: header actions piled into a ragged 4-row mess
+              on the phone). The mode dial + Export stay visible. */}
+          <div className="relative md:hidden">
+            <button
+              onClick={() => setMoreOpen((v) => !v)}
+              className="rounded-md border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 hover:text-gray-100"
+              title="More actions"
+            >
+              ⋯
+            </button>
+            {moreOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMoreOpen(false)} />
+                <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-md border border-gray-700 bg-gray-950 py-1 shadow-2xl">
+                  {([
+                    { label: autopilotPaused ? "Resume autopilot" : "Pause autopilot", icon: autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />, disabled: !autopilotMode, run: handleAutopilotPauseResume },
+                    { label: "Steer autopilot", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setShowGuidanceInput(true) },
+                    { label: "Review draft", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setAutopilotState("reviewing") },
+                    { label: "Brainstorm", icon: <Sparkles className="w-3 h-3" />, disabled: false, run: () => setIsChatOpen(true) },
+                    { label: checkingConsistency ? "Checking…" : "Check consistency", icon: <AlertTriangle className="w-3 h-3" />, disabled: !activeBook || checkingConsistency, run: () => { setShowExportModal(true); void handleCheckConsistency(); } },
+                    { label: narrating ? "Generating…" : "Narrate book", icon: <Volume2 className="w-3 h-3" />, disabled: narrating, run: handleNarrateEstimate },
+                  ] as const).map((item) => (
+                    <button
+                      key={item.label}
+                      disabled={item.disabled}
+                      onClick={() => { setMoreOpen(false); void item.run(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-gray-300 hover:bg-gray-800 disabled:opacity-40"
+                    >
+                      {item.icon} {item.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Narrate cost-confirm dialog */}
@@ -1441,6 +2099,20 @@ export function BookWritingPage() {
           </div>
         )}
 
+        {/* Narrate error dialog — honest "what's missing" message (e.g. no voice provider) */}
+        {narrateError && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setNarrateError(null)} />
+            <div className="relative w-96 bg-gray-950 border border-red-700 rounded-lg shadow-2xl p-5 space-y-3">
+              <h3 className="text-sm font-semibold text-red-300">Audiobook unavailable</h3>
+              <p className="text-xs text-gray-300">{narrateError}</p>
+              <div className="flex justify-end">
+                <button onClick={() => setNarrateError(null)} className="rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200">Close</button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </header>
 
       {/* ── Assisted Mode Suggestion Panel ── */}
@@ -1451,13 +2123,49 @@ export function BookWritingPage() {
         />
       )}
 
-      {/* ── Three-Pane Layout ──────────────────────────────────────────── */}
-      <div className={cn("flex-1 min-h-0", focusMode ? "" : "grid grid-cols-[1fr_2fr_1fr]")}>
+      {/* ── Three-Pane Layout ──────────────────────────────────────────────
+          minmax(0,…) tracks: grid items default to min-width:auto, so wide
+          toolbar/chip rows were forcing the columns past 100vw → horizontal
+          scrollbar + the Review Notes panel clipping off-screen (Tyler,
+          2026-07-12). minmax(0,·) lets every track shrink to the viewport. */}
+      <div className={cn(
+        "flex-1 min-h-0 overflow-x-hidden",
+        focusMode
+          ? "flex flex-col"
+          : cn(
+              // <md: single-column flow driven by the mobile pane switcher.
+              "flex flex-col md:grid",
+              notesCollapsed
+                ? "md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_2.75rem]"
+                : "md:grid-cols-[minmax(0,1fr)_minmax(0,2.2fr)_minmax(0,0.9fr)]",
+            ),
+      )}>
+        {/* Mobile pane switcher (Bible | Write | Notes) */}
+        {!focusMode && (
+          <div className="flex md:hidden border-b border-gray-800 shrink-0">
+            {([["bible", "Bible"], ["write", "Write"], ["notes", "Notes"]] as const).map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setMobilePane(id)}
+                className={cn(
+                  "flex-1 py-2 text-xs font-medium border-b-2 transition-colors",
+                  mobilePane === id ? "border-blue-500 text-blue-300" : "border-transparent text-gray-500",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* LEFT PANE — Story Bible */}
         {!focusMode && (
-        <aside className="flex flex-col border-r border-gray-800 min-h-0">
+        <aside className={cn(
+          "min-w-0 flex-col md:border-r border-gray-800 min-h-0 md:flex",
+          mobilePane === "bible" ? "flex flex-1 md:flex-initial" : "hidden",
+        )}>
           {/* ── Readiness Bar ──────────────────────────────────────────────── */}
-          <div className="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 border-b border-gray-800 bg-gray-900/70 shrink-0 text-[10px]">
             <div className={cn("flex items-center gap-1", characters.length >= READINESS_TARGETS.characters ? "text-green-400" : "text-yellow-400")}>
               <User className="w-3 h-3" />
               <span>Characters {characters.length}/{READINESS_TARGETS.characters}</span>
@@ -1497,12 +2205,16 @@ export function BookWritingPage() {
           </div>
 
           <div className="flex-1 overflow-y-auto">
+            {/* Scoped boundary: a crash in one bible panel shows a local fallback
+                instead of taking down the whole tab; key={tab} auto-recovers on switch. */}
+            <ErrorBoundary key={activeBibleTab}>
             {/* Overview Tab */}
             {activeBibleTab === "overview" && (
               <OverviewEditor
                 book={activeBook}
                 loading={loading}
                 onUpdate={updateBook}
+                onDelete={deleteBook}
               />
             )}
 
@@ -1684,6 +2396,7 @@ export function BookWritingPage() {
                             comps: (draft.comps as string) || "",
                             sampleParagraph: (draft.sampleParagraph as string) || "",
                             bannedCliches: Array.isArray(draft.bannedCliches) ? (draft.bannedCliches as string[]) : [],
+                            tropes: Array.isArray(draft.tropes) ? (draft.tropes as string[]) : [],
                             source: "co_created",
                           });
                           setShowGenStyle(false);
@@ -1741,13 +2454,20 @@ export function BookWritingPage() {
                         entityType="outline-beats"
                         bookId={activeBook.id}
                         companySlug={companySlug}
-                        onAccept={(draft) => {
-                          createOutline({
-                            chapterNumber: (draft.chapterNumber as number) || 1,
-                            title: (draft.title as string) || "New Chapter",
-                            beats: Array.isArray(draft.beats) ? (draft.beats as Record<string, unknown>[]) : [],
-                            source: "co_created",
-                          });
+                        onAccept={async (draft) => {
+                          // Multi-chapter drafts arrive as { chapters: [...] }
+                          // (finding #3); a bare single chapter still works.
+                          const chapters: Record<string, unknown>[] = Array.isArray(draft.chapters)
+                            ? (draft.chapters as Record<string, unknown>[])
+                            : [draft];
+                          for (const ch of chapters) {
+                            await createOutline({
+                              chapterNumber: (ch.chapterNumber as number) || 1,
+                              title: (ch.title as string) || "New Chapter",
+                              beats: Array.isArray(ch.beats) ? (ch.beats as Record<string, unknown>[]) : [],
+                              source: "co_created",
+                            });
+                          }
                           setShowGenOutlineBeats(false);
                         }}
                         onDiscard={() => setShowGenOutlineBeats(false)}
@@ -1768,12 +2488,16 @@ export function BookWritingPage() {
                 </div>
               </div>
             )}
+            </ErrorBoundary>
           </div>
         </aside>
         )}
 
         {/* CENTER PANE — Manuscript */}
-        <div className="flex flex-col min-h-0">
+        <div className={cn(
+          "min-w-0 flex-col min-h-0 md:flex",
+          (focusMode || mobilePane === "write") ? "flex flex-1 md:flex-initial" : "hidden",
+        )}>
           <ManuscriptEditor
             bookId={activeBook?.id ?? ""}
             companySlug={companySlug}
@@ -1782,42 +2506,42 @@ export function BookWritingPage() {
             onToggleFocus={() => setFocusMode(!focusMode)}
             jumpToChapter={jumpToChapter}
             highlightRange={highlightRange}
+            autonomyMode={autonomyMode}
           />
         </div>
 
-        {/* RIGHT PANE — Review Notes */}
+        {/* RIGHT PANE — Review Notes (collapsible; collapsed persists) */}
         {!focusMode && activeBook && (
-          <ReviewNotesPanel
-            bookId={activeBook.id}
-            companySlug={companySlug}
-            onSelectChapter={(ch) => setJumpToChapter(ch)}
-            onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
-          />
+          <div className={cn(
+            "min-w-0 min-h-0 flex-col md:flex",
+            mobilePane === "notes" ? "flex flex-1 md:flex-initial" : "hidden",
+          )}>
+            <ReviewNotesPanel
+              bookId={activeBook.id}
+              companySlug={companySlug}
+              onSelectChapter={(ch) => { setJumpToChapter(ch); setMobilePane("write"); }}
+              onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
+              collapsed={notesCollapsed}
+              onToggleCollapse={() => {
+                setNotesCollapsed((v) => {
+                  try { localStorage.setItem("bookStudio.notesCollapsed", v ? "0" : "1"); } catch { /* private mode */ }
+                  return !v;
+                });
+              }}
+            />
+          </div>
         )}
       </div>
 
-      {/* BOTTOM BAR */}
-      <footer className="flex items-center gap-4 border-t border-gray-800 px-5 py-3 shrink-0 bg-gray-950/80 backdrop-blur-sm">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 shrink-0">
-          Rewrite Proposal
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs text-gray-300 truncate">
-            <span className="text-gray-600 line-through mr-2">Mara watched it spiral down through the amber light</span>
-            <span className="text-green-400">Mara watched the petal spiral through amber light</span>
-          </p>
-          <p className="text-[10px] text-gray-600 mt-0.5">Suggested: tighter prose, active voice, removes redundant "down"</p>
-        </div>
-        <button className="rounded-md bg-green-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 flex items-center gap-1.5">
-          <Check className="w-3 h-3" /> Accept
-        </button>
-        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600">
-          Reject
-        </button>
-        <button className="rounded-md border border-gray-700 px-3 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:border-gray-600 flex items-center gap-1.5">
-          <Pen className="w-3 h-3" /> Edit
-        </button>
-      </footer>
+      {/* Book Media drawer (Fable, additive — fixed-position, layout-independent) */}
+      {activeBook && <BookMediaPanel bookId={activeBook.id} />}
+
+      {/* Rewrite Proposal bar removed (2026-07-12, Fable): it rendered hardcoded
+          demo content ("Mara watched…") unconditionally with no-op Accept/Reject/Edit
+          buttons — a data-honesty violation. A real rewrite-proposal feature should
+          render only when an actual proposal exists for the current chapter and wire
+          Accept→apply-to-manuscript / Reject→dismiss / Edit→editable. Until that
+          exists, show nothing rather than fake content. */}
 
       {/* Chat Drawer Overlay */}
       {activeBook && (
@@ -1836,10 +2560,12 @@ export function BookWritingPage() {
           activeBook={activeBook}
           companySlug={companySlug}
           exportingFormat={exportingFormat}
+          exportError={exportError}
           consistencyFindings={consistencyFindings}
           checkingConsistency={checkingConsistency}
           onClose={() => setShowExportModal(false)}
-          onExportMarkdown={handleExportMarkdown}
+          onExport={handleExportDownload}
+          onExportAudiobook={handleExportAudiobook}
           onCheckConsistency={handleCheckConsistency}
           severityColors={severityColors}
         />
@@ -1855,28 +2581,36 @@ interface ExportModalContentProps {
   activeBook: BookData | null;
   companySlug: string;
   exportingFormat: string | null;
+  exportError: string | null;
   consistencyFindings: Array<{ severity: string; category: string; description: string; suggestion: string }> | null;
   checkingConsistency: boolean;
   onClose: () => void;
-  onExportMarkdown: () => void;
+  onExport: (format: string, ext: string) => void;
+  onExportAudiobook: () => void;
   onCheckConsistency: () => void;
   severityColors: Record<string, string>;
 }
 
+// Every format is a real, working export. Markdown/EPUB always work (EPUB has an
+// in-process builder when pandoc is absent). PDF works when pandoc + a PDF engine
+// are on the server, else it returns an honest error. Audiobook routes through
+// the narrate pipeline (ElevenLabs TTS + ffmpeg).
 const EXPORT_FORMATS = [
-  { key: "markdown", label: "Markdown", ext: ".md", active: true, hint: null },
-  { key: "epub", label: "EPUB", ext: ".epub", active: false, hint: "Install epub-gen npm package to enable" },
-  { key: "pdf", label: "PDF", ext: ".pdf", active: false, hint: "Install pandoc to enable" },
-  { key: "audiobook", label: "Audiobook", ext: ".mp3", active: false, hint: "Set TTS_API_KEY to enable" },
+  { key: "markdown", label: "Markdown", ext: ".md", kind: "download" as const },
+  { key: "epub", label: "EPUB", ext: ".epub", kind: "download" as const },
+  { key: "pdf", label: "PDF", ext: ".pdf", kind: "download" as const },
+  { key: "audiobook", label: "Audiobook", ext: ".mp3", kind: "audiobook" as const },
 ] as const;
 
 function ExportModalContent({
   activeBook,
   exportingFormat,
+  exportError,
   consistencyFindings,
   checkingConsistency,
   onClose,
-  onExportMarkdown,
+  onExport,
+  onExportAudiobook,
   onCheckConsistency,
   severityColors,
 }: ExportModalContentProps) {
@@ -1902,42 +2636,38 @@ function ExportModalContent({
           <div>
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-3">Export Formats</h3>
             <div className="space-y-2">
-              {EXPORT_FORMATS.map((fmt) => (
-                <div
-                  key={fmt.key}
-                  className={cn(
-                    "flex items-center justify-between rounded-md border px-4 py-3",
-                    fmt.active ? "border-gray-700 bg-gray-900/50" : "border-gray-800 bg-gray-900/30 opacity-60",
-                  )}
-                >
-                  <div className="flex items-center gap-3">
-                    <FileDown className={cn("w-4 h-4", fmt.active ? "text-blue-400" : "text-gray-600")} />
-                    <div>
-                      <span className="text-sm font-medium text-gray-200">{fmt.label}</span>
-                      <span className="text-xs text-gray-500 ml-1.5">{fmt.ext}</span>
+              {EXPORT_FORMATS.map((fmt) => {
+                const busy = exportingFormat === fmt.key;
+                const isAudiobook = fmt.kind === "audiobook";
+                return (
+                  <div
+                    key={fmt.key}
+                    className="flex items-center justify-between rounded-md border border-gray-700 bg-gray-900/50 px-4 py-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <FileDown className="w-4 h-4 text-blue-400" />
+                      <div>
+                        <span className="text-sm font-medium text-gray-200">{fmt.label}</span>
+                        <span className="text-xs text-gray-500 ml-1.5">{fmt.ext}</span>
+                      </div>
                     </div>
-                  </div>
-                  {fmt.active ? (
                     <button
-                      onClick={onExportMarkdown}
-                      disabled={exportingFormat === "markdown"}
+                      onClick={() => (isAudiobook ? onExportAudiobook() : onExport(fmt.key, fmt.ext.replace(/^\./, "")))}
+                      disabled={busy || !activeBook}
                       className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 flex items-center gap-1.5"
                     >
-                      {exportingFormat === "markdown" ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Download className="w-3 h-3" />
-                      )}
-                      {exportingFormat === "markdown" ? "Downloading..." : "Download"}
+                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : isAudiobook ? <Volume2 className="w-3 h-3" /> : <Download className="w-3 h-3" />}
+                      {busy ? "Working…" : isAudiobook ? "Generate" : "Download"}
                     </button>
-                  ) : (
-                    <span className="text-[10px] text-gray-500 cursor-default" title={fmt.hint ?? undefined}>
-                      Coming soon
-                    </span>
-                  )}
-                </div>
-              ))}
+                  </div>
+                );
+              })}
             </div>
+            {exportError && (
+              <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/5 px-4 py-3 text-xs text-red-300">
+                {exportError}
+              </div>
+            )}
           </div>
 
           <div>

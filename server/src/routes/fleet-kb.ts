@@ -251,8 +251,9 @@ function consolidationArchiveDir(): string {
 function loadLatestDreams(): {
   date: string | null;
   content: string;
-  dirsConsolidated: number;
-  failures: number;
+  dirsConsolidated: number | null;
+  failures: number | null;
+  noteCount: number;
   filename: string;
 } | null {
   const dir = consolidationArchiveDir();
@@ -286,11 +287,18 @@ function loadLatestDreams(): {
 
   const latest = notes[0]!;
   const raw = fs.readFileSync(latest.file, "utf8");
+
+  // Data-honesty: only report dirs/failures if the log actually states them.
+  // Previously these were hardcoded to 0 and rendered in the HUD as if real.
+  const dirsMatch = raw.match(/dirs[_\s-]*consolidated\D*?(\d+)/i);
+  const failMatch = raw.match(/failures?\D*?(\d+)/i);
+
   return {
     date: latest.date || null,
     content: raw,
-    dirsConsolidated: 0,
-    failures: 0,
+    dirsConsolidated: dirsMatch ? Number(dirsMatch[1]) : null,
+    failures: failMatch ? Number(failMatch[1]) : null,
+    noteCount: notes.length,
     filename: path.basename(latest.file),
   };
 }
@@ -375,33 +383,71 @@ function cosine(a: Map<string, number>, b: Map<string, number>): number {
 const RELATED_MAX_PER_NODE = 6;
 const RELATED_MIN_SCORE = 0.12;
 
+// Candidate generation: instead of scoring all O(n²) pairs (~512k at 1k notes,
+// which blocked the event loop for seconds per request), only score pairs that
+// can possibly share a real signal — a top distinctive term or a tag. Inverted
+// posting lists over each note's top TF-IDF terms + its tags produce the
+// candidate set; scoring semantics below are unchanged.
+const TOP_TERMS_PER_DOC = 10;
+const MAX_POSTING = 40; // terms present in >40 docs aren't distinctive enough to pair on
+const MAX_TAG_POSTING = 80;
+
+function candidatePairs(notes: FleetNote[], tfidf: Map<string, Map<string, number>>): Set<string> {
+  const postings = new Map<string, string[]>();
+  for (const n of notes) {
+    const vec = tfidf.get(n.id);
+    if (!vec) continue;
+    const top = [...vec.entries()].sort((a, b) => b[1] - a[1]).slice(0, TOP_TERMS_PER_DOC);
+    for (const [term] of top) {
+      const list = postings.get(`t:${term}`) ?? [];
+      list.push(n.id);
+      postings.set(`t:${term}`, list);
+    }
+    for (const tag of n.tags) {
+      const list = postings.get(`g:${tag}`) ?? [];
+      list.push(n.id);
+      postings.set(`g:${tag}`, list);
+    }
+  }
+  const pairs = new Set<string>();
+  for (const [key, list] of postings) {
+    const cap = key.startsWith("g:") ? MAX_TAG_POSTING : MAX_POSTING;
+    if (list.length < 2 || list.length > cap) continue;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i]!; const b = list[j]!;
+        pairs.add(a < b ? `${a}|${b}` : `${b}|${a}`);
+      }
+    }
+  }
+  return pairs;
+}
+
 function synthesizeRelatedEdges(notes: FleetNote[], existingPairs: Set<string>): GraphEdge[] {
   const tfidf = buildTfIdf(notes);
+  const byId = new Map(notes.map((n) => [n.id, n]));
   const cands: Array<{ a: string; b: string; score: number }> = [];
 
-  for (let i = 0; i < notes.length; i++) {
-    const na = notes[i]!;
-    const va = tfidf.get(na.id)!;
+  for (const key of candidatePairs(notes, tfidf)) {
+    if (existingPairs.has(key)) continue; // already joined by an explicit wikilink
+    const [idA, idB] = key.split("|") as [string, string];
+    const na = byId.get(idA)!;
+    const nb = byId.get(idB)!;
+
+    const termScore = cosine(tfidf.get(idA)!, tfidf.get(idB)!);
     const tagsA = new Set(na.tags);
-    for (let j = i + 1; j < notes.length; j++) {
-      const nb = notes[j]!;
-      const key = na.id < nb.id ? `${na.id}|${nb.id}` : `${nb.id}|${na.id}`;
-      if (existingPairs.has(key)) continue; // already joined by an explicit wikilink
+    let shared = 0;
+    for (const t of nb.tags) if (tagsA.has(t)) shared++;
 
-      const termScore = cosine(va, tfidf.get(nb.id)!);
-      let shared = 0;
-      for (const t of nb.tags) if (tagsA.has(t)) shared++;
+    // Require a real signal: shared distinctive terms OR a shared tag.
+    // Same-category alone must NOT create an edge (would form category cliques).
+    if (termScore < 0.08 && shared === 0) continue;
 
-      // Require a real signal: shared distinctive terms OR a shared tag.
-      // Same-category alone must NOT create an edge (would form category cliques).
-      if (termScore < 0.08 && shared === 0) continue;
-
-      const tagScore = Math.min(1, shared * 0.5);
-      const sameCat = na.category === nb.category ? 0.12 : 0;
-      const score = termScore + tagScore * 0.6 + sameCat;
-      if (score < RELATED_MIN_SCORE) continue;
-      cands.push({ a: na.id, b: nb.id, score });
-    }
+    const tagScore = Math.min(1, shared * 0.5);
+    const sameCat = na.category === nb.category ? 0.12 : 0;
+    const score = termScore + tagScore * 0.6 + sameCat;
+    if (score < RELATED_MIN_SCORE) continue;
+    cands.push({ a: idA, b: idB, score });
   }
 
   // Greedy strongest-first with a per-node degree cap → legible web, not hairball.
@@ -501,18 +547,100 @@ function summarize(notes: FleetNote[]) {
   };
 }
 
+// ─── Cache ───────────────────────────────────────────────────────────────────
+//
+// The vault has grown to ~1,000 notes. Re-reading + re-parsing every file and
+// re-synthesizing edges on EVERY request (the UI polls every 12s) blocked the
+// event loop and shipped multi-MB payloads. Instead: a cheap stat-only scan
+// produces a signature (file count + newest mtime + total bytes); the expensive
+// load + graph build only reruns when the signature changes. `generatedAt` is
+// the build time and stays stable while the vault is unchanged, so React Query
+// structural sharing keeps object identity and the client's force layout does
+// NOT re-heat on every poll.
+
+interface VaultCache {
+  signature: string;
+  builtAt: string;
+  root: string;
+  exists: boolean;
+  notes: FleetNote[];
+  indexExists: boolean;
+  graph: { nodes: GraphNode[]; edges: GraphEdge[] };
+  summary: ReturnType<typeof summarize>;
+}
+
+let vaultCache: VaultCache | null = null;
+let lastScanMs = 0;
+const SCAN_MIN_INTERVAL_MS = 3_000;
+
+function statSignature(root: string): string {
+  let count = 0;
+  let maxMtime = 0;
+  let totalSize = 0;
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (ent.name.startsWith(".")) continue;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) walk(full);
+      else if (ent.isFile() && ent.name.endsWith(".md")) {
+        try {
+          const st = fs.statSync(full);
+          count++;
+          totalSize += st.size;
+          if (st.mtimeMs > maxMtime) maxMtime = st.mtimeMs;
+        } catch { /* ignore */ }
+      }
+    }
+  };
+  walk(root);
+  return `${count}:${Math.round(maxMtime)}:${totalSize}`;
+}
+
+function getVaultCached(): VaultCache {
+  const now = Date.now();
+  if (vaultCache && now - lastScanMs < SCAN_MIN_INTERVAL_MS) return vaultCache;
+
+  const root = vaultRoot();
+  const signature = fs.existsSync(root) ? statSignature(root) : "missing";
+  lastScanMs = now;
+  if (vaultCache && vaultCache.signature === signature) return vaultCache;
+
+  const { exists, notes, indexExists } = loadVault();
+  const graph = exists ? buildGraph(notes, indexExists) : { nodes: [], edges: [] };
+  const summary = exists ? summarize(notes) : { categories: [], tags: [], agents: [] };
+  vaultCache = {
+    signature,
+    builtAt: new Date().toISOString(),
+    root,
+    exists,
+    notes,
+    indexExists,
+    graph,
+    summary,
+  };
+  return vaultCache;
+}
+
 // ─── Router ──────────────────────────────────────────────────────────────────
 
 export function fleetKbRoutes() {
   const router = Router();
 
-  // Full graph + note metadata (bodies included; the vault is small ~85 notes).
-  router.get("/fleet-kb/graph", (_req, res) => {
-    const { root, exists, notes, indexExists } = loadVault();
-    if (!exists) {
+  // Full graph + note metadata. Note BODIES are omitted by default — at ~1,000
+  // notes they added ~5MB per poll. The KB reader passes ?bodies=1; the brain
+  // view fetches individual bodies on demand via /fleet-kb/notes/:id.
+  router.get("/fleet-kb/graph", (req, res) => {
+    const cached = getVaultCached();
+    if (!cached.exists) {
       res.status(200).json({
         available: false,
-        vaultPath: root,
+        vaultPath: cached.root,
         noteCount: 0,
         notes: [],
         categories: [],
@@ -522,26 +650,38 @@ export function fleetKbRoutes() {
       });
       return;
     }
-    const graph = buildGraph(notes, indexExists);
-    const { categories, tags, agents } = summarize(notes);
+
+    const includeBodies = req.query.bodies === "1" || req.query.bodies === "true";
+    const etag = `"kg-${cached.signature}${includeBodies ? "-b" : ""}"`;
+    res.set("ETag", etag);
+    res.set("Cache-Control", "no-cache");
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+
+    const notes = includeBodies
+      ? cached.notes
+      : cached.notes.map(({ body: _body, ...rest }) => rest);
+
     res.status(200).json({
       available: true,
-      vaultPath: root,
-      generatedAt: new Date().toISOString(),
-      noteCount: notes.length,
-      indexExists,
+      vaultPath: cached.root,
+      generatedAt: cached.builtAt,
+      noteCount: cached.notes.length,
+      indexExists: cached.indexExists,
       notes,
-      categories,
-      tags,
-      agents,
-      graph,
+      categories: cached.summary.categories,
+      tags: cached.summary.tags,
+      agents: cached.summary.agents,
+      graph: cached.graph,
     });
   });
 
   // Single note (raw markdown + parsed metadata + backlinks).
   router.get("/fleet-kb/notes/:id", (req, res) => {
     const { id } = req.params as { id: string };
-    const { exists, notes } = loadVault();
+    const { exists, notes } = getVaultCached();
     if (!exists) {
       res.status(404).json({ error: "Fleet KB vault not found" });
       return;
@@ -565,7 +705,7 @@ export function fleetKbRoutes() {
   router.get("/fleet-kb/dreams", (_req, res) => {
     const dreams = loadLatestDreams();
     if (!dreams) {
-      res.status(200).json({ available: false, date: null, content: "", dirsConsolidated: 0, failures: 0, filename: null });
+      res.status(200).json({ available: false, date: null, content: "", dirsConsolidated: null, failures: null, noteCount: 0, filename: null });
       return;
     }
     res.status(200).json({ available: true, ...dreams });

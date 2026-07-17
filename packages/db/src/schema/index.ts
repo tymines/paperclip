@@ -68,6 +68,12 @@ export { issueInboxArchives } from "./issue_inbox_archives.js";
 export { inboxDismissals } from "./inbox_dismissals.js";
 export { feedbackVotes } from "./feedback_votes.js";
 export { appDevApps, appDevBlueprints } from "./app_dev.js";
+export {
+  gymEvalSuites,
+  gymEvalRuns,
+  gymPromptCandidates,
+  gymAgentProfiles,
+} from "./gym.js";
 export { feedbackExports } from "./feedback_exports.js";
 export { issueReadStates } from "./issue_read_states.js";
 export { assets } from "./assets.js";
@@ -218,3 +224,44 @@ export {
   type ReelSeriesEntry,
   type NewReelSeriesEntry,
 } from "./reels.js";
+
+// ── WO-1/2/3/4: Rooms pipeline (shadow) ──
+export { roomsRailConfig } from "./rooms_rail_config.js";
+export { roomTransitions } from "./room_transitions.js";
+export { roomBosses } from "./room_bosses.js";
+export { councilSessions } from "./council_sessions.js";
+export { councilParticipants } from "./council_participants.js";
+
+// ── App Dev Control Center (spec v1.1) — migration 0146 GATED, not applied ──
+export {
+  appdevApps,
+  appdevGates,
+  appdevWorkOrders,
+  appdevReferencePacks,
+  appdevAssets,
+  appdevProofBundles,
+  appdevVisualReviews,
+  appdevFeedbackItems,
+  appdevChatThreads,
+  appdevChatMessages,
+  appdevScreens,
+  appdevSessions,
+  appdevReleases,
+  appdevSkills,
+  appdevDeployments,
+  appdevRetros,
+  appdevScreenBaselines,
+} from "./appdev_control.js";
+// ── Creative Studio (Fable spec 2026-07-12, P0) — migration 0149 GATED, not applied ──
+export { creativeJobs, type CreativeJob, type NewCreativeJob } from "./creative_studio.js";
+export { creativeBrandKits, type CreativeBrandKit, type NewCreativeBrandKit } from "./creative_brand_kits.js";
+
+// ── Book Studio annotations (Fable, 2026-07-12) — migration 0151 GATED, not applied ──
+export {
+  bookAnnotations,
+  bookReviewRuns,
+  type BookAnnotation,
+  type NewBookAnnotation,
+  type BookReviewRun,
+  type NewBookReviewRun,
+} from "./book_annotations.js";

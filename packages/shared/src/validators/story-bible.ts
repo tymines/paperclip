@@ -52,6 +52,7 @@ export const createStoryBibleStyleSchema = z.object({
   comps: z.string().optional().default(""),
   sampleParagraph: z.string().optional().default(""),
   bannedCliches: z.array(z.string()).optional().default([]),
+  tropes: z.array(z.string()).optional().default([]),
   source: z.enum(["authored", "co_created", "imported"]).optional().default("authored"),
 });
 
@@ -61,6 +62,7 @@ export const updateStoryBibleStyleSchema = z.object({
   comps: z.string().optional(),
   sampleParagraph: z.string().optional(),
   bannedCliches: z.array(z.string()).optional(),
+  tropes: z.array(z.string()).optional(),
   locked: z.boolean().optional(),
   source: z.enum(["authored", "co_created", "imported"]).optional(),
 });

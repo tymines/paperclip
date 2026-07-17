@@ -32,13 +32,18 @@ export function storyBibleRoutes(db: Db) {
     const row = await db.select().from(storyBibleCharacters)
       .where(and(eq(storyBibleCharacters.id, req.params.id), eq(storyBibleCharacters.bookId, req.params.bookId))).limit(1);
     if (!row.length) throw notFound("character");
-    const { name, role, description, voiceCard, locked } = req.body ?? {};
+    const { name, role, description, voiceCard, locked, metadata } = req.body ?? {};
     const [updated] = await db.update(storyBibleCharacters).set({
       ...(name !== undefined && { name }),
       ...(role !== undefined && { role }),
       ...(description !== undefined && { description }),
       ...(voiceCard !== undefined && { voiceCard }),
       ...(locked !== undefined && { locked }),
+      // shallow-merge (same as books PATCH) — a partial metadata update must
+      // never wipe sibling keys like iconLocked/imageUrl
+      ...(metadata !== undefined && typeof metadata === "object" && metadata !== null && {
+        metadata: { ...((row[0]!.metadata ?? {}) as Record<string, unknown>), ...(metadata as Record<string, unknown>) },
+      }),
       updatedAt: new Date(),
     }).where(eq(storyBibleCharacters.id, req.params.id)).returning();
     res.json(updated);
@@ -68,7 +73,12 @@ export function storyBibleRoutes(db: Db) {
     const [updated] = await db.update(storyBibleWorldLocations).set({
       ...(name !== undefined && { name }),
       ...(description !== undefined && { description }),
-      ...(metadata !== undefined && { metadata }),
+      // shallow-merge (same as books/characters PATCH) — migration 0155 added
+      // the metadata column; partial updates must not wipe sibling keys
+      // (imageLocked/imageUrl).
+      ...(metadata !== undefined && typeof metadata === "object" && metadata !== null && {
+        metadata: { ...((row[0]!.metadata ?? {}) as Record<string, unknown>), ...(metadata as Record<string, unknown>) },
+      }),
       ...(locked !== undefined && { locked }),
       updatedAt: new Date(),
     }).where(eq(storyBibleWorldLocations.id, req.params.id)).returning();

@@ -1,6 +1,5 @@
 import {
   CircleDot,
-  Target,
   LayoutDashboard,
   DollarSign,
   History,
@@ -15,17 +14,17 @@ import {
   Settings,
   Megaphone,
   Home as HomeIcon,
-  Hexagon,
   Bot,
   MoreHorizontal,
   Sparkles,
-  Mic,
   Palette,
   ImageIcon,
   Drama,
   Paperclip,
   AppWindow,
   BookOpen,
+  Dumbbell,
+  Clapperboard,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
@@ -199,7 +198,7 @@ function SidebarLegacy({
           className="flex flex-col gap-0.5"
           itemClassName="text-[13px] font-medium"
         />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {/* 'Goals' nav hidden 2026-07-13 (Tyler de-clutter). Route /goals + page + data kept; restore by re-adding this item (icon Target). */}
         {showWorkspacesLink ? (
           <SidebarNavItem to="/workspaces" label="Workspaces" icon={GitBranch} />
         ) : null}
@@ -219,7 +218,8 @@ function SidebarLegacy({
       </SidebarSection>
 
       <SidebarSection label="Company">
-        <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
         <SidebarNavItem to="/world-view" label="World View" icon={Globe} />
         <SidebarNavItem to="/knowledge-graph" label="Knowledge Graph" icon={Share2} />
@@ -228,6 +228,7 @@ function SidebarLegacy({
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/creative-studio" label="Creative Studio" icon={Clapperboard} />
         <SidebarNavItem to="/image-studio" label="AI Influencer Studio" icon={ImageIcon} />
         <SidebarNavItem to="/book-writing" label="Book Writing" icon={BookOpen} />
         <SidebarNavItem to="/company/settings" label="Settings" icon={Settings} />
@@ -294,11 +295,12 @@ function SidebarV1({
       </div>
 
       <SidebarSection label="More">
-        <SidebarNavItem to="/jarvis" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/war-room" label="War Room" icon={Sparkles} />
+        <SidebarNavItem to="/gym" label="Gym" icon={Dumbbell} />
         <SidebarNavItem to="/app-dev" label="App Dev" icon={AppWindow} />
-        <SidebarNavItem to="/voice-memos" label="Voice Memos" icon={Mic} />
-        <SidebarNavItem to="/projects" label="Projects" icon={Hexagon} />
-        <SidebarNavItem to="/goals" label="Goals" icon={Target} />
+        {/* 'Voice Memos' nav hidden 2026-07-13 (Tyler de-clutter). Route /voice-memos + page + data kept; restore by re-adding this item (icon Mic). */}
+        {/* 'Projects' nav hidden 2026-07-13 (Tyler de-clutter). Route /projects + page + data kept; restore by re-adding this item (icon Hexagon). NOTE: the SidebarProjects tree below is a separate component, left intact. */}
+        {/* 'Goals' nav hidden 2026-07-13 (Tyler de-clutter). Route /goals + page + data kept; restore by re-adding this item (icon Target). */}
         <SidebarNavItem
           to="/social"
           label="Social"
@@ -313,6 +315,7 @@ function SidebarV1({
         <SidebarNavItem to="/costs" label="Costs" icon={DollarSign} />
         <SidebarNavItem to="/activity" label="Activity" icon={History} />
         <SidebarNavItem to="/design" label="Design" icon={Palette} />
+        <SidebarNavItem to="/creative-studio" label="Creative Studio" icon={Clapperboard} />
         <SidebarNavItem to="/image-studio" label="AI Influencer Studio" icon={ImageIcon} />
         <SidebarNavItem to="/book-writing" label="Book Writing" icon={BookOpen} />
         {showWorkspacesLink ? (

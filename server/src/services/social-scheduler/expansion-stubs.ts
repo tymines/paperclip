@@ -1,11 +1,12 @@
 /**
- * Default stub implementations of the expansion-pass adapter methods
- * (Inbox / Competitors / Analytics / Hashtags). Each adapter can spread
- * these into itself with the right platform binding, then override
- * individual methods where the real implementation differs.
+ * Legacy stub implementations of the expansion-pass adapter methods
+ * (Inbox / Competitors / Analytics / Hashtags).
  *
- * Once Tyler ships real API credentials, each platform replaces only
- * the methods that have real wiring — the rest fall back to the stubs.
+ * NOT USED ON ANY PRODUCTION PATH. Production adapters no longer spread
+ * these in — a missing optional method is translated by `routes/social.ts`
+ * into an honest `{ available: false, reason, homework }` response driven
+ * by `feasibility.ts`. This factory is kept only as a fixture for tests
+ * and explicit demo previews.
  */
 import type { SocialAccount, SocialPlatform } from "@paperclipai/shared";
 import type {

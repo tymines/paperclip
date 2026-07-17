@@ -1,5 +1,13 @@
 export type { Company } from "./company.js";
-export type { Book } from "./book.js";
+export type {
+  Book,
+  BookAutonomyMode,
+  BookAnnotationKind,
+  BookReviewLens,
+  BookAnnotationDto,
+  BookReviewRunDto,
+  BookAnnotationsResponse,
+} from "./book.js";
 export type {
   Environment,
   EnvironmentLease,
@@ -415,6 +423,8 @@ export type {
   SocialPostListItem,
   SocialAppCredentialPublic,
   SocialAppCredentialTestResult,
+  SocialFeatureHomeworkLink,
+  SocialFeatureAvailability,
 } from "./social.js";
 export type {
   StoryBibleCharacter,

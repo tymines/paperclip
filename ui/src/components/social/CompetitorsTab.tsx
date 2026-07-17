@@ -7,16 +7,19 @@
  * "They post 3.2x/wk, you post 1.1x/wk", "Their avg engagement is 4x
  * yours", "Their top hashtag is #foo (you've never used it)".
  *
- * Source: IG Graph Business Discovery for IG, public profile scrape for
- * the rest. v1 returns shaped mock data.
+ * Source: IG Graph Business Discovery for IG, Reddit public data for
+ * Reddit. Data-honest (spec §7): platforms without a keyed path return an
+ * explicit keyed-off state with the homework that unlocks them — never
+ * shaped mock data.
  */
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { Plus, Search, Users } from "lucide-react";
 import type { SocialAccountPublic, SocialPlatform } from "@paperclipai/shared";
 import { socialApi, type CompetitorProfile } from "../../api/social";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { KeyedOffNotice } from "./data-honesty";
 import { PLATFORM_META, TYLER_PRIORITY_PLATFORMS } from "./platform-meta";
 import { cn } from "../../lib/utils";
 
@@ -76,9 +79,19 @@ export function CompetitorsTab({ companyId, accounts: _accounts }: CompetitorsTa
             />
           </div>
         </div>
-        {query.trim() ? (
+        {query.trim() && searchQuery.data && !searchQuery.data.available ? (
+          <div className="mt-3">
+            <KeyedOffNotice
+              icon={Users}
+              featurePitch={`Competitor search will look up public ${PLATFORM_META[platform].label} profiles for a side-by-side compare.`}
+              state={searchQuery.data}
+              compact
+            />
+          </div>
+        ) : null}
+        {query.trim() && searchQuery.data?.available !== false ? (
           <ul className="mt-3 flex flex-col divide-y divide-border rounded-md border border-border">
-            {(searchQuery.data ?? []).map((profile) => {
+            {(searchQuery.data?.available ? searchQuery.data.data : []).map((profile) => {
               const meta = PLATFORM_META[profile.platform];
               const Icon = meta.icon;
               return (
@@ -152,10 +165,12 @@ function CompetitorCard({
     queryFn: () => socialApi.competitorMetrics(companyId, profile.platform, profile.handle, from, to),
   });
 
-  const followerSeries = metricsQuery.data?.byDay.map((d) => d.followerCount) ?? [];
+  const metricsResult = metricsQuery.data;
+  const metrics = metricsResult?.available ? metricsResult.data : undefined;
+  const followerSeries = metrics?.byDay.map((d) => d.followerCount) ?? [];
   const followerDelta =
     followerSeries.length > 1 ? (followerSeries.at(-1) ?? 0) - (followerSeries[0] ?? 0) : 0;
-  const totalEngagement = (metricsQuery.data?.byDay ?? []).reduce((s, d) => s + d.totalEngagement, 0);
+  const totalEngagement = (metrics?.byDay ?? []).reduce((s, d) => s + d.totalEngagement, 0);
 
   return (
     <div className="rounded-md border border-border bg-card p-4">
@@ -181,36 +196,49 @@ function CompetitorCard({
             <Stat label="Posts/wk" value={profile.postingCadencePerWeek.toFixed(1)} />
             <Stat label="Avg engagement" value={profile.averageEngagement.toLocaleString()} />
           </div>
-          <div className="mt-3">
-            <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-              30-day follower trend ({followerDelta >= 0 ? "+" : ""}
-              {followerDelta.toLocaleString()})
-            </div>
-            <Sparkline data={followerSeries} />
-          </div>
-          {(metricsQuery.data?.topPosts.length ?? 0) > 0 ? (
+          {metricsResult && !metricsResult.available ? (
             <div className="mt-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Top posts (30d)
-              </div>
-              <div className="mt-1 grid grid-cols-3 gap-1">
-                {metricsQuery.data!.topPosts.slice(0, 3).map((post) => (
-                  <div
-                    key={post.platformPostId}
-                    className={cn("aspect-square overflow-hidden rounded-sm bg-muted")}
-                    title={post.caption}
-                  >
-                    {post.mediaUrl ? (
-                      <img src={post.mediaUrl} alt="" className="h-full w-full object-cover" />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
+              <KeyedOffNotice
+                icon={Users}
+                featurePitch="30-day follower trend, total engagement, and top posts for this profile."
+                state={metricsResult}
+                compact
+              />
             </div>
-          ) : null}
-          <div className="mt-3 text-[11px] text-muted-foreground">
-            Total engagement (30d): {totalEngagement.toLocaleString()}
-          </div>
+          ) : (
+            <>
+              <div className="mt-3">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  30-day follower trend ({followerDelta >= 0 ? "+" : ""}
+                  {followerDelta.toLocaleString()})
+                </div>
+                <Sparkline data={followerSeries} />
+              </div>
+              {(metrics?.topPosts.length ?? 0) > 0 ? (
+                <div className="mt-3">
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Top posts (30d)
+                  </div>
+                  <div className="mt-1 grid grid-cols-3 gap-1">
+                    {metrics!.topPosts.slice(0, 3).map((post) => (
+                      <div
+                        key={post.platformPostId}
+                        className={cn("aspect-square overflow-hidden rounded-sm bg-muted")}
+                        title={post.caption}
+                      >
+                        {post.mediaUrl ? (
+                          <img src={post.mediaUrl} alt="" className="h-full w-full object-cover" />
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              <div className="mt-3 text-[11px] text-muted-foreground">
+                Total engagement (30d): {totalEngagement.toLocaleString()}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

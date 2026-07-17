@@ -14,6 +14,7 @@ import { socialApi } from "../../api/social";
 import { queryKeys } from "../../lib/queryKeys";
 import { Button } from "@/components/ui/button";
 import { cn } from "../../lib/utils";
+import { BlockedBadge, isBlockedStatus } from "./data-honesty";
 import { PLATFORM_META } from "./platform-meta";
 
 interface QueueTabProps {
@@ -134,9 +135,13 @@ function QueueRow({ post }: { post: SocialPostListItem }) {
         <div className="mt-1 line-clamp-2 text-sm">{post.content}</div>
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
-        <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium uppercase text-accent-foreground">
-          {post.status}
-        </span>
+        {isBlockedStatus(post.status) ? (
+          <BlockedBadge />
+        ) : (
+          <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium uppercase text-accent-foreground">
+            {post.status}
+          </span>
+        )}
         <Button variant="ghost" size="sm" title="Edit (coming soon)" disabled>
           Edit
         </Button>

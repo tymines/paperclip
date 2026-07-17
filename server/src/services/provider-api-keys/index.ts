@@ -141,9 +141,45 @@ export async function listRedactedKeys(): Promise<RedactedKeyEntry[]> {
  * provider-credits service to make real API calls). Never expose this
  * via HTTP.
  */
+/**
+ * Well-known environment variables per provider. The on-disk store takes
+ * precedence (UI-saved / Augi-injected keys); env vars are a fallback so a key
+ * that's live in the process environment (e.g. GOOGLE_API_KEY on the box) is
+ * usable without also being written into provider-api-keys.json.
+ *
+ * 2026-07-12 (Fable): added because getRawKey previously read ONLY the store,
+ * so a live GOOGLE_API_KEY was invisible — Book Studio's Gemini lane fell
+ * through to the misleading "Anthropic not configured" error.
+ */
+const PROVIDER_ENV_FALLBACKS: Record<ProviderKey, string[]> = {
+  gemini: ["GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"],
+  anthropic: ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+  deepseek: ["DEEPSEEK_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  replicate: ["REPLICATE_API_TOKEN", "REPLICATE_API_KEY"],
+  atlascloud: ["ATLASCLOUD_API_KEY", "ATLAS_CLOUD_API_KEY"],
+  wavespeedai: ["WAVESPEED_API_KEY", "WAVESPEEDAI_API_KEY"],
+  elevenlabs: ["ELEVENLABS_API_KEY"],
+  openai_realtime: ["OPENAI_REALTIME_API_KEY"],
+};
+
+function envKey(provider: ProviderKey): string | null {
+  for (const name of PROVIDER_ENV_FALLBACKS[provider] ?? []) {
+    const v = process.env[name];
+    if (typeof v === "string" && v.trim().length > 0) return v.trim();
+  }
+  return null;
+}
+
 export async function getRawKey(provider: ProviderKey): Promise<string | null> {
   const store = await readStore();
-  return entryValue(store[provider]);
+  return entryValue(store[provider]) ?? envKey(provider);
+}
+
+/** Whether a provider has a usable key (store OR env). Never returns the value. */
+export async function isProviderConfigured(provider: ProviderKey): Promise<boolean> {
+  return (await getRawKey(provider)) !== null;
 }
 
 /** Upsert a single provider's key. Pass empty string to clear. */

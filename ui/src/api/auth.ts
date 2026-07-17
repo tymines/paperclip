@@ -109,6 +109,15 @@ export const authApi = {
     await authPost("/sign-in/email", input);
   },
 
+  // Email one-time-code login (this instance has password auth disabled; OTP is the method).
+  sendSignInOtp: async (input: { email: string }) => {
+    await authPost("/email-otp/send-verification-otp", { email: input.email, type: "sign-in" });
+  },
+
+  signInWithOtp: async (input: { email: string; otp: string }) => {
+    await authPost("/sign-in/email-otp", input);
+  },
+
   signUpEmail: async (input: { name: string; email: string; password: string }) => {
     await authPost("/sign-up/email", input);
   },

@@ -29,11 +29,28 @@ export function listSupportedSocialPlatforms(): SocialPlatform[] {
   return Object.keys(REGISTRY) as SocialPlatform[];
 }
 
-export type { SocialPlatformAdapter, PostDraftPayload, PostValidation, PublishedPostRef } from "./types.js";
+export type {
+  SocialPlatformAdapter,
+  PostDraftPayload,
+  PostValidation,
+  PublishedPostRef,
+  DirectMessage,
+  DirectMessageThread,
+} from "./types.js";
+export {
+  BlockedNoCredentialError,
+  NotSupportedError,
+  STUB_ACCESS_TOKEN,
+  hasRealAccessToken,
+  requireRealAccessToken,
+} from "./errors.js";
 export {
   SOCIAL_FEATURE_MATRIX,
   TYLER_HOMEWORK,
   BANNED_FEATURES,
+  describeFeatureGate,
+  getFeatureStatus,
+  getHomeworkForPlatform,
   type FeatureStatus,
   type FeatureRow,
   type HomeworkItem,
@@ -62,3 +79,26 @@ export {
 } from "./token-exchange.js";
 export { buildConnectedAccountFromTokens } from "./connect-helpers.js";
 export { ensureFreshToken } from "./freshness.js";
+export {
+  SOCIAL_MEDIA_IMAGE_MIMES,
+  SOCIAL_MEDIA_VIDEO_MIMES,
+  SOCIAL_MEDIA_IMAGE_MAX_BYTES,
+  SOCIAL_MEDIA_VIDEO_MAX_BYTES,
+  MediaPublicUrlError,
+  MediaFetchError,
+  assertPubliclyFetchableMediaUrl,
+  buildPublishMediaUrl,
+  detectSocialMediaKind,
+  fetchMediaBytes,
+  isPrivateMediaHost,
+  publicSocialMediaPath,
+  resolvePublicBaseUrl,
+  resolveSelfBaseUrl,
+  socialMediaToken,
+  verifySocialMediaToken,
+  __setMediaPollSleepForTesting,
+  __resetMediaBaseUrlCacheForTesting,
+  type FetchedMedia,
+  type PublishMediaUrl,
+  type SocialMediaKind,
+} from "./media.js";

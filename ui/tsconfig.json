@@ -13,9 +13,24 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
-      "lexical": ["./node_modules/lexical/index.d.ts"]
+      "@/*": [
+        "./src/*"
+      ],
+      "lexical": [
+        "./node_modules/lexical/index.d.ts"
+      ]
     }
   },
-  "include": ["src", "storybook"]
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.spec.ts",
+    "**/*.spec.tsx",
+    "src/fixtures/**",
+    "**/*.stories.tsx",
+    "storybook"
+  ]
 }

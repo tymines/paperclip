@@ -46,9 +46,12 @@ import { CompanyImport } from "./pages/CompanyImport";
 import { DesignGuide } from "./pages/DesignGuide";
 import Design from "./pages/Design";
 import DesignLibrary from "./pages/DesignLibrary";
-import { ImageStudio } from "./pages/ImageStudio"
-import { BookWritingPage } from "./pages/BookWritingPage";
+import { ImageStudio } from "./pages/ImageStudio";
 import { GymPage } from "./pages/GymPage";
+import { CreativeStudio } from "./pages/CreativeStudio";
+import { BookWritingPage } from "./pages/BookWritingPage";
+import { ErrorBoundary as BookStudioErrorBoundary } from "./components/book-studio/ErrorBoundary";
+import { OrgChart } from "./pages/OrgChart";
 import { Personas } from "./pages/Personas";
 import { PersonaDetail } from "./pages/PersonaDetail";
 import { InstanceGeneralSettings } from "./pages/InstanceGeneralSettings";
@@ -61,9 +64,9 @@ import { PluginManager } from "./pages/PluginManager";
 import { PluginSettings } from "./pages/PluginSettings";
 import { AdapterManager } from "./pages/AdapterManager";
 import { PluginPage } from "./pages/PluginPage";
-import { OrgChart } from "./pages/OrgChart";
 import { KnowledgeGraph } from "./pages/KnowledgeGraph";
 import { Rooms } from "./pages/Rooms";
+import { WarRoom } from "./pages/WarRoom";
 import { WorldView } from "./pages/WorldView";
 import { RoomDetail } from "./pages/RoomDetail";
 // /social now points at the multi-platform scheduler (Buffer/Later-style).
@@ -113,6 +116,10 @@ function boardRoutes() {
       <Route path="knowledge-graph" element={<KnowledgeGraph />} />
       <Route path="world-view" element={<WorldView />} />
       <Route path="rooms" element={<Rooms />} />
+      <Route path="war-room" element={<WarRoom />} />
+      <Route path="gym" element={<GymPage />} />
+      <Route path="creative-studio" element={<CreativeStudio />} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
       <Route path="social" element={<SocialScheduler />} />
       <Route path="social/posts/:postId" element={<SocialPostDetail />} />
@@ -185,8 +192,9 @@ function boardRoutes() {
       <Route path="personas" element={<Personas />} />
       <Route path="personas/:personaId" element={<PersonaDetail />} />
       <Route path="image-studio" element={<ImageStudio />} />
-      <Route path="book-writing" element={<BookWritingPage />} />
-            <Route path="gym" element={<GymPage />} />
+<Route path="gym" element={<GymPage />} />
+      <Route path="creative-studio" element={<CreativeStudio />} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
       {/* Legacy standalone tool routes — collapsed into the unified Image Studio
           workbench. Redirect old links to the matching ?tab= rather than 404. */}
       <Route path="image-studio/tools/photoshoot" element={<LegacyImageToolRedirect tab="photoshoot" />} />
@@ -425,7 +433,6 @@ export function App() {
           <Route path="personas" element={<UnprefixedBoardRedirect />} />
           <Route path="personas/:personaId" element={<UnprefixedBoardRedirect />} />
           <Route path="image-studio" element={<UnprefixedBoardRedirect />} />
-          <Route path="book-writing" element={<UnprefixedBoardRedirect />} />
           {/* Old standalone tool URLs (often typed directly / bookmarked on mobile)
               had no company prefix and fell through to :companyPrefix → 404.
               Redirect them into the unified workbench with the matching tab. */}

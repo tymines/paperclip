@@ -19,6 +19,15 @@ import { dispatchAgentBridge } from "../services/agent-bridge.js";
 import { conflict, notFound } from "../errors.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
+import {
+  processRoomTransition,
+} from "../rooms-rail/rail-engine.js";
+import {
+  createCouncilSession,
+  addParticipant,
+  castVote,
+  checkConsensus,
+} from "../rooms-rail/council.js";
 
 export function roomRoutes(db: Db) {
   const router = Router();
@@ -505,6 +514,70 @@ export function roomRoutes(db: Db) {
     })();
 
     res.status(201).json(message);
+  });
+
+  // ── Council routes (SHADOW — rooms_rail.enabled=false) ──
+  router.post("/companies/:companyId/rooms/:roomId/council/sessions", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    const roomId = req.params.roomId as string;
+    assertCompanyAccess(req, companyId);
+    const topic = String(req.body?.topic ?? "Review");
+    const protocol = String(req.body?.protocol ?? "majority");
+    const session = await createCouncilSession(db, roomId, topic, protocol);
+    res.status(201).json(session);
+  });
+
+  router.post("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId/participants", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { sessionId } = req.params;
+    const agentId = req.body?.agentId as string;
+    if (!agentId) { res.status(400).json({ error: "agentId required" }); return; }
+    const participant = await addParticipant(db, sessionId, agentId);
+    res.status(201).json(participant);
+  });
+
+  router.patch("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId/votes", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { sessionId } = req.params;
+    const { agentId, vote } = req.body as { agentId?: string; vote?: string };
+    if (!agentId || !vote) { res.status(400).json({ error: "agentId and vote required" }); return; }
+    const participant = await castVote(db, sessionId, agentId, vote);
+    res.json(participant);
+  });
+
+  router.get("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const { sessionId } = req.params;
+    const result = await checkConsensus(db, sessionId);
+    res.json(result);
+  });
+
+  // ── Gate decision (enforcement path) ──
+  router.post("/companies/:companyId/gate-decision", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const actor = getActorInfo(req);
+
+    // ponytail: agents structurally cannot advance gates
+    if (req.actor.type !== "board") {
+      res.status(403).json({ error: "agents cannot advance gates", actorType: actor.actorType });
+      return;
+    }
+
+    const { stage, evidence, decision } = req.body as { stage?: string; evidence?: string[]; decision?: string };
+    if (!stage) { res.status(400).json({ error: "stage required" }); return; }
+
+    const { checkGate } = await import("../rooms-rail/gate-checker.js");
+    const result = checkGate(stage, evidence ?? []);
+
+    // ponytail: tyler-gate holds without explicit decision
+    result.needs_tyler = !decision;
+    result.blocked = result.needs_tyler;
+
+    res.status(result.passed && !result.blocked ? 200 : 409).json(result);
   });
 
   return router;

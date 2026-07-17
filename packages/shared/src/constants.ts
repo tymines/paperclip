@@ -55,6 +55,19 @@ export const AGENT_ROLES = [
   "devops",
   "researcher",
   "general",
+  "plan-orchestrator",
+  "plan-critic",
+  "memory-scribe",
+  "board-dispatcher",
+  "execute-dispatcher",
+  "review-boss",
+  "reviewer",
+  "evidence-verifier",
+  "coder",
+  "apps-build-engineer",
+  "fleet-ops-responder",
+  "in-app-service",
+  "standalone",
 ] as const;
 export type AgentRole = (typeof AGENT_ROLES)[number];
 
@@ -71,6 +84,19 @@ export const AGENT_ROLE_LABELS: Record<AgentRole, string> = {
   devops: "DevOps",
   researcher: "Researcher",
   general: "General",
+  "plan-orchestrator": "Plan Orchestrator",
+  "plan-critic": "Plan Critic",
+  "memory-scribe": "Memory Scribe",
+  "board-dispatcher": "Board Dispatcher",
+  "execute-dispatcher": "Execute Dispatcher",
+  "review-boss": "Review Boss",
+  reviewer: "Reviewer",
+  "evidence-verifier": "Evidence Verifier",
+  coder: "Coder",
+  "apps-build-engineer": "Apps Build Engineer",
+  "fleet-ops-responder": "Fleet Ops Responder",
+  "in-app-service": "In-App Service",
+  standalone: "Standalone",
 };
 
 export const AGENT_DEFAULT_MAX_CONCURRENT_RUNS = 20;
@@ -630,12 +656,21 @@ export const LIVE_EVENT_TYPES = [
   "room.member.joined",
   "room.member.left",
   "room.updated",
+  // App Dev Control Center typed wire (spec v1.1 Part 3.1.4)
+  "appdev.gate.passed",
+  "appdev.gate.failed",
+  "appdev.wo.requeued",
+  "appdev.vfg.failed",
+  "appdev.plan.escalated",
+  "appdev.release.halted",
+  "appdev.app.killed",
+  "appdev.queue.updated",
 ] as const;
 export type LiveEventType = (typeof LIVE_EVENT_TYPES)[number];
 
 export const ROOM_STATUSES = ["active", "archived"] as const;
 export type RoomStatus = (typeof ROOM_STATUSES)[number];
-export const ROOM_TYPES = ["collaboration", "war-room", "standup"] as const;
+export const ROOM_TYPES = ["collaboration", "war-room", "standup", "brainstorm", "team", "council"] as const;
 export type RoomType = (typeof ROOM_TYPES)[number];
 export const ROOM_MEMBER_ROLES = ["member", "moderator", "observer"] as const;
 export type RoomMemberRole = (typeof ROOM_MEMBER_ROLES)[number];
@@ -667,7 +702,11 @@ export type SocialPlatform = (typeof SOCIAL_PLATFORMS)[number];
 export const SOCIAL_ACCOUNT_STATUSES = ["connected", "expired", "revoked", "error"] as const;
 export type SocialAccountStatus = (typeof SOCIAL_ACCOUNT_STATUSES)[number];
 
-export const SOCIAL_POST_STATUSES = ["draft", "scheduled", "publishing", "published", "failed", "cancelled"] as const;
+// "partial_failed" — post-level rollup when some targets published and some
+// reached a terminal failure. "blocked" — target-level terminal state when the
+// account has no real credential for the platform (never retried; the target's
+// errorMessage carries the `blocked_no_credential:` prefix).
+export const SOCIAL_POST_STATUSES = ["draft", "scheduled", "publishing", "published", "failed", "partial_failed", "blocked", "cancelled"] as const;
 export type SocialPostStatus = (typeof SOCIAL_POST_STATUSES)[number];
 
 export const SOCIAL_POST_TYPES = ["text", "image", "video", "carousel", "story", "reel", "thread"] as const;

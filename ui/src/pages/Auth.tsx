@@ -8,18 +8,17 @@ import { Button } from "@/components/ui/button";
 import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
 import { Sparkles } from "lucide-react";
 
-type AuthMode = "sign_in" | "sign_up";
+type Step = "request_code" | "enter_code";
 
 export function AuthPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const initialMode: AuthMode = searchParams.get("mode") === "sign_up" ? "sign_up" : "sign_in";
-  const [mode, setMode] = useState<AuthMode>(initialMode);
-  const [name, setName] = useState("");
+  const [step, setStep] = useState<Step>("request_code");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const nextPath = useMemo(
     () => searchParams.get("next") || getRememberedInvitePath() || "/",
@@ -37,17 +36,23 @@ export function AuthPage() {
     }
   }, [session, navigate, nextPath]);
 
-  const mutation = useMutation({
+  const sendCode = useMutation({
     mutationFn: async () => {
-      if (mode === "sign_in") {
-        await authApi.signInEmail({ email: email.trim(), password });
-        return;
-      }
-      await authApi.signUpEmail({
-        name: name.trim(),
-        email: email.trim(),
-        password,
-      });
+      await authApi.sendSignInOtp({ email: email.trim() });
+    },
+    onSuccess: () => {
+      setError(null);
+      setNotice(`We sent a one-time code to ${email.trim()}. Enter it below.`);
+      setStep("enter_code");
+    },
+    onError: (err) => {
+      setError(err instanceof Error ? err.message : "Could not send the login code.");
+    },
+  });
+
+  const verifyCode = useMutation({
+    mutationFn: async () => {
+      await authApi.signInWithOtp({ email: email.trim(), otp: otp.trim() });
     },
     onSuccess: async () => {
       setError(null);
@@ -56,14 +61,12 @@ export function AuthPage() {
       navigate(nextPath, { replace: true });
     },
     onError: (err) => {
-      setError(err instanceof Error ? err.message : "Authentication failed");
+      setError(err instanceof Error ? err.message : "That code didn't work. Try again.");
     },
   });
 
-  const canSubmit =
-    email.trim().length > 0 &&
-    password.trim().length > 0 &&
-    (mode === "sign_in" || (name.trim().length > 0 && password.trim().length >= 8));
+  const canSend = email.trim().length > 0 && !sendCode.isPending;
+  const canVerify = otp.trim().length > 0 && !verifyCode.isPending;
 
   if (isSessionLoading) {
     return (
@@ -83,96 +86,120 @@ export function AuthPage() {
             <span className="text-sm font-medium">Paperclip</span>
           </div>
 
-          <h1 className="text-xl font-semibold">
-            {mode === "sign_in" ? "Sign in to Paperclip" : "Create your Paperclip account"}
-          </h1>
+          <h1 className="text-xl font-semibold">Sign in to Paperclip</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            {mode === "sign_in"
-              ? "Use your email and password to access this instance."
-              : "Create an account for this instance. Email confirmation is not required in v1."}
+            {step === "request_code"
+              ? "Enter your email and we'll send you a one-time sign-in code."
+              : "Enter the one-time code we emailed you."}
           </p>
 
-          <form
-            className="mt-6 space-y-4"
-            method="post"
-            action={mode === "sign_up" ? "/api/auth/sign-up/email" : "/api/auth/sign-in/email"}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (mutation.isPending) return;
-              if (!canSubmit) {
-                setError("Please fill in all required fields.");
-                return;
-              }
-              mutation.mutate();
-            }}
-          >
-            {mode === "sign_up" && (
+          {step === "request_code" ? (
+            <form
+              className="mt-6 space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!canSend) {
+                  setError("Enter your email address.");
+                  return;
+                }
+                sendCode.mutate();
+              }}
+            >
               <div>
-                <label htmlFor="name" className="text-xs text-muted-foreground mb-1 block">Name</label>
+                <label htmlFor="email" className="text-xs text-muted-foreground mb-1 block">Email</label>
                 <input
-                  id="name"
-                  name="name"
+                  id="email"
+                  name="email"
                   className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  autoComplete="name"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  autoComplete="email"
                   autoFocus
                 />
               </div>
-            )}
-            <div>
-              <label htmlFor="email" className="text-xs text-muted-foreground mb-1 block">Email</label>
-              <input
-                id="email"
-                name="email"
-                className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                autoComplete="email"
-                autoFocus={mode === "sign_in"}
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="text-xs text-muted-foreground mb-1 block">Password</label>
-              <input
-                id="password"
-                name="password"
-                className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                autoComplete={mode === "sign_in" ? "current-password" : "new-password"}
-              />
-            </div>
-            {error && <p className="text-xs text-destructive">{error}</p>}
-            <Button
-              type="submit"
-              disabled={mutation.isPending}
-              aria-disabled={!canSubmit || mutation.isPending}
-              className={`w-full ${!canSubmit && !mutation.isPending ? "opacity-50" : ""}`}
-            >
-              {mutation.isPending
-                ? "Working…"
-                : mode === "sign_in"
-                  ? "Sign In"
-                  : "Create Account"}
-            </Button>
-          </form>
-
-          <div className="mt-5 text-sm text-muted-foreground">
-            {mode === "sign_in" ? "Need an account?" : "Already have an account?"}{" "}
-            <button
-              type="button"
-              className="font-medium text-foreground underline underline-offset-2"
-              onClick={() => {
-                setError(null);
-                setMode(mode === "sign_in" ? "sign_up" : "sign_in");
+              {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <Button
+                type="submit"
+                disabled={sendCode.isPending}
+                aria-disabled={!canSend}
+                className={`w-full ${!canSend ? "opacity-50" : ""}`}
+              >
+                {sendCode.isPending ? "Sending…" : "Email me a code"}
+              </Button>
+            </form>
+          ) : (
+            <form
+              className="mt-6 space-y-4"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!canVerify) {
+                  setError("Enter the code from your email.");
+                  return;
+                }
+                verifyCode.mutate();
               }}
             >
-              {mode === "sign_in" ? "Create one" : "Sign in"}
-            </button>
-          </div>
+              <div>
+                <label htmlFor="email-readonly" className="text-xs text-muted-foreground mb-1 block">Email</label>
+                <input
+                  id="email-readonly"
+                  className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm text-muted-foreground outline-none"
+                  type="email"
+                  value={email}
+                  readOnly
+                />
+              </div>
+              <div>
+                <label htmlFor="otp" className="text-xs text-muted-foreground mb-1 block">One-time code</label>
+                <input
+                  id="otp"
+                  name="otp"
+                  className="w-full rounded-md border border-border bg-transparent px-3 py-2 text-sm tracking-widest outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/50"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  value={otp}
+                  onChange={(event) => setOtp(event.target.value)}
+                  autoFocus
+                  placeholder="123456"
+                />
+              </div>
+              {notice && <p className="text-xs text-muted-foreground">{notice}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <Button
+                type="submit"
+                disabled={verifyCode.isPending}
+                aria-disabled={!canVerify}
+                className={`w-full ${!canVerify ? "opacity-50" : ""}`}
+              >
+                {verifyCode.isPending ? "Verifying…" : "Sign In"}
+              </Button>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline underline-offset-2"
+                  onClick={() => {
+                    setError(null);
+                    setNotice(null);
+                    setOtp("");
+                    setStep("request_code");
+                  }}
+                >
+                  Use a different email
+                </button>
+                <button
+                  type="button"
+                  className="font-medium text-foreground underline underline-offset-2 disabled:opacity-50"
+                  disabled={sendCode.isPending}
+                  onClick={() => sendCode.mutate()}
+                >
+                  {sendCode.isPending ? "Sending…" : "Resend code"}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
 
@@ -183,4 +210,3 @@ export function AuthPage() {
     </div>
   );
 }
-// feat: task-alpha - added new function

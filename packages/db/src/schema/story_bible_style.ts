@@ -9,6 +9,7 @@ export const storyBibleStyle = pgTable("story_bible_style", {
   comps: text("comps").notNull().default(""),
   sampleParagraph: text("sample_paragraph").notNull().default(""),
   bannedCliches: jsonb("banned_cliches").$type<string[]>().notNull().default([]),
+  tropes: jsonb("tropes").$type<string[]>().notNull().default([]),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

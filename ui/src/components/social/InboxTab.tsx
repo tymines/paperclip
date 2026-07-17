@@ -24,6 +24,7 @@ import { socialApi, type DirectMessageThread } from "../../api/social";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "../../lib/utils";
+import { KeyedOffNotice } from "./data-honesty";
 import { PLATFORM_META } from "./platform-meta";
 
 interface InboxTabProps {
@@ -43,17 +44,28 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
     enabled: !!companyId,
   });
 
+  // Availability is per-account: X can be available while IG in the same
+  // response is keyed off. Available entries feed the thread list; keyed-off
+  // entries render a compact honesty notice each.
+  const inboxEntries = inboxQuery.data;
+
   const flatThreads = useMemo(() => {
     const out: Array<{ account: SocialAccountPublic; thread: DirectMessageThread }> = [];
-    for (const bucket of inboxQuery.data ?? []) {
-      const account = accounts.find((a) => a.id === bucket.accountId);
+    for (const entry of inboxEntries ?? []) {
+      if (!entry.available) continue;
+      const account = accounts.find((a) => a.id === entry.accountId);
       if (!account) continue;
-      for (const thread of bucket.threads) out.push({ account, thread });
+      for (const thread of entry.data) out.push({ account, thread });
     }
     return out.sort(
       (a, b) => new Date(b.thread.lastMessageAt).getTime() - new Date(a.thread.lastMessageAt).getTime(),
     );
-  }, [inboxQuery.data, accounts]);
+  }, [inboxEntries, accounts]);
+
+  const keyedOffEntries = useMemo(
+    () => (inboxEntries ?? []).flatMap((entry) => (entry.available ? [] : [entry])),
+    [inboxEntries],
+  );
 
   const activeThread = activeThreadId
     ? flatThreads.find((t) => t.thread.threadId === activeThreadId)
@@ -89,7 +101,8 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
   if (accounts.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-border bg-card/60 p-8 text-center text-sm text-muted-foreground">
-        Connect an account to see DMs here.
+        Connect an account to see DMs here — X DMs unlock with an X account connected with the
+        dm.read scope (paid X API tier).
       </div>
     );
   }
@@ -129,6 +142,26 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
           })}
       </div>
 
+      {/* Per-account keyed-off notices — one compact card per account whose
+          platform has no DM wiring yet. Available accounts still contribute
+          their threads to the list below. */}
+      {keyedOffEntries.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {keyedOffEntries.map((entry) => {
+            const account = accounts.find((a) => a.id === entry.accountId);
+            const label = PLATFORM_META[entry.platform].label;
+            return (
+              <KeyedOffNotice
+                key={entry.accountId}
+                compact
+                featurePitch={`DMs for ${account?.displayName ?? label} (${label}) will appear here once this platform's messaging API is unlocked. No mock threads are ever shown.`}
+                state={entry}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+
       <div className="grid gap-3 lg:grid-cols-[320px_minmax(0,1fr)]">
         {/* Thread list */}
         <div className="max-h-[60vh] overflow-y-auto rounded-md border border-border bg-card">
@@ -139,7 +172,10 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
           ) : flatThreads.length === 0 ? (
             <div className="flex flex-col items-center gap-2 p-8 text-center text-sm text-muted-foreground">
               <InboxIcon className="h-5 w-5" />
-              No conversations yet.
+              <span>
+                No conversations yet. X DMs appear here once an X account is connected with the
+                dm.read scope.
+              </span>
             </div>
           ) : (
             flatThreads.map(({ account, thread }) => {
@@ -198,8 +234,17 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
                   {PLATFORM_META[activeThread.account.platform].label}
                 </span>
               </div>
+              {streamQuery.data && !streamQuery.data.available ? (
+                <div className="flex-1 overflow-y-auto p-4">
+                  <KeyedOffNotice
+                    compact
+                    featurePitch="Messages for this conversation will load here once this platform's DM read API is unlocked."
+                    state={streamQuery.data}
+                  />
+                </div>
+              ) : (
               <div className="flex flex-1 flex-col-reverse gap-2 overflow-y-auto p-4">
-                {(streamQuery.data ?? [])
+                {(streamQuery.data?.available ? streamQuery.data.data : [])
                   .slice()
                   .reverse()
                   .map((message) => (
@@ -216,6 +261,7 @@ export function InboxTab({ companyId, accounts }: InboxTabProps) {
                     </div>
                   ))}
               </div>
+              )}
               <div className="border-t border-border p-3">
                 {activeThread.thread.canReply ? (
                   <div className="flex items-end gap-2">

@@ -1,14 +1,14 @@
 /**
- * Reddit adapter — real publish + verify, with stub-token fallback.
+ * Reddit adapter — real publish + verify + own-post listing.
  *
  * Wiring requires a "script" or "web app" registered at
  * https://www.reddit.com/prefs/apps. client_id + client_secret are stored
- * in `social_app_credentials` via the Connect Wizard. Once P0 #1
- * (real OAuth token exchange in the callback) lands, `account.accessToken`
- * will be a real bearer token and `publishPost` will hit Reddit for real.
- * Until then, accounts persisted by the stub callback carry the literal
- * token `"stub_access_token"` and we return a deterministic mock submit
- * result so the scheduler worker can be tested end-to-end.
+ * in `social_app_credentials` via the Connect Wizard; the wizard's OAuth
+ * callback exchanges the auth code for a real bearer token which lands on
+ * `account.accessToken`. Legacy stub rows (the `"stub_access_token"`
+ * sentinel / `metadata.stub === true`) are refused: `publishPost` throws
+ * `BlockedNoCredentialError` so the scheduler marks the target `blocked`
+ * instead of faking a submit result.
  *
  * Publish path: POST https://oauth.reddit.com/api/submit with body
  *   { sr, kind: self|link|image, title, text|url, flair_id?, flair_text? }
@@ -16,28 +16,47 @@
  * `RedditRateLimitError` carrying the `Retry-After` seconds so the
  * scheduler can back off rather than retrying tight.
  *
- * Image/video posts are a separate flow (POST /api/media/asset.json →
- * upload to S3 → POST /api/submit with kind=image and the asset URL).
- * That's a meaningful chunk of code — punted to a follow-up iteration;
- * `publishPost` throws `RedditApiError(501)` if media is supplied.
+ * Image/video posts run the asset-lease flow:
+ *   1. POST /api/media/asset.json { filepath, mimetype } → S3 lease
+ *      ({ args: { action, fields }, asset: { asset_id } })
+ *   2. multipart POST to the lease URL (fields + file) → asset lands at
+ *      `${action}/${fields.key}` (i.redd.it / v.redd.it backing store)
+ *   3. POST /api/submit with kind=image|video and the asset URL. Media
+ *      submits confirm asynchronously over websocket; when the sync
+ *      response has no fullname we look the fresh post up via the
+ *      free own-submissions listing rather than fabricating an id.
+ * The adapter downloads the bytes itself (`fetchMediaBytes`), so a
+ * loopback self-URL works — no public base URL required for Reddit.
+ * Galleries (2+ images) need the websocket confirmation flow — v1 keeps
+ * them an honest 501. Videos require a poster image
+ * (`metadata.posterUrl`) — a clear 400 otherwise, never a silent drop.
+ *
+ * Connect is NOT done through this adapter: `startConnect`/`finishConnect`
+ * throw `NotSupportedError` — the wizard flow (`routes/social.ts` +
+ * `token-exchange.ts`) is the only real connect path, and no stub account
+ * is ever created.
  */
 import type { SocialAccount } from "@paperclipai/shared";
 import type {
   AccountMetrics,
+  ConnectAuthStart,
   PostDraftPayload,
   PostValidation,
   PublishedPostRef,
   SocialPlatformAdapter,
 } from "./types.js";
+import { caption } from "./stub-helpers.js";
 import {
-  caption,
-  mockAccountMetrics,
-  mockConnectAccount,
-  mockConnectStart,
-  mockPublishedRef,
-  mockRecentPosts,
-} from "./stub-helpers.js";
-import { expansionStubs } from "./expansion-stubs.js";
+  NotSupportedError,
+  hasRealAccessToken,
+  requireRealAccessToken,
+} from "./errors.js";
+import {
+  SOCIAL_MEDIA_IMAGE_MIMES,
+  SOCIAL_MEDIA_VIDEO_MIMES,
+  fetchMediaBytes,
+  type FetchedMedia,
+} from "./media.js";
 
 const REDDIT_TITLE_MAX = 300;
 const REDDIT_BODY_MAX = 40_000;
@@ -48,10 +67,6 @@ const REDDIT_OAUTH_BASE = "https://oauth.reddit.com";
 // (https://github.com/reddit-archive/reddit/wiki/API). Generic/shared UAs
 // (e.g. "node-fetch", browser strings) get rate-limited or 403'd.
 const REDDIT_USER_AGENT = "Paperclip:v1.0 (by /u/tylerswitzer19)";
-
-// Sentinel token written by `mockConnectAccount()` while P0 #1 (real OAuth
-// token exchange in the callback) is still in flight.
-const STUB_ACCESS_TOKEN = "stub_access_token";
 
 /** Reddit returns a JSON-of-JSON envelope from /api/submit. */
 interface RedditSubmitResponse {
@@ -93,10 +108,6 @@ export class RedditApiError extends Error {
   }
 }
 
-function isStubToken(account: SocialAccount): boolean {
-  return !account.accessToken || account.accessToken === STUB_ACCESS_TOKEN;
-}
-
 function resolveSubreddit(account: SocialAccount, post: PostDraftPayload): string {
   const meta = (post.metadata ?? {}) as Record<string, unknown>;
   const explicit = typeof meta.subreddit === "string" ? meta.subreddit.trim() : "";
@@ -119,10 +130,14 @@ function resolveSubreddit(account: SocialAccount, post: PostDraftPayload): strin
 function detectPostKind(
   post: PostDraftPayload,
   meta: Record<string, unknown>,
-): "self" | "link" | "image" {
+): "self" | "link" | "image" | "video" {
   const explicit = typeof meta.kind === "string" ? meta.kind : "";
-  if (explicit === "self" || explicit === "link" || explicit === "image") return explicit;
-  if (post.mediaUrls.length > 0) return "image";
+  if (explicit === "self" || explicit === "link" || explicit === "image" || explicit === "video") {
+    return explicit;
+  }
+  if (post.mediaUrls.length > 0) {
+    return post.postType === "video" || post.postType === "reel" ? "video" : "image";
+  }
   const linkUrl = typeof meta.url === "string" ? meta.url : "";
   if (linkUrl) return "link";
   return "self";
@@ -155,6 +170,102 @@ async function redditFetch(
   }
 
   return res;
+}
+
+/* ── Media asset-lease flow ─────────────────────────────────────────── */
+
+interface RedditAssetLease {
+  /** Absolute https upload URL (Reddit returns it scheme-relative). */
+  actionUrl: string;
+  /** Pre-signed S3 form fields, appended verbatim before the file part. */
+  fields: Array<{ name: string; value: string }>;
+  assetId: string;
+}
+
+const LEASE_EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/gif": "gif",
+  "video/mp4": "mp4",
+};
+
+function leaseFilenameFor(mimeType: string): string {
+  return `paperclip-upload.${LEASE_EXTENSION_BY_MIME[mimeType] ?? "bin"}`;
+}
+
+/** POST /api/media/asset.json — mint a pre-signed S3 upload lease. */
+async function mintRedditAssetLease(
+  accessToken: string,
+  filename: string,
+  mimeType: string,
+): Promise<RedditAssetLease> {
+  const body = new URLSearchParams({ filepath: filename, mimetype: mimeType });
+  const res = await redditFetch("/api/media/asset.json", {
+    accessToken,
+    method: "POST",
+    body,
+  });
+  type RedditAssetJson = {
+    args?: { action?: string; fields?: Array<{ name?: unknown; value?: unknown }> };
+    asset?: { asset_id?: unknown };
+  };
+  let parsed: RedditAssetJson | null = null;
+  try {
+    parsed = (await res.json()) as RedditAssetJson | null;
+  } catch {
+    /* handled below */
+  }
+  if (!res.ok) {
+    throw new RedditApiError(
+      `Reddit /api/media/asset.json failed: ${res.status}`,
+      res.status,
+      parsed,
+    );
+  }
+  const action = typeof parsed?.args?.action === "string" ? parsed.args.action : "";
+  const rawFields = Array.isArray(parsed?.args?.fields) ? parsed.args.fields : [];
+  if (!action || rawFields.length === 0) {
+    throw new RedditApiError("Reddit media lease returned no upload action/fields", 502, parsed);
+  }
+  const fields = rawFields
+    .filter((f): f is { name: string; value: string } =>
+      typeof f?.name === "string" && typeof f?.value === "string",
+    )
+    .map((f) => ({ name: f.name, value: f.value }));
+  return {
+    actionUrl: action.startsWith("//") ? `https:${action}` : action,
+    fields,
+    assetId: typeof parsed?.asset?.asset_id === "string" ? parsed.asset.asset_id : "",
+  };
+}
+
+/**
+ * Multipart POST to the lease URL. The asset's final URL is the lease
+ * action + the pre-signed `key` field — that URL goes on /api/submit.
+ */
+async function uploadToRedditLease(
+  lease: RedditAssetLease,
+  media: FetchedMedia,
+  filename: string,
+): Promise<string> {
+  const form = new FormData();
+  for (const field of lease.fields) form.append(field.name, field.value);
+  form.append("file", new Blob([new Uint8Array(media.buffer)], { type: media.mimeType }), filename);
+  const res = await fetch(lease.actionUrl, { method: "POST", body: form });
+  // S3 lease uploads answer 201 (Created) with an XML body.
+  if (!res.ok && res.status !== 201) {
+    throw new RedditApiError(
+      `Reddit media upload to lease URL failed: HTTP ${res.status}`,
+      502,
+    );
+  }
+  const key = lease.fields.find((f) => f.name === "key")?.value;
+  if (!key) {
+    throw new RedditApiError("Reddit media lease had no 'key' field", 502, lease.fields);
+  }
+  return `${lease.actionUrl}/${key}`;
 }
 
 async function submitPost(
@@ -203,14 +314,58 @@ async function submitPost(
     }
     body.set("url", url);
   } else {
-    // Reddit image/video uploads need a separate /api/media/asset.json
-    // dance (mint lease → PUT to S3 → submit kind=image with asset URL).
-    // Tracking as a follow-up — surface a 501 so the scheduler marks the
-    // target failed with a clear message rather than silently doing nothing.
-    throw new RedditApiError(
-      "Reddit image/video posts not yet implemented (POST /api/media/asset.json upload — next iteration)",
-      501,
+    // image | video via the asset-lease flow.
+    if (post.mediaUrls.length > 1) {
+      // Gallery submits need the websocket confirmation flow — honest 501.
+      throw new RedditApiError(
+        "Reddit gallery posts (multiple images) not yet implemented (websocket-confirmation flow) — attach a single image",
+        501,
+      );
+    }
+    const mediaUrl = post.mediaUrls[0] ?? "";
+    if (!mediaUrl) {
+      throw new RedditApiError("Reddit media post requires a media attachment", 400);
+    }
+    const media = await fetchMediaBytes(mediaUrl);
+    const isVideoMime = SOCIAL_MEDIA_VIDEO_MIMES.has(media.mimeType);
+    const isImageMime = SOCIAL_MEDIA_IMAGE_MIMES.has(media.mimeType);
+    if (!isVideoMime && !isImageMime) {
+      throw new RedditApiError(
+        `Reddit media upload supports jpeg/png/webp/gif/mp4 — media served as "${media.mimeType}"`,
+        415,
+      );
+    }
+    if (kind === "video" && !isVideoMime) {
+      throw new RedditApiError(
+        `Reddit video post requires an mp4 — media served as "${media.mimeType}"`,
+        415,
+      );
+    }
+    // Reddit refuses kind=video without a poster frame. We can't extract
+    // one server-side (no ffmpeg) — require it explicitly BEFORE spending
+    // a lease + upload, never guess.
+    const posterUrl = typeof meta.posterUrl === "string" ? meta.posterUrl.trim() : "";
+    if (isVideoMime && !posterUrl) {
+      throw new RedditApiError(
+        "Reddit video posts require a poster image — set metadata.posterUrl to a public image URL",
+        400,
+      );
+    }
+    const filename = leaseFilenameFor(media.mimeType);
+    const lease = await mintRedditAssetLease(
+      account.accessToken as string,
+      filename,
+      media.mimeType,
     );
+    const assetUrl = await uploadToRedditLease(lease, media, filename);
+    if (isVideoMime) {
+      body.set("kind", "video");
+      body.set("url", assetUrl);
+      body.set("video_poster_url", posterUrl);
+    } else {
+      body.set("kind", "image");
+      body.set("url", assetUrl);
+    }
   }
 
   const res = await redditFetch("/api/submit", {
@@ -240,6 +395,28 @@ async function submitPost(
 
   const data = parsed?.json?.data;
   if (!data?.name || !data.url) {
+    // Media submits (kind=image/video) confirm asynchronously over
+    // websocket and can come back 200 + empty data. Data honesty: don't
+    // fabricate an id — look the freshly-created post up via the free
+    // own-submissions listing, and fail loudly if it isn't there.
+    if (kind === "image" || kind === "video") {
+      const recent = await listOwnSubmissions(account, { limit: 1 }).catch(() => null);
+      const latest = recent?.posts[0];
+      if (latest && Date.now() - latest.publishedAt.getTime() < 5 * 60_000) {
+        return {
+          platformPostId: latest.platformPostId,
+          platformUrl: latest.platformUrl,
+          publishedAt: latest.publishedAt,
+          caption: caption(post),
+          mediaUrl: post.mediaUrls[0] ?? null,
+        };
+      }
+      throw new RedditApiError(
+        "Reddit accepted the media submit but returned no post id (websocket-only confirmation) and the post has not appeared on the account's submissions yet",
+        502,
+        parsed,
+      );
+    }
     throw new RedditApiError("Reddit /api/submit returned no post id", 502, parsed);
   }
 
@@ -254,19 +431,14 @@ async function submitPost(
 
 /** GET /api/v1/me — used by the Accounts dot + the /verify route. */
 export async function verifyRedditAccount(account: SocialAccount): Promise<RedditMeProfile> {
-  if (!account.accessToken) {
-    throw new RedditApiError("Reddit account has no access token", 401);
+  if (!hasRealAccessToken(account)) {
+    // Legacy stub rows never verify green — reconnect through the wizard.
+    throw new RedditApiError(
+      "Reddit account has no real access token — reconnect via the connect wizard",
+      401,
+    );
   }
-  if (isStubToken(account)) {
-    // Account row was created by the stub callback (P0 #1 not landed yet).
-    // Return a synthetic profile so the dot can still render green in dev.
-    return {
-      name: (account.username ?? "stub_reddit_user").replace(/^u\//, ""),
-      link_karma: 0,
-      comment_karma: 0,
-    };
-  }
-  const res = await redditFetch("/api/v1/me", { accessToken: account.accessToken });
+  const res = await redditFetch("/api/v1/me", { accessToken: account.accessToken as string });
   if (!res.ok) {
     throw new RedditApiError(`Reddit /api/v1/me failed: ${res.status}`, res.status);
   }
@@ -278,49 +450,111 @@ export async function verifyRedditAccount(account: SocialAccount): Promise<Reddi
   };
 }
 
+/** One `t3` child from a /user/{name}/submitted listing. */
+interface RedditListingChild {
+  data?: {
+    name?: string;
+    permalink?: string;
+    created_utc?: number;
+    title?: string;
+    url?: string;
+    thumbnail?: string;
+    score?: number;
+    num_comments?: number;
+  };
+}
+
+/**
+ * GET /user/{username}/submitted — the connected account's own posts.
+ * Free own-resource read under Reddit's API rules.
+ */
+async function listOwnSubmissions(
+  account: SocialAccount,
+  opts?: { limit?: number; cursor?: string | null },
+): Promise<{ posts: PublishedPostRef[]; nextCursor: string | null }> {
+  const username = (account.username ?? "").replace(/^u\//, "");
+  if (!username) {
+    throw new RedditApiError("Reddit account has no username to list posts for", 400);
+  }
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 20), raw_json: "1" });
+  if (opts?.cursor) params.set("after", opts.cursor);
+  const res = await redditFetch(
+    `/user/${encodeURIComponent(username)}/submitted?${params.toString()}`,
+    { accessToken: account.accessToken as string },
+  );
+  if (!res.ok) {
+    throw new RedditApiError(`Reddit /user/${username}/submitted failed: ${res.status}`, res.status);
+  }
+  const body = (await res.json()) as {
+    data?: { children?: RedditListingChild[]; after?: string | null };
+  };
+  const children = Array.isArray(body.data?.children) ? body.data.children : [];
+  const posts: PublishedPostRef[] = [];
+  for (const child of children) {
+    const d = child.data;
+    if (!d?.name) continue;
+    const thumbnail =
+      typeof d.thumbnail === "string" && /^https?:\/\//.test(d.thumbnail) ? d.thumbnail : null;
+    posts.push({
+      platformPostId: d.name,
+      platformUrl: d.permalink ? `https://www.reddit.com${d.permalink}` : null,
+      publishedAt:
+        typeof d.created_utc === "number" ? new Date(d.created_utc * 1000) : new Date(),
+      caption: d.title ?? null,
+      mediaUrl: null,
+      thumbnailUrl: thumbnail,
+      metrics: {
+        likes: Number(d.score ?? 0) || 0,
+        comments: Number(d.num_comments ?? 0) || 0,
+      },
+    });
+  }
+  return { posts, nextCursor: body.data?.after ?? null };
+}
+
 export const redditAdapter: SocialPlatformAdapter = {
   platform: "reddit",
 
-  async startConnect() {
-    return mockConnectStart("reddit");
+  async startConnect(): Promise<ConnectAuthStart> {
+    throw new NotSupportedError(
+      "Reddit connect runs through the Social connect wizard (app credentials + OAuth callback), not the adapter.",
+    );
   },
 
-  async finishConnect(opts) {
-    return mockConnectAccount({
-      platform: "reddit",
-      companyId: opts.companyId,
-      username: "u/stub_reddit_user",
-      displayName: "u/stub_reddit_user",
-    });
+  async finishConnect(): Promise<SocialAccount> {
+    throw new NotSupportedError(
+      "Reddit connect runs through the Social connect wizard (app credentials + OAuth callback), not the adapter.",
+    );
   },
 
-  async refreshAuth(account) {
-    return { ...account, tokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60) };
+  async refreshAuth(): Promise<SocialAccount> {
+    throw new NotSupportedError(
+      "Token refresh is handled by ensureFreshToken() (freshness.ts), which persists the rotated token.",
+    );
   },
 
-  async disconnect() {},
+  async disconnect() {
+    // Local disconnect only — deleting the social_accounts row drops our
+    // copy of the token. Remote revoke lands with the wizard-side revoke.
+  },
 
   async listRecentPosts(account, opts) {
-    return {
-      posts: mockRecentPosts(account, opts?.limit ?? 20),
-      nextCursor: null,
-    };
+    // No real token → honest empty page, never mock posts.
+    if (!hasRealAccessToken(account)) return { posts: [], nextCursor: null };
+    return listOwnSubmissions(account, opts);
   },
 
   async getAccountMetrics(account): Promise<AccountMetrics> {
-    if (isStubToken(account)) return mockAccountMetrics(account);
-    try {
-      const profile = await verifyRedditAccount(account);
-      // Reddit exposes karma, not followers/engagement-rate. Surface
-      // total karma in the engagementRate field so the existing card UI
-      // has something to render; followerCount/postCount stay undefined
-      // until we add the listings calls.
-      return {
-        engagementRate: profile.link_karma + profile.comment_karma,
-      };
-    } catch {
-      return mockAccountMetrics(account);
-    }
+    // No real token → honest empty; the Accounts card renders "no data".
+    if (!hasRealAccessToken(account)) return {};
+    const profile = await verifyRedditAccount(account);
+    // Reddit exposes karma, not followers/engagement-rate. Surface
+    // total karma in the engagementRate field so the existing card UI
+    // has something to render; followerCount/postCount stay undefined
+    // until we add the listings calls.
+    return {
+      engagementRate: profile.link_karma + profile.comment_karma,
+    };
   },
 
   async verifyAccount(account) {
@@ -336,13 +570,9 @@ export const redditAdapter: SocialPlatformAdapter = {
   },
 
   async publishPost(account, post): Promise<PublishedPostRef> {
-    if (isStubToken(account)) {
-      // Stub-token path: P0 #1 (real OAuth token exchange) hasn't landed,
-      // so there's no real token to call Reddit with. Return a synthetic
-      // success so the scheduler worker can be tested end-to-end with the
-      // stub callback's account rows.
-      return mockPublishedRef(account, post);
-    }
+    // Data honesty: no real token → BlockedNoCredentialError (the worker
+    // marks the target `blocked`, terminal). Publish never fakes success.
+    requireRealAccessToken(account, "publish to Reddit");
     return submitPost(account, post);
   },
 
@@ -363,8 +593,21 @@ export const redditAdapter: SocialPlatformAdapter = {
       warnings.push("Reddit uses `u/username` for mentions, not `@username`.");
     }
 
+    if (post.postType === "video" || post.postType === "reel") {
+      if (post.mediaUrls.length !== 1) {
+        errors.push("Reddit video posts take exactly one mp4 file.");
+      }
+      const posterUrl =
+        typeof meta.posterUrl === "string" ? (meta.posterUrl as string).trim() : "";
+      if (!posterUrl) {
+        warnings.push(
+          "Reddit video posts need a poster image (metadata.posterUrl) — the publish will fail without one.",
+        );
+      }
+    } else if (post.mediaUrls.length > 1) {
+      errors.push("Reddit galleries aren't supported yet — attach a single image.");
+    }
+
     return { ok: errors.length === 0, errors, warnings };
   },
-
-  ...expansionStubs("reddit"),
 };

@@ -2519,6 +2519,20 @@ export function accessRoutes(
         expiresAt: created.challenge.expiresAt.toISOString(),
         suggestedPollIntervalMs: 1000,
       });
+
+      // FIX-6: Persist board API key to durable file outside DB
+      // So a restore from backup can recover board access even if DB is fresh.
+      try {
+        const secretsDir = path.resolve(
+          process.env.PAPERCLIP_INSTANCE_DIR ?? path.join(process.env.HOME ?? "C:\\Users\\Augi-T1", ".paperclip", "instances", "default"),
+          "secrets"
+        );
+        const boardKeyPath = path.resolve(secretsDir, "board-key.txt");
+        await fs.promises.mkdir(secretsDir, { recursive: true });
+        await fs.promises.writeFile(boardKeyPath, created.pendingBoardToken, "utf-8");
+      } catch {
+        // Best-effort — don't fail the API response for persistence
+      }
     },
   );
 

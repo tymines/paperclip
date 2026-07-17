@@ -10,6 +10,8 @@ export const storyBibleWorldLocations = pgTable("story_bible_world_locations", {
   sensoryNotes: jsonb("sensory_notes").$type<Record<string, unknown>>().notNull().default({}),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
+  // migration 0155: location image + misc UI metadata (imageUrl, imageJobId, imageLocked)
+  metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

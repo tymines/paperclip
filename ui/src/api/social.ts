@@ -74,6 +74,59 @@ export interface FeasibilityResponse {
   banned: BannedFeature[];
 }
 
+// ── Data-honesty envelope ───────────────────────────────────────────────────
+// Analytics / competitors / hashtag-suggest / inbox(non-X) endpoints no longer
+// return mock series. They return a discriminated union: either real data
+// (`available: true`) or an explicit keyed-off state with the reason and the
+// homework item (app registration / App Review / paid tier) that unlocks it.
+export interface KeyedOffHomeworkLink {
+  title: string;
+  href: string;
+}
+export interface KeyedOff {
+  available: false;
+  reason: string;
+  homework?: KeyedOffHomeworkLink;
+}
+export type KeyedResponse<T> = { available: true; data: T } | KeyedOff;
+
+// GET /social/inbox returns ONE entry per account: identity fields plus the
+// per-account availability envelope. Availability is per-account — X can be
+// `available: true` while IG in the same response is `available: false` with
+// its homework link. Never a single top-level envelope.
+export type InboxAccountEntry = {
+  accountId: string;
+  platform: SocialPlatform;
+} & KeyedResponse<DirectMessageThread[]>;
+
+// ── Composer media uploads ──────────────────────────────────────────────────
+// POST /companies/:id/social/media stores files via the existing storage
+// machinery and returns per-file URLs. `mediaUrl` is what goes on the post's
+// mediaUrls; `publiclyFetchable: false` means only a loopback fallback URL
+// exists (no PAPERCLIP_PUBLIC_URL configured) — fine for X/Reddit (the server
+// uploads the bytes itself), honest pre-publish amber hint for IG/FB/Threads
+// (Meta must download the URL from the public internet).
+export interface SocialMediaUploadItem {
+  id: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: "image" | "video";
+  /** Authenticated preview URL (already /api-prefixed) for <img>/<video>. */
+  contentUrl: string;
+  /** Absolute URL to place on the post's mediaUrls. */
+  mediaUrl: string;
+  publiclyFetchable: boolean;
+}
+
+export interface SocialMediaUploadResponse {
+  media: SocialMediaUploadItem[];
+  errors: Array<{ filename: string; reason: string }>;
+  publicBaseUrl: string | null;
+  /** Present when no public base URL is configured — show it to the user. */
+  publicUrlNotice?: string;
+}
+
 export const socialApi = {
   // ── Discovery ───────────────────────────────────────────────────────────
   platforms: () => api.get<SocialPlatformSupport>("/social/platforms"),
@@ -126,6 +179,16 @@ export const socialApi = {
   deletePost: (companyId: string, postId: string) =>
     api.delete<SocialPostDetail>(`/companies/${companyId}/social/posts/${postId}`),
 
+  // ── Media (composer uploads) ────────────────────────────────────────────
+  uploadMedia: (companyId: string, files: File[]) => {
+    const form = new FormData();
+    for (const file of files) form.append("files", file);
+    return api.postForm<SocialMediaUploadResponse>(
+      `/companies/${companyId}/social/media`,
+      form,
+    );
+  },
+
   validatePost: (
     companyId: string,
     platforms: SocialPlatform[],
@@ -156,7 +219,7 @@ export const socialApi = {
 
   inbox: (companyId: string, accountId?: string) => {
     const qs = accountId ? `?accountId=${encodeURIComponent(accountId)}` : "";
-    return api.get<Array<{ accountId: string; platform: SocialPlatform; threads: DirectMessageThread[] }>>(
+    return api.get<InboxAccountEntry[]>(
       `/companies/${companyId}/social/inbox${qs}`,
     );
   },
@@ -186,7 +249,9 @@ export const socialApi = {
     api.get<{ unread: number }>(`/companies/${companyId}/social/dms/unread-count`),
 
   inboxThread: (companyId: string, accountId: string, threadId: string) =>
-    api.get<DirectMessage[]>(`/companies/${companyId}/social/inbox/${accountId}/${threadId}`),
+    api.get<KeyedResponse<DirectMessage[]>>(
+      `/companies/${companyId}/social/inbox/${accountId}/${threadId}`,
+    ),
 
   inboxSend: (companyId: string, accountId: string, threadId: string, text: string) =>
     api.post<DirectMessage>(
@@ -195,7 +260,7 @@ export const socialApi = {
     ),
 
   competitorSearch: (companyId: string, platform: SocialPlatform, q: string) =>
-    api.get<CompetitorProfile[]>(
+    api.get<KeyedResponse<CompetitorProfile[]>>(
       `/companies/${companyId}/social/competitors/search?platform=${platform}&q=${encodeURIComponent(q)}`,
     ),
 
@@ -206,7 +271,7 @@ export const socialApi = {
     from: Date,
     to: Date,
   ) =>
-    api.get<CompetitorMetricsTimeseries>(
+    api.get<KeyedResponse<CompetitorMetricsTimeseries>>(
       `/companies/${companyId}/social/competitors/${platform}/${encodeURIComponent(handle)}?from=${from.toISOString()}&to=${to.toISOString()}`,
     ),
 
@@ -216,11 +281,13 @@ export const socialApi = {
     if (opts?.from) params.set("from", opts.from.toISOString());
     if (opts?.to) params.set("to", opts.to.toISOString());
     const qs = params.toString();
-    return api.get<AccountAnalytics>(`/companies/${companyId}/social/analytics${qs ? `?${qs}` : ""}`);
+    return api.get<KeyedResponse<AccountAnalytics>>(
+      `/companies/${companyId}/social/analytics${qs ? `?${qs}` : ""}`,
+    );
   },
 
   suggestHashtags: (companyId: string, platform: SocialPlatform, text: string, niche?: string) =>
-    api.post<HashtagSuggestion[]>(`/companies/${companyId}/social/hashtags/suggest`, {
+    api.post<KeyedResponse<HashtagSuggestion[]>>(`/companies/${companyId}/social/hashtags/suggest`, {
       platform,
       text,
       niche,
@@ -307,6 +374,7 @@ export interface DirectMessage {
   direction: "inbound" | "outbound";
   sentAt: string;
   text: string;
+  attachments: string[];
 }
 export interface CompetitorProfile {
   platform: SocialPlatform;

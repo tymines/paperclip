@@ -409,7 +409,7 @@ function GenerateInline({
   });
 
   const controlsBlock = controlsQ.isLoading ? (
-    <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground">
+    <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
       <Loader2 className="h-4 w-4 animate-spin" /> Loading controls…
     </div>
   ) : isMobile ? (
@@ -434,7 +434,7 @@ function GenerateInline({
       })}
     </div>
   ) : (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {orderedControls.map((control) => (
         <StructuredControlPanel
           key={control.id}
@@ -567,7 +567,7 @@ function GenerateInline({
       {subTab === "library" ? (
         <TemplateLibraryTab persona={persona} showExplicit={showExplicit} onUseTemplate={useTemplate} currentTool="persona_generate" />
       ) : (
-        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-5">
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-4">
           <div className="min-w-0">
             {!isMobile && (
               <div className="relative mb-3">

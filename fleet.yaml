@@ -2,14 +2,22 @@
 # Souls, Hermes profiles, and Paperclip roster entries are GENERATED from this file.
 # Edit here, regenerate, commit. If a soul or the DB disagrees with this file, this file wins.
 # Watchdog runs a drift check against this file.
+#
+# Last correction (2026-07-09, Zeus):
+#   1. REVIEWERS: R1 (Gemini), R2 (DeepSeek), EV (OpenAI) — 3 distinct families. Verified OpenAI 200.
+#   2. Bosses: Ares on kimi-k2.6 (smart). Zeus moved to deepseek-v4-pro (Tyler 2026-07-13 — was
+#      kimi-k2.6; the kimi provider was the "Provider authentication failed" cause). Workers stay on flash.
+#   3. Hermes Designer: gemini (vision exception to flash rule). Zeus Dispatch: deepseek-v4-flash (operational).
 
 meta:
-  version: 1
-  updated: 2026-07-01
+  version: 2
+  updated: 2026-07-09
   rules:
-    - "No OpenAI models anywhere."
-    - "Test-phase baseline: deepseek-v4-flash fleet-wide, except vision -> gemini."
-    - "Planned upgrades (P2): zeus + ares -> kimi-k2.6; reviewer-1 and reviewer-2 on different model families."
+    - "REVIEWERS: R1=Gemini, R2=DeepSeek, EV=OpenAI(gpt-4o-mini) — 3 distinct model families, NO overlap."
+    - "Bosses on smart models (kimi-k2.6), workers on flash (deepseek-v4-flash)."
+    - "Hermes Designer: gemini (vision required, exception to flash rule)."
+    - "OpenAI key verified live HTTP 200 from Box 2 (2026-07-09). Ares EV only OpenAI consumer."
+    - "DeepSeek, Gemini, Kimi are the 3 non-OpenAI working families. All providers confirmed."
 
 boxes:
   windows:
@@ -32,9 +40,9 @@ agents:
   # ---- Plan (Windows, Hermes framework) ----
   - name: Zeus
     box: windows
-    orchestrator: null          # top of the tree
+    orchestrator: null
     role: plan-orchestrator
-    model: deepseek-v4-flash    # P2: kimi-k2.6
+    model: deepseek-v4-pro         # Tyler 2026-07-13: Zeus on DeepSeek V4 Pro (was kimi-k2.6)
     framework: hermes
     adapter: hermes_local
   - name: Zeus Critic
@@ -52,8 +60,8 @@ agents:
   - name: Zeus Dispatch
     box: windows
     orchestrator: Zeus
-    role: board-dispatcher      # Jarvis routing layer owner — see soul
-    model: deepseek-v4-flash
+    role: board-dispatcher
+    model: deepseek-v4-flash        # operational dispatch, flash OK
     framework: hermes
 
   # ---- Execute (Box 1, Hermes framework) ----
@@ -68,13 +76,13 @@ agents:
     box: box1
     orchestrator: Hermes
     role: coder
-    model: deepseek-v4-flash    # diversified target: kimi-k2.6
+    model: deepseek-v4-flash
     framework: hermes
   - name: Hermes Coder 2
     box: box1
     orchestrator: Hermes
     role: coder
-    model: deepseek-v4-flash    # diversified target: glm-5.2 (1M ctx)
+    model: deepseek-v4-flash
     framework: hermes
   - name: Hermes Coder 3
     box: box1
@@ -86,7 +94,7 @@ agents:
     box: box1
     orchestrator: Hermes
     role: designer
-    model: gemini               # vision required
+    model: gemini                   # vision required — exception to flash rule
     framework: hermes
   - name: Hermes Researcher
     box: box1
@@ -96,52 +104,66 @@ agents:
     framework: hermes
 
   # ---- Review (Box 2, Hermes framework) ----
+  # REVIEWER DIVERSITY: R1=Gemini, R2=DeepSeek, EV=OpenAI — 3 distinct families
   - name: Ares
     box: box2
     orchestrator: Zeus
     role: review-boss
-    model: deepseek-v4-flash    # P2: kimi-k2.6
+    model: kimi-k2.6               # smart boss
     framework: hermes
     adapter: hermes_local
-  - name: Ares Evidence Verifier
-    box: box2
-    orchestrator: Ares
-    role: evidence-verifier
-    model: deepseek-v4-flash    # replaces gpt-4o-mini (no-OpenAI rule)
-    framework: hermes
   - name: Ares Reviewer 1
     box: box2
     orchestrator: Ares
     role: reviewer
-    model: deepseek-v4-flash    # P2: kimi-k2.6 (must differ from Reviewer 2's family)
+    model: gemini-2.5-flash        # Gemini family — distinct from R2 + EV
     framework: hermes
   - name: Ares Reviewer 2
     box: box2
     orchestrator: Ares
     role: reviewer
-    model: deepseek-v4-flash
+    model: deepseek-v4-flash       # DeepSeek family — distinct from R1 + EV
+    framework: hermes
+  - name: Ares Evidence Verifier
+    box: box2
+    orchestrator: Ares
+    role: evidence-verifier
+    model: gpt-4o-mini             # OpenAI family — distinct from R1 + R2. Live-verified 200.
     framework: hermes
 
   # ---- Standalones ----
   - name: Augi
     box: box1
     orchestrator: null
-    role: apps-build-engineer   # Apple/Xcode toolchain lives here
+    role: apps-build-engineer
     model: deepseek-v4-flash
     framework: openclaw
     standalone: true
   - name: August
     box: box2
     orchestrator: null
-    role: fleet-ops-responder   # PROPOSED — see soul; secondary burst worker
+    role: fleet-ops-responder
     model: deepseek-v4-flash
     framework: openclaw
     standalone: true
   - name: Baily AI
     box: external
     orchestrator: null
-    role: in-app-service        # BailysApp — DO NOT dispatch, DO NOT reconfigure
+    role: in-app-service
     model: qwen/qwen3-vl-8b-instruct
     framework: external
     standalone: true
     dispatchable: false
+  - name: Nano Banana 2
+    box: box1
+    orchestrator: Hermes
+    role: designer
+    model: gemini-3.1-flash-image
+    framework: hermes
+  - name: Hermes UI Designer
+    box: windows
+    orchestrator: Zeus
+    role: designer
+    model: gpt-5.4-mini
+    framework: hermes
+    profile: hermes-ui-designer

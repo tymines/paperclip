@@ -3,12 +3,17 @@
  *
  * Every platform Paperclip supports for publishing/scheduling (Instagram, X,
  * Facebook, Threads, Reddit, …) ships a file in this directory implementing
- * `SocialPlatformAdapter`. v1 ships stub implementations that return mock data
- * — they satisfy the contract so the UI can be built end-to-end before any
- * real OAuth credentials are wired in.
+ * `SocialPlatformAdapter`.
  *
- * When Tyler ships API credentials, only the per-platform adapter file needs
- * a real implementation; routes and UI stay untouched.
+ * Data-honesty rules (see `errors.ts`):
+ *  - `publishPost` never fakes success. Accounts without a real credential
+ *    throw `BlockedNoCredentialError`; the scheduler worker marks the target
+ *    `blocked` (terminal, no retries).
+ *  - Connect runs exclusively through the wizard flow (`routes/social.ts` +
+ *    `token-exchange.ts`); adapter `startConnect`/`finishConnect` throw
+ *    `NotSupportedError`.
+ *  - Read-side methods return honest empty results when the real wiring
+ *    doesn't exist yet — never seeded mock data.
  */
 import type {
   SocialAccount,
@@ -163,17 +168,10 @@ export interface HashtagSuggestion {
 }
 
 /**
- * The single contract each platform implements. v1 stubs return obviously-
- * fake data shaped exactly like the real responses will be, so the UI is
- * fully built and Tyler can demo the scheduler end-to-end before any real
- * OAuth wiring exists.
- */
-
-/**
- * The single contract each platform implements. v1 stubs return obviously-
- * fake data shaped exactly like the real responses will be, so the UI is
- * fully built and Tyler can demo the scheduler end-to-end before any real
- * OAuth wiring exists.
+ * The single contract each platform implements. Optional expansion methods
+ * are only present when a real implementation exists — routes translate a
+ * missing method into an honest `available: false` response instead of
+ * serving mock data.
  */
 export interface SocialPlatformAdapter {
   readonly platform: SocialPlatform;
@@ -276,3 +274,30 @@ export interface SocialPlatformAdapter {
     niche?: string;
   }): Promise<HashtagSuggestion[]>;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

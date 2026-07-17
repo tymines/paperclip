@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@/lib/router";
-import { MessageSquare, Plus, Trash2, Users, Zap, Coffee } from "lucide-react";
+import { MessageSquare, Plus, Trash2, Users, Zap, Coffee, Lightbulb, GitBranch, Scale } from "lucide-react";
 import { roomsApi } from "../api/rooms";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -75,12 +75,18 @@ const ROOM_TYPE_ICONS: Record<string, typeof MessageSquare> = {
   collaboration: Users,
   "war-room": Zap,
   standup: Coffee,
+  brainstorm: Lightbulb,
+  team: GitBranch,
+  council: Scale,
 };
 
 const ROOM_TYPE_LABELS: Record<string, string> = {
   collaboration: "Collaboration",
   "war-room": "War Room",
   standup: "Standup",
+  brainstorm: "Brainstorm",
+  team: "Team",
+  council: "Council",
 };
 
 function RoomCard({ room, onClick }: { room: Room; onClick: () => void }) {
@@ -304,6 +310,9 @@ export function Rooms() {
                   <SelectItem value="collaboration">Collaboration</SelectItem>
                   <SelectItem value="war-room">War Room</SelectItem>
                   <SelectItem value="standup">Standup</SelectItem>
+                  <SelectItem value="brainstorm">Brainstorm</SelectItem>
+                  <SelectItem value="team">Team</SelectItem>
+                  <SelectItem value="council">Council</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -1,6 +1,27 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import { books, storyBibleOutline, bookExports } from "@paperclipai/db";
+import { books, storyBibleOutline, bookExports, manuscriptChapters } from "@paperclipai/db";
+
+// Merge outline beats with real manuscript prose. Prose wins when present so the
+// export is the BOOK, not the outline; beats are the fallback for undrafted chapters.
+async function loadChaptersWithProse(db: any, bookId: string, beatToText: (b: any) => string) {
+  const [outline, prose] = await Promise.all([
+    db.select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
+      .from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId)).orderBy(storyBibleOutline.chapterNumber),
+    db.select({ chapterNumber: manuscriptChapters.chapterNumber, title: manuscriptChapters.title, content: manuscriptChapters.content })
+      .from(manuscriptChapters).where(eq(manuscriptChapters.bookId, bookId)),
+  ]);
+  const proseByNum = new Map<number, { title: string; content: string }>();
+  for (const c of prose) proseByNum.set(c.chapterNumber, { title: c.title, content: c.content });
+  // union of chapter numbers (outline drives order; drafted-but-unoutlined chapters appended)
+  const nums = new Set<number>([...outline.map((o: any) => o.chapterNumber), ...prose.map((c: any) => c.chapterNumber)]);
+  return [...nums].sort((a, b) => a - b).map((n) => {
+    const o = outline.find((x: any) => x.chapterNumber === n);
+    const pr = proseByNum.get(n);
+    const body = (pr && pr.content && pr.content.trim()) ? pr.content : (o && Array.isArray(o.beats) && o.beats.length ? beatToText(o.beats) : "");
+    return { chapterNumber: n, title: (pr?.title || o?.title || `Chapter ${n}`), content: body, beats: o?.beats };
+  });
+}
 import { eq, desc } from "drizzle-orm";
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
@@ -10,9 +31,110 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { getTTSProvider } from "../services/tts/index.js";
+import { elevenlabsProvider } from "../services/tts/elevenlabs.js";
+import { getRawKey } from "../services/provider-api-keys/index.js";
+import { buildEpubBuffer } from "../services/book-export/epub.js";
 import { beatToText } from "../utils/beatToText.js";
 
 const EXPORT_DIR = process.env.BOOK_EXPORT_DIR || path.join(process.env.HOME || "/tmp", "paperclip", "book-exports");
+
+// Runtime detection: pandoc may or may not be on the host PATH. When present we
+// prefer it (best-quality EPUB/PDF); otherwise EPUB falls back to the in-process
+// builder and PDF returns an honest "install pandoc/LaTeX" error — never a stub.
+function pandocAvailable(): boolean {
+  try {
+    execSync("pandoc --version", { stdio: "pipe", timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type ExportChapter = { chapterNumber: number; title: string; content: string };
+
+// Assemble the DB manuscript (title + per-chapter prose markdown) into one
+// markdown document. Prose is the source of truth; loadChaptersWithProse already
+// merged outline beats as the fallback for undrafted chapters.
+function assembleManuscript(book: { title: string }, chapters: ExportChapter[]): string {
+  const mdLines = [`# ${book.title}`, ""];
+  for (const ch of chapters) {
+    mdLines.push(`## ${ch.title || `Chapter ${ch.chapterNumber}`}`);
+    mdLines.push("");
+    mdLines.push(ch.content && ch.content.trim() ? ch.content : "*[Chapter content pending]*");
+    mdLines.push("");
+  }
+  return mdLines.join("\n");
+}
+
+type ExportGenResult =
+  | { ok: true; finalPath: string; ext: string; contentType: string; pandocUsed: boolean; engine: string }
+  | { ok: false; error: string };
+
+// Produce the real export file on disk. EPUB: pandoc if present, else a valid
+// in-process EPUB (zero deps). PDF: pandoc if present, else an honest error.
+// Markdown: written directly.
+function generateExportFile(
+  format: string,
+  opts: { book: { title: string }; chapters: ExportChapter[]; markdown: string; outDir: string; exportId: string },
+): ExportGenResult {
+  const { book, chapters, markdown, outDir, exportId } = opts;
+
+  if (format === "markdown") {
+    const finalPath = path.join(outDir, `${exportId}.md`);
+    writeFileSync(finalPath, markdown, "utf-8");
+    return { ok: true, finalPath, ext: "md", contentType: "text/markdown; charset=utf-8", pandocUsed: false, engine: "none" };
+  }
+
+  if (format === "epub") {
+    const epubPath = path.join(outDir, `${exportId}.epub`);
+    if (pandocAvailable()) {
+      const mdPath = path.join(outDir, `${exportId}.md`);
+      writeFileSync(mdPath, markdown, "utf-8");
+      try {
+        execSync(`pandoc "${mdPath}" -o "${epubPath}" -f markdown -t epub`, { timeout: 60000, stdio: "pipe" });
+        try { rmSync(mdPath); } catch { /* best effort */ }
+        return { ok: true, finalPath: epubPath, ext: "epub", contentType: "application/epub+zip", pandocUsed: true, engine: "pandoc" };
+      } catch {
+        try { rmSync(mdPath); } catch { /* best effort */ }
+        // fall through to the in-process builder
+      }
+    }
+    const buf = buildEpubBuffer({
+      title: book.title,
+      chapters: chapters.map((c) => ({
+        title: c.title || `Chapter ${c.chapterNumber}`,
+        markdown: c.content && c.content.trim() ? c.content : "*[Chapter content pending]*",
+      })),
+    });
+    writeFileSync(epubPath, buf);
+    return { ok: true, finalPath: epubPath, ext: "epub", contentType: "application/epub+zip", pandocUsed: false, engine: "in-process" };
+  }
+
+  if (format === "pdf") {
+    if (!pandocAvailable()) {
+      return {
+        ok: false,
+        error: "PDF export needs pandoc (with a LaTeX or wkhtmltopdf PDF engine) installed on the server. Pandoc was not found on PATH. EPUB and Markdown export work without it.",
+      };
+    }
+    const mdPath = path.join(outDir, `${exportId}.md`);
+    writeFileSync(mdPath, markdown, "utf-8");
+    const pdfPath = path.join(outDir, `${exportId}.pdf`);
+    try {
+      execSync(`pandoc "${mdPath}" -o "${pdfPath}" -f markdown`, { timeout: 120000, stdio: "pipe" });
+      try { rmSync(mdPath); } catch { /* best effort */ }
+      return { ok: true, finalPath: pdfPath, ext: "pdf", contentType: "application/pdf", pandocUsed: true, engine: "pandoc" };
+    } catch {
+      try { rmSync(mdPath); } catch { /* best effort */ }
+      return {
+        ok: false,
+        error: "PDF export: pandoc is installed but no PDF engine is available. Install a LaTeX distribution (TeX Live / MiKTeX) or wkhtmltopdf on the server. EPUB export works without it.",
+      };
+    }
+  }
+
+  return { ok: false, error: `Unsupported export format: ${format}` };
+}
 
 export function bookStudioExportRoutes(db: Db) {
   const router = Router();
@@ -36,64 +158,23 @@ export function bookStudioExportRoutes(db: Db) {
 
       if (!book) throw notFound("Book not found");
 
-      // Load chapters
-      const chapters = await db
-        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
-        .from(storyBibleOutline)
-        .where(eq(storyBibleOutline.bookId, bookId))
-        .orderBy(storyBibleOutline.chapterNumber);
-
-      // Assemble markdown
-      const mdLines = [`# ${book.title}`, ""];
-      for (const ch of chapters) {
-        mdLines.push(`## ${ch.title || `Chapter ${ch.chapterNumber}`}`);
-        mdLines.push("");
-        if (Array.isArray(ch.beats) && ch.beats.length > 0) {
-          mdLines.push(beatToText(ch.beats));
-        } else {
-          mdLines.push("*[Chapter content pending]*");
-        }
-        mdLines.push("");
-      }
-      const markdown = mdLines.join("\n");
+      // Load chapters + assemble the manuscript markdown
+      const chapters = await loadChaptersWithProse(db, bookId, beatToText);
+      const markdown = assembleManuscript(book, chapters);
 
       // Write to exports dir
       const outDir = path.join(EXPORT_DIR, book.slug);
       if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
 
       const exportId = randomUUID();
-      const isPandocFormat = ["pdf", "epub"].includes(format);
-      let finalPath: string;
-      let pandocUsed = false;
-
-      if (isPandocFormat) {
-        // Write temp markdown
-        const mdPath = path.join(outDir, `${exportId}.md`);
-        writeFileSync(mdPath, markdown, "utf-8");
-
-        try {
-          const ext = format === "pdf" ? "pdf" : "epub";
-          finalPath = path.join(outDir, `${exportId}.${ext}`);
-          execSync(`pandoc "${mdPath}" -o "${finalPath}" -f markdown -t ${ext}`, {
-            timeout: 30000,
-            stdio: "pipe",
-          });
-          pandocUsed = true;
-          // Clean up temp md
-          try { execSync(`rm "${mdPath}"`); } catch {}
-        } catch {
-          // Pandoc failure: save the markdown as fallback
-          finalPath = mdPath;
-        }
-      } else {
-        finalPath = path.join(outDir, `${exportId}.md`);
-        writeFileSync(finalPath, markdown, "utf-8");
-      }
+      const gen = generateExportFile(format, { book, chapters, markdown, outDir, exportId });
+      if (!gen.ok) throw serviceUnavailable(gen.error);
 
       const metadata: Record<string, unknown> = {
         chapterCount: chapters.length,
         format,
-        pandocUsed,
+        pandocUsed: gen.pandocUsed,
+        engine: gen.engine,
       };
 
       const [inserted] = await db
@@ -104,7 +185,7 @@ export function bookStudioExportRoutes(db: Db) {
           type: "export",
           format,
           status: "completed",
-          outputPath: finalPath,
+          outputPath: gen.finalPath,
           metadata,
         })
         .returning();
@@ -119,10 +200,75 @@ export function bookStudioExportRoutes(db: Db) {
         action: "book.exported",
         entityType: "book_export",
         entityId: inserted.id,
-        details: { bookId, format, pandocUsed, chapterCount: chapters.length },
+        details: { bookId, format, pandocUsed: gen.pandocUsed, engine: gen.engine, chapterCount: chapters.length },
       });
 
       res.status(201).json({ export: inserted });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // ── GET .../export/:format (generate + stream download) ──────────────
+  // Single-shot: assemble the manuscript, produce the real file, record a
+  // bookExports row, and stream it back as a download. Used by the export
+  // modal's Markdown / EPUB / PDF buttons. PDF returns an honest 503 naming
+  // the missing tool when pandoc / a PDF engine is absent (never a stub).
+  router.get("/companies/:companyId/book-studio/books/:bookId/export/:format", async (req, res, next) => {
+    try {
+      const { companyId, bookId, format } = req.params;
+      assertCompanyAccess(req, companyId);
+
+      if (!["markdown", "epub", "pdf"].includes(format)) {
+        throw badRequest("format must be 'markdown', 'epub' or 'pdf'");
+      }
+
+      const book = await db
+        .select({ id: books.id, title: books.title, slug: books.slug })
+        .from(books)
+        .where(eq(books.id, bookId))
+        .then((r) => r[0]);
+      if (!book) throw notFound("Book not found");
+
+      const chapters = await loadChaptersWithProse(db, bookId, beatToText);
+      const markdown = assembleManuscript(book, chapters);
+
+      const outDir = path.join(EXPORT_DIR, book.slug);
+      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
+
+      const exportId = randomUUID();
+      const gen = generateExportFile(format, { book, chapters, markdown, outDir, exportId });
+      if (!gen.ok) throw serviceUnavailable(gen.error);
+
+      const [inserted] = await db
+        .insert(bookExports)
+        .values({
+          bookId,
+          companyId,
+          type: "export",
+          format,
+          status: "completed",
+          outputPath: gen.finalPath,
+          metadata: { chapterCount: chapters.length, format, pandocUsed: gen.pandocUsed, engine: gen.engine },
+        })
+        .returning();
+
+      const actor = getActorInfo(req);
+      await logActivity(db, {
+        companyId,
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        agentId: actor.agentId,
+        runId: actor.runId,
+        action: "book.exported",
+        entityType: "book_export",
+        entityId: inserted.id,
+        details: { bookId, format, pandocUsed: gen.pandocUsed, engine: gen.engine, chapterCount: chapters.length },
+      });
+
+      const filename = `${book.slug || "book"}.${gen.ext}`;
+      res.setHeader("Content-Type", gen.contentType);
+      res.download(gen.finalPath, filename);
     } catch (err) {
       next(err);
     }
@@ -134,9 +280,17 @@ export function bookStudioExportRoutes(db: Db) {
       const { companyId, bookId } = req.params;
       assertCompanyAccess(req, companyId);
 
-      const tts = getTTSProvider();
+      // Prefer ElevenLabs whenever its key is present (provider-key store or the
+      // ELEVENLABS_API_KEY env fallback) so the audiobook works without also
+      // needing TTS_PROVIDER set. Fall back to the env-selected provider otherwise.
+      const elevenKey = await getRawKey("elevenlabs");
+      const tts = elevenKey ? elevenlabsProvider : getTTSProvider();
       const configured = await tts.isConfigured();
-      if (!configured) throw serviceUnavailable("TTS is not configured");
+      if (!configured) {
+        throw serviceUnavailable(
+          "Audiobook needs a voice provider. Set an ElevenLabs API key (provider \"elevenlabs\" in the provider-key store, or the ELEVENLABS_API_KEY env var) on the server.",
+        );
+      }
 
       const book = await db
         .select({ id: books.id, title: books.title, slug: books.slug })
@@ -146,14 +300,10 @@ export function bookStudioExportRoutes(db: Db) {
 
       if (!book) throw notFound("Book not found");
 
-      const chapters = await db
-        .select({ chapterNumber: storyBibleOutline.chapterNumber, title: storyBibleOutline.title, beats: storyBibleOutline.beats })
-        .from(storyBibleOutline)
-        .where(eq(storyBibleOutline.bookId, bookId))
-        .orderBy(storyBibleOutline.chapterNumber);
+      const chapters = await loadChaptersWithProse(db, bookId, beatToText);
 
       const totalChars = chapters.reduce((sum, ch) => {
-        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        const text = ch.content ?? "";
         return sum + text.length + (ch.title?.length || 0);
       }, 0);
 
@@ -182,7 +332,7 @@ export function bookStudioExportRoutes(db: Db) {
 
       // Pre-compute non-empty chapters once for both narration loop and concat building
       const nonEmptyChapters = chapters.filter(ch => {
-        const text = Array.isArray(ch.beats) ? beatToText(ch.beats) : "";
+        const text = ch.content ?? "";
         return text.trim().length > 0;
       });
 
@@ -192,7 +342,7 @@ export function bookStudioExportRoutes(db: Db) {
       for (const ch of nonEmptyChapters) {
         const chTitle = ch.title || `Chapter ${ch.chapterNumber}`;
         const result = await tts.generateNarration(
-          Array.isArray(ch.beats) ? beatToText(ch.beats) : "",
+          ch.content ?? "",
           chTitle,
         );
         const chPath = path.join(tempDir, `chapter-${ch.chapterNumber}.mp3`);

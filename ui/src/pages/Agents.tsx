@@ -416,10 +416,20 @@ function deriveGroups(agents: Agent[], orgTree: OrgNode[] | undefined): Groups {
   const leadership: Agent[] = [];
   const workers: Agent[] = [];
   const external: Agent[] = [];
+  // Explicit group assignments (Tyler directive 2026-07-07).
+  // ponytail: named sets take priority over org-tree traversal.
+  const LEADERSHIP_NAMES = new Set(["zeus", "zeus book keeper", "zeus critic"]);
+  const EXTERNAL_NAMES = new Set(["baily ai"]);
   // Always keep Hermes & Brainstorm in the main team regardless of org-tree quirks.
-  const MAIN_TEAM_NAMES = new Set(["hermes", "brainstorm", "zeus", "zeus vision", "zeus coding", "zeus brainstorm", "zeus reviewer"]);
+  const MAIN_TEAM_NAMES = new Set(["hermes", "brainstorm", "zeus vision", "zeus coding", "zeus brainstorm", "zeus reviewer"]);
   for (const a of agents) {
-    if (mainIds.has(a.id)) {
+    const nameKey = a.name.toLowerCase().trim();
+    // Explicit group overrides (Tyler directive 2026-07-07).
+    if (LEADERSHIP_NAMES.has(nameKey)) {
+      leadership.push(a);
+    } else if (EXTERNAL_NAMES.has(nameKey)) {
+      external.push(a);
+    } else if (mainIds.has(a.id)) {
       // In the main org tree — classify by reports.
       if (hasReports.get(a.id)) {
         leadership.push(a);
