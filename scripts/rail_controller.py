@@ -34,7 +34,8 @@ DRY        = "--dry-run" in sys.argv
 VERBOSE    = "--verbose" in sys.argv or DRY
 REPO       = Path(os.environ.get("RAIL_REPO", r"C:\Users\Augi-T1\paperclip"))
 SCRIPTS    = REPO / "scripts"
-EVENTS_LOG = Path(os.environ.get("RAIL_EVENTS_LOG", str(REPO / ".rail_events.jsonl")))
+PAPERCLIP_HOME = Path(os.environ.get("PAPERCLIP_HOME", str(Path.home() / ".paperclip")))
+EVENTS_LOG = Path(os.environ.get("RAIL_EVENTS_LOG", str(PAPERCLIP_HOME / "rail" / "rail-events.jsonl")))
 CONFIG_FILE = Path(os.environ.get("RAIL_CONFIG", str(REPO / ".rail_config.json")))
 STATE_FILE  = Path(os.environ.get("RAIL_STATE", str(REPO / ".rail_state.json")))
 
@@ -120,26 +121,6 @@ def _check_session_rotation(task_id: str, state: dict, cfg: dict) -> dict:
     }
 
 
-def _write_rail_event_db(event: dict):
-    """Best-effort DB mirror for JSONL events. ponytail: try/except, never blocks."""
-    try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host="127.0.0.1", port=54329, user="paperclip",
-            password="paperclip", dbname="paperclip"
-        )
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO rail_events (event_type, task_id, payload, created_at)
-               VALUES (%s, %s, %s, NOW())""",
-            (event.get("type", "unknown"), event.get("task_id", ""),
-             json.dumps(event, default=str))
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass  # ponytail: DB mirror is best-effort, JSONL is the durable log
-
 STATES = [
     "ready", "claimed", "planning", "plan_ready", "critiqued",
     "coding", "in_review", "closed",
@@ -184,12 +165,11 @@ def _log(category, msg):
 def emit_event(event_type, task_id, **extra):
     ev = {"ts": now_iso(), "type": event_type, "task_id": task_id, **extra}
     try:
+        EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
         with EVENTS_LOG.open("a") as f:
             f.write(json.dumps(ev, default=str) + "\n")
     except Exception:
         pass
-    # ponytail: DB mirror best-effort, never blocks pipeline
-    _write_rail_event_db(ev)
     if VERBOSE:
         _log("event", f"{event_type} {task_id} {json.dumps(extra, default=str)[:120]}")
 
@@ -458,14 +438,17 @@ def check_heartbeat(task_id, worktree_path, stall_count, last_artifact_at, cfg):
 # ═══════════════════════════════════════════════════════════════
 
 def query_board_direct(limit=5):
-    """Direct PG query — fallback when Paperclip API is unreachable."""
+    """Direct PG fallback. Fail closed unless the server confirms production port 5432."""
     try:
         import psycopg2
         conn = psycopg2.connect(
-            "host=127.0.0.1 port=54329 dbname=paperclip user=paperclip password=paperclip",
-            connect_timeout=5
+            host="127.0.0.1", port=5432, user="paperclip",
+            dbname="paperclip", connect_timeout=5
         )
         cur = conn.cursor()
+        cur.execute("SHOW port")
+        if str(cur.fetchone()[0]) != "5432":
+            raise RuntimeError("RAIL direct DB fallback requires verified port 5432")
         cur.execute(
             "SELECT id, identifier, title, description, status, "
             "assignee_agent_id, created_at, parent_id, iteration_count, "

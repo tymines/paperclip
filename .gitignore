@@ -61,3 +61,11 @@ tests/release-smoke/playwright-report/
 cli/vitest.config.ts
 .gitignore
 book-exports/
+
+# Runtime journals and sensitive local backups belong outside Git.
+/.rail_events.jsonl
+/scripts/.rail_events.jsonl
+/.env.bak.*
+/server/.env.bak.*
+/backup-*.sql
+/backup-*.sql.gz

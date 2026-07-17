@@ -35,6 +35,12 @@ export function resolveDefaultLogsDir(): string {
   return resolveSharedDefaultLogsDir();
 }
 
+export function resolveRailEventsPath(overridePath = process.env.RAIL_EVENTS_LOG): string {
+  return overridePath
+    ? path.resolve(overridePath)
+    : path.resolve(resolvePaperclipHomeDir(), "rail", "rail-events.jsonl");
+}
+
 export function resolveDefaultSecretsKeyFilePath(): string {
   return resolveSharedDefaultSecretsKeyFilePath();
 }
