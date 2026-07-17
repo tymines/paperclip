@@ -1070,7 +1070,7 @@ def main():
                     task = api("GET", f"/api/issues/{task['id']}") or task
                     time.sleep(2)
             else:
-                process_task(task, cfg)
+                _log("claim", f"handed off to run {task['checkoutRunId']} — no duplicate local pipeline")
         else:
             # ── resume existing in-flight tasks ──
             st = load_state()
