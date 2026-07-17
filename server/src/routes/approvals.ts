@@ -40,6 +40,7 @@ export function approvalRoutes(
     pluginWorkerManager: options.pluginWorkerManager,
   });
   const issueApprovalsSvc = issueApprovalService(db);
+  const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -93,6 +94,17 @@ export function approvalRoutes(
     // before attempting the insert — otherwise a FK violation returns a
     // generic 500 instead of a helpful 400.
     const actor = getActorInfo(req);
+    if (actor.actorType === "agent" && uniqueIssueIds.length > 0) {
+      const agentId = actor.agentId;
+      const runId = actor.runId?.trim();
+      if (!agentId || !runId) {
+        res.status(401).json({ error: "Agent run id required" });
+        return;
+      }
+      for (const issueId of uniqueIssueIds) {
+        await issuesSvc.assertCheckoutOwner(issueId, agentId, runId);
+      }
+    }
     const resolvedRequestedByAgentId: string | null =
       approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.agentId : null);
     if (resolvedRequestedByAgentId) {
@@ -143,7 +155,6 @@ export function approvalRoutes(
 
     // Auto-transition linked issues to needs_approval for task_completion approvals
     if (approval.type === "task_completion" && uniqueIssueIds.length > 0) {
-      const issuesSvc = issueService(db);
       for (const issueId of uniqueIssueIds) {
         await issuesSvc.update(issueId, { status: "needs_approval" }).catch((err) =>
           logger.warn({ err, issueId, approvalId: approval.id }, "failed to transition issue to needs_approval"),
