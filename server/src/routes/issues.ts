@@ -1317,7 +1317,11 @@ export function issueRoutes(
       return false;
     }
     if (issue.status !== "in_progress") {
-      return true;
+      res.status(409).json({
+        error: "Agent must check out issue before mutation",
+        details: { issueId: issue.id, actorAgentId, status: issue.status },
+      });
+      return false;
     }
     const runId = requireAgentRunId(req, res);
     if (!runId) return false;
