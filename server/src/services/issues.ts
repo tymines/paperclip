@@ -333,6 +333,21 @@ function sameRunLock(checkoutRunId: string | null, actorRunId: string | null) {
   return checkoutRunId == null;
 }
 
+function runningIssueRunCondition(actorRunId: string, actorAgentId: string) {
+  return sql<boolean>`exists (
+    select 1
+    from ${heartbeatRuns}
+    where ${heartbeatRuns.id} = ${actorRunId}
+      and ${heartbeatRuns.agentId} = ${actorAgentId}
+      and ${heartbeatRuns.companyId} = ${issues.companyId}
+      and ${heartbeatRuns.status} = 'running'
+      and (
+        ${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issues.id}::text
+        or ${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issues.id}::text
+      )
+  )`;
+}
+
 const TERMINAL_HEARTBEAT_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 const ISSUE_LIST_DESCRIPTION_MAX_CHARS = 1200;
 const ISSUE_LIST_DESCRIPTION_MAX_BYTES = ISSUE_LIST_DESCRIPTION_MAX_CHARS * 4;
@@ -3328,6 +3343,7 @@ export function issueService(db: Db) {
           eq(issues.status, "in_progress"),
           eq(issues.assigneeAgentId, input.actorAgentId),
           eq(issues.checkoutRunId, input.expectedCheckoutRunId),
+          runningIssueRunCondition(input.actorRunId, input.actorAgentId),
         ),
       )
       .returning({
@@ -3364,6 +3380,7 @@ export function issueService(db: Db) {
           eq(issues.assigneeAgentId, input.actorAgentId),
           isNull(issues.checkoutRunId),
           or(isNull(issues.executionRunId), eq(issues.executionRunId, input.actorRunId)),
+          runningIssueRunCondition(input.actorRunId, input.actorAgentId),
         ),
       )
       .returning({
@@ -4711,6 +4728,7 @@ export function issueService(db: Db) {
             inArray(issues.status, expectedStatuses),
             or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
             executionLockCondition,
+            checkoutRunId ? runningIssueRunCondition(checkoutRunId, agentId) : undefined,
           ),
         )
         .returning()
@@ -4729,6 +4747,9 @@ export function issueService(db: Db) {
           assigneeAgentId: issues.assigneeAgentId,
           checkoutRunId: issues.checkoutRunId,
           executionRunId: issues.executionRunId,
+          checkoutRunActive: checkoutRunId
+            ? runningIssueRunCondition(checkoutRunId, agentId)
+            : sql<boolean>`true`,
         })
         .from(issues)
         .where(eq(issues.id, id))
@@ -4788,6 +4809,7 @@ export function issueService(db: Db) {
 
       // If this run already owns it and it's in_progress, return it (no self-409)
       if (
+        current.checkoutRunActive &&
         current.assigneeAgentId === agentId &&
         current.status === "in_progress" &&
         sameRunLock(current.checkoutRunId, checkoutRunId)
@@ -4820,6 +4842,7 @@ export function issueService(db: Db) {
             eq(issues.assigneeAgentId, actorAgentId),
             eq(issues.checkoutRunId, actorRunId),
             or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+            runningIssueRunCondition(actorRunId, actorAgentId),
           ),
         )
         .returning()
@@ -4867,6 +4890,9 @@ export function issueService(db: Db) {
           checkoutRunId: issues.checkoutRunId,
           executionRunId: issues.executionRunId,
           leaseActive: sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} > now()`,
+          actorRunActive: actorRunId
+            ? runningIssueRunCondition(actorRunId, actorAgentId)
+            : sql<boolean>`false`,
         })
         .from(issues)
         .where(eq(issues.id, id))
@@ -4875,6 +4901,7 @@ export function issueService(db: Db) {
       if (!current) throw notFound("Issue not found");
 
       if (
+        current.actorRunActive &&
         current.leaseActive &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
@@ -4885,6 +4912,7 @@ export function issueService(db: Db) {
 
       if (
         actorRunId &&
+        current.actorRunActive &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
         current.checkoutRunId == null &&
@@ -4906,6 +4934,7 @@ export function issueService(db: Db) {
 
       if (
         actorRunId &&
+        current.actorRunActive &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
         current.checkoutRunId &&
@@ -4949,23 +4978,18 @@ export function issueService(db: Db) {
       if (actorAgentId && existing.assigneeAgentId && existing.assigneeAgentId !== actorAgentId) {
         throw conflict("Only assignee can release issue");
       }
-      if (
-        actorAgentId &&
-        existing.status === "in_progress" &&
-        existing.assigneeAgentId === actorAgentId &&
-        existing.checkoutRunId &&
-        !sameRunLock(existing.checkoutRunId, actorRunId ?? null)
-      ) {
-        const stale = await isTerminalOrMissingHeartbeatRun(existing.checkoutRunId);
-        if (!stale) {
-          throw conflict("Only checkout run can release issue", {
-            issueId: existing.id,
-            assigneeAgentId: existing.assigneeAgentId,
-            checkoutRunId: existing.checkoutRunId,
-            actorRunId: actorRunId ?? null,
-          });
-        }
-      }
+
+      const agentReleaseCondition =
+        actorAgentId && existing.status === "in_progress"
+          ? actorRunId
+            ? and(
+                eq(issues.assigneeAgentId, actorAgentId),
+                eq(issues.checkoutRunId, actorRunId),
+                sql`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} > now()`,
+                runningIssueRunCondition(actorRunId, actorAgentId),
+              )
+            : sql<boolean>`false`
+          : undefined;
 
       const updated = await db
         .update(issues)
@@ -4979,9 +5003,17 @@ export function issueService(db: Db) {
           leaseExpiresAt: null,
           updatedAt: new Date(),
         })
-        .where(eq(issues.id, id))
+        .where(and(eq(issues.id, id), agentReleaseCondition))
         .returning()
         .then((rows) => rows[0] ?? null);
+      if (!updated && agentReleaseCondition) {
+        throw conflict("Only active checkout run can release issue", {
+          issueId: existing.id,
+          assigneeAgentId: existing.assigneeAgentId,
+          checkoutRunId: existing.checkoutRunId,
+          actorRunId: actorRunId ?? null,
+        });
+      }
       if (!updated) return null;
       const [enriched] = await withIssueLabels(db, [updated]);
       return enriched;
