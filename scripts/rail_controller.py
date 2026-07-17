@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
     "sweep_interval_min": 5,
     "rework_cap": 3,
     "seats": ["zeus"],
+    "eligible_issue_ids": [],      # fail closed until fresh records are explicitly allowed
     "enforcement": "shadow",      # on | shadow | off
     "api_key": "",                # Paperclip API key for board access
 }
@@ -758,11 +759,16 @@ def claim_task(cfg=None):
     """Claim one ready task through Paperclip's atomic checkout/lease CAS."""
     cfg = cfg or {}
     enforcement = cfg.get("enforcement", "shadow")
-    issues = api("GET", f"/api/companies/{CID}/issues?status=backlog&limit=5")
+    eligible_ids = {str(issue_id) for issue_id in cfg.get("eligible_issue_ids", [])}
+    if not eligible_ids:
+        _log("claim", "No explicitly fresh issue IDs configured — claiming nothing")
+        return None
+    issues = api("GET", f"/api/companies/{CID}/issues?status=backlog&limit=100")
     if not issues:
         # Fallback: direct PG access when API is unreachable (shadow mode or no valid key)
         _log("rail", "API returned no tasks — trying direct PG fallback")
-        issues = query_board_direct(5)
+        issues = query_board_direct(100)
+    issues = [issue for issue in issues if str(issue["id"]) in eligible_ids]
     if enforcement == "shadow":
         if not issues:
             return None

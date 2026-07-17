@@ -6,6 +6,16 @@
   "sweep_interval_min": 5,
   "rework_cap": 3,
   "seats": ["zeus"],
+  "eligible_issue_ids": [
+    "27fd1d9c-4dec-4783-abe8-b88453f50206",
+    "4c83ac00-21a6-4b22-9bef-235612ebe51b",
+    "d4b8c61d-c383-4b83-b469-1ca4edded084",
+    "346a2b27-0dd4-481b-8034-a2ae757c3f0d",
+    "2ef06d86-193e-4872-82a7-49c522595c4a",
+    "6b7cbcbd-7565-43cb-9810-754065750167",
+    "2f1ffc4f-4c92-4e75-88c3-940781d6ade7",
+    "9b1a6632-26dc-4247-af3b-f4cc1cadc129"
+  ],
   "api_key": "",
   "ten_laws": {
     "session_max_age_hours": 8,
