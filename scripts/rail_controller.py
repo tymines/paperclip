@@ -51,7 +51,7 @@ DEFAULT_CONFIG = {
     "revoke_ttl_min": 40,
     "sweep_interval_min": 5,
     "rework_cap": 3,
-    "seats": ["zeus-coding"],
+    "seats": ["zeus"],
     "enforcement": "shadow",      # on | shadow | off
     "api_key": "",                # Paperclip API key for board access
 }

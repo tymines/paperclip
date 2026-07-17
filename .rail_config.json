@@ -5,7 +5,7 @@
   "revoke_ttl_min": 40,
   "sweep_interval_min": 5,
   "rework_cap": 3,
-  "seats": ["zeus-coding"],
+  "seats": ["zeus"],
   "api_key": "",
   "ten_laws": {
     "session_max_age_hours": 8,
