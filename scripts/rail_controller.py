@@ -977,6 +977,7 @@ def main():
         controller_heartbeat()
         if cfg.get("enforcement") == "on":
             for reclaimed in reclaim_expired_leases():
+                emit_event("claim_lost", str(reclaimed["id"]), **reclaimed)
                 emit_event("claim_reclaimed", str(reclaimed["id"]), **reclaimed)
 
         if not enforce_global_invariants():
