@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from rail_durability import append_event, atomic_write_json, load_projection
+
 # ── config ──────────────────────────────────────────────────────
 BASE       = os.environ.get("PAPERCLIP_URL", "http://127.0.0.1:3100")
 CID        = os.environ.get("PAPERCLIP_COMPANY_ID", "7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4")
@@ -163,15 +165,10 @@ def _log(category, msg):
     print(line, file=sys.stderr, flush=True)
 
 def emit_event(event_type, task_id, **extra):
-    ev = {"ts": now_iso(), "type": event_type, "task_id": task_id, **extra}
-    try:
-        EVENTS_LOG.parent.mkdir(parents=True, exist_ok=True)
-        with EVENTS_LOG.open("a") as f:
-            f.write(json.dumps(ev, default=str) + "\n")
-    except Exception:
-        pass
+    ev = append_event(EVENTS_LOG, {"ts": now_iso(), "type": event_type, "task_id": task_id, **extra})
     if VERBOSE:
-        _log("event", f"{event_type} {task_id} {json.dumps(extra, default=str)[:120]}")
+        _log("event", f"{event_type} {task_id} cursor={ev['cursor']} {json.dumps(extra, default=str)[:120]}")
+
 
 def _shadow_event(task_id, stage, **details):
     """Log a shadow decision — no real transitions occur."""
@@ -188,12 +185,10 @@ def save_config(cfg):
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
 def load_state():
-    if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text())
-    return {}
+    return load_projection(EVENTS_LOG, STATE_FILE)
 
 def save_state(st):
-    STATE_FILE.write_text(json.dumps(st, indent=2, default=str))
+    atomic_write_json(STATE_FILE, st)
 
 def run(cmd, cwd=None, timeout=120):
     """Run shell command, return (stdout, stderr, rc)."""
