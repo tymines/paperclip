@@ -738,7 +738,7 @@ def claim_task(cfg=None):
         if not issue.get("assigneeAgentId"):
             patched = api("PATCH", f"/api/issues/{issue['id']}", {"status": "todo"})
             if patched:
-                emit_event("claim", issue["id"], identifier=ident, title=issue.get("title"))
+                emit_event("claim_acquired", issue["id"], identifier=ident, title=issue.get("title"))
                 return issue
     return None
 
@@ -977,7 +977,7 @@ def main():
         controller_heartbeat()
         if cfg.get("enforcement") == "on":
             for reclaimed in reclaim_expired_leases():
-                emit_event("claim.expired_reclaimed", str(reclaimed["id"]), **reclaimed)
+                emit_event("claim_reclaimed", str(reclaimed["id"]), **reclaimed)
 
         if not enforce_global_invariants():
             if ONCE:
