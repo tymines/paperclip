@@ -703,9 +703,9 @@ def query_board_direct(issue_ids):
                     "SELECT id, identifier, title, description, status, "
                     "assignee_agent_id, created_at, parent_id, iteration_count, "
                     "last_verdict "
-                    "FROM issues WHERE company_id = %s AND status = %s AND id = ANY(%s::uuid[]) "
+                    "FROM issues WHERE company_id = %s AND status IN (%s, %s) AND id = ANY(%s::uuid[]) "
                     "ORDER BY priority DESC, created_at ASC",
-                    (CID, "backlog", list(issue_ids))
+                    (CID, "backlog", "todo", list(issue_ids))
                 )
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, row)) for row in cur.fetchall()]
@@ -774,7 +774,7 @@ def claim_task(cfg=None):
         issue = api("GET", f"/api/issues/{issue_id}")
         if issue is None:
             api_missed = True
-        elif issue.get("status") == "backlog":
+        elif issue.get("status") in ("backlog", "todo"):
             issues.append(issue)
     if not issues and api_missed:
         # Fallback: direct PG access when API is unreachable (shadow mode or no valid key)
@@ -804,7 +804,7 @@ def claim_task(cfg=None):
         if not issue.get("assigneeAgentId") and not issue.get("assignee_agent_id"):
             claimed = api("POST", f"/api/issues/{issue['id']}/checkout", {
                 "agentId": agent["id"],
-                "expectedStatuses": ["backlog"],
+                "expectedStatuses": ["backlog", "todo"],
             })
             deadline = time.monotonic() + 30
             while claimed and time.monotonic() < deadline:
