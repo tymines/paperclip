@@ -4867,6 +4867,7 @@ export function issueService(db: Db) {
           assigneeAgentId: issues.assigneeAgentId,
           checkoutRunId: issues.checkoutRunId,
           executionRunId: issues.executionRunId,
+          leaseActive: sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} > now()`,
         })
         .from(issues)
         .where(eq(issues.id, id))
@@ -4875,6 +4876,7 @@ export function issueService(db: Db) {
       if (!current) throw notFound("Issue not found");
 
       if (
+        current.leaseActive &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
         sameRunLock(current.checkoutRunId, actorRunId)
