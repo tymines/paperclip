@@ -755,26 +755,46 @@ def reclaim_expired_leases():
         conn.close()
 
 def claim_task(cfg=None):
-    """Claim one ready task from backlog. Atomic via status-guard PATCH."""
-    enforcement = (cfg or {}).get("enforcement", "shadow")
+    """Claim one ready task through Paperclip's atomic checkout/lease CAS."""
+    cfg = cfg or {}
+    enforcement = cfg.get("enforcement", "shadow")
     issues = api("GET", f"/api/companies/{CID}/issues?status=backlog&limit=5")
     if not issues:
         # Fallback: direct PG access when API is unreachable (shadow mode or no valid key)
         _log("rail", "API returned no tasks — trying direct PG fallback")
         issues = query_board_direct(5)
+    if enforcement == "shadow":
+        if not issues:
+            return None
+        issue = issues[0]
+        ident = issue.get("identifier", issue["id"][:8])
+        _shadow_event(issue["id"], "claim",
+                      identifier=ident, title=issue.get("title"),
+                      would_status="in_progress", would_assignee=(cfg.get("seats") or [None])[0])
+        _log("shadow", f"{ident}: WOULD checkout but shadow mode — no real POST")
+        return issue
+
+    agents = api("GET", f"/api/companies/{CID}/agents") or []
+    seat_keys = cfg.get("seats") or []
+    agent = next((agent for seat in seat_keys for agent in agents
+                  if agent.get("urlKey") == seat and agent.get("status") != "paused"), None)
+    if not agent:
+        _log("claim", f"No available configured seat found: {', '.join(seat_keys) or 'none'}")
+        return None
+
     for issue in issues:
         ident = issue.get("identifier", issue["id"][:8])
-        if enforcement == "shadow":
-            _shadow_event(issue["id"], "claim",
-                          identifier=ident, title=issue.get("title"),
-                          would_status="todo")
-            _log("shadow", f"{ident}: WOULD claim but shadow mode — no real PATCH")
-            return issue
-        if not issue.get("assigneeAgentId"):
-            patched = api("PATCH", f"/api/issues/{issue['id']}", {"status": "todo"})
-            if patched:
-                emit_event("claim_acquired", issue["id"], identifier=ident, title=issue.get("title"))
-                return issue
+        if not issue.get("assigneeAgentId") and not issue.get("assignee_agent_id"):
+            claimed = api("POST", f"/api/issues/{issue['id']}/checkout", {
+                "agentId": agent["id"],
+                "expectedStatuses": ["backlog"],
+            })
+            if claimed:
+                emit_event("claim_acquired", issue["id"], identifier=ident,
+                           title=issue.get("title"), assignee_agent_id=agent["id"],
+                           checkout_run_id=claimed.get("checkoutRunId"),
+                           lease_expires_at=claimed.get("leaseExpiresAt"))
+                return claimed
     return None
 
 def process_task(task, cfg):
