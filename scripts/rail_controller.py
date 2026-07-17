@@ -494,33 +494,87 @@ def check_progress_watchdog(task_id, worktree_path, stall_count, last_artifact_a
 # main loop
 # ═══════════════════════════════════════════════════════════════
 
+def open_db():
+    """Open only the verified production PostgreSQL listener."""
+    import psycopg2
+    conn = psycopg2.connect(
+        host="127.0.0.1", port=5432, user="paperclip",
+        dbname="paperclip", connect_timeout=5
+    )
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SHOW port")
+            if str(cur.fetchone()[0]) != "5432":
+                raise RuntimeError("RAIL direct DB access requires verified port 5432")
+        return conn
+    except Exception:
+        conn.close()
+        raise
+
+
 def query_board_direct(limit=5):
     """Direct PG fallback. Fail closed unless the server confirms production port 5432."""
     try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host="127.0.0.1", port=5432, user="paperclip",
-            dbname="paperclip", connect_timeout=5
-        )
-        cur = conn.cursor()
-        cur.execute("SHOW port")
-        if str(cur.fetchone()[0]) != "5432":
-            raise RuntimeError("RAIL direct DB fallback requires verified port 5432")
-        cur.execute(
-            "SELECT id, identifier, title, description, status, "
-            "assignee_agent_id, created_at, parent_id, iteration_count, "
-            "last_verdict "
-            "FROM issues WHERE status = %s "
-            "ORDER BY priority DESC, created_at ASC LIMIT %s",
-            ("backlog", limit)
-        )
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-        conn.close()
-        return rows
-    except Exception as e:
-        _log("pg", f"Direct PG query failed: {e}")
+        conn = open_db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, identifier, title, description, status, "
+                    "assignee_agent_id, created_at, parent_id, iteration_count, "
+                    "last_verdict "
+                    "FROM issues WHERE status = %s "
+                    "ORDER BY priority DESC, created_at ASC LIMIT %s",
+                    ("backlog", limit)
+                )
+                cols = [d[0] for d in cur.description]
+                return [dict(zip(cols, row)) for row in cur.fetchall()]
+        finally:
+            conn.close()
+    except Exception as exc:
+        _log("pg", f"Direct PG query failed: {exc}")
         return []
+
+
+def reclaim_expired_leases():
+    """Requeue expired claims once, preserving branch/worktree proof."""
+    conn = open_db()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    WITH rail_owner AS (
+                        SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
+                    ), expired AS (
+                        SELECT i.id, i.checkout_run_id
+                        FROM issues i CROSS JOIN rail_owner o
+                        WHERE o.acquired
+                          AND i.status = 'in_progress'
+                          AND i.lease_expires_at IS NOT NULL
+                          AND i.lease_expires_at <= now()
+                        ORDER BY i.lease_expires_at
+                        LIMIT 20
+                        FOR UPDATE OF i SKIP LOCKED
+                    )
+                    UPDATE issues i
+                    SET status = 'todo',
+                        assignee_agent_id = NULL,
+                        checkout_run_id = NULL,
+                        execution_run_id = NULL,
+                        execution_agent_name_key = NULL,
+                        execution_locked_at = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = now()
+                    FROM expired e
+                    WHERE i.id = e.id
+                      AND i.checkout_run_id = e.checkout_run_id
+                      AND i.lease_expires_at <= now()
+                    RETURNING i.id, i.identifier, e.checkout_run_id,
+                              i.worktree_path, i.branch_name
+                """)
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 def claim_task(cfg=None):
     """Claim one ready task from backlog. Atomic via status-guard PATCH."""
@@ -778,6 +832,9 @@ def main():
             continue
 
         controller_heartbeat()
+        if cfg.get("enforcement") == "on":
+            for reclaimed in reclaim_expired_leases():
+                emit_event("claim.expired_reclaimed", str(reclaimed["id"]), **reclaimed)
 
         # ── claim new tasks ──
         task = claim_task(cfg)
