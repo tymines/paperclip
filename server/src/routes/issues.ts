@@ -4346,6 +4346,35 @@ export function issueRoutes(
     res.json(updated);
   });
 
+  router.post("/issues/:id/renew-lease", async (req, res) => {
+    if (req.actor.type !== "agent" || !req.actor.agentId) {
+      res.status(403).json({ error: "Agent access required" });
+      return;
+    }
+    const id = req.params.id as string;
+    const issue = await svc.getById(id);
+    if (!issue) {
+      res.status(404).json({ error: "Issue not found" });
+      return;
+    }
+    assertCompanyAccess(req, issue.companyId);
+    const runId = requireAgentRunId(req, res);
+    if (!runId) return;
+    const renewed = await svc.renewLease(id, req.actor.agentId, runId);
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId: issue.companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: "issue.lease_renewed",
+      entityType: "issue",
+      entityId: issue.id,
+    });
+    res.json(renewed);
+  });
+
   router.post("/issues/:id/release", async (req, res) => {
     const id = req.params.id as string;
     const existing = await svc.getById(id);

@@ -103,6 +103,9 @@ function applyStatusSideEffects(
   patch: Partial<typeof issues.$inferInsert>,
 ): Partial<typeof issues.$inferInsert> {
   if (!status) return patch;
+  if (status !== "in_progress") {
+    patch.leaseExpiresAt = null;
+  }
 
   if (status === "in_progress" && !patch.startedAt) {
     patch.startedAt = new Date();
@@ -3315,8 +3318,9 @@ export function issueService(db: Db) {
       .set({
         checkoutRunId: input.actorRunId,
         executionRunId: input.actorRunId,
+        leaseExpiresAt: sql`now() + interval '15 minutes'`,
         executionLockedAt: now,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(
         and(
@@ -3349,8 +3353,9 @@ export function issueService(db: Db) {
       .set({
         checkoutRunId: input.actorRunId,
         executionRunId: input.actorRunId,
+        leaseExpiresAt: sql`now() + interval '15 minutes'`,
         executionLockedAt: now,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(
         and(
@@ -4686,9 +4691,10 @@ export function issueService(db: Db) {
           assigneeUserId: null,
           checkoutRunId,
           executionRunId: checkoutRunId,
+          leaseExpiresAt: sql`now() + interval '15 minutes'`,
           status: "in_progress",
           startedAt: now,
-          updatedAt: now,
+          updatedAt: sql`now()`,
         })
         .where(
           and(
@@ -4732,7 +4738,8 @@ export function issueService(db: Db) {
           .set({
             checkoutRunId,
             executionRunId: checkoutRunId,
-            updatedAt: new Date(),
+            leaseExpiresAt: sql`now() + interval '15 minutes'`,
+            updatedAt: sql`now()`,
           })
           .where(
             and(
@@ -4788,6 +4795,57 @@ export function issueService(db: Db) {
         checkoutRunId: current.checkoutRunId,
         executionRunId: current.executionRunId,
       });
+    },
+
+    renewLease: async (id: string, actorAgentId: string, actorRunId: string) => {
+      const renewed = await db
+        .update(issues)
+        .set({
+          leaseExpiresAt: sql`now() + interval '15 minutes'`,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(issues.id, id),
+            eq(issues.status, "in_progress"),
+            eq(issues.assigneeAgentId, actorAgentId),
+            eq(issues.checkoutRunId, actorRunId),
+            or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+          ),
+        )
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!renewed) throw conflict("Issue lease renewal conflict", { issueId: id });
+      const [enriched] = await withIssueLabels(db, [renewed]);
+      return enriched;
+    },
+
+    reclaimExpiredLease: async (id: string, expectedCheckoutRunId: string) => {
+      const reclaimed = await db
+        .update(issues)
+        .set({
+          status: "todo",
+          assigneeAgentId: null,
+          checkoutRunId: null,
+          executionRunId: null,
+          executionAgentNameKey: null,
+          executionLockedAt: null,
+          leaseExpiresAt: null,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(issues.id, id),
+            eq(issues.status, "in_progress"),
+            eq(issues.checkoutRunId, expectedCheckoutRunId),
+            sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
+          ),
+        )
+        .returning()
+        .then((rows) => rows[0] ?? null);
+      if (!reclaimed) return null;
+      const [enriched] = await withIssueLabels(db, [reclaimed]);
+      return enriched;
     },
 
     assertCheckoutOwner: async (id: string, actorAgentId: string, actorRunId: string | null) => {
@@ -4907,6 +4965,7 @@ export function issueService(db: Db) {
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
+          leaseExpiresAt: null,
           updatedAt: new Date(),
         })
         .where(eq(issues.id, id))
@@ -4938,6 +4997,7 @@ export function issueService(db: Db) {
           executionRunId: null,
           executionAgentNameKey: null,
           executionLockedAt: null,
+          leaseExpiresAt: null,
           updatedAt: new Date(),
         };
         if (options.clearAssignee) {
