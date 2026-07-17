@@ -217,6 +217,7 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
+const ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1000;
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
   2 * 60 * 1000,
   10 * 60 * 1000,
@@ -2504,6 +2505,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         executionWorkspaceId: issues.executionWorkspaceId,
         executionWorkspacePreference: issues.executionWorkspacePreference,
         assigneeAgentId: issues.assigneeAgentId,
+        checkoutRunId: issues.checkoutRunId,
         assigneeAdapterOverrides: issues.assigneeAdapterOverrides,
         executionWorkspaceSettings: issues.executionWorkspaceSettings,
         originKind: issues.originKind,
@@ -6911,6 +6913,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     activeRunExecutions.add(run.id);
+    let issueLeaseRenewalTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
     const agent = await getAgent(run.agentId);
@@ -6957,6 +6960,21 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = false;
       }
       issueContext = await getIssueExecutionContext(agent.companyId, issueId);
+    }
+    if (issueId && issueContext?.checkoutRunId === run.id) {
+      issueLeaseRenewalTimer = setInterval(() => {
+        void issuesSvc.renewLease(issueId, agent.id, run.id).catch((err) => {
+          if (issueLeaseRenewalTimer) {
+            clearInterval(issueLeaseRenewalTimer);
+            issueLeaseRenewalTimer = null;
+          }
+          logger.warn({ err, issueId, runId: run.id }, "issue ownership lease lost; cancelling run");
+          void cancelRunInternal(run.id, "Cancelled because issue ownership lease was lost").catch((cancelErr) => {
+            logger.error({ err: cancelErr, issueId, runId: run.id }, "failed to cancel run after lease loss");
+          });
+        });
+      }, ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
+      issueLeaseRenewalTimer.unref();
     }
     const wakeCommentId = deriveCommentId(context, null);
     const wakeCommentContext =
@@ -8237,6 +8255,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
         } finally {
+          if (issueLeaseRenewalTimer) {
+            clearInterval(issueLeaseRenewalTimer);
+            issueLeaseRenewalTimer = null;
+          }
           const latestRun = await getRun(run.id).catch(() => null);
           await releaseEnvironmentLeasesForRun({
             runId: run.id,

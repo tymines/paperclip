@@ -4812,7 +4812,6 @@ export function issueService(db: Db) {
         .update(issues)
         .set({
           leaseExpiresAt: sql`now() + interval '15 minutes'`,
-          updatedAt: sql`now()`,
         })
         .where(
           and(
