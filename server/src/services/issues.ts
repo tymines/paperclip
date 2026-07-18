@@ -4898,8 +4898,12 @@ export function issueService(db: Db) {
       return enriched;
     },
 
-    reclaimExpiredLease: async (id: string, expectedCheckoutRunId: string) => {
-      const reclaimed = await db
+    reclaimExpiredLease: async (
+      id: string,
+      expectedCheckoutRunId: string,
+      expectedExecutionRunId: string,
+    ) => {
+      const reclaimed = await withRailClaimLock((tx) => tx
         .update(issues)
         .set({
           status: "todo",
@@ -4916,11 +4920,12 @@ export function issueService(db: Db) {
             eq(issues.id, id),
             eq(issues.status, "in_progress"),
             eq(issues.checkoutRunId, expectedCheckoutRunId),
+            eq(issues.executionRunId, expectedExecutionRunId),
             sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
           ),
         )
         .returning()
-        .then((rows) => rows[0] ?? null);
+        .then((rows) => rows[0] ?? null));
       if (!reclaimed) return null;
       const [enriched] = await withIssueLabels(db, [reclaimed]);
       return enriched;

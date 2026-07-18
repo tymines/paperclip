@@ -41,6 +41,7 @@ type LeaseRow = {
 
 function createLeaseDb(row: LeaseRow) {
   const whereQueries: Array<{ sql: string; params: unknown[] }> = [];
+  const stats = { transactionCalls: 0 };
   const dialect = new PgDialect();
 
   const db = {
@@ -54,7 +55,13 @@ function createLeaseDb(row: LeaseRow) {
               const isReclaim = patch.status === "todo";
               const now = new Date();
               const matches = isReclaim
-                ? row.status === "in_progress" && row.leaseExpiresAt !== null && row.leaseExpiresAt < now
+                ? row.status === "in_progress"
+                  && query.sql.includes('"checkout_run_id"')
+                  && query.sql.includes('"execution_run_id"')
+                  && query.params.includes(row.checkoutRunId)
+                  && query.params.includes(row.executionRunId)
+                  && row.leaseExpiresAt !== null
+                  && row.leaseExpiresAt < now
                 : row.status === "in_progress"
                   && query.sql.includes('"execution_run_id"')
                   && query.params.includes(row.assigneeAgentId)
@@ -92,8 +99,15 @@ function createLeaseDb(row: LeaseRow) {
       }),
     }),
   };
+  const execute = async () => [{ acquired: true }];
+  Object.assign(db, {
+    transaction: async (operation: (tx: typeof db & { execute: typeof execute }) => Promise<unknown>) => {
+      stats.transactionCalls += 1;
+      return operation({ ...db, execute });
+    },
+  });
 
-  return { db: db as never, row, whereQueries };
+  return { db: db as never, row, whereQueries, stats };
 }
 
 function agentActor(companyId: string, agentId: string, runId: string): Express.Request["actor"] {
@@ -279,8 +293,8 @@ describe("issue lease service CAS", () => {
     const service = realIssueService(fake.db);
 
     const results = await Promise.all([
-      service.reclaimExpiredLease(row.id),
-      service.reclaimExpiredLease(row.id),
+      service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!),
+      service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!),
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
@@ -294,7 +308,22 @@ describe("issue lease service CAS", () => {
       executionLockedAt: null,
       leaseExpiresAt: null,
     });
-    expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"lease_expires_at"/s);
+    expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"checkout_run_id".*"execution_run_id".*"lease_expires_at"/s);
     expect(fake.whereQueries[0].sql).toMatch(/now\(\)/);
+    expect(fake.stats.transactionCalls).toBe(2);
+  });
+
+  it("does not clear a newer execution owner selected after the reclaim snapshot", async () => {
+    const row = leaseRow(new Date(Date.now() - 60_000));
+    const staleExecutionRunId = row.executionRunId!;
+    const fake = createLeaseDb(row);
+    const service = realIssueService(fake.db);
+    row.executionRunId = randomUUID();
+
+    const reclaimed = await service.reclaimExpiredLease(row.id, row.checkoutRunId!, staleExecutionRunId);
+
+    expect(reclaimed).toBeNull();
+    expect(row.status).toBe("in_progress");
+    expect(row.executionRunId).not.toBe(staleExecutionRunId);
   });
 });
