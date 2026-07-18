@@ -242,6 +242,7 @@ describe("issue lease service CAS", () => {
     expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"assignee_agent_id".*"checkout_run_id".*"lease_expires_at"/s);
     expect(fake.whereQueries[0].sql).toMatch(/now\(\)/);
     expect(fake.whereQueries[0].sql).toMatch(/context_snapshot.*controllerEpoch.*activity_log.*rail\.controller_epoch/s);
+    expect(fake.whereQueries[0].sql).not.toMatch(/controllerEpoch.*is null/s);
   });
 
   it("allows only the rightful owner when two agents renew concurrently and rejects wrong run or expiry", async () => {

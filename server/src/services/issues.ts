@@ -346,14 +346,11 @@ function runningIssueRunCondition(actorRunId: string, actorAgentId: string) {
         ${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issues.id}::text
         or ${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issues.id}::text
       )
-      and (
-        ${heartbeatRuns.contextSnapshot} ->> 'controllerEpoch' is null
-        or (${heartbeatRuns.contextSnapshot} ->> 'controllerEpoch')::bigint = (
-          select max((${activityLog.details} ->> 'controllerEpoch')::bigint)
-          from ${activityLog}
-          where ${activityLog.companyId} = ${issues.companyId}
-            and ${activityLog.action} = 'rail.controller_epoch'
-        )
+      and (${heartbeatRuns.contextSnapshot} ->> 'controllerEpoch')::bigint = (
+        select max((${activityLog.details} ->> 'controllerEpoch')::bigint)
+        from ${activityLog}
+        where ${activityLog.companyId} = ${issues.companyId}
+          and ${activityLog.action} = 'rail.controller_epoch'
       )
   )`;
 }
