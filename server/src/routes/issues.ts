@@ -565,7 +565,7 @@ function assertCanManageIssueMonitor(req: Request, assigneeAgentId: string | nul
   throw forbidden("Only the assignee agent or a board user can manage issue monitors");
 }
 
-const BOARD_CONTROLLED_ISSUE_STATUSES = new Set(["done", "needs_approval", "changes_requested"]);
+const BOARD_CONTROLLED_ISSUE_STATUSES = new Set(["done", "in_review", "needs_approval", "changes_requested"]);
 
 function assertNoAgentBoardControlledIssueStatus(req: Request, status: unknown) {
   if (req.actor.type === "agent" && typeof status === "string" && BOARD_CONTROLLED_ISSUE_STATUSES.has(status)) {
