@@ -544,6 +544,10 @@ export function roomRoutes(db: Db) {
     const { sessionId } = req.params;
     const { agentId, vote } = req.body as { agentId?: string; vote?: string };
     if (!agentId || !vote) { res.status(400).json({ error: "agentId and vote required" }); return; }
+    if (req.actor.type === "agent" && req.actor.agentId !== agentId) {
+      res.status(403).json({ error: "Agent can only cast its own council vote" });
+      return;
+    }
     const participant = await castVote(db, sessionId, agentId, vote);
     res.json(participant);
   });
