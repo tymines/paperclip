@@ -79,6 +79,10 @@ export function approvalRoutes(
       : [];
     const uniqueIssueIds = Array.from(new Set(issueIds));
     const { issueIds: _issueIds, ...approvalInput } = req.body;
+    if (approvalInput.type === "task_completion" && uniqueIssueIds.length === 0) {
+      res.status(400).json({ error: "Task completion approval requires at least one linked issue" });
+      return;
+    }
     const normalizedPayload =
       approvalInput.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
