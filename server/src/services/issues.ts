@@ -3318,6 +3318,21 @@ export function issueService(db: Db) {
     return TERMINAL_HEARTBEAT_RUN_STATUSES.has(run.status);
   }
 
+  type IssueTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+  async function withRailClaimLock<T>(operation: (tx: IssueTransaction) => Promise<T>): Promise<T | null> {
+    return db.transaction(async (tx) => {
+      // ponytail: one global RAIL claim lock; split by company only if checkout throughput needs it.
+      const lockRows = await tx.execute(sql<{ acquired: boolean }>`
+        SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
+      `);
+      const lock = Array.isArray(lockRows)
+        ? lockRows[0] as { acquired?: boolean }
+        : (lockRows as { rows?: Array<{ acquired?: boolean }> }).rows?.[0];
+      return lock?.acquired ? operation(tx) : null;
+    });
+  }
+
   async function adoptStaleCheckoutRun(input: {
     issueId: string;
     actorAgentId: string;
@@ -3328,7 +3343,7 @@ export function issueService(db: Db) {
     if (!stale) return null;
 
     const now = new Date();
-    const adopted = await db
+    const adopted = await withRailClaimLock((tx) => tx
       .update(issues)
       .set({
         checkoutRunId: input.actorRunId,
@@ -3353,7 +3368,7 @@ export function issueService(db: Db) {
         checkoutRunId: issues.checkoutRunId,
         executionRunId: issues.executionRunId,
       })
-      .then((rows) => rows[0] ?? null);
+      .then((rows) => rows[0] ?? null));
 
     return adopted;
   }
@@ -3364,7 +3379,7 @@ export function issueService(db: Db) {
     actorRunId: string;
   }) {
     const now = new Date();
-    const adopted = await db
+    const adopted = await withRailClaimLock((tx) => tx
       .update(issues)
       .set({
         checkoutRunId: input.actorRunId,
@@ -3390,7 +3405,7 @@ export function issueService(db: Db) {
         checkoutRunId: issues.checkoutRunId,
         executionRunId: issues.executionRunId,
       })
-      .then((rows) => rows[0] ?? null);
+      .then((rows) => rows[0] ?? null));
 
     return adopted;
   }
@@ -4701,17 +4716,8 @@ export function issueService(db: Db) {
       const executionLockCondition = checkoutRunId
         ? or(isNull(issues.executionRunId), eq(issues.executionRunId, checkoutRunId))
         : isNull(issues.executionRunId);
-      const updated = await db.transaction(async (tx) => {
-        // ponytail: one global RAIL claim lock; split by company only if checkout throughput needs it.
-        const lockRows = await tx.execute(sql<{ acquired: boolean }>`
-          SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
-        `);
-        const lock = Array.isArray(lockRows)
-          ? lockRows[0] as { acquired?: boolean }
-          : (lockRows as { rows?: Array<{ acquired?: boolean }> }).rows?.[0];
-        if (!lock?.acquired) return null;
-        return tx
-          .update(issues)
+      const updated = await withRailClaimLock((tx) => tx
+        .update(issues)
         .set({
           assigneeAgentId: agentId,
           assigneeUserId: null,
@@ -4732,8 +4738,7 @@ export function issueService(db: Db) {
           ),
         )
         .returning()
-        .then((rows) => rows[0] ?? null);
-      });
+        .then((rows) => rows[0] ?? null));
 
       if (updated) {
         const [enriched] = await withIssueLabels(db, [updated]);
