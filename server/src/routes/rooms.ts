@@ -555,30 +555,5 @@ export function roomRoutes(db: Db) {
     res.json(result);
   });
 
-  // ── Gate decision (enforcement path) ──
-  router.post("/companies/:companyId/gate-decision", async (req, res) => {
-    const companyId = req.params.companyId as string;
-    assertCompanyAccess(req, companyId);
-    const actor = getActorInfo(req);
-
-    // ponytail: agents structurally cannot advance gates
-    if (req.actor.type !== "board") {
-      res.status(403).json({ error: "agents cannot advance gates", actorType: actor.actorType });
-      return;
-    }
-
-    const { stage, evidence, decision } = req.body as { stage?: string; evidence?: string[]; decision?: string };
-    if (!stage) { res.status(400).json({ error: "stage required" }); return; }
-
-    const { checkGate } = await import("../rooms-rail/gate-checker.js");
-    const result = checkGate(stage, evidence ?? []);
-
-    // ponytail: tyler-gate holds without explicit decision
-    result.needs_tyler = !decision;
-    result.blocked = result.needs_tyler;
-
-    res.status(result.passed && !result.blocked ? 200 : 409).json(result);
-  });
-
   return router;
 }
