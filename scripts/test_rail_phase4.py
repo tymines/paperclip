@@ -107,6 +107,39 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         self.assertIn("pg_try_advisory_lock", executed[0][0])
         lock.close()
 
+    def test_expired_lease_reclaimer_fences_both_run_ids(self):
+        executed = []
+
+        class Cursor:
+            description = [(name,) for name in (
+                "id", "identifier", "checkout_run_id", "execution_run_id", "worktree_path", "branch_name",
+            )]
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def execute(self, query, params=None):
+                executed.append(str(query))
+            def fetchall(self):
+                return [("issue-1", "RAIL-1", "checkout-1", "execution-1", "C:/work", "rail/1")]
+
+        class Connection:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def cursor(self):
+                return Cursor()
+            def close(self):
+                return None
+
+        with mock.patch.object(controller, "open_db", return_value=Connection()):
+            reclaimed = controller.reclaim_expired_leases()
+
+        self.assertIn("SELECT i.id, i.checkout_run_id, i.execution_run_id", executed[0])
+        self.assertIn("AND i.execution_run_id = e.execution_run_id", executed[0])
+        self.assertEqual(reclaimed[0]["execution_run_id"], "execution-1")
+
     def test_stale_controller_cannot_issue_mutating_api_request(self):
         controller.CONTROLLER_EPOCH = 4
         with mock.patch.object(controller, "load_state", return_value={"_meta": {"controller_epoch": 5}}), \

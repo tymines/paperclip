@@ -734,7 +734,7 @@ def reclaim_expired_leases():
                     WITH rail_owner AS (
                         SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
                     ), expired AS (
-                        SELECT i.id, i.checkout_run_id
+                        SELECT i.id, i.checkout_run_id, i.execution_run_id
                         FROM issues i CROSS JOIN rail_owner o
                         WHERE o.acquired
                           AND i.status = 'in_progress'
@@ -756,8 +756,9 @@ def reclaim_expired_leases():
                     FROM expired e
                     WHERE i.id = e.id
                       AND i.checkout_run_id = e.checkout_run_id
+                      AND i.execution_run_id = e.execution_run_id
                       AND i.lease_expires_at <= now()
-                    RETURNING i.id, i.identifier, e.checkout_run_id,
+                    RETURNING i.id, i.identifier, e.checkout_run_id, e.execution_run_id,
                               i.worktree_path, i.branch_name
                 """)
                 columns = [desc[0] for desc in cur.description]
