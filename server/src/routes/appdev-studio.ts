@@ -473,6 +473,7 @@ export function appdevStudioRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
       const to = String(req.body?.to ?? "");
+      if (to === "spec") assertBoard(req);
       const [msg] = await db
         .select()
         .from(appdevChatMessages)
