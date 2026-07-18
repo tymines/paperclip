@@ -355,8 +355,9 @@ export function approvalService(db: Db) {
         .where(and(
           eq(issueApprovals.companyId, existing.companyId),
           eq(issueApprovals.approvalId, id),
-        ));
-      for (const { issueId } of linkedIssueIds) {
+        ))
+        .then((rows) => rows.map((row) => row.issueId));
+      for (const issueId of linkedIssueIds) {
         await assertIssueRunOwnership(tx, issueId, existing.companyId, options.runOwnership);
       }
 
@@ -377,6 +378,33 @@ export function approvalService(db: Db) {
       if (!updated) {
         throw unprocessable("Only revision requested approvals can be resubmitted");
       }
+
+      if (updated.type === "task_completion" && linkedIssueIds.length > 0) {
+        const transitioned = await tx
+          .update(issues)
+          .set({
+            status: "needs_approval",
+            completedAt: null,
+            checkoutRunId: null,
+            executionRunId: null,
+            executionAgentNameKey: null,
+            executionLockedAt: null,
+            leaseExpiresAt: null,
+            updatedAt: now,
+          })
+          .where(and(
+            eq(issues.companyId, updated.companyId),
+            inArray(issues.id, linkedIssueIds),
+            options.runOwnership
+              ? eq(issues.status, "in_progress")
+              : inArray(issues.status, ["in_progress", "changes_requested"]),
+          ))
+          .returning({ id: issues.id });
+        if (transitioned.length !== linkedIssueIds.length) {
+          throw conflict("Linked issues changed before approval resubmission");
+        }
+      }
+
       return updated;
     }),
 
