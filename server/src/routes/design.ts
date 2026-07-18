@@ -23,6 +23,12 @@ export function designRoutes(db: Db) {
   const service = createDesignRunsService(db);
   const presets = createPresetRunsService(db, service);
 
+  const assertDesignRunAccess = (req: import("express").Request, companyId: string | null) => {
+    assertAuthenticated(req);
+    if (companyId) assertCompanyAccess(req, companyId);
+    else if (req.actor.type === "agent") throw notFound("design run not found");
+  };
+
   router.get("/design/health", async (_req, res, next) => {
     try {
       const h = await odHealth();
@@ -144,7 +150,7 @@ export function designRoutes(db: Db) {
     try {
       const run = await service.get(req.params.id);
       if (!run) throw notFound("design run not found");
-      if (run.companyId) assertCompanyAccess(req, run.companyId);
+      assertDesignRunAccess(req, run.companyId);
       res.json({ run });
     } catch (err) {
       next(err);
@@ -155,7 +161,7 @@ export function designRoutes(db: Db) {
     try {
       const run = await service.get(req.params.id);
       if (!run || !run.assetPath) throw notFound("asset not ready");
-      if (run.companyId) assertCompanyAccess(req, run.companyId);
+      assertDesignRunAccess(req, run.companyId);
       const html = await fs.readFile(run.assetPath, "utf8");
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("X-Frame-Options", "SAMEORIGIN");
@@ -229,7 +235,7 @@ export function designRoutes(db: Db) {
     try {
       const run = await service.get(req.params.id);
       if (!run) throw notFound("design run not found");
-      if (run.companyId) assertCompanyAccess(req, run.companyId);
+      assertDesignRunAccess(req, run.companyId);
       const paths = Array.isArray(run.pngPaths) ? (run.pngPaths as string[]) : [];
       if (paths.length === 0) throw notFound("png not ready");
       const slideParam = typeof req.query.slide === "string" ? parseInt(req.query.slide, 10) : 1;
@@ -245,7 +251,7 @@ export function designRoutes(db: Db) {
     try {
       const run = await service.get(req.params.id);
       if (!run) throw notFound("design run not found");
-      if (run.companyId) assertCompanyAccess(req, run.companyId);
+      assertDesignRunAccess(req, run.companyId);
       if (!run.mp4Path) throw notFound("mp4 not ready");
       await sendFileWithRange(run.mp4Path, "video/mp4", req, res);
     } catch (err) {
