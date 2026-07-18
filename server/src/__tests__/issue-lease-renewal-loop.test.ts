@@ -32,7 +32,21 @@ describe("issue ownership lease renewal loop", () => {
     stop();
   });
 
-  it("stops the loop and reports lease loss once when renewal fails", async () => {
+  it("retries one transient renewal failure without losing the lease", async () => {
+    vi.useFakeTimers();
+    const renew = vi.fn()
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValue(undefined);
+    const onLost = vi.fn();
+    const stop = startIssueLeaseRenewalLoop(renew, onLost);
+
+    await vi.advanceTimersByTimeAsync(ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
+    expect(renew).toHaveBeenCalledTimes(2);
+    expect(onLost).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("stops the loop and reports lease loss once after the retry fails", async () => {
     vi.useFakeTimers();
     const error = new Error("lease lost");
     const renew = vi.fn().mockRejectedValue(error);
@@ -40,11 +54,11 @@ describe("issue ownership lease renewal loop", () => {
     startIssueLeaseRenewalLoop(renew, onLost);
 
     await vi.advanceTimersByTimeAsync(ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
-    expect(renew).toHaveBeenCalledTimes(1);
+    expect(renew).toHaveBeenCalledTimes(2);
     expect(onLost).toHaveBeenCalledWith(error);
 
     await vi.advanceTimersByTimeAsync(2 * ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
-    expect(renew).toHaveBeenCalledTimes(1);
+    expect(renew).toHaveBeenCalledTimes(2);
     expect(onLost).toHaveBeenCalledTimes(1);
   });
 });

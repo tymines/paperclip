@@ -229,6 +229,7 @@ export function startIssueLeaseRenewalLoop(
     if (renewing || stopped) return;
     renewing = true;
     void renew()
+      .catch(() => renew())
       .catch(async (error) => {
         if (stopped) return;
         stopped = true;
