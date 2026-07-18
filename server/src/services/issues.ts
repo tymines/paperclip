@@ -4024,15 +4024,28 @@ export function issueService(db: Db) {
     createChild: async (
       parentIssueId: string,
       data: IssueChildCreateInput,
-    ) => {
-      const parent = await db
-        .select()
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const parentCompany = await tx
+        .select({ companyId: issues.companyId })
         .from(issues)
         .where(eq(issues.id, parentIssueId))
         .then((rows) => rows[0] ?? null);
+      if (!parentCompany) throw notFound("Parent issue not found");
+      const parent = options.runOwnership
+        ? await (async () => {
+          await assertIssueRunOwnership(tx, parentIssueId, parentCompany.companyId, options.runOwnership);
+          return tx.select().from(issues).where(eq(issues.id, parentIssueId)).then((rows) => rows[0] ?? null);
+        })()
+        : await tx
+          .update(issues)
+          .set({ updatedAt: sql`${issues.updatedAt}` })
+          .where(eq(issues.id, parentIssueId))
+          .returning()
+          .then((rows) => rows[0] ?? null);
       if (!parent) throw notFound("Parent issue not found");
 
-      const [{ childCount }] = await db
+      const [{ childCount }] = await tx
         .select({ childCount: sql<number>`count(*)::int` })
         .from(issues)
         .where(and(eq(issues.companyId, parent.companyId), eq(issues.parentId, parent.id)));
@@ -4057,10 +4070,10 @@ export function issueService(db: Db) {
         ),
         description: appendAcceptanceCriteriaToDescription(issueData.description, acceptanceCriteria),
         inheritExecutionWorkspaceFromIssueId: parent.id,
-      });
+      }, tx);
 
       if (blockParentUntilDone) {
-        const existingBlockers = await db
+        const existingBlockers = await tx
           .select({ blockerIssueId: issueRelations.issueId })
           .from(issueRelations)
           .where(and(eq(issueRelations.companyId, parent.companyId), eq(issueRelations.relatedIssueId, parent.id), eq(issueRelations.type, "blocks")));
@@ -4069,6 +4082,7 @@ export function issueService(db: Db) {
           parent.companyId,
           [...new Set([...existingBlockers.map((row) => row.blockerIssueId), child.id])],
           { agentId: actorAgentId ?? null, userId: actorUserId ?? null },
+          tx,
         );
       }
 
@@ -4076,11 +4090,12 @@ export function issueService(db: Db) {
         issue: child,
         parentBlockerAdded: Boolean(blockParentUntilDone),
       };
-    },
+    }),
 
     create: async (
       companyId: string,
       data: IssueCreateInput,
+      dbOrTx?: IssueTransaction,
     ) => {
       const {
         labelIds: inputLabelIds,
@@ -4106,7 +4121,7 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
-      return db.transaction(async (tx) => {
+      const runCreate = async (tx: IssueTransaction) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -4308,7 +4323,8 @@ export function issueService(db: Db) {
         }
         const [enriched] = await withIssueLabels(tx, [issue]);
         return enriched;
-      });
+      };
+      return dbOrTx ? runCreate(dbOrTx) : db.transaction(runCreate);
     },
 
     update: async (
