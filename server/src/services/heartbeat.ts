@@ -217,7 +217,34 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-const ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1000;
+export const ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1000;
+
+export function startIssueLeaseRenewalLoop(
+  renew: () => Promise<void>,
+  onLost: (error: unknown) => void | Promise<void>,
+) {
+  let renewing = false;
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (renewing || stopped) return;
+    renewing = true;
+    void renew()
+      .catch(async (error) => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(timer);
+        await onLost(error);
+      })
+      .finally(() => {
+        renewing = false;
+      });
+  }, ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
   2 * 60 * 1000,
   10 * 60 * 1000,
@@ -6935,7 +6962,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     activeRunExecutions.add(run.id);
-    let issueLeaseRenewalTimer: ReturnType<typeof setInterval> | null = null;
+    let stopIssueLeaseRenewal: (() => void) | null = null;
 
     try {
     const agent = await getAgent(run.agentId);
@@ -6985,31 +7012,33 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       issueContext = await getIssueExecutionContext(agent.companyId, issueId);
     }
     if (issueId && issueContext?.checkoutRunId === run.id) {
-      issueLeaseRenewalTimer = setInterval(() => {
-        void issuesSvc.renewLease(issueId, agent.id, run.id).then((renewed) => {
-          void logActivity(db, {
-            companyId: run.companyId,
-            actorType: "agent",
-            actorId: agent.id,
-            agentId: agent.id,
-            runId: run.id,
-            action: "issue.lease_renewed",
-            entityType: "issue",
-            entityId: issueId,
-            details: { leaseExpiresAt: renewed.leaseExpiresAt },
-          }).catch((err) => logger.warn({ err, issueId, runId: run.id }, "failed to log issue lease renewal"));
-        }).catch((err) => {
-          if (issueLeaseRenewalTimer) {
-            clearInterval(issueLeaseRenewalTimer);
-            issueLeaseRenewalTimer = null;
-          }
-          logger.warn({ err, issueId, runId: run.id }, "issue ownership lease lost; cancelling run");
-          void cancelRunInternal(run.id, "Cancelled because issue ownership lease was lost").catch((cancelErr) => {
-            logger.error({ err: cancelErr, issueId, runId: run.id }, "failed to cancel run after lease loss");
-          });
+      const renewIssueLease = async () => {
+        const renewed = await issuesSvc.renewLease(issueId, agent.id, run.id);
+        void logActivity(db, {
+          companyId: run.companyId,
+          actorType: "agent",
+          actorId: agent.id,
+          agentId: agent.id,
+          runId: run.id,
+          action: "issue.lease_renewed",
+          entityType: "issue",
+          entityId: issueId,
+          details: { leaseExpiresAt: renewed.leaseExpiresAt },
+        }).catch((err) => logger.warn({ err, issueId, runId: run.id }, "failed to log issue lease renewal"));
+      };
+      const onIssueLeaseLost = async (err: unknown) => {
+        logger.warn({ err, issueId, runId: run.id }, "issue ownership lease lost; cancelling run");
+        await cancelRunInternal(run.id, "Cancelled because issue ownership lease was lost").catch((cancelErr) => {
+          logger.error({ err: cancelErr, issueId, runId: run.id }, "failed to cancel run after lease loss");
         });
-      }, ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
-      issueLeaseRenewalTimer.unref();
+      };
+      try {
+        await renewIssueLease();
+      } catch (err) {
+        await onIssueLeaseLost(err);
+        return;
+      }
+      stopIssueLeaseRenewal = startIssueLeaseRenewalLoop(renewIssueLease, onIssueLeaseLost);
     }
     const wakeCommentId = deriveCommentId(context, null);
     const wakeCommentContext =
@@ -8290,10 +8319,8 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
         } finally {
-          if (issueLeaseRenewalTimer) {
-            clearInterval(issueLeaseRenewalTimer);
-            issueLeaseRenewalTimer = null;
-          }
+          stopIssueLeaseRenewal?.();
+          stopIssueLeaseRenewal = null;
           const latestRun = await getRun(run.id).catch(() => null);
           await releaseEnvironmentLeasesForRun({
             runId: run.id,
