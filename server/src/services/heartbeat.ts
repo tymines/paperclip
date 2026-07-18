@@ -3164,6 +3164,24 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     if (!actorId) {
       throw conflict("Issue monitor trigger requires an actor");
     }
+    const actorAgentId = input?.agentId ?? null;
+    const actorRunId = input?.runId ?? null;
+    if (actorType === "agent" && (!actorAgentId || !actorRunId)) {
+      throw conflict("Agent issue monitor trigger requires an active run");
+    }
+    const agentRunOwnershipCondition = actorType === "agent"
+      ? and(
+        eq(issues.assigneeAgentId, actorAgentId!),
+        eq(issues.checkoutRunId, actorRunId!),
+        gt(issues.leaseExpiresAt, sql`now()`),
+        sql<boolean>`exists (
+          select 1 from ${heartbeatRuns}
+          where ${heartbeatRuns.id} = ${actorRunId}
+            and ${heartbeatRuns.agentId} = ${actorAgentId}
+            and ${heartbeatRuns.status} = 'running'
+        )`,
+      )
+      : undefined;
 
     const issue = await db
       .select(issueMonitorDispatchColumns)
@@ -3199,6 +3217,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             isNull(issues.assigneeUserId),
             sql`${issues.assigneeAgentId} is not null`,
             inArray(issues.status, ["in_progress", "in_review"]),
+            agentRunOwnershipCondition,
             or(
               isNull(issues.monitorWakeRequestedAt),
               lt(issues.monitorWakeRequestedAt, staleClaimThreshold),
@@ -3210,6 +3229,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     });
 
     if (!claimed) {
+      if (agentRunOwnershipCondition) {
+        throw conflict("Only active checkout run can trigger issue monitor");
+      }
       throw conflict("Issue monitor check is already in progress");
     }
 
