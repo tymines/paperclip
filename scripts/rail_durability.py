@@ -186,7 +186,10 @@ def load_projection(journal: Path, state_file: Path) -> dict:
             elif event_type == "claim_renewed":
                 task.setdefault("state", "run_backed_claim")
             elif event_type == "claim_lost":
-                task["state"] = "claim_lost"
+                task.update({
+                    "state": "claim_lost", "checkout_run_id": None,
+                    "execution_run_id": None, "lease_expires_at": None,
+                })
             elif event_type == "claim_reclaimed":
                 task.update({
                     "state": "ready", "checkout_run_id": None,
