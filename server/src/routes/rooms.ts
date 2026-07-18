@@ -222,6 +222,10 @@ export function roomRoutes(db: Db) {
     if (!existing || existing.companyId !== companyId) {
       throw notFound("Room not found");
     }
+    if (req.body.agentId) {
+      const memberAgent = await agentService(db).getById(req.body.agentId);
+      if (!memberAgent || memberAgent.companyId !== companyId) throw notFound("Agent not found");
+    }
     const member = await svc.addMember({
       roomId,
       agentId: req.body.agentId ?? null,
