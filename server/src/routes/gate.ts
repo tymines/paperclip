@@ -59,7 +59,7 @@ export function gateRoutes(db: Db) {
       return;
     }
 
-    const [activeRow] = await rows(db, sql`SELECT id, name, stage_order FROM run_stages WHERE pipeline_run_id = ${runId} AND status = 'active' ORDER BY stage_order LIMIT 1`);
+    const [activeRow] = await rows(db, sql`SELECT s.id, s.name, s.stage_order FROM run_stages s JOIN pipeline_runs r ON r.id = s.pipeline_run_id WHERE s.pipeline_run_id = ${runId} AND r.company_id = ${companyId} AND s.status = 'active' ORDER BY s.stage_order LIMIT 1`);
 
     if (!activeRow) {
       res.status(404).json({ error: "no active stage found" });
