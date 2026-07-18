@@ -104,6 +104,14 @@ export function approvalRoutes(
       }
       runOwnership = { agentId, runId };
     }
+    if (
+      actor.actorType === "agent" &&
+      approvalInput.requestedByAgentId &&
+      approvalInput.requestedByAgentId !== actor.agentId
+    ) {
+      res.status(403).json({ error: "Agent cannot request approval as another agent" });
+      return;
+    }
     const resolvedRequestedByAgentId: string | null =
       approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.agentId : null);
     if (resolvedRequestedByAgentId) {
