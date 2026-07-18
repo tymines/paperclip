@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { heartbeatRuns, issues } from "@paperclipai/db";
 import { conflict } from "../errors.js";
@@ -23,7 +23,7 @@ export async function assertIssueRunOwnership(
         eq(issues.status, "in_progress"),
         eq(issues.assigneeAgentId, ownership.agentId),
         eq(issues.checkoutRunId, ownership.runId),
-        or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+        gt(issues.leaseExpiresAt, sql`now()`),
         sql<boolean>`exists (
           select 1 from ${heartbeatRuns}
           where ${heartbeatRuns.id} = ${ownership.runId}
