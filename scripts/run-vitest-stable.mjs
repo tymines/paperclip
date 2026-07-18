@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, statSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 const repoRoot = process.cwd();
 const serverRoot = path.join(repoRoot, "server");
@@ -55,6 +56,146 @@ const generalWorkspacesBGroupName = "general-workspaces-b";
 const generalWorkspacesAProjects = ["@paperclipai/ui", "paperclipai"];
 const generalWorkspacesBProjects = nonServerProjects.filter((project) => !generalWorkspacesAProjects.includes(project));
 const generalGroupNames = [generalServerGroupName, generalWorkspacesAGroupName, generalWorkspacesBGroupName];
+
+const createdTempRoots = new Set();
+
+function getProcessList() {
+  return new Promise((resolve) => {
+    execFile("ps", ["-eo", "pid,ppid,pgid,etime,command"], (error, stdout) => {
+      resolve(error ? "" : String(stdout));
+    });
+  });
+}
+
+function parseWorkerPids(psOutput) {
+  const pids = new Set();
+  for (const line of psOutput.split(/\r?\n/)) {
+    if (!/node.*(?:tinypool|vitest\/dist\/workers)/.test(line)) continue;
+    const parts = line.trim().split(/\s+/);
+    const pid = Number.parseInt(parts[0] ?? "", 10);
+    if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+  }
+  return pids;
+}
+
+function getCwdForPid(pid) {
+  return new Promise((resolve) => {
+    execFile("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], (error, stdout) => {
+      if (error) {
+        resolve(null);
+        return;
+      }
+      for (const line of String(stdout).split(/\r?\n/)) {
+        if (line.startsWith("n")) {
+          resolve(line.slice(1));
+          return;
+        }
+      }
+      resolve(null);
+    });
+  });
+}
+
+async function getOwnWorkerPids() {
+  const psOutput = await getProcessList();
+  const allWorkerPids = parseWorkerPids(psOutput);
+  const ownPids = new Set();
+  const repoRootResolved = path.resolve(repoRoot);
+  for (const pid of allWorkerPids) {
+    const cwd = await getCwdForPid(pid);
+    if (cwd && path.resolve(cwd).startsWith(`${repoRootResolved}${path.sep}`)) {
+      ownPids.add(pid);
+    }
+  }
+  return { psOutput, ownPids };
+}
+
+function formatPids(pids) {
+  return Array.from(pids).sort((a, b) => a - b).join(", ") || "(none)";
+}
+
+async function killTree(signal, target, isWindows) {
+  if (isWindows) {
+    await new Promise((resolve) => {
+      const child = spawn("taskkill", ["/T", "/PID", String(target)], { stdio: "ignore" });
+      child.on("error", () => resolve(undefined));
+      child.on("close", () => resolve(undefined));
+    });
+    return;
+  }
+  try {
+    process.kill(-target, signal);
+  } catch {
+    // Ignore
+  }
+}
+
+async function waitForPidsToExit(pids, timeoutMs = 5000, intervalMs = 200) {
+  const remaining = new Set(pids);
+  const deadline = Date.now() + timeoutMs;
+  while (remaining.size > 0 && Date.now() < deadline) {
+    for (const pid of remaining) {
+      try {
+        process.kill(pid, 0);
+      } catch {
+        remaining.delete(pid);
+      }
+    }
+    if (remaining.size > 0) {
+      await delay(intervalMs);
+    }
+  }
+  return remaining;
+}
+
+async function enforceZeroSurvivors() {
+  const { ownPids } = await getOwnWorkerPids();
+  if (ownPids.size === 0) {
+    console.log("[test:run] zero cwd-attached vitest/tinypool survivors");
+    return;
+  }
+
+  console.error(
+    `[test:run] leak detected: ${ownPids.size} cwd-attached worker(s) still alive: ${formatPids(ownPids)}`,
+  );
+  for (const pid of ownPids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Ignore
+    }
+  }
+  await waitForPidsToExit(ownPids, 5000);
+
+  const { ownPids: stillAlive } = await getOwnWorkerPids();
+  if (stillAlive.size > 0) {
+    console.error(`[test:run] escalating to SIGKILL: ${formatPids(stillAlive)}`);
+    for (const pid of stillAlive) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Ignore
+      }
+    }
+    await waitForPidsToExit(stillAlive, 5000);
+  }
+
+  const { ownPids: final } = await getOwnWorkerPids();
+  if (final.size > 0) {
+    console.error(`[test:run] FATAL: could not reap survivors: ${formatPids(final)}`);
+    process.exitCode = 1;
+  }
+}
+
+function cleanupTempRoots() {
+  for (const root of createdTempRoots) {
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      // Ignore
+    }
+  }
+}
 
 function walk(dir) {
   const entries = readdirSync(dir);
@@ -233,11 +374,12 @@ function selectSerializedSuites(routeTests, shardIndex, shardCount) {
   return routeTests.filter((_, index) => index % shardCount === shardIndex);
 }
 
-function runVitest(args, label) {
+async function runVitest(args, label) {
   console.log(`\n[test:run] ${label}`);
   invocationIndex += 1;
   const tempRootParent = process.platform === "win32" ? os.tmpdir() : "/tmp";
   const testRoot = mkdtempSync(path.join(tempRootParent, `pcvt-${process.pid}-${invocationIndex}-`));
+  createdTempRoots.add(testRoot);
   // Keep per-run paths compact so Unix socket fixtures stay under macOS path limits.
   const env = {
     ...process.env,
@@ -247,37 +389,82 @@ function runVitest(args, label) {
   };
   mkdirSync(env.PAPERCLIP_HOME, { recursive: true });
   mkdirSync(env.TMPDIR, { recursive: true });
-  const result = spawnSync("pnpm", ["exec", "vitest", "run", ...args], {
+
+  const isWindows = process.platform === "win32";
+  const command = "pnpm";
+  const vitestArgs = ["exec", "vitest", "run", ...args];
+  const spawnOptions = {
     cwd: repoRoot,
     env,
     stdio: "inherit",
-    shell: true,
+    shell: false,
+    detached: !isWindows,
+  };
+
+  const child = spawn(command, vitestArgs, spawnOptions);
+  let exitCode = null;
+
+  const childClosed = new Promise((resolve) => {
+    child.on("error", (err) => {
+      console.error(`[test:run] Failed to start Vitest: ${err.message}`);
+      exitCode = 1;
+      resolve();
+    });
+    child.on("close", (code) => {
+      exitCode = code ?? 1;
+      resolve();
+    });
   });
-  if (result.error) {
-    console.error(`[test:run] Failed to start Vitest: ${result.error.message}`);
-    process.exit(1);
+
+  const forwardSignal = async (signal) => {
+    if (!child.pid) return;
+    await killTree(signal, child.pid, isWindows);
+  };
+
+  const sigintHandler = () => forwardSignal("SIGINT");
+  const sigtermHandler = () => forwardSignal("SIGTERM");
+
+  process.on("SIGINT", sigintHandler);
+  process.on("SIGTERM", sigtermHandler);
+
+  try {
+    await childClosed;
+  } finally {
+    process.off("SIGINT", sigintHandler);
+    process.off("SIGTERM", sigtermHandler);
+    if (child.pid) {
+      await killTree("SIGTERM", child.pid, isWindows);
+      await waitForPidsToExit([child.pid], 5000);
+    }
+    try {
+      rmSync(testRoot, { recursive: true, force: true });
+    } catch {
+      // Ignore
+    }
+    createdTempRoots.delete(testRoot);
   }
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
+
+  if (exitCode !== 0) {
+    throw new Error(`Vitest invocation failed with exit code ${exitCode ?? -1}`);
   }
 }
 
-function runGeneralSuites(routeTests) {
+async function runGeneralSuites(routeTests) {
   for (const groupName of generalGroupNames) {
-    runGeneralGroup(routeTests, groupName);
+    await runGeneralGroup(routeTests, groupName);
   }
 }
 
-function runProjectGroup(projects, groupName) {
+async function runProjectGroup(projects, groupName) {
   for (const project of projects) {
-    runVitest(["--project", project], `${groupName} project ${project}`);
+    await runVitest(["--project", project], `${groupName} project ${project}`);
   }
 }
 
-function runGeneralGroup(routeTests, groupName) {
+async function runGeneralGroup(routeTests, groupName) {
   if (groupName === generalServerGroupName) {
     const excludeRouteArgs = routeTests.flatMap((file) => ["--exclude", file.serverPath]);
-    runVitest(
+    await runVitest(
       ["--project", "@paperclipai/server", ...excludeRouteArgs],
       `${groupName} server suites excluding ${routeTests.length} serialized suites`,
     );
@@ -285,26 +472,26 @@ function runGeneralGroup(routeTests, groupName) {
   }
 
   if (groupName === generalWorkspacesAGroupName) {
-    runProjectGroup(generalWorkspacesAProjects, groupName);
+    await runProjectGroup(generalWorkspacesAProjects, groupName);
     return;
   }
 
   if (groupName === generalWorkspacesBGroupName) {
-    runProjectGroup(generalWorkspacesBProjects, groupName);
+    await runProjectGroup(generalWorkspacesBProjects, groupName);
     return;
   }
 
   fail(`Unknown group "${groupName}".`);
 }
 
-function runSerializedSuites(routeTests, shardIndex, shardCount) {
+async function runSerializedSuites(routeTests, shardIndex, shardCount) {
   const shardTests = selectSerializedSuites(routeTests, shardIndex, shardCount);
   console.log(
     `\n[test:run] serialized shard ${shardIndex + 1}/${shardCount} running ${shardTests.length} of ${routeTests.length} suites`,
   );
 
   for (const routeTest of shardTests) {
-    runVitest(
+    await runVitest(
       [
         "--project",
         "@paperclipai/server",
@@ -326,37 +513,57 @@ const routeTests = walk(serverTestsDir)
   .sort((a, b) => a.repoPath.localeCompare(b.repoPath));
 
 const options = parseCliOptions(process.argv.slice(2));
-if (options.dryRun) {
-  const serializedSuites =
-    options.mode === serializedModeName
-      ? selectSerializedSuites(routeTests, options.shardIndex, options.shardCount)
-      : routeTests;
-  console.log(
-    JSON.stringify(
-      {
-        mode: options.mode,
-        shardIndex: options.shardIndex,
-        shardCount: options.shardCount,
-        group: options.group,
-        availableGeneralGroups: generalGroupNames,
-        serializedSuiteCount: routeTests.length,
-        selectedSerializedSuites: serializedSuites.map((routeTest) => routeTest.repoPath),
-      },
-      null,
-      2,
-    ),
-  );
-  process.exit(0);
-}
 
-if (options.mode === generalModeName || options.mode === allModeName) {
-  if (options.group) {
-    runGeneralGroup(routeTests, options.group);
-  } else {
-    runGeneralSuites(routeTests);
+async function main() {
+  if (options.dryRun) {
+    const serializedSuites =
+      options.mode === serializedModeName
+        ? selectSerializedSuites(routeTests, options.shardIndex, options.shardCount)
+        : routeTests;
+    console.log(
+      JSON.stringify(
+        {
+          mode: options.mode,
+          shardIndex: options.shardIndex,
+          shardCount: options.shardCount,
+          group: options.group,
+          availableGeneralGroups: generalGroupNames,
+          serializedSuiteCount: routeTests.length,
+          selectedSerializedSuites: serializedSuites.map((routeTest) => routeTest.repoPath),
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  try {
+    if (options.mode === generalModeName || options.mode === allModeName) {
+      if (options.group) {
+        await runGeneralGroup(routeTests, options.group);
+      } else {
+        await runGeneralSuites(routeTests);
+      }
+    }
+
+    if (options.mode === serializedModeName || options.mode === allModeName) {
+      await runSerializedSuites(routeTests, options.shardIndex ?? 0, options.shardCount ?? 1);
+    }
+  } catch (err) {
+    console.error(`[test:run] ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  } finally {
+    await enforceZeroSurvivors();
+    cleanupTempRoots();
   }
 }
 
-if (options.mode === serializedModeName || options.mode === allModeName) {
-  runSerializedSuites(routeTests, options.shardIndex ?? 0, options.shardCount ?? 1);
-}
+main()
+  .then(() => {
+    process.exit(process.exitCode ?? 0);
+  })
+  .catch((err) => {
+    console.error(`[test:run] unexpected error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
