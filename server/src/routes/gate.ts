@@ -116,10 +116,23 @@ export function gateRoutes(db: Db) {
 
       const targetStage = MANUAL_STAGES[targetIdx];
       const reworkId = randomUUID();
-
-      await db.execute(sql`UPDATE run_stages SET status = 'rework', completed_at = now() WHERE id = ${activeRow.id}`);
-      await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${reworkId}, ${runId}, ${targetStage}, 'active', ${targetIdx})`);
-      await db.execute(sql`UPDATE pipeline_runs SET status = 'active' WHERE id = ${runId}`);
+      const [reworked] = await rows(db, sql`
+        WITH current_stage AS (
+          UPDATE run_stages SET status = 'rework', completed_at = now()
+          WHERE id = ${activeRow.id} AND pipeline_run_id = ${runId} AND status = 'active'
+          RETURNING pipeline_run_id
+        ), next_stage AS (
+          INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order)
+          SELECT ${reworkId}, pipeline_run_id, ${targetStage}, 'active', ${targetIdx} FROM current_stage
+          RETURNING id, pipeline_run_id
+        ), active_run AS (
+          UPDATE pipeline_runs SET status = 'active', completed_at = NULL, updated_at = now()
+          WHERE id IN (SELECT pipeline_run_id FROM current_stage) AND company_id = ${companyId}
+          RETURNING id
+        )
+        SELECT next_stage.id FROM next_stage JOIN active_run ON active_run.id = next_stage.pipeline_run_id
+      `);
+      if (!reworked) { res.status(409).json({ error: "gate already advanced" }); return; }
 
       emitEvent({ type: "stage_rework", runId, from: currentStage, send_back_to: targetStage, reworkStageId: reworkId });
       res.status(409).json({
