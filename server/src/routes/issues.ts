@@ -2742,15 +2742,18 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, issue.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
+    const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
     const product = await workProductsSvc.createForIssue(issue.id, issue.companyId, {
       ...req.body,
       projectId: req.body.projectId ?? issue.projectId ?? null,
-    });
+    }, { runOwnership });
     if (!product) {
       res.status(422).json({ error: "Invalid work product payload" });
       return;
     }
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: issue.companyId,
       actorType: actor.actorType,
@@ -2785,12 +2788,15 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    const product = await workProductsSvc.update(id, req.body);
+    const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
+    const product = await workProductsSvc.update(id, req.body, { runOwnership });
     if (!product) {
       res.status(404).json({ error: "Work product not found" });
       return;
     }
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,
@@ -2825,12 +2831,15 @@ export function issueRoutes(
       return;
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
-    const removed = await workProductsSvc.remove(id);
+    const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
+    const removed = await workProductsSvc.remove(id, { runOwnership });
     if (!removed) {
       res.status(404).json({ error: "Work product not found" });
       return;
     }
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: existing.companyId,
       actorType: actor.actorType,

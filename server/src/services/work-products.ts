@@ -1,7 +1,8 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { issueWorkProducts } from "@paperclipai/db";
+import { heartbeatRuns, issues, issueWorkProducts } from "@paperclipai/db";
 import type { IssueWorkProduct } from "@paperclipai/shared";
+import { conflict } from "../errors.js";
 
 type IssueWorkProductRow = typeof issueWorkProducts.$inferSelect;
 
@@ -31,6 +32,40 @@ function toIssueWorkProduct(row: IssueWorkProductRow): IssueWorkProduct {
 }
 
 export function workProductService(db: Db) {
+  type WorkProductTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+  type RunOwnership = { agentId: string; runId: string };
+
+  async function assertRunOwnership(
+    tx: WorkProductTransaction,
+    issueId: string,
+    companyId: string,
+    ownership?: RunOwnership,
+  ) {
+    if (!ownership) return;
+    const owned = await tx
+      .update(issues)
+      .set({ updatedAt: sql`${issues.updatedAt}` })
+      .where(
+        and(
+          eq(issues.id, issueId),
+          eq(issues.companyId, companyId),
+          eq(issues.status, "in_progress"),
+          eq(issues.assigneeAgentId, ownership.agentId),
+          eq(issues.checkoutRunId, ownership.runId),
+          or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+          sql<boolean>`exists (
+            select 1 from ${heartbeatRuns}
+            where ${heartbeatRuns.id} = ${ownership.runId}
+              and ${heartbeatRuns.agentId} = ${ownership.agentId}
+              and ${heartbeatRuns.status} = 'running'
+          )`,
+        ),
+      )
+      .returning({ id: issues.id })
+      .then((rows) => rows[0] ?? null);
+    if (!owned) throw conflict("Issue checkout ownership conflict");
+  }
+
   return {
     listForIssue: async (issueId: string) => {
       const rows = await db
@@ -50,8 +85,14 @@ export function workProductService(db: Db) {
       return row ? toIssueWorkProduct(row) : null;
     },
 
-    createForIssue: async (issueId: string, companyId: string, data: Omit<typeof issueWorkProducts.$inferInsert, "issueId" | "companyId">) => {
+    createForIssue: async (
+      issueId: string,
+      companyId: string,
+      data: Omit<typeof issueWorkProducts.$inferInsert, "issueId" | "companyId">,
+      options: { runOwnership?: RunOwnership } = {},
+    ) => {
       const row = await db.transaction(async (tx) => {
+        await assertRunOwnership(tx, issueId, companyId, options.runOwnership);
         if (data.isPrimary) {
           await tx
             .update(issueWorkProducts)
@@ -77,7 +118,11 @@ export function workProductService(db: Db) {
       return row ? toIssueWorkProduct(row) : null;
     },
 
-    update: async (id: string, patch: Partial<typeof issueWorkProducts.$inferInsert>) => {
+    update: async (
+      id: string,
+      patch: Partial<typeof issueWorkProducts.$inferInsert>,
+      options: { runOwnership?: RunOwnership } = {},
+    ) => {
       const row = await db.transaction(async (tx) => {
         const existing = await tx
           .select()
@@ -85,6 +130,7 @@ export function workProductService(db: Db) {
           .where(eq(issueWorkProducts.id, id))
           .then((rows) => rows[0] ?? null);
         if (!existing) return null;
+        await assertRunOwnership(tx, existing.issueId, existing.companyId, options.runOwnership);
 
         if (patch.isPrimary === true) {
           await tx
@@ -109,12 +155,21 @@ export function workProductService(db: Db) {
       return row ? toIssueWorkProduct(row) : null;
     },
 
-    remove: async (id: string) => {
-      const row = await db
-        .delete(issueWorkProducts)
-        .where(eq(issueWorkProducts.id, id))
-        .returning()
-        .then((rows) => rows[0] ?? null);
+    remove: async (id: string, options: { runOwnership?: RunOwnership } = {}) => {
+      const row = await db.transaction(async (tx) => {
+        const existing = await tx
+          .select()
+          .from(issueWorkProducts)
+          .where(eq(issueWorkProducts.id, id))
+          .then((rows) => rows[0] ?? null);
+        if (!existing) return null;
+        await assertRunOwnership(tx, existing.issueId, existing.companyId, options.runOwnership);
+        return tx
+          .delete(issueWorkProducts)
+          .where(eq(issueWorkProducts.id, id))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+      });
       return row ? toIssueWorkProduct(row) : null;
     },
   };
