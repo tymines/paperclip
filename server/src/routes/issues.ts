@@ -1849,6 +1849,7 @@ export function issueRoutes(
     "/companies/:companyId/issues/:issueId/status",
     validate(updateIssueStatusToggleSchema),
     async (req, res) => {
+      assertBoard(req);
       const companyId = req.params.companyId as string;
       const issueId = req.params.issueId as string;
       assertCompanyAccess(req, companyId);
