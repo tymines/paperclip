@@ -264,15 +264,6 @@ export function approvalRoutes(
           });
         }
       }
-      // Auto-transition linked issues to done on approve
-      if (approval.type === "task_completion" && linkedIssueIds.length > 0) {
-        const issuesSvc = issueService(db);
-        for (const issueId of linkedIssueIds) {
-          await issuesSvc.update(issueId, { status: "done" }).catch((err) =>
-            logger.warn({ err, issueId, approvalId: approval.id }, "failed to transition issue to done on approve"),
-          );
-        }
-      }
     }
 
     res.json(redactApprovalPayload(approval));
