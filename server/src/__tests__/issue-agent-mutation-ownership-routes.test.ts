@@ -111,6 +111,9 @@ function registerRouteMocks() {
     accessService: () => mockAccessService,
     agentService: () => mockAgentService,
     companyService: () => mockCompanyService,
+    costService: () => ({
+      byIssueIds: vi.fn(async () => new Map()),
+    }),
     documentService: () => mockDocumentService,
     executionWorkspaceService: () => ({}),
     feedbackService: () => ({
@@ -498,7 +501,11 @@ describe("agent issue mutation checkout ownership", () => {
       expect.any(Object),
     );
     expect(mockDocumentService.upsertIssueDocument).toHaveBeenCalled();
-    expect(mockWorkProductService.update).toHaveBeenCalledWith("product-1", { title: "Updated product" });
+    expect(mockWorkProductService.update).toHaveBeenCalledWith(
+      "product-1",
+      { title: "Updated product" },
+      { runOwnership: { agentId: ownerAgentId, runId: ownerRunId } },
+    );
   });
 
   it("preserves board mutations on active checkouts", async () => {
@@ -546,22 +553,15 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
   });
 
-  it("allows same-company agent mutations on unassigned in-progress issues", async () => {
+  it("requires checkout before an agent mutates an unassigned in-progress issue", async () => {
     mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: null }));
-    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
-      ...makeIssue({ assigneeAgentId: null }),
-      ...patch,
-    }));
 
     const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ title: "Claimable update" });
 
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Agent must check out issue before mutation");
     expect(mockIssueService.assertCheckoutOwner).not.toHaveBeenCalled();
-    expect(res.body).toMatchObject({
-      id: issueId,
-      assigneeAgentId: null,
-      title: "Claimable update",
-    });
+    expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
   it("rejects peer-agent status updates that would clear a recovery action they do not own", async () => {
@@ -575,8 +575,8 @@ describe("agent issue mutation checkout ownership", () => {
 
     const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ status: "todo" });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(403);
-    expect(res.body.error).toBe("Agent cannot resolve another owner's recovery action");
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Agent must check out issue before mutation");
     expect(mockIssueService.update).not.toHaveBeenCalled();
   });
 
@@ -597,12 +597,12 @@ describe("agent issue mutation checkout ownership", () => {
         sourceIssueStatus: "done",
       });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(403);
-    expect(res.body.error).toBe("Agent cannot resolve another owner's recovery action");
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Agent must check out issue before mutation");
     expect(mockIssueRecoveryActionService.resolveActiveForIssue).not.toHaveBeenCalled();
   });
 
-  it("allows the named recovery owner to resolve a board-owned source issue", async () => {
+  it("requires checkout before the named recovery owner resolves a board-owned source issue", async () => {
     mockIssueService.getById.mockResolvedValue(
       makeIssue({ status: "blocked", assigneeAgentId: null, assigneeUserId: "board-user" }),
     );
@@ -623,12 +623,13 @@ describe("agent issue mutation checkout ownership", () => {
         sourceIssueStatus: "done",
       });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockIssueService.update).toHaveBeenCalled();
-    expect(mockIssueRecoveryActionService.resolveActiveForIssue).toHaveBeenCalled();
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Agent must check out issue before mutation");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+    expect(mockIssueRecoveryActionService.resolveActiveForIssue).not.toHaveBeenCalled();
   });
 
-  it("wakes the assigned agent when recovery resolution restores a source issue to todo", async () => {
+  it("does not wake an assigned agent when recovery resolution lacks checkout ownership", async () => {
     mockIssueService.getById.mockResolvedValue(
       makeIssue({ status: "blocked", assigneeAgentId: ownerAgentId }),
     );
@@ -649,17 +650,8 @@ describe("agent issue mutation checkout ownership", () => {
         sourceIssueStatus: "todo",
       });
 
-    expect(res.status, JSON.stringify(res.body)).toBe(200);
-    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
-      ownerAgentId,
-      expect.objectContaining({
-        reason: "issue_recovery_action_restored",
-        payload: expect.objectContaining({
-          issueId,
-          recoveryActionId,
-          mutation: "recovery_action_resolution",
-        }),
-      }),
-    );
+    expect(res.status, JSON.stringify(res.body)).toBe(409);
+    expect(res.body.error).toBe("Agent must check out issue before mutation");
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 });
