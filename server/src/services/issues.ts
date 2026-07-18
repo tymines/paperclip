@@ -4725,7 +4725,13 @@ export function issueService(db: Db) {
         return enriched;
       }),
 
-    checkout: async (id: string, agentId: string, expectedStatuses: string[], checkoutRunId: string | null) => {
+    checkout: async (
+      id: string,
+      agentId: string,
+      expectedStatuses: string[],
+      checkoutRunId: string | null,
+      controllerEpoch?: number,
+    ) => {
       const issueCompany = await db
         .select({ companyId: issues.companyId })
         .from(issues)
@@ -4784,6 +4790,14 @@ export function issueService(db: Db) {
             inArray(issues.status, expectedStatuses),
             or(isNull(issues.assigneeAgentId), sameRunAssigneeCondition),
             executionLockCondition,
+            controllerEpoch === undefined
+              ? undefined
+              : sql<boolean>`${controllerEpoch} = (
+                  select max((${activityLog.details} ->> 'controllerEpoch')::bigint)
+                  from ${activityLog}
+                  where ${activityLog.companyId} = ${issues.companyId}
+                    and ${activityLog.action} = 'rail.controller_epoch'
+                )`,
             checkoutRunId ? runningIssueRunCondition(checkoutRunId, agentId) : undefined,
           ),
         )

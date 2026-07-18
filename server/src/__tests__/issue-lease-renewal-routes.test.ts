@@ -208,6 +208,7 @@ describe("controller epoch checkout propagation", () => {
       .send({ agentId, expectedStatuses: ["todo"], controllerEpoch: 7 });
 
     expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(routeMocks.checkout).toHaveBeenCalledWith(issueId, agentId, ["todo"], null, 7);
     expect(routeMocks.wakeup).toHaveBeenCalledWith(agentId, expect.objectContaining({
       contextSnapshot: {
         issueId,
