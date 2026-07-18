@@ -3325,6 +3325,10 @@ export function issueRoutes(
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    if (req.actor.type === "agent" && req.body.status === "done") {
+      res.status(403).json({ error: "Agents must submit task completion for board approval" });
+      return;
+    }
 
     const actor = getActorInfo(req);
     const isClosed = isClosedIssueStatus(existing.status);
