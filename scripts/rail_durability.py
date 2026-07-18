@@ -9,6 +9,10 @@ from pathlib import Path
 
 CLAIM_EVENTS = frozenset({"claim_acquired", "claim_renewed", "claim_lost", "claim_reclaimed"})
 PROJECTION_VERSION = 2
+PROJECTED_TASK_FIELDS = frozenset({
+    "state", "last_event", "checkout_run_id", "execution_run_id", "lease_expires_at",
+    "worktree_path", "branch_name", "identifier",
+})
 
 
 def _validate_event(event: dict) -> None:
@@ -129,7 +133,15 @@ def load_projection(journal: Path, state_file: Path) -> dict:
         state = {}
     changed = False
     if int(state.get("_meta", {}).get("projection_version", 0)) != PROJECTION_VERSION:
-        state = {"_meta": {"projection_version": PROJECTION_VERSION}}
+        state = {
+            task_id: {
+                key: value for key, value in task.items()
+                if key not in PROJECTED_TASK_FIELDS
+            }
+            for task_id, task in state.items()
+            if task_id != "_meta" and isinstance(task, dict)
+        }
+        state["_meta"] = {"projection_version": PROJECTION_VERSION}
         cursor = 0
         changed = True
     else:

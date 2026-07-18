@@ -69,6 +69,33 @@ class Phase4DurabilityTests(unittest.TestCase):
             self.assertIsNone(state["T-1"]["execution_run_id"])
             self.assertIsNone(state["T-1"]["lease_expires_at"])
 
+    def test_projection_version_rebuild_preserves_unrelated_task_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = root / "rail-events.jsonl"
+            state_file = root / ".rail_state.json"
+            append_event(journal, {
+                "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-2", "execution_run_id": "run-2",
+                "lease_expires_at": "2026-07-17T07:15:00+00:00",
+            })
+            state_file.write_text(json.dumps({
+                "_meta": {"projection_version": 1, "cursor": 99},
+                "T-1": {
+                    "state": "stale", "checkout_run_id": "run-1",
+                    "execution_run_id": "run-1", "lease_expires_at": "stale",
+                    "stall_count": 3, "rework_count": 1,
+                },
+            }), encoding="utf-8")
+
+            state = load_projection(journal, state_file)
+
+            self.assertEqual(state["T-1"]["stall_count"], 3)
+            self.assertEqual(state["T-1"]["rework_count"], 1)
+            self.assertEqual(state["T-1"]["state"], "run_backed_claim")
+            self.assertEqual(state["T-1"]["checkout_run_id"], "run-2")
+            self.assertEqual(state["T-1"]["execution_run_id"], "run-2")
+
     def test_projection_rebuild_fences_stale_dual_run_event(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
