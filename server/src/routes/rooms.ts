@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Db } from "@paperclipai/db";
-import { agents } from "@paperclipai/db";
-import { eq } from "drizzle-orm";
+import { agents, councilSessions } from "@paperclipai/db";
+import { and, eq } from "drizzle-orm";
 import {
   createRoomSchema,
   updateRoomSchema,
@@ -33,6 +33,18 @@ export function roomRoutes(db: Db) {
   const router = Router();
   const svc = roomService(db);
   const heartbeat = heartbeatService(db);
+
+  const assertCouncilScope = async (companyId: string, roomId: string, sessionId?: string) => {
+    const room = await svc.getById(roomId);
+    if (!room || room.companyId !== companyId) throw notFound("Room not found");
+    if (!sessionId) return;
+    const session = await db
+      .select({ id: councilSessions.id })
+      .from(councilSessions)
+      .where(and(eq(councilSessions.id, sessionId), eq(councilSessions.roomId, roomId)))
+      .then((rows) => rows[0] ?? null);
+    if (!session) throw notFound("Council session not found");
+  };
 
   // GET /companies/:companyId/rooms
   router.get("/companies/:companyId/rooms", async (req, res) => {
@@ -522,10 +534,7 @@ export function roomRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     const roomId = req.params.roomId as string;
     assertCompanyAccess(req, companyId);
-    const room = await svc.getById(roomId);
-    if (!room || room.companyId !== companyId) {
-      throw notFound("Room not found");
-    }
+    await assertCouncilScope(companyId, roomId);
     const topic = String(req.body?.topic ?? "Review");
     const protocol = String(req.body?.protocol ?? "majority");
     const session = await createCouncilSession(db, roomId, topic, protocol);
@@ -535,7 +544,8 @@ export function roomRoutes(db: Db) {
   router.post("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId/participants", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const { sessionId } = req.params;
+    const { roomId, sessionId } = req.params;
+    await assertCouncilScope(companyId, roomId, sessionId);
     const agentId = req.body?.agentId as string;
     if (!agentId) { res.status(400).json({ error: "agentId required" }); return; }
     const participant = await addParticipant(db, sessionId, agentId);
@@ -545,7 +555,8 @@ export function roomRoutes(db: Db) {
   router.patch("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId/votes", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const { sessionId } = req.params;
+    const { roomId, sessionId } = req.params;
+    await assertCouncilScope(companyId, roomId, sessionId);
     const { agentId, vote } = req.body as { agentId?: string; vote?: string };
     if (!agentId || !vote) { res.status(400).json({ error: "agentId and vote required" }); return; }
     if (req.actor.type === "agent" && req.actor.agentId !== agentId) {
@@ -559,7 +570,8 @@ export function roomRoutes(db: Db) {
   router.get("/companies/:companyId/rooms/:roomId/council/sessions/:sessionId", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const { sessionId } = req.params;
+    const { roomId, sessionId } = req.params;
+    await assertCouncilScope(companyId, roomId, sessionId);
     const result = await checkConsensus(db, sessionId);
     res.json(result);
   });
