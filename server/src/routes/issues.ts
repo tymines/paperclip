@@ -5586,19 +5586,23 @@ export function issueRoutes(
     }
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
 
-    try {
-      await storage.deleteObject(attachment.companyId, attachment.objectKey);
-    } catch (err) {
-      logger.warn({ err, attachmentId }, "storage delete failed while removing attachment");
-    }
-
-    const removed = await svc.removeAttachment(attachmentId);
+    const actor = getActorInfo(req);
+    const removed = await svc.removeAttachment(attachmentId, {
+      runOwnership: req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+        ? { agentId: actor.agentId!, runId: actor.runId! }
+        : undefined,
+    });
     if (!removed) {
       res.status(404).json({ error: "Attachment not found" });
       return;
     }
 
-    const actor = getActorInfo(req);
+    try {
+      await storage.deleteObject(removed.companyId, removed.objectKey);
+    } catch (err) {
+      logger.warn({ err, attachmentId }, "storage delete failed while removing attachment");
+    }
+
     await logActivity(db, {
       companyId: removed.companyId,
       actorType: actor.actorType,
