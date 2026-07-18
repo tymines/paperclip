@@ -126,6 +126,22 @@ export function gateRoutes(db: Db) {
     }
 
     const { runId, reason } = req.body as { runId?: string; reason?: string };
+    if (!runId) { res.status(400).json({ error: "runId required" }); return; }
+
+    const [killed] = await rows(db, sql`
+      WITH killed_run AS (
+        UPDATE pipeline_runs
+        SET status = 'cancelled', completed_at = now(), updated_at = now()
+        WHERE id = ${runId} AND company_id = ${companyId} AND status NOT IN ('completed', 'cancelled')
+        RETURNING id
+      ), killed_stages AS (
+        UPDATE run_stages SET status = 'cancelled', completed_at = now()
+        WHERE pipeline_run_id IN (SELECT id FROM killed_run) AND status IN ('active', 'rework')
+        RETURNING id
+      )
+      SELECT id FROM killed_run
+    `);
+    if (!killed) { res.status(404).json({ error: "active run not found" }); return; }
 
     emitEvent({ type: "run_killed", runId, reason, actorId: actor.actorId });
     logger.info({ runId, reason }, "run killed by Tyler");
