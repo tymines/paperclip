@@ -522,6 +522,10 @@ export function roomRoutes(db: Db) {
     const companyId = req.params.companyId as string;
     const roomId = req.params.roomId as string;
     assertCompanyAccess(req, companyId);
+    const room = await svc.getById(roomId);
+    if (!room || room.companyId !== companyId) {
+      throw notFound("Room not found");
+    }
     const topic = String(req.body?.topic ?? "Review");
     const protocol = String(req.body?.protocol ?? "majority");
     const session = await createCouncilSession(db, roomId, topic, protocol);
