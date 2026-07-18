@@ -281,26 +281,63 @@ export function approvalService(db: Db) {
       return { approval: updated, applied };
     },
 
-    requestRevision: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
-      const existing = await getExistingApproval(id);
-      if (existing.status !== "pending") {
-        throw unprocessable("Only pending approvals can request revision");
-      }
+    requestRevision: async (id: string, decidedByUserId: string, decisionNote?: string | null) =>
+      db.transaction(async (tx) => {
+        const existing = await getExistingApproval(id, tx);
+        if (existing.status !== "pending") {
+          throw unprocessable("Only pending approvals can request revision");
+        }
 
-      const now = new Date();
-      return db
-        .update(approvals)
-        .set({
-          status: "revision_requested",
-          decidedByUserId,
-          decisionNote: decisionNote ?? null,
-          decidedAt: now,
-          updatedAt: now,
-        })
-        .where(eq(approvals.id, id))
-        .returning()
-        .then((rows) => rows[0]);
-    },
+        const now = new Date();
+        const updated = await tx
+          .update(approvals)
+          .set({
+            status: "revision_requested",
+            decidedByUserId,
+            decisionNote: decisionNote ?? null,
+            decidedAt: now,
+            updatedAt: now,
+          })
+          .where(and(eq(approvals.id, id), eq(approvals.status, "pending")))
+          .returning()
+          .then((rows) => rows[0] ?? null);
+        if (!updated) {
+          throw unprocessable("Only pending approvals can request revision");
+        }
+
+        if (updated.type === "task_completion") {
+          const linkedIssueIds = await tx
+            .select({ issueId: issueApprovals.issueId })
+            .from(issueApprovals)
+            .where(eq(issueApprovals.approvalId, updated.id))
+            .then((rows) => rows.map((row) => row.issueId));
+          if (linkedIssueIds.length > 0) {
+            const transitioned = await tx
+              .update(issues)
+              .set({
+                status: "changes_requested",
+                completedAt: null,
+                checkoutRunId: null,
+                executionRunId: null,
+                executionAgentNameKey: null,
+                executionLockedAt: null,
+                leaseExpiresAt: null,
+                updatedAt: now,
+              })
+              .where(and(
+                eq(issues.companyId, updated.companyId),
+                inArray(issues.id, linkedIssueIds),
+                eq(issues.status, "needs_approval"),
+              ))
+              .returning({ id: issues.id });
+            if (transitioned.length !== linkedIssueIds.length) {
+              throw conflict("Linked issues changed before revision request");
+            }
+          }
+        }
+
+        return updated;
+      }),
 
     resubmit: async (
       id: string,
