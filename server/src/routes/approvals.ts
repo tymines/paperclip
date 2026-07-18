@@ -15,7 +15,6 @@ import {
   issueApprovalService,
   logActivity,
   secretService,
-  issueService,
   agentService,
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
@@ -40,7 +39,6 @@ export function approvalRoutes(
     pluginWorkerManager: options.pluginWorkerManager,
   });
   const issueApprovalsSvc = issueApprovalService(db);
-  const issuesSvc = issueService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
 
@@ -321,13 +319,6 @@ export function approvalRoutes(
       const linkedIssues = await issueApprovalsSvc.listIssuesForApproval(approval.id);
       const linkedIssueIds = linkedIssues.map((issue) => issue.id);
       const primaryIssueId = linkedIssueIds[0] ?? null;
-      const issuesSvc = issueService(db);
-      for (const issue of linkedIssues) {
-        if (issue.status !== "changes_requested") {
-          await issuesSvc.update(issue.id, { status: "changes_requested" });
-        }
-      }
-
       // Wake the requesting agent with full revision context
       // Also fire a Brainstorm re-plan via the replan pipeline
       if (approval.requestedByAgentId) {
