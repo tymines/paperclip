@@ -56,8 +56,10 @@ function createLeaseDb(row: LeaseRow) {
               const matches = isReclaim
                 ? row.status === "in_progress" && row.leaseExpiresAt !== null && row.leaseExpiresAt < now
                 : row.status === "in_progress"
+                  && query.sql.includes('"execution_run_id"')
                   && query.params.includes(row.assigneeAgentId)
                   && query.params.includes(row.checkoutRunId)
+                  && query.params.includes(row.executionRunId)
                   && (row.leaseExpiresAt === null || row.leaseExpiresAt > now);
 
               if (!matches) return Promise.resolve([]);
@@ -214,13 +216,14 @@ describe("issue lease renewal route", () => {
 
 describe("issue lease service CAS", () => {
   function leaseRow(leaseExpiresAt: Date | null = null): LeaseRow {
+    const runId = randomUUID();
     return {
       id: randomUUID(),
       companyId: randomUUID(),
       status: "in_progress",
       assigneeAgentId: randomUUID(),
-      checkoutRunId: randomUUID(),
-      executionRunId: randomUUID(),
+      checkoutRunId: runId,
+      executionRunId: runId,
       executionAgentNameKey: "lease-owner",
       executionLockedAt: new Date(),
       leaseExpiresAt,
@@ -239,7 +242,7 @@ describe("issue lease service CAS", () => {
     const renewed = await service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!);
     expect(renewed?.leaseExpiresAt?.getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
     expect(fake.whereQueries).toHaveLength(2);
-    expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"assignee_agent_id".*"checkout_run_id".*"lease_expires_at"/s);
+    expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"assignee_agent_id".*"checkout_run_id".*"execution_run_id".*"lease_expires_at"/s);
     expect(fake.whereQueries[0].sql).toMatch(/now\(\)/);
     expect(fake.whereQueries[0].sql).toMatch(/context_snapshot.*controllerEpoch.*activity_log.*rail\.controller_epoch/s);
     expect(fake.whereQueries[0].sql).not.toMatch(/controllerEpoch.*is null/s);
@@ -259,6 +262,11 @@ describe("issue lease service CAS", () => {
     await expect(service.renewLease(row.id, row.assigneeAgentId!, randomUUID())).rejects.toThrow(
       "Issue lease renewal conflict",
     );
+    row.executionRunId = randomUUID();
+    await expect(service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!)).rejects.toThrow(
+      "Issue lease renewal conflict",
+    );
+    row.executionRunId = row.checkoutRunId;
     row.leaseExpiresAt = new Date(Date.now() - 60_000);
     await expect(service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!)).rejects.toThrow(
       "Issue lease renewal conflict",

@@ -4886,6 +4886,7 @@ export function issueService(db: Db) {
             eq(issues.status, "in_progress"),
             eq(issues.assigneeAgentId, actorAgentId),
             eq(issues.checkoutRunId, actorRunId),
+            eq(issues.executionRunId, actorRunId),
             gt(issues.leaseExpiresAt, sql`now()`),
             runningIssueRunCondition(actorRunId, actorAgentId),
           ),
