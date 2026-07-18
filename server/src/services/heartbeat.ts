@@ -217,7 +217,46 @@ export {
   ACTIVE_RUN_OUTPUT_SUSPICION_THRESHOLD_MS,
 } from "./recovery/service.js";
 export const ACTIVE_RUN_OUTPUT_PROGRESS_FLUSH_INTERVAL_MS = 60 * 1000;
-const ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1000;
+export const ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS = 5 * 60 * 1000;
+const ISSUE_OWNERSHIP_LEASE_RENEW_RETRY_ATTEMPTS = 1;
+
+export function startIssueLeaseRenewalLoop(
+  renew: () => Promise<void>,
+  onLost: (error: unknown) => void | Promise<void>,
+) {
+  let renewing = false;
+  let stopped = false;
+  const timer = setInterval(() => {
+    if (renewing || stopped) return;
+    renewing = true;
+    const renewWithRetry = async () => {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          await renew();
+          return;
+        } catch (error) {
+          if (attempt >= ISSUE_OWNERSHIP_LEASE_RENEW_RETRY_ATTEMPTS) throw error;
+        }
+      }
+    };
+    void renewWithRetry()
+      .catch(async (error) => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(timer);
+        await onLost(error);
+      })
+      .finally(() => {
+        renewing = false;
+      });
+  }, ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
+  timer.unref();
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
 export const BOUNDED_TRANSIENT_HEARTBEAT_RETRY_DELAYS_MS = [
   2 * 60 * 1000,
   10 * 60 * 1000,
@@ -6940,7 +6979,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
     }
 
     activeRunExecutions.add(run.id);
-    let issueLeaseRenewalTimer: ReturnType<typeof setInterval> | null = null;
+    let stopIssueLeaseRenewal: (() => void) | null = null;
 
     try {
     const agent = await getAgent(run.agentId);
@@ -6990,9 +7029,10 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       issueContext = await getIssueExecutionContext(agent.companyId, issueId);
     }
     if (issueId && issueContext?.checkoutRunId === run.id) {
-      issueLeaseRenewalTimer = setInterval(() => {
-        void issuesSvc.renewLease(issueId, agent.id, run.id).then((renewed) => {
-          void logActivity(db, {
+      stopIssueLeaseRenewal = startIssueLeaseRenewalLoop(
+        async () => {
+          const renewed = await issuesSvc.renewLease(issueId, agent.id, run.id);
+          await logActivity(db, {
             companyId: run.companyId,
             actorType: "agent",
             actorId: agent.id,
@@ -7003,18 +7043,15 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
             entityId: issueId,
             details: { leaseExpiresAt: renewed.leaseExpiresAt },
           }).catch((err) => logger.warn({ err, issueId, runId: run.id }, "failed to log issue lease renewal"));
-        }).catch((err) => {
-          if (issueLeaseRenewalTimer) {
-            clearInterval(issueLeaseRenewalTimer);
-            issueLeaseRenewalTimer = null;
-          }
+        },
+        async (err) => {
+          stopIssueLeaseRenewal = null;
           logger.warn({ err, issueId, runId: run.id }, "issue ownership lease lost; cancelling run");
-          void cancelRunInternal(run.id, "Cancelled because issue ownership lease was lost").catch((cancelErr) => {
+          await cancelRunInternal(run.id, "Cancelled because issue ownership lease was lost").catch((cancelErr) => {
             logger.error({ err: cancelErr, issueId, runId: run.id }, "failed to cancel run after lease loss");
           });
-        });
-      }, ISSUE_OWNERSHIP_LEASE_RENEW_INTERVAL_MS);
-      issueLeaseRenewalTimer.unref();
+        },
+      );
     }
     const wakeCommentId = deriveCommentId(context, null);
     const wakeCommentContext =
@@ -8295,9 +8332,9 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           // DB calls threw (e.g. a transient DB error in finalizeAgentStatus).
           await finalizeAgentStatus(run.agentId, "failed").catch(() => undefined);
         } finally {
-          if (issueLeaseRenewalTimer) {
-            clearInterval(issueLeaseRenewalTimer);
-            issueLeaseRenewalTimer = null;
+          if (stopIssueLeaseRenewal) {
+            stopIssueLeaseRenewal();
+            stopIssueLeaseRenewal = null;
           }
           const latestRun = await getRun(run.id).catch(() => null);
           await releaseEnvironmentLeasesForRun({
