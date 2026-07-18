@@ -313,7 +313,7 @@ export function designRoutes(db: Db) {
     try {
       const result = await presets.get(req.params.id);
       if (!result) throw notFound("preset run not found");
-      if (result.preset.companyId) assertCompanyAccess(req, result.preset.companyId);
+      assertDesignRunAccess(req, result.preset.companyId);
       res.json(result);
     } catch (err) {
       next(err);
@@ -322,7 +322,9 @@ export function designRoutes(db: Db) {
 
   router.get("/design/preset-runs", async (req, res, next) => {
     try {
-      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : null;
+      assertAuthenticated(req);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : null;
+      const companyId = requestedCompanyId ?? (req.actor.type === "agent" ? req.actor.companyId ?? null : null);
       if (companyId) assertCompanyAccess(req, companyId);
       const limit = Math.min(200, Number(req.query.limit) || 50);
       const rows = await presets.list(companyId, limit);
