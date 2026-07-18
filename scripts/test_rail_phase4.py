@@ -174,6 +174,33 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         self.assertIn("AND i.execution_run_id = e.execution_run_id", executed[0])
         self.assertEqual(reclaimed[0]["execution_run_id"], "execution-1")
 
+    def test_global_invariant_surfaces_dual_run_drift(self):
+        executed = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def execute(self, query, params=None):
+                executed.append(str(query))
+            def fetchall(self):
+                return []
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+            def close(self):
+                return None
+
+        with mock.patch.object(controller, "open_db", return_value=Connection()):
+            self.assertEqual(controller.check_global_invariants(), [])
+
+        self.assertIn("execution run missing", executed[0])
+        self.assertIn("execution/checkout mismatch", executed[0])
+        self.assertIn("i.execution_run_id IS NULL", executed[0])
+        self.assertIn("i.execution_run_id IS DISTINCT FROM i.checkout_run_id", executed[0])
+
     def test_stale_controller_cannot_issue_mutating_api_request(self):
         controller.CONTROLLER_EPOCH = 4
         with mock.patch.object(controller, "load_state", return_value={"_meta": {"controller_epoch": 5}}), \

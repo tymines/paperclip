@@ -565,6 +565,8 @@ def check_global_invariants():
                    concat_ws(', ',
                      CASE WHEN i.assignee_agent_id IS NULL THEN 'assignee missing' END,
                      CASE WHEN i.checkout_run_id IS NULL THEN 'checkout run missing' END,
+                     CASE WHEN i.execution_run_id IS NULL THEN 'execution run missing' END,
+                     CASE WHEN i.execution_run_id IS DISTINCT FROM i.checkout_run_id THEN 'execution/checkout mismatch' END,
                      CASE WHEN i.lease_expires_at IS NULL THEN 'lease missing' END,
                      CASE WHEN i.lease_expires_at <= now() THEN 'lease expired' END,
                      CASE WHEN hr.id IS NULL THEN 'heartbeat run missing' END,
@@ -579,6 +581,8 @@ def check_global_invariants():
               AND i.status = 'in_progress'
               AND (
                 i.assignee_agent_id IS NULL OR i.checkout_run_id IS NULL
+                OR i.execution_run_id IS NULL
+                OR i.execution_run_id IS DISTINCT FROM i.checkout_run_id
                 OR i.lease_expires_at IS NULL OR i.lease_expires_at <= now()
                 OR hr.id IS NULL OR hr.status NOT IN ('queued', 'running')
                 OR hr.agent_id IS DISTINCT FROM i.assignee_agent_id
