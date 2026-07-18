@@ -361,7 +361,7 @@ export function appdevControlRoutes(db: Db) {
           res.status(404).json({ error: "Work order not found" });
           return;
         }
-        const approved = confidence >= 0.8;
+        const approved = req.actor.type === "board" && confidence >= 0.8;
         await db
           .update(appdevWorkOrders)
           .set({
