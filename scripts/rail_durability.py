@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 
 CLAIM_EVENTS = frozenset({"claim_acquired", "claim_renewed", "claim_lost", "claim_reclaimed"})
+PROJECTION_VERSION = 2
 
 
 def _validate_event(event: dict) -> None:
@@ -126,8 +127,13 @@ def load_projection(journal: Path, state_file: Path) -> dict:
         state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
     except (OSError, json.JSONDecodeError):
         state = {}
-    cursor = int(state.get("_meta", {}).get("cursor", 0))
     changed = False
+    if int(state.get("_meta", {}).get("projection_version", 0)) != PROJECTION_VERSION:
+        state = {"_meta": {"projection_version": PROJECTION_VERSION}}
+        cursor = 0
+        changed = True
+    else:
+        cursor = int(state.get("_meta", {}).get("cursor", 0))
     for event in _events(journal):
         if event["cursor"] <= cursor:
             continue
@@ -149,15 +155,32 @@ def load_projection(journal: Path, state_file: Path) -> dict:
         task_id = event.get("task_id")
         if task_id and task_id != "system":
             task = state.setdefault(task_id, {})
+            event_type = event["type"]
+            if (
+                event_type in {"claim_renewed", "claim_lost", "claim_reclaimed"}
+                and task.get("state") == "run_backed_claim"
+                and ("checkout_run_id" in event or "execution_run_id" in event)
+            ):
+                current_checkout = task.get("checkout_run_id")
+                current_execution = task.get("execution_run_id", current_checkout)
+                event_checkout = event.get("checkout_run_id")
+                event_execution = event.get("execution_run_id", event_checkout)
+                if (event_checkout, event_execution) != (current_checkout, current_execution):
+                    meta["ignored_stale_claim_events"] = int(meta.get("ignored_stale_claim_events", 0)) + 1
+                    meta["last_ignored_claim_event"] = event
+                    changed = True
+                    continue
             task["last_event"] = {
                 "cursor": cursor,
                 "ts": event.get("ts"),
-                "type": event.get("type"),
+                "type": event_type,
             }
-            for key in ("checkout_run_id", "lease_expires_at", "worktree_path", "branch_name", "identifier"):
+            for key in (
+                "checkout_run_id", "execution_run_id", "lease_expires_at",
+                "worktree_path", "branch_name", "identifier",
+            ):
                 if key in event:
                     task[key] = event[key]
-            event_type = event["type"]
             if event_type == "claim_acquired":
                 task["state"] = "run_backed_claim"
             elif event_type == "claim_renewed":
@@ -165,7 +188,10 @@ def load_projection(journal: Path, state_file: Path) -> dict:
             elif event_type == "claim_lost":
                 task["state"] = "claim_lost"
             elif event_type == "claim_reclaimed":
-                task.update({"state": "ready", "checkout_run_id": None, "lease_expires_at": None})
+                task.update({
+                    "state": "ready", "checkout_run_id": None,
+                    "execution_run_id": None, "lease_expires_at": None,
+                })
             elif event_type == "gated":
                 task["state"] = "gated"
             elif event_type == "blocked":

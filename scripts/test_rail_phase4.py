@@ -20,12 +20,14 @@ class Phase4DurabilityTests(unittest.TestCase):
             state_file = root / ".rail_state.json"
             append_event(journal, {
                 "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 2,
-                "checkout_run_id": "run-1", "lease_expires_at": "2026-07-17T07:00:00+00:00",
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+                "lease_expires_at": "2026-07-17T07:00:00+00:00",
                 "worktree_path": "C:/work/T-1", "branch_name": "rail/T-1",
             })
             append_event(journal, {
                 "type": "claim_renewed", "task_id": "T-1", "controller_epoch": 2,
-                "checkout_run_id": "run-1", "lease_expires_at": "2026-07-17T07:05:00+00:00",
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+                "lease_expires_at": "2026-07-17T07:05:00+00:00",
             })
             append_event(journal, {
                 "type": "claim_lost", "task_id": "T-1", "controller_epoch": 1,
@@ -38,11 +40,43 @@ class Phase4DurabilityTests(unittest.TestCase):
             self.assertEqual(state["_meta"]["controller_epoch"], 2)
             self.assertEqual(state["T-1"]["state"], "run_backed_claim")
             self.assertEqual(state["T-1"]["lease_expires_at"], "2026-07-17T07:05:00+00:00")
+            self.assertEqual(state["T-1"]["execution_run_id"], "run-1")
             self.assertEqual(state["T-1"]["worktree_path"], "C:/work/T-1")
             self.assertEqual(state["T-1"]["branch_name"], "rail/T-1")
             self.assertEqual(state["T-1"]["last_event"]["type"], "claim_renewed")
             self.assertEqual(state["_meta"]["ignored_stale_epoch_events"], 1)
             self.assertEqual(json.loads(state_file.read_text(encoding="utf-8")), state)
+
+    def test_projection_rebuild_fences_stale_dual_run_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = root / "rail-events.jsonl"
+            state_file = root / ".rail_state.json"
+            append_event(journal, {
+                "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+            })
+            append_event(journal, {
+                "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-2", "execution_run_id": "run-2",
+            })
+            append_event(journal, {
+                "type": "claim_reclaimed", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+            })
+            state_file.write_text(json.dumps({
+                "_meta": {"cursor": 3}, "T-1": {"state": "ready"},
+            }), encoding="utf-8")
+
+            state = load_projection(journal, state_file)
+
+            self.assertEqual(state["_meta"]["projection_version"], 2)
+            self.assertEqual(state["_meta"]["cursor"], 3)
+            self.assertEqual(state["_meta"]["ignored_stale_claim_events"], 1)
+            self.assertEqual(state["T-1"]["state"], "run_backed_claim")
+            self.assertEqual(state["T-1"]["checkout_run_id"], "run-2")
+            self.assertEqual(state["T-1"]["execution_run_id"], "run-2")
+            self.assertEqual(state["T-1"]["last_event"]["type"], "claim_acquired")
 
     def test_journal_rejects_invalid_claim_event_envelopes(self):
         with tempfile.TemporaryDirectory() as directory:
