@@ -565,6 +565,14 @@ function assertCanManageIssueMonitor(req: Request, assigneeAgentId: string | nul
   throw forbidden("Only the assignee agent or a board user can manage issue monitors");
 }
 
+const BOARD_CONTROLLED_ISSUE_STATUSES = new Set(["done", "needs_approval", "changes_requested"]);
+
+function assertNoAgentBoardControlledIssueStatus(req: Request, status: unknown) {
+  if (req.actor.type === "agent" && typeof status === "string" && BOARD_CONTROLLED_ISSUE_STATUSES.has(status)) {
+    throw forbidden("Agents cannot set board-controlled issue status directly");
+  }
+}
+
 function summarizeIssueMonitor(
   issue: {
     monitorNextCheckAt?: Date | null;
@@ -3086,6 +3094,7 @@ export function issueRoutes(
   router.post("/companies/:companyId/issues", applyCreateIssueStatusDefault, validate(createIssueSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    assertNoAgentBoardControlledIssueStatus(req, req.body.status);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
@@ -3181,6 +3190,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, parent.companyId);
+    assertNoAgentBoardControlledIssueStatus(req, req.body.status);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, parent))) return;
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
@@ -3332,13 +3342,7 @@ export function issueRoutes(
     assertCompanyAccess(req, existing.companyId);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
-    if (
-      req.actor.type === "agent" &&
-      ["done", "needs_approval", "changes_requested"].includes(req.body.status)
-    ) {
-      res.status(403).json({ error: "Agents cannot set board-controlled issue status directly" });
-      return;
-    }
+    assertNoAgentBoardControlledIssueStatus(req, req.body.status);
 
     const actor = getActorInfo(req);
     const isClosed = isClosedIssueStatus(existing.status);
