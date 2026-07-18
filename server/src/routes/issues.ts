@@ -92,6 +92,7 @@ import {
   SVG_CONTENT_TYPE,
 } from "../attachment-types.js";
 import { queueIssueAssignmentWakeup } from "../services/issue-assignment-wakeup.js";
+import { assertIssueRunOwnership } from "../services/issue-run-ownership.js";
 import { detectAndFireGoalWorkComplete } from "../services/goal-wakeups.js";
 import { assertEnvironmentSelectionForCompany } from "./environment-selection.js";
 import { executionWorkspaceService as executionWorkspaceServiceDirect } from "../services/execution-workspaces.js";
@@ -2182,6 +2183,9 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === existing.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
     const updateFields = sourceIssueStatus ? { status: sourceIssueStatus } : {};
     await assertAgentInReviewReviewPath({
       existing,
@@ -2191,6 +2195,7 @@ export function issueRoutes(
 
     const actionStatus = outcome === "cancelled" ? "cancelled" : "resolved";
     const result = await db.transaction(async (tx) => {
+      await assertIssueRunOwnership(tx, existing.id, existing.companyId, runOwnership);
       let issue = existing;
       if (outcome === "blocked") {
         const unresolvedBlockers = await tx
