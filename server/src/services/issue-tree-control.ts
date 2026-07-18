@@ -879,6 +879,7 @@ export function issueTreeControlService(db: Db) {
         executionRunId: null,
         executionAgentNameKey: null,
         executionLockedAt: null,
+        leaseExpiresAt: null,
         updatedAt: now,
       })
       .where(
@@ -970,6 +971,7 @@ export function issueTreeControlService(db: Db) {
             executionRunId: null,
             executionAgentNameKey: null,
             executionLockedAt: null,
+            leaseExpiresAt: null,
             updatedAt: now,
           })
           .where(
