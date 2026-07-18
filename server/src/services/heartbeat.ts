@@ -6958,6 +6958,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       } catch (error) {
         if (!isCheckoutConflictError(error)) throw error;
         context[PAPERCLIP_HARNESS_CHECKOUT_KEY] = false;
+        throw error;
       }
       issueContext = await getIssueExecutionContext(agent.companyId, issueId);
     }
