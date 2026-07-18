@@ -349,6 +349,24 @@ function runningIssueRunCondition(actorRunId: string, actorAgentId: string) {
   )`;
 }
 
+const ISSUE_LEASE_HEARTBEAT_STALE_THRESHOLD_MS = 15 * 60 * 1000;
+
+function recentRunningIssueHeartbeatCondition(runId: string) {
+  return sql<boolean>`exists (
+    select 1
+    from ${heartbeatRuns}
+    where ${heartbeatRuns.id} = ${runId}
+      and ${heartbeatRuns.agentId} = ${issues.assigneeAgentId}
+      and ${heartbeatRuns.companyId} = ${issues.companyId}
+      and ${heartbeatRuns.status} = 'running'
+      and ${heartbeatRuns.updatedAt} > now() - (${ISSUE_LEASE_HEARTBEAT_STALE_THRESHOLD_MS} * interval '1 millisecond')
+      and (
+        ${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issues.id}::text
+        or ${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issues.id}::text
+      )
+  )`;
+}
+
 const TERMINAL_HEARTBEAT_RUN_STATUSES = new Set(["succeeded", "failed", "cancelled", "timed_out"]);
 const ISSUE_LIST_DESCRIPTION_MAX_CHARS = 1200;
 const ISSUE_LIST_DESCRIPTION_MAX_BYTES = ISSUE_LIST_DESCRIPTION_MAX_CHARS * 4;
@@ -4892,6 +4910,25 @@ export function issueService(db: Db) {
     },
 
     reclaimExpiredLease: async (id: string, expectedCheckoutRunId: string) => {
+      const extended = await db
+        .update(issues)
+        .set({
+          leaseExpiresAt: sql`now() + interval '15 minutes'`,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(issues.id, id),
+            eq(issues.status, "in_progress"),
+            eq(issues.checkoutRunId, expectedCheckoutRunId),
+            sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
+            recentRunningIssueHeartbeatCondition(expectedCheckoutRunId),
+          ),
+        )
+        .returning({ id: issues.id })
+        .then((rows) => rows[0] ?? null);
+      if (extended) return null;
+
       const reclaimed = await db
         .update(issues)
         .set({
@@ -4910,6 +4947,7 @@ export function issueService(db: Db) {
             eq(issues.status, "in_progress"),
             eq(issues.checkoutRunId, expectedCheckoutRunId),
             sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
+            sql<boolean>`not (${recentRunningIssueHeartbeatCondition(expectedCheckoutRunId)})`,
           ),
         )
         .returning()

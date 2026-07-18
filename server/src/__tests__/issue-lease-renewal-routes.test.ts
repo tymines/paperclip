@@ -39,7 +39,13 @@ type LeaseRow = {
   leaseExpiresAt: Date | null;
 };
 
-function createLeaseDb(row: LeaseRow) {
+type HeartbeatRun = {
+  id: string;
+  status: string;
+  updatedAt: Date;
+};
+
+function createLeaseDb(row: LeaseRow, heartbeatRun: HeartbeatRun | null = null) {
   const whereQueries: Array<{ sql: string; params: unknown[] }> = [];
   const dialect = new PgDialect();
 
@@ -52,13 +58,22 @@ function createLeaseDb(row: LeaseRow) {
           return {
             returning: () => {
               const isReclaim = patch.status === "todo";
+              const isHeartbeatExtension = !isReclaim && "updatedAt" in patch;
               const now = new Date();
-              const matches = isReclaim
-                ? row.status === "in_progress" && row.leaseExpiresAt !== null && row.leaseExpiresAt < now
-                : row.status === "in_progress"
-                  && query.params.includes(row.assigneeAgentId)
-                  && query.params.includes(row.checkoutRunId)
-                  && (row.leaseExpiresAt === null || row.leaseExpiresAt > now);
+              const expired = row.status === "in_progress" && row.leaseExpiresAt !== null && row.leaseExpiresAt < now;
+              const expectedRunMatches = query.params.includes(row.checkoutRunId);
+              const recentRunningHeartbeat = heartbeatRun?.id === row.checkoutRunId
+                && heartbeatRun.status === "running"
+                && heartbeatRun.updatedAt.getTime() > now.getTime() - 15 * 60_000;
+              const heartbeatAwareReclaim = isReclaim && query.sql.includes("heartbeat_runs");
+              const matches = isHeartbeatExtension
+                ? expired && expectedRunMatches && recentRunningHeartbeat
+                : isReclaim
+                  ? expired && expectedRunMatches && (!heartbeatAwareReclaim || !recentRunningHeartbeat)
+                  : row.status === "in_progress"
+                    && query.params.includes(row.assigneeAgentId)
+                    && expectedRunMatches
+                    && (row.leaseExpiresAt === null || row.leaseExpiresAt > now);
 
               if (!matches) return Promise.resolve([]);
               if (isReclaim) {
@@ -269,8 +284,8 @@ describe("issue lease service CAS", () => {
     const service = realIssueService(fake.db);
 
     const results = await Promise.all([
-      service.reclaimExpiredLease(row.id),
-      service.reclaimExpiredLease(row.id),
+      service.reclaimExpiredLease(row.id, row.checkoutRunId!),
+      service.reclaimExpiredLease(row.id, row.checkoutRunId!),
     ]);
 
     expect(results.filter(Boolean)).toHaveLength(1);
@@ -286,5 +301,27 @@ describe("issue lease service CAS", () => {
     });
     expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"lease_expires_at"/s);
     expect(fake.whereQueries[0].sql).toMatch(/now\(\)/);
+  });
+
+  it("extends an expired lease for a recent running heartbeat and reclaims it once stale", async () => {
+    const now = Date.now();
+    const row = leaseRow(new Date(now - 60_000));
+    const heartbeatRun = {
+      id: row.checkoutRunId!,
+      status: "running",
+      updatedAt: new Date(now - 60_000),
+    };
+    const fake = createLeaseDb(row, heartbeatRun);
+    const service = realIssueService(fake.db);
+
+    await expect(service.reclaimExpiredLease(row.id, row.checkoutRunId!)).resolves.toBeNull();
+    expect(row.status).toBe("in_progress");
+    expect(row.leaseExpiresAt!.getTime()).toBeGreaterThan(now + 14 * 60_000);
+
+    row.leaseExpiresAt = new Date(now - 60_000);
+    heartbeatRun.updatedAt = new Date(now - 16 * 60_000);
+    await expect(service.reclaimExpiredLease(row.id, row.checkoutRunId!)).resolves.toMatchObject({ status: "todo" });
+    expect(row.status).toBe("todo");
+    expect(fake.whereQueries.map((query) => query.sql).join("\n")).toMatch(/heartbeat_runs.*status.*updated_at/s);
   });
 });
