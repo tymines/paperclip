@@ -351,7 +351,8 @@ export function designRoutes(db: Db) {
       const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
       if (!skill) throw badRequest("skill required");
       if (!prompt) throw badRequest("prompt required");
-      const companyId = typeof body.companyId === "string" ? body.companyId : null;
+      const requestedCompanyId = typeof body.companyId === "string" ? body.companyId : null;
+      const companyId = requestedCompanyId ?? (req.actor.type === "agent" ? req.actor.companyId ?? null : null);
       if (companyId) assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
       const idemKey =
@@ -393,7 +394,8 @@ export function designRoutes(db: Db) {
       const body = req.body ?? {};
       const brief = typeof body.brief === "string" ? body.brief.trim() : "";
       if (!brief) throw badRequest("brief required");
-      const companyId = typeof body.companyId === "string" ? body.companyId : null;
+      const requestedCompanyId = typeof body.companyId === "string" ? body.companyId : null;
+      const companyId = requestedCompanyId ?? (req.actor.type === "agent" ? req.actor.companyId ?? null : null);
       if (companyId) assertCompanyAccess(req, companyId);
       const actor = getActorInfo(req);
       const result = await presets.start({
