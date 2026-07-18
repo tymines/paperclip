@@ -738,8 +738,15 @@ def reclaim_expired_leases():
                     WITH rail_owner AS (
                         SELECT pg_try_advisory_xact_lock(1380010316, 1) AS acquired
                     ), expired AS (
-                        SELECT i.id, i.checkout_run_id, i.execution_run_id
-                        FROM issues i CROSS JOIN rail_owner o
+                        SELECT i.id, i.checkout_run_id, i.execution_run_id,
+                               coalesce(
+                                   hr.status = 'running'
+                                   AND coalesce(hr.last_output_at, hr.updated_at) > now() - interval '15 minutes',
+                                   false
+                               ) AS heartbeat_recent
+                        FROM issues i
+                        LEFT JOIN heartbeat_runs hr ON hr.id = i.execution_run_id
+                        CROSS JOIN rail_owner o
                         WHERE o.acquired
                           AND i.status = 'in_progress'
                           AND i.lease_expires_at IS NOT NULL
@@ -747,23 +754,27 @@ def reclaim_expired_leases():
                         ORDER BY i.lease_expires_at
                         LIMIT 20
                         FOR UPDATE OF i SKIP LOCKED
+                    ), updated AS (
+                        UPDATE issues i
+                        SET status = CASE WHEN e.heartbeat_recent THEN i.status ELSE 'todo' END,
+                            assignee_agent_id = CASE WHEN e.heartbeat_recent THEN i.assignee_agent_id END,
+                            checkout_run_id = CASE WHEN e.heartbeat_recent THEN i.checkout_run_id END,
+                            execution_run_id = CASE WHEN e.heartbeat_recent THEN i.execution_run_id END,
+                            execution_agent_name_key = CASE WHEN e.heartbeat_recent THEN i.execution_agent_name_key END,
+                            execution_locked_at = CASE WHEN e.heartbeat_recent THEN i.execution_locked_at END,
+                            lease_expires_at = CASE WHEN e.heartbeat_recent THEN now() + interval '15 minutes' END,
+                            updated_at = now()
+                        FROM expired e
+                        WHERE i.id = e.id
+                          AND i.checkout_run_id = e.checkout_run_id
+                          AND i.execution_run_id = e.execution_run_id
+                          AND i.lease_expires_at <= now()
+                        RETURNING i.id, i.identifier, e.checkout_run_id, e.execution_run_id,
+                                  i.worktree_path, i.branch_name, e.heartbeat_recent
                     )
-                    UPDATE issues i
-                    SET status = 'todo',
-                        assignee_agent_id = NULL,
-                        checkout_run_id = NULL,
-                        execution_run_id = NULL,
-                        execution_agent_name_key = NULL,
-                        execution_locked_at = NULL,
-                        lease_expires_at = NULL,
-                        updated_at = now()
-                    FROM expired e
-                    WHERE i.id = e.id
-                      AND i.checkout_run_id = e.checkout_run_id
-                      AND i.execution_run_id = e.execution_run_id
-                      AND i.lease_expires_at <= now()
-                    RETURNING i.id, i.identifier, e.checkout_run_id, e.execution_run_id,
-                              i.worktree_path, i.branch_name
+                    SELECT id, identifier, checkout_run_id, execution_run_id, worktree_path, branch_name
+                    FROM updated
+                    WHERE NOT heartbeat_recent
                 """)
                 columns = [desc[0] for desc in cur.description]
                 return [dict(zip(columns, row)) for row in cur.fetchall()]

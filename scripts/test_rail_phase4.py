@@ -141,7 +141,7 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         self.assertIn("pg_try_advisory_lock", executed[0][0])
         lock.close()
 
-    def test_expired_lease_reclaimer_fences_both_run_ids(self):
+    def test_expired_lease_reclaimer_fences_run_ids_and_defers_recent_heartbeats(self):
         executed = []
 
         class Cursor:
@@ -170,8 +170,13 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         with mock.patch.object(controller, "open_db", return_value=Connection()):
             reclaimed = controller.reclaim_expired_leases()
 
-        self.assertIn("SELECT i.id, i.checkout_run_id, i.execution_run_id", executed[0])
-        self.assertIn("AND i.execution_run_id = e.execution_run_id", executed[0])
+        sql = executed[0]
+        self.assertIn("SELECT i.id, i.checkout_run_id, i.execution_run_id", sql)
+        self.assertIn("LEFT JOIN heartbeat_runs hr ON hr.id = i.execution_run_id", sql)
+        self.assertIn("coalesce(hr.last_output_at, hr.updated_at) > now() - interval '15 minutes'", sql)
+        self.assertIn("THEN now() + interval '15 minutes'", sql)
+        self.assertIn("AND i.execution_run_id = e.execution_run_id", sql)
+        self.assertIn("WHERE NOT heartbeat_recent", sql)
         self.assertEqual(reclaimed[0]["execution_run_id"], "execution-1")
 
     def test_global_invariant_surfaces_dual_run_drift(self):
