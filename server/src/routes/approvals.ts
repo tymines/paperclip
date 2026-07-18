@@ -485,10 +485,20 @@ export function approvalRoutes(
     }
     assertCompanyAccess(req, approval.companyId);
     const actor = getActorInfo(req);
+    let runOwnership: { agentId: string; runId: string } | undefined;
+    if (actor.actorType === "agent") {
+      const agentId = actor.agentId;
+      const runId = actor.runId?.trim();
+      if (!agentId || !runId) {
+        res.status(401).json({ error: "Agent run id required" });
+        return;
+      }
+      runOwnership = { agentId, runId };
+    }
     const comment = await svc.addComment(id, req.body.body, {
       agentId: actor.agentId ?? undefined,
       userId: actor.actorType === "user" ? actor.actorId : undefined,
-    });
+    }, { runOwnership });
 
     await logActivity(db, {
       companyId: approval.companyId,

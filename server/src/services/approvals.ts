@@ -342,23 +342,37 @@ export function approvalService(db: Db) {
       approvalId: string,
       body: string,
       actor: { agentId?: string; userId?: string },
+      options: { runOwnership?: IssueRunOwnership } = {},
     ) => {
-      const existing = await getExistingApproval(approvalId);
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
       const redactedBody = redactCurrentUserText(body, currentUserRedactionOptions);
-      return db
-        .insert(approvalComments)
-        .values({
-          companyId: existing.companyId,
-          approvalId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          body: redactedBody,
-        })
-        .returning()
-        .then((rows) => redactApprovalComment(rows[0], currentUserRedactionOptions.enabled));
+      return db.transaction(async (tx) => {
+        const existing = await getExistingApproval(approvalId, tx);
+        const linkedIssueIds = await tx
+          .select({ issueId: issueApprovals.issueId })
+          .from(issueApprovals)
+          .where(and(
+            eq(issueApprovals.companyId, existing.companyId),
+            eq(issueApprovals.approvalId, approvalId),
+          ));
+        for (const { issueId } of linkedIssueIds) {
+          await assertIssueRunOwnership(tx, issueId, existing.companyId, options.runOwnership);
+        }
+
+        return tx
+          .insert(approvalComments)
+          .values({
+            companyId: existing.companyId,
+            approvalId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            body: redactedBody,
+          })
+          .returning()
+          .then((rows) => redactApprovalComment(rows[0], currentUserRedactionOptions.enabled));
+      });
     },
   };
 }
