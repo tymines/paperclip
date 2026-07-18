@@ -871,6 +871,7 @@ def claim_task(cfg=None):
             claimed = api("POST", f"/api/issues/{issue['id']}/checkout", {
                 "agentId": agent["id"],
                 "expectedStatuses": ["backlog", "todo"],
+                "controllerEpoch": CONTROLLER_EPOCH,
             })
             deadline = time.monotonic() + 30
             while claimed and time.monotonic() < deadline:

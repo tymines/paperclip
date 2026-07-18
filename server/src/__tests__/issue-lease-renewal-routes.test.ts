@@ -10,7 +10,9 @@ import { issueService as realIssueService } from "../services/issues.js";
 
 const routeMocks = vi.hoisted(() => ({
   getById: vi.fn(),
+  checkout: vi.fn(),
   renewLease: vi.fn(),
+  wakeup: vi.fn(),
   logActivity: vi.fn(),
 }));
 
@@ -20,7 +22,11 @@ vi.mock("../services/index.js", async (importOriginal) => {
     ...actual,
     issueService: () => ({
       getById: routeMocks.getById,
+      checkout: routeMocks.checkout,
       renewLease: routeMocks.renewLease,
+    }),
+    heartbeatService: () => ({
+      wakeup: routeMocks.wakeup,
     }),
     logActivity: routeMocks.logActivity,
   };
@@ -150,6 +156,18 @@ function agentActor(companyId: string, agentId: string, runId: string): Express.
   };
 }
 
+function boardActor(companyId: string): Express.Request["actor"] {
+  return {
+    type: "board",
+    userId: "rail-controller",
+    userName: null,
+    userEmail: null,
+    companyIds: [companyId],
+    source: "session",
+    isInstanceAdmin: false,
+  };
+}
+
 function createApp(actor: Express.Request["actor"]) {
   const app = express();
   app.use(express.json());
@@ -161,6 +179,44 @@ function createApp(actor: Express.Request["actor"]) {
   app.use(errorHandler);
   return app;
 }
+
+describe("controller epoch checkout propagation", () => {
+  it("carries the controller epoch into the assignee heartbeat run", async () => {
+    vi.clearAllMocks();
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const issueId = randomUUID();
+    const issue = {
+      id: issueId,
+      companyId,
+      status: "todo",
+      projectId: null,
+      executionWorkspaceId: null,
+    };
+    routeMocks.getById.mockResolvedValue(issue);
+    routeMocks.checkout.mockResolvedValue({
+      ...issue,
+      status: "in_progress",
+      assigneeAgentId: agentId,
+      checkoutRunId: null,
+      executionRunId: null,
+    });
+    routeMocks.wakeup.mockResolvedValue(undefined);
+
+    const response = await request(createApp(boardActor(companyId)))
+      .post(`/api/issues/${issueId}/checkout`)
+      .send({ agentId, expectedStatuses: ["todo"], controllerEpoch: 7 });
+
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(routeMocks.wakeup).toHaveBeenCalledWith(agentId, expect.objectContaining({
+      contextSnapshot: {
+        issueId,
+        source: "issue.checkout",
+        controllerEpoch: 7,
+      },
+    }));
+  });
+});
 
 describe("issue lease renewal validator", () => {
   it("accepts only an empty body so identity cannot be supplied by the caller", () => {

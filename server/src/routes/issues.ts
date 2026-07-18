@@ -4408,7 +4408,11 @@ export function issueRoutes(
           payload: { issueId: issue.id, mutation: "checkout" },
           requestedByActorType: actor.actorType,
           requestedByActorId: actor.actorId,
-          contextSnapshot: { issueId: issue.id, source: "issue.checkout" },
+          contextSnapshot: {
+            issueId: issue.id,
+            source: "issue.checkout",
+            ...(req.body.controllerEpoch === undefined ? {} : { controllerEpoch: req.body.controllerEpoch }),
+          },
         })
         .catch((err) => logger.warn({ err, issueId: issue.id }, "failed to wake assignee on issue checkout"));
     }

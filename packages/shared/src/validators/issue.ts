@@ -436,6 +436,7 @@ export type IssueExecutionWorkspaceSettings = z.infer<typeof issueExecutionWorks
 export const checkoutIssueSchema = z.object({
   agentId: z.string().uuid(),
   expectedStatuses: z.array(z.enum(ISSUE_STATUSES)).nonempty(),
+  controllerEpoch: z.number().int().positive().optional(),
 });
 
 export type CheckoutIssue = z.infer<typeof checkoutIssueSchema>;

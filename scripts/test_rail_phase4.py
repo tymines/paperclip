@@ -293,6 +293,7 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         )
 
     def test_claim_acquired_event_carries_dual_run_token(self):
+        controller.CONTROLLER_EPOCH = 7
         issue = {"id": "T-1", "identifier": "RAIL-1", "title": "Lease", "status": "todo"}
         agent = {"id": "agent-1", "urlKey": "zeus", "status": "idle"}
         claimed = {
@@ -300,12 +301,13 @@ class Phase4ControllerFenceTests(unittest.TestCase):
             "checkoutRunId": "run-1", "executionRunId": "run-1",
             "leaseExpiresAt": "2099-01-01T00:00:00+00:00",
         }
-        with mock.patch.object(controller, "api", side_effect=[issue, [agent], claimed]), \
+        with mock.patch.object(controller, "api", side_effect=[issue, [agent], claimed]) as api_call, \
              mock.patch.object(controller, "emit_event") as emit_event:
             result = controller.claim_task({
                 "enforcement": "on", "eligible_issue_ids": ["T-1"], "seats": ["zeus"],
             })
         self.assertEqual(result, claimed)
+        self.assertEqual(api_call.call_args_list[2].args[2]["controllerEpoch"], 7)
         emit_event.assert_called_once_with(
             "claim_acquired", "T-1", identifier="RAIL-1", title="Lease",
             assignee_agent_id="agent-1", checkout_run_id="run-1", execution_run_id="run-1",
