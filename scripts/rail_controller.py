@@ -262,10 +262,23 @@ def acquire_controller_lock():
     return conn
 
 
-def next_controller_epoch():
+def next_controller_epoch(conn):
     state = load_state()
     meta = state.setdefault("_meta", {})
-    epoch = int(meta.get("controller_epoch", 0)) + 1
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT COALESCE(MAX((details ->> 'controllerEpoch')::bigint), 0)
+            FROM activity_log
+            WHERE company_id = %s AND action = 'rail.controller_epoch'
+        """, (CID,))
+        durable_epoch = int(cur.fetchone()[0] or 0)
+        epoch = max(int(meta.get("controller_epoch", 0)), durable_epoch) + 1
+        cur.execute("""
+            INSERT INTO activity_log
+                (company_id, actor_type, actor_id, action, entity_type, entity_id, details)
+            VALUES (%s, 'system', 'rail_controller', 'rail.controller_epoch',
+                    'company', %s, jsonb_build_object('controllerEpoch', %s))
+        """, (CID, CID, epoch))
     meta.update({"controller_epoch": epoch, "controller_heartbeat_at": now_iso()})
     save_state(state)
     return epoch
@@ -1090,7 +1103,7 @@ def main():
                 break
 
     CONTROLLER_LOCK = acquire_controller_lock()
-    CONTROLLER_EPOCH = next_controller_epoch()
+    CONTROLLER_EPOCH = next_controller_epoch(CONTROLLER_LOCK)
     _log("rail", f"RAIL controller starting. epoch={CONTROLLER_EPOCH} rail_enabled=ON enforcement={cfg['enforcement']} poll={POLL_SEC}s")
     emit_event("controller.start", "system", config={k: v for k, v in cfg.items() if k != "rail_enabled"},
                polling_interval_s=POLL_SEC, dry=DRY, once=ONCE, e2e=E2E)

@@ -141,6 +141,35 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         self.assertIn("pg_try_advisory_lock", executed[0][0])
         lock.close()
 
+    def test_controller_epoch_advances_past_durable_db_epoch_and_registers_it(self):
+        executed = []
+
+        class Cursor:
+            def __enter__(self):
+                return self
+            def __exit__(self, *_):
+                return False
+            def execute(self, query, params=None):
+                executed.append((query, params))
+            def fetchone(self):
+                return (9,)
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        state = {"_meta": {"controller_epoch": 4}}
+        with mock.patch.object(controller, "load_state", return_value=state), \
+             mock.patch.object(controller, "save_state") as save_state:
+            epoch = controller.next_controller_epoch(Connection())
+
+        self.assertEqual(epoch, 10)
+        self.assertEqual(state["_meta"]["controller_epoch"], 10)
+        save_state.assert_called_once_with(state)
+        self.assertIn("rail.controller_epoch", executed[0][0])
+        self.assertIn("INSERT INTO activity_log", executed[1][0])
+        self.assertEqual(executed[1][1], (controller.CID, controller.CID, 10))
+
     def test_expired_lease_reclaimer_fences_run_ids_and_defers_recent_heartbeats(self):
         executed = []
 
