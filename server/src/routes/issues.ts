@@ -4277,9 +4277,13 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, existing.companyId);
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
+    const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === existing.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
     const attachments = await svc.listAttachments(id);
 
-    const issue = await svc.remove(id);
+    const issue = await svc.remove(id, { runOwnership });
     if (!issue) {
       res.status(404).json({ error: "Issue not found" });
       return;
@@ -4293,7 +4297,6 @@ export function issueRoutes(
       }
     }
 
-    const actor = getActorInfo(req);
     await logActivity(db, {
       companyId: issue.companyId,
       actorType: actor.actorType,
