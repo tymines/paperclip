@@ -3178,7 +3178,12 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
           select 1 from ${heartbeatRuns}
           where ${heartbeatRuns.id} = ${actorRunId}
             and ${heartbeatRuns.agentId} = ${actorAgentId}
+            and ${heartbeatRuns.companyId} = ${issues.companyId}
             and ${heartbeatRuns.status} = 'running'
+            and (
+              ${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issues.id}::text
+              or ${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issues.id}::text
+            )
         )`,
       )
       : undefined;
