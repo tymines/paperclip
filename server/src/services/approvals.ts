@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals, agents, issueApprovals, issues } from "@paperclipai/db";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -108,7 +108,7 @@ export function approvalService(db: Db) {
       actor: { agentId?: string | null; userId?: string | null } = {},
       options: { runOwnership?: IssueRunOwnership } = {},
     ) => db.transaction(async (tx) => {
-      const uniqueIssueIds = Array.from(new Set(issueIds));
+      const uniqueIssueIds = Array.from(new Set(issueIds)).sort();
       if (uniqueIssueIds.length > 0) {
         const issueRows = await tx
           .select({ id: issues.id })
@@ -119,6 +119,34 @@ export function approvalService(db: Db) {
         }
         for (const issueId of uniqueIssueIds) {
           await assertIssueRunOwnership(tx, issueId, companyId, options.runOwnership);
+        }
+        if (!options.runOwnership) {
+          const lockedIssueRows = await tx
+            .update(issues)
+            .set({ updatedAt: sql`${issues.updatedAt}` })
+            .where(and(eq(issues.companyId, companyId), inArray(issues.id, uniqueIssueIds)))
+            .returning({ id: issues.id });
+          if (lockedIssueRows.length !== uniqueIssueIds.length) {
+            throw notFound("One or more issues not found");
+          }
+        }
+      }
+
+      if (data.type === "task_completion" && uniqueIssueIds.length > 0) {
+        const existingTaskApproval = await tx
+          .select({ id: approvals.id })
+          .from(issueApprovals)
+          .innerJoin(approvals, eq(approvals.id, issueApprovals.approvalId))
+          .where(and(
+            eq(issueApprovals.companyId, companyId),
+            inArray(issueApprovals.issueId, uniqueIssueIds),
+            eq(approvals.type, "task_completion"),
+            inArray(approvals.status, ["pending", "revision_requested"]),
+          ))
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (existingTaskApproval) {
+          throw conflict("Linked issue already has an active task completion approval");
         }
       }
 
