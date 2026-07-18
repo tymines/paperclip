@@ -3,6 +3,7 @@ import express from "express";
 import request from "supertest";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { heartbeatRuns } from "@paperclipai/db";
 import { renewIssueLeaseSchema } from "@paperclipai/shared/validators/issue";
 import { errorHandler } from "../middleware/index.js";
 import { issueService as realIssueService } from "../services/issues.js";
@@ -39,7 +40,12 @@ type LeaseRow = {
   leaseExpiresAt: Date | null;
 };
 
-function createLeaseDb(row: LeaseRow) {
+type HeartbeatRow = Pick<
+  typeof heartbeatRuns.$inferSelect,
+  "id" | "status" | "lastOutputAt" | "updatedAt"
+>;
+
+function createLeaseDb(row: LeaseRow, heartbeat: HeartbeatRow | null = null) {
   const whereQueries: Array<{ sql: string; params: unknown[] }> = [];
   const stats = { transactionCalls: 0 };
   const dialect = new PgDialect();
@@ -53,6 +59,7 @@ function createLeaseDb(row: LeaseRow) {
           return {
             returning: () => {
               const isReclaim = patch.status === "todo";
+              const isHeartbeatExtension = !isReclaim && !query.sql.includes('"assignee_agent_id"');
               const now = new Date();
               const matches = isReclaim
                 ? row.status === "in_progress"
@@ -62,12 +69,18 @@ function createLeaseDb(row: LeaseRow) {
                   && query.params.includes(row.executionRunId)
                   && row.leaseExpiresAt !== null
                   && row.leaseExpiresAt < now
-                : row.status === "in_progress"
-                  && query.sql.includes('"execution_run_id"')
-                  && query.params.includes(row.assigneeAgentId)
-                  && query.params.includes(row.checkoutRunId)
-                  && query.params.includes(row.executionRunId)
-                  && (row.leaseExpiresAt === null || row.leaseExpiresAt > now);
+                : isHeartbeatExtension
+                  ? row.status === "in_progress"
+                    && query.params.includes(row.checkoutRunId)
+                    && query.params.includes(row.executionRunId)
+                    && row.leaseExpiresAt !== null
+                    && row.leaseExpiresAt < now
+                  : row.status === "in_progress"
+                    && query.sql.includes('"execution_run_id"')
+                    && query.params.includes(row.assigneeAgentId)
+                    && query.params.includes(row.checkoutRunId)
+                    && query.params.includes(row.executionRunId)
+                    && (row.leaseExpiresAt === null || row.leaseExpiresAt > now);
 
               if (!matches) return Promise.resolve([]);
               if (isReclaim) {
@@ -90,12 +103,24 @@ function createLeaseDb(row: LeaseRow) {
       }),
     }),
     select: () => ({
-      from: () => ({
-        where: () => Promise.resolve([{
-          ...row,
-          leaseActive: row.leaseExpiresAt !== null && row.leaseExpiresAt > new Date(),
-          actorRunActive: true,
-        }]),
+      from: (table: unknown) => ({
+        where: (condition: Parameters<PgDialect["sqlToQuery"]>[0]) => {
+          if (table === heartbeatRuns) {
+            const query = dialect.sqlToQuery(condition);
+            whereQueries.push({ sql: query.sql, params: query.params });
+            const heartbeatAt = heartbeat?.lastOutputAt ?? heartbeat?.updatedAt;
+            const recent = heartbeat?.status === "running"
+              && heartbeatAt !== undefined
+              && heartbeatAt !== null
+              && heartbeatAt > new Date(Date.now() - 15 * 60_000);
+            return Promise.resolve(recent ? [{ id: heartbeat.id }] : []);
+          }
+          return Promise.resolve([{
+            ...row,
+            leaseActive: row.leaseExpiresAt !== null && row.leaseExpiresAt > new Date(),
+            actorRunActive: true,
+          }]);
+        },
         innerJoin: () => ({
           where: () => ({
             orderBy: () => Promise.resolve([]),
@@ -292,9 +317,15 @@ describe("issue lease service CAS", () => {
     );
   });
 
-  it("allows exactly one service caller to reclaim an expired lease and clears ownership", async () => {
+  it("allows exactly one service caller to reclaim an expired lease after its run heartbeat is stale", async () => {
     const row = leaseRow(new Date(Date.now() - 60_000));
-    const fake = createLeaseDb(row);
+    const staleAt = new Date(Date.now() - 16 * 60_000);
+    const fake = createLeaseDb(row, {
+      id: row.executionRunId!,
+      status: "running",
+      lastOutputAt: staleAt,
+      updatedAt: staleAt,
+    });
     const service = realIssueService(fake.db);
 
     const results = await Promise.all([
@@ -313,9 +344,29 @@ describe("issue lease service CAS", () => {
       executionLockedAt: null,
       leaseExpiresAt: null,
     });
-    expect(fake.whereQueries[0].sql).toMatch(/"id".*"status".*"checkout_run_id".*"execution_run_id".*"lease_expires_at"/s);
-    expect(fake.whereQueries[0].sql).toMatch(/now\(\)/);
+    const reclaimQuery = fake.whereQueries.find(({ sql }) => sql.includes('"issues"."id"'))!;
+    expect(reclaimQuery.sql).toMatch(/"id".*"status".*"checkout_run_id".*"execution_run_id".*"lease_expires_at"/s);
+    expect(reclaimQuery.sql).toMatch(/now\(\)/);
     expect(fake.stats.transactionCalls).toBe(2);
+  });
+
+  it("extends an expired lease instead of reclaiming while its run heartbeat is recent", async () => {
+    const row = leaseRow(new Date(Date.now() - 60_000));
+    const recentAt = new Date(Date.now() - 60_000);
+    const fake = createLeaseDb(row, {
+      id: row.executionRunId!,
+      status: "running",
+      lastOutputAt: recentAt,
+      updatedAt: recentAt,
+    });
+    const service = realIssueService(fake.db);
+
+    const reclaimed = await service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!);
+
+    expect(reclaimed).toBeNull();
+    expect(row.status).toBe("in_progress");
+    expect(row.leaseExpiresAt?.getTime()).toBeGreaterThan(Date.now() + 14 * 60_000);
+    expect(fake.whereQueries[0].sql).toMatch(/heartbeat_runs.*status.*coalesce.*last_output_at.*updated_at.*15 minutes/s);
   });
 
   it("does not clear a newer execution owner selected after the reclaim snapshot", async () => {

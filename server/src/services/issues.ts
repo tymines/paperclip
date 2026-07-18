@@ -4904,29 +4904,50 @@ export function issueService(db: Db) {
       expectedCheckoutRunId: string,
       expectedExecutionRunId: string,
     ) => {
-      const reclaimed = await withRailClaimLock((tx) => tx
-        .update(issues)
-        .set({
-          status: "todo",
-          assigneeAgentId: null,
-          checkoutRunId: null,
-          executionRunId: null,
-          executionAgentNameKey: null,
-          executionLockedAt: null,
-          leaseExpiresAt: null,
-          updatedAt: sql`now()`,
-        })
-        .where(
-          and(
-            eq(issues.id, id),
-            eq(issues.status, "in_progress"),
-            eq(issues.checkoutRunId, expectedCheckoutRunId),
-            eq(issues.executionRunId, expectedExecutionRunId),
-            sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
-          ),
-        )
-        .returning()
-        .then((rows) => rows[0] ?? null));
+      const reclaimed = await withRailClaimLock(async (tx) => {
+        const expiredLeaseMatch = and(
+          eq(issues.id, id),
+          eq(issues.status, "in_progress"),
+          eq(issues.checkoutRunId, expectedCheckoutRunId),
+          eq(issues.executionRunId, expectedExecutionRunId),
+          sql<boolean>`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} <= now()`,
+        );
+        const recentHeartbeat = await tx
+          .select({ id: heartbeatRuns.id })
+          .from(heartbeatRuns)
+          .where(and(
+            eq(heartbeatRuns.id, expectedExecutionRunId),
+            eq(heartbeatRuns.status, "running"),
+            sql<boolean>`coalesce(${heartbeatRuns.lastOutputAt}, ${heartbeatRuns.updatedAt}) > now() - interval '15 minutes'`,
+          ))
+          .then((rows) => rows[0] ?? null);
+        if (recentHeartbeat) {
+          await tx
+            .update(issues)
+            .set({
+              leaseExpiresAt: sql`now() + interval '15 minutes'`,
+              updatedAt: sql`now()`,
+            })
+            .where(expiredLeaseMatch)
+            .returning();
+          return null;
+        }
+        return tx
+          .update(issues)
+          .set({
+            status: "todo",
+            assigneeAgentId: null,
+            checkoutRunId: null,
+            executionRunId: null,
+            executionAgentNameKey: null,
+            executionLockedAt: null,
+            leaseExpiresAt: null,
+            updatedAt: sql`now()`,
+          })
+          .where(expiredLeaseMatch)
+          .returning()
+          .then((rows) => rows[0] ?? null);
+      });
       if (!reclaimed) return null;
       const [enriched] = await withIssueLabels(db, [reclaimed]);
       return enriched;
