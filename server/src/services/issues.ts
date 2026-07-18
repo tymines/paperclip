@@ -5230,12 +5230,20 @@ export function issueService(db: Db) {
       return redactIssueComment(commentWithResolvedName, censorUsernameInLogs);
     },
 
-    removeComment: async (commentId: string) => {
+    removeComment: async (commentId: string, options: { runOwnership?: IssueRunOwnership } = {}) => {
       const currentUserRedactionOptions = {
         enabled: (await instanceSettings.getGeneral()).censorUsernameInLogs,
       };
 
       return db.transaction(async (tx) => {
+        const existing = await tx
+          .select({ issueId: issueComments.issueId, companyId: issueComments.companyId })
+          .from(issueComments)
+          .where(eq(issueComments.id, commentId))
+          .then((rows) => rows[0] ?? null);
+        if (!existing) return null;
+        await assertIssueRunOwnership(tx, existing.issueId, existing.companyId, options.runOwnership);
+
         const [comment] = await tx
           .delete(issueComments)
           .where(eq(issueComments.id, commentId))
