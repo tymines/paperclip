@@ -31,8 +31,17 @@ export function gateRoutes(db: Db) {
     const stageId = randomUUID();
     const runName = name ?? "New Project";
 
-    await db.execute(sql`INSERT INTO pipeline_runs (id, company_id, name, status) VALUES (${runId}, ${companyId}, ${runName}, 'active')`);
-    await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${stageId}, ${runId}, 'idea', 'active', 0)`);
+    const [started] = await rows(db, sql`
+      WITH new_run AS (
+        INSERT INTO pipeline_runs (id, company_id, name, status)
+        VALUES (${runId}, ${companyId}, ${runName}, 'active')
+        RETURNING id
+      )
+      INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order)
+      SELECT ${stageId}, id, 'idea', 'active', 0 FROM new_run
+      RETURNING id
+    `);
+    if (!started) { res.status(409).json({ error: "pipeline start failed" }); return; }
 
     emitEvent({ type: "pipeline_start", runId, stageId, name: runName });
 
