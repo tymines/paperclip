@@ -339,14 +339,30 @@ export function approvalService(db: Db) {
         return updated;
       }),
 
-    resubmit: async (id: string, payload?: Record<string, unknown>) => {
-      const existing = await getExistingApproval(id);
+    resubmit: async (
+      id: string,
+      payload?: Record<string, unknown>,
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const existing = await getExistingApproval(id, tx);
       if (existing.status !== "revision_requested") {
         throw unprocessable("Only revision requested approvals can be resubmitted");
       }
 
+      const linkedIssueIds = await tx
+        .select({ issueId: issueApprovals.issueId })
+        .from(issueApprovals)
+        .where(and(
+          eq(issueApprovals.companyId, existing.companyId),
+          eq(issueApprovals.approvalId, id),
+        ))
+        .then((rows) => rows.map((row) => row.issueId));
+      for (const issueId of linkedIssueIds) {
+        await assertIssueRunOwnership(tx, issueId, existing.companyId, options.runOwnership);
+      }
+
       const now = new Date();
-      return db
+      const updated = await tx
         .update(approvals)
         .set({
           status: "pending",
@@ -356,10 +372,41 @@ export function approvalService(db: Db) {
           decidedAt: null,
           updatedAt: now,
         })
-        .where(eq(approvals.id, id))
+        .where(and(eq(approvals.id, id), eq(approvals.status, "revision_requested")))
         .returning()
-        .then((rows) => rows[0]);
-    },
+        .then((rows) => rows[0] ?? null);
+      if (!updated) {
+        throw unprocessable("Only revision requested approvals can be resubmitted");
+      }
+
+      if (updated.type === "task_completion" && linkedIssueIds.length > 0) {
+        const transitioned = await tx
+          .update(issues)
+          .set({
+            status: "needs_approval",
+            completedAt: null,
+            checkoutRunId: null,
+            executionRunId: null,
+            executionAgentNameKey: null,
+            executionLockedAt: null,
+            leaseExpiresAt: null,
+            updatedAt: now,
+          })
+          .where(and(
+            eq(issues.companyId, updated.companyId),
+            inArray(issues.id, linkedIssueIds),
+            options.runOwnership
+              ? eq(issues.status, "in_progress")
+              : inArray(issues.status, ["in_progress", "changes_requested"]),
+          ))
+          .returning({ id: issues.id });
+        if (transitioned.length !== linkedIssueIds.length) {
+          throw conflict("Linked issues changed before approval resubmission");
+        }
+      }
+
+      return updated;
+    }),
 
     listComments: async (approvalId: string) => {
       const existing = await getExistingApproval(approvalId);
