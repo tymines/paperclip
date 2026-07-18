@@ -2,7 +2,7 @@
 import { Router } from "express";
 import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { checkGate } from "../rooms-rail/gate-checker.js";
 import { logger } from "../middleware/logger.js";
 import { randomUUID } from "node:crypto";
@@ -23,6 +23,7 @@ export function gateRoutes(db: Db) {
 
   // ── Run create — start pipeline at Idea ──
   router.post("/companies/:companyId/pipeline/start", async (req, res) => {
+    assertBoard(req);
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const { name } = req.body as { name?: string };
