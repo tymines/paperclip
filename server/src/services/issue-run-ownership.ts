@@ -28,7 +28,12 @@ export async function assertIssueRunOwnership(
           select 1 from ${heartbeatRuns}
           where ${heartbeatRuns.id} = ${ownership.runId}
             and ${heartbeatRuns.agentId} = ${ownership.agentId}
+            and ${heartbeatRuns.companyId} = ${issues.companyId}
             and ${heartbeatRuns.status} = 'running'
+            and (
+              ${heartbeatRuns.contextSnapshot} ->> 'issueId' = ${issues.id}::text
+              or ${heartbeatRuns.contextSnapshot} ->> 'taskId' = ${issues.id}::text
+            )
         )`,
       ),
     )
