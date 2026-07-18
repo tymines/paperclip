@@ -196,18 +196,59 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         claim = {
             "state": "run_backed_claim",
             "checkout_run_id": "run-1",
+            "execution_run_id": "run-1",
             "lease_expires_at": "2026-07-17T07:00:00+00:00",
         }
         issue = {
             "id": "T-1", "status": "in_progress", "checkoutRunId": "run-1",
-            "leaseExpiresAt": "2026-07-17T07:05:00+00:00",
+            "executionRunId": "run-1", "leaseExpiresAt": "2026-07-17T07:05:00+00:00",
         }
         with mock.patch.object(controller, "api", return_value=issue), \
              mock.patch.object(controller, "emit_event") as emit_event:
             controller.refresh_run_backed_claim("T-1", claim)
         emit_event.assert_called_once_with(
-            "claim_renewed", "T-1", checkout_run_id="run-1",
+            "claim_renewed", "T-1", checkout_run_id="run-1", execution_run_id="run-1",
             lease_expires_at="2026-07-17T07:05:00+00:00",
+        )
+
+    def test_run_backed_claim_reports_split_execution_owner_as_lost(self):
+        claim = {
+            "state": "run_backed_claim",
+            "checkout_run_id": "run-1",
+            "execution_run_id": "run-1",
+            "lease_expires_at": "2026-07-17T07:00:00+00:00",
+        }
+        issue = {
+            "status": "in_progress", "checkoutRunId": "run-1",
+            "executionRunId": "run-2", "leaseExpiresAt": "2026-07-17T07:00:00+00:00",
+        }
+        with mock.patch.object(controller, "api", return_value=issue), \
+             mock.patch.object(controller, "emit_event") as emit_event:
+            controller.refresh_run_backed_claim("T-1", claim)
+        emit_event.assert_called_once_with(
+            "claim_lost", "T-1", checkout_run_id="run-1", execution_run_id="run-1",
+            observed_status="in_progress", observed_checkout_run_id="run-1",
+            observed_execution_run_id="run-2",
+        )
+
+    def test_claim_acquired_event_carries_dual_run_token(self):
+        issue = {"id": "T-1", "identifier": "RAIL-1", "title": "Lease", "status": "todo"}
+        agent = {"id": "agent-1", "urlKey": "zeus", "status": "idle"}
+        claimed = {
+            "id": "T-1", "status": "in_progress", "assigneeAgentId": "agent-1",
+            "checkoutRunId": "run-1", "executionRunId": "run-1",
+            "leaseExpiresAt": "2099-01-01T00:00:00+00:00",
+        }
+        with mock.patch.object(controller, "api", side_effect=[issue, [agent], claimed]), \
+             mock.patch.object(controller, "emit_event") as emit_event:
+            result = controller.claim_task({
+                "enforcement": "on", "eligible_issue_ids": ["T-1"], "seats": ["zeus"],
+            })
+        self.assertEqual(result, claimed)
+        emit_event.assert_called_once_with(
+            "claim_acquired", "T-1", identifier="RAIL-1", title="Lease",
+            assignee_agent_id="agent-1", checkout_run_id="run-1", execution_run_id="run-1",
+            lease_expires_at="2099-01-01T00:00:00+00:00",
         )
 
 

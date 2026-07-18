@@ -772,19 +772,26 @@ def refresh_run_backed_claim(task_id, claim):
     issue = api("GET", f"/api/issues/{task_id}")
     if issue is None:
         return
-    expected_run = claim.get("checkout_run_id")
-    live_run = issue.get("checkoutRunId")
+    expected_checkout_run = claim.get("checkout_run_id")
+    expected_execution_run = claim.get("execution_run_id", expected_checkout_run)
+    live_checkout_run = issue.get("checkoutRunId")
+    live_execution_run = issue.get("executionRunId")
     live_lease = issue.get("leaseExpiresAt")
-    if issue.get("status") != "in_progress" or live_run != expected_run or not live_lease:
+    if (issue.get("status") != "in_progress"
+            or live_checkout_run != expected_checkout_run
+            or live_execution_run != expected_execution_run
+            or not live_lease):
         emit_event(
-            "claim_lost", task_id, checkout_run_id=expected_run,
-            observed_status=issue.get("status"), observed_checkout_run_id=live_run,
+            "claim_lost", task_id, checkout_run_id=expected_checkout_run,
+            execution_run_id=expected_execution_run, observed_status=issue.get("status"),
+            observed_checkout_run_id=live_checkout_run,
+            observed_execution_run_id=live_execution_run,
         )
         return
     if live_lease != claim.get("lease_expires_at"):
         emit_event(
-            "claim_renewed", task_id, checkout_run_id=live_run,
-            lease_expires_at=live_lease,
+            "claim_renewed", task_id, checkout_run_id=live_checkout_run,
+            execution_run_id=live_execution_run, lease_expires_at=live_lease,
         )
 
 
@@ -846,10 +853,13 @@ def claim_task(cfg=None):
                     lease_live = False
                 if (claimed.get("status") == "in_progress"
                         and claimed.get("assigneeAgentId") == agent["id"]
-                        and claimed.get("checkoutRunId") and lease_live):
+                        and claimed.get("checkoutRunId")
+                        and claimed.get("executionRunId") == claimed.get("checkoutRunId")
+                        and lease_live):
                     emit_event("claim_acquired", issue["id"], identifier=ident,
                                title=issue.get("title"), assignee_agent_id=agent["id"],
                                checkout_run_id=claimed["checkoutRunId"],
+                               execution_run_id=claimed["executionRunId"],
                                lease_expires_at=lease)
                     return claimed
                 time.sleep(0.5)
