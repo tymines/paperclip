@@ -17,7 +17,7 @@ import { roomService, agentService, logActivity, publishLiveEvent, heartbeatServ
 import { createDesignRunsService } from "../services/design-runs.js";
 import { dispatchAgentBridge } from "../services/agent-bridge.js";
 import { conflict, notFound } from "../errors.js";
-import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
 import {
   processRoomTransition,
@@ -55,6 +55,7 @@ export function roomRoutes(db: Db) {
 
   // POST /companies/:companyId/review-projects/:projectId/review  { decision, note }
   router.post("/companies/:companyId/review-projects/:projectId/review", async (req, res) => {
+    assertBoard(req);
     assertCompanyAccess(req, req.params.companyId as string);
     const { projectId } = req.params;
     const decision = String((req.body?.decision ?? "")).toLowerCase();
