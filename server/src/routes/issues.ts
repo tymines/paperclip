@@ -5494,6 +5494,9 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
     const stored = await storage.putFile({
       companyId,
       namespace: `issues/${issueId}`,
@@ -5502,18 +5505,28 @@ export function issueRoutes(
       body: file.buffer,
     });
 
-    const attachment = await svc.createAttachment({
-      issueId,
-      issueCommentId: parsedMeta.data.issueCommentId ?? null,
-      provider: stored.provider,
-      objectKey: stored.objectKey,
-      contentType: stored.contentType,
-      byteSize: stored.byteSize,
-      sha256: stored.sha256,
-      originalFilename: stored.originalFilename,
-      createdByAgentId: actor.agentId,
-      createdByUserId: actor.actorType === "user" ? actor.actorId : null,
-    });
+    let attachment;
+    try {
+      attachment = await svc.createAttachment({
+        issueId,
+        issueCommentId: parsedMeta.data.issueCommentId ?? null,
+        provider: stored.provider,
+        objectKey: stored.objectKey,
+        contentType: stored.contentType,
+        byteSize: stored.byteSize,
+        sha256: stored.sha256,
+        originalFilename: stored.originalFilename,
+        createdByAgentId: actor.agentId,
+        createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+      }, { runOwnership });
+    } catch (err) {
+      try {
+        await storage.deleteObject(companyId, stored.objectKey);
+      } catch (cleanupErr) {
+        logger.warn({ err: cleanupErr, issueId, objectKey: stored.objectKey }, "failed to clean up rejected attachment upload");
+      }
+      throw err;
+    }
 
     await logActivity(db, {
       companyId,

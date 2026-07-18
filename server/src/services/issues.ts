@@ -5341,7 +5341,7 @@ export function issueService(db: Db) {
       originalFilename?: string | null;
       createdByAgentId?: string | null;
       createdByUserId?: string | null;
-    }) => {
+    }, options: { runOwnership?: IssueRunOwnership } = {}) => {
       const issue = await db
         .select({ id: issues.id, companyId: issues.companyId })
         .from(issues)
@@ -5349,19 +5349,20 @@ export function issueService(db: Db) {
         .then((rows) => rows[0] ?? null);
       if (!issue) throw notFound("Issue not found");
 
-      if (input.issueCommentId) {
-        const comment = await db
-          .select({ id: issueComments.id, companyId: issueComments.companyId, issueId: issueComments.issueId })
-          .from(issueComments)
-          .where(eq(issueComments.id, input.issueCommentId))
-          .then((rows) => rows[0] ?? null);
-        if (!comment) throw notFound("Issue comment not found");
-        if (comment.companyId !== issue.companyId || comment.issueId !== issue.id) {
-          throw unprocessable("Attachment comment must belong to same issue and company");
-        }
-      }
-
       return db.transaction(async (tx) => {
+        await assertIssueRunOwnership(tx, issue.id, issue.companyId, options.runOwnership);
+        if (input.issueCommentId) {
+          const comment = await tx
+            .select({ id: issueComments.id, companyId: issueComments.companyId, issueId: issueComments.issueId })
+            .from(issueComments)
+            .where(eq(issueComments.id, input.issueCommentId))
+            .then((rows) => rows[0] ?? null);
+          if (!comment) throw notFound("Issue comment not found");
+          if (comment.companyId !== issue.companyId || comment.issueId !== issue.id) {
+            throw unprocessable("Attachment comment must belong to same issue and company");
+          }
+        }
+
         const [asset] = await tx
           .insert(assets)
           .values({
