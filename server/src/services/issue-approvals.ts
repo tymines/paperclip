@@ -3,6 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { approvals, issueApprovals, issues } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactEventPayload } from "../redaction.js";
+import { assertIssueRunOwnership, type IssueRunOwnership } from "./issue-run-ownership.js";
 
 interface LinkActor {
   agentId?: string | null;
@@ -10,27 +11,33 @@ interface LinkActor {
 }
 
 export function issueApprovalService(db: Db) {
-  async function getIssue(issueId: string) {
-    return db
+  type QueryExecutor = Pick<Db, "select">;
+
+  async function getIssue(issueId: string, dbOrTx: QueryExecutor = db) {
+    return dbOrTx
       .select()
       .from(issues)
       .where(eq(issues.id, issueId))
       .then((rows) => rows[0] ?? null);
   }
 
-  async function getApproval(approvalId: string) {
-    return db
+  async function getApproval(approvalId: string, dbOrTx: QueryExecutor = db) {
+    return dbOrTx
       .select()
       .from(approvals)
       .where(eq(approvals.id, approvalId))
       .then((rows) => rows[0] ?? null);
   }
 
-  async function assertIssueAndApprovalSameCompany(issueId: string, approvalId: string) {
-    const issue = await getIssue(issueId);
+  async function assertIssueAndApprovalSameCompany(
+    issueId: string,
+    approvalId: string,
+    dbOrTx: QueryExecutor = db,
+  ) {
+    const issue = await getIssue(issueId, dbOrTx);
     if (!issue) throw notFound("Issue not found");
 
-    const approval = await getApproval(approvalId);
+    const approval = await getApproval(approvalId, dbOrTx);
     if (!approval) throw notFound("Approval not found");
 
     if (issue.companyId !== approval.companyId) {
@@ -104,10 +111,16 @@ export function issueApprovalService(db: Db) {
         .orderBy(desc(issueApprovals.createdAt));
     },
 
-    link: async (issueId: string, approvalId: string, actor?: LinkActor) => {
-      const { issue } = await assertIssueAndApprovalSameCompany(issueId, approvalId);
+    link: async (
+      issueId: string,
+      approvalId: string,
+      actor?: LinkActor,
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const { issue } = await assertIssueAndApprovalSameCompany(issueId, approvalId, tx);
+      await assertIssueRunOwnership(tx, issueId, issue.companyId, options.runOwnership);
 
-      await db
+      await tx
         .insert(issueApprovals)
         .values({
           companyId: issue.companyId,
@@ -118,19 +131,24 @@ export function issueApprovalService(db: Db) {
         })
         .onConflictDoNothing();
 
-      return db
+      return tx
         .select()
         .from(issueApprovals)
         .where(and(eq(issueApprovals.issueId, issueId), eq(issueApprovals.approvalId, approvalId)))
         .then((rows) => rows[0] ?? null);
-    },
+    }),
 
-    unlink: async (issueId: string, approvalId: string) => {
-      await assertIssueAndApprovalSameCompany(issueId, approvalId);
-      await db
+    unlink: async (
+      issueId: string,
+      approvalId: string,
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const { issue } = await assertIssueAndApprovalSameCompany(issueId, approvalId, tx);
+      await assertIssueRunOwnership(tx, issueId, issue.companyId, options.runOwnership);
+      await tx
         .delete(issueApprovals)
         .where(and(eq(issueApprovals.issueId, issueId), eq(issueApprovals.approvalId, approvalId)));
-    },
+    }),
 
     linkManyForApproval: async (approvalId: string, issueIds: string[], actor?: LinkActor) => {
       if (issueIds.length === 0) return;

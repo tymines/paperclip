@@ -3023,6 +3023,10 @@ export function issueRoutes(
     await issueApprovalsSvc.link(id, req.body.approvalId, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,
+    }, {
+      runOwnership: req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+        ? { agentId: actor.agentId!, runId: actor.runId! }
+        : undefined,
     });
 
     await logActivity(db, {
@@ -3053,9 +3057,13 @@ export function issueRoutes(
     if (!(await assertAgentIssueMutationAllowed(req, res, issue))) return;
     if (!(await assertCanManageIssueApprovalLinks(req, res, issue.companyId))) return;
 
-    await issueApprovalsSvc.unlink(id, approvalId);
-
     const actor = getActorInfo(req);
+    await issueApprovalsSvc.unlink(id, approvalId, {
+      runOwnership: req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+        ? { agentId: actor.agentId!, runId: actor.runId! }
+        : undefined,
+    });
+
     await logActivity(db, {
       companyId: issue.companyId,
       actorType: actor.actorType,
