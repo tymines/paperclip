@@ -5455,7 +5455,7 @@ export function issueService(db: Db) {
         .where(eq(issueAttachments.id, id))
         .then((rows) => rows[0] ?? null),
 
-    removeAttachment: async (id: string) =>
+    removeAttachment: async (id: string, options: { runOwnership?: IssueRunOwnership } = {}) =>
       db.transaction(async (tx) => {
         const existing = await tx
           .select({
@@ -5480,6 +5480,7 @@ export function issueService(db: Db) {
           .where(eq(issueAttachments.id, id))
           .then((rows) => rows[0] ?? null);
         if (!existing) return null;
+        await assertIssueRunOwnership(tx, existing.issueId, existing.companyId, options.runOwnership);
 
         await tx.delete(issueAttachments).where(eq(issueAttachments.id, id));
         await tx.delete(assets).where(eq(assets.id, existing.assetId));
