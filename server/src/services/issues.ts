@@ -5218,6 +5218,7 @@ export function issueService(db: Db) {
         presentation?: IssueCommentPresentation | null;
         metadata?: IssueCommentMetadata | null;
         createdAt?: Date | string | null;
+        enforceRunOwnership?: boolean;
       },
     ) => {
       const issue = await db
@@ -5254,28 +5255,49 @@ export function issueService(db: Db) {
         authorName = actor.userId;
       }
 
-      const [comment] = await db
-        .insert(issueComments)
-        .values({
-          companyId: issue.companyId,
-          issueId,
-          authorAgentId: actor.agentId ?? null,
-          authorUserId: actor.userId ?? null,
-          authorName,
-          authorType,
-          createdByRunId: actor.runId ?? null,
-          body: redactedBody,
-          presentation,
-          metadata,
-          ...(createdAt && !Number.isNaN(createdAt.getTime()) ? { createdAt } : {}),
-        })
-        .returning();
+      const comment = await db.transaction(async (tx) => {
+        if (options?.enforceRunOwnership && actor.agentId) {
+          if (!actor.runId) throw conflict("Active checkout run required to add issue comments");
+          const owner = await tx
+            .select({ id: issues.id })
+            .from(issues)
+            .where(and(
+              eq(issues.id, issueId),
+              eq(issues.status, "in_progress"),
+              eq(issues.assigneeAgentId, actor.agentId),
+              eq(issues.checkoutRunId, actor.runId),
+              sql`${issues.leaseExpiresAt} is not null and ${issues.leaseExpiresAt} > now()`,
+              runningIssueRunCondition(actor.runId, actor.agentId),
+            ))
+            .for("update")
+            .then((rows) => rows[0] ?? null);
+          if (!owner) throw conflict("Only active checkout run can add issue comments");
+        }
 
-      // Update issue's updatedAt so comment activity is reflected in recency sorting
-      await db
-        .update(issues)
-        .set({ updatedAt: new Date() })
-        .where(eq(issues.id, issueId));
+        const [inserted] = await tx
+          .insert(issueComments)
+          .values({
+            companyId: issue.companyId,
+            issueId,
+            authorAgentId: actor.agentId ?? null,
+            authorUserId: actor.userId ?? null,
+            authorName,
+            authorType,
+            createdByRunId: actor.runId ?? null,
+            body: redactedBody,
+            presentation,
+            metadata,
+            ...(createdAt && !Number.isNaN(createdAt.getTime()) ? { createdAt } : {}),
+          })
+          .returning();
+
+        // Update issue's updatedAt so comment activity is reflected in recency sorting
+        await tx
+          .update(issues)
+          .set({ updatedAt: new Date() })
+          .where(eq(issues.id, issueId));
+        return inserted;
+      });
 
       const [commentWithResolvedName] = await resolveCommentAuthorNames([comment]);
       return redactIssueComment(commentWithResolvedName, currentUserRedactionOptions.enabled);

@@ -3912,7 +3912,7 @@ export function issueRoutes(
         agentId: actor.agentId ?? undefined,
         userId: actor.actorType === "user" ? actor.actorId : undefined,
         runId: actor.runId,
-      });
+      }, { enforceRunOwnership: req.actor.type === "agent" });
       await issueReferencesSvc.syncComment(comment.id);
       const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       const commentReferenceDiff = issueReferencesSvc.diffIssueReferenceSummary(
@@ -5111,6 +5111,7 @@ export function issueRoutes(
       authorType: req.body.authorType ?? (actor.actorType === "agent" ? "agent" : "user"),
       presentation: req.body.presentation ?? null,
       metadata: req.body.metadata ?? null,
+      enforceRunOwnership: req.actor.type === "agent",
     });
     await issueReferencesSvc.syncComment(comment.id);
     const commentReferenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(currentIssue.id);
