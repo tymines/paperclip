@@ -1,7 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { approvalComments, approvals, agents, issueApprovals, issues } from "@paperclipai/db";
-import { notFound, unprocessable } from "../errors.js";
+import { conflict, notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
@@ -25,12 +25,12 @@ export function approvalService(db: Db) {
     };
   }
 
-  async function getExistingApproval(id: string) {
-    const existing = await db
+  async function getExistingApproval(id: string, dbOrTx: any = db) {
+    const existing = await dbOrTx
       .select()
       .from(approvals)
       .where(eq(approvals.id, id))
-      .then((rows) => rows[0] ?? null);
+      .then((rows: ApprovalRecord[]) => rows[0] ?? null);
     if (!existing) throw notFound("Approval not found");
     return existing;
   }
@@ -40,8 +40,9 @@ export function approvalService(db: Db) {
     targetStatus: "approved" | "rejected",
     decidedByUserId: string,
     decisionNote: string | null | undefined,
+    dbOrTx: any = db,
   ): Promise<ResolutionResult> {
-    const existing = await getExistingApproval(id);
+    const existing = await getExistingApproval(id, dbOrTx);
     if (!canResolveStatuses.has(existing.status)) {
       if (existing.status === targetStatus) {
         return { approval: existing, applied: false };
@@ -52,7 +53,7 @@ export function approvalService(db: Db) {
     }
 
     const now = new Date();
-    const updated = await db
+    const updated = await dbOrTx
       .update(approvals)
       .set({
         status: targetStatus,
@@ -63,13 +64,13 @@ export function approvalService(db: Db) {
       })
       .where(and(eq(approvals.id, id), inArray(approvals.status, resolvableStatuses)))
       .returning()
-      .then((rows) => rows[0] ?? null);
+      .then((rows: ApprovalRecord[]) => rows[0] ?? null);
 
     if (updated) {
       return { approval: updated, applied: true };
     }
 
-    const latest = await getExistingApproval(id);
+    const latest = await getExistingApproval(id, dbOrTx);
     if (latest.status === targetStatus) {
       return { approval: latest, applied: false };
     }
@@ -159,12 +160,46 @@ export function approvalService(db: Db) {
     }),
 
     approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
-      const { approval: updated, applied } = await resolveApproval(
-        id,
-        "approved",
-        decidedByUserId,
-        decisionNote,
-      );
+      const { approval: updated, applied } = await db.transaction(async (tx) => {
+        const result = await resolveApproval(
+          id,
+          "approved",
+          decidedByUserId,
+          decisionNote,
+          tx,
+        );
+        if (result.applied && result.approval.type === "task_completion") {
+          const linkedIssueIds = await tx
+            .select({ issueId: issueApprovals.issueId })
+            .from(issueApprovals)
+            .where(eq(issueApprovals.approvalId, result.approval.id))
+            .then((rows) => rows.map((row) => row.issueId));
+          if (linkedIssueIds.length > 0) {
+            const transitioned = await tx
+              .update(issues)
+              .set({
+                status: "done",
+                completedAt: new Date(),
+                checkoutRunId: null,
+                executionRunId: null,
+                executionAgentNameKey: null,
+                executionLockedAt: null,
+                leaseExpiresAt: null,
+                updatedAt: new Date(),
+              })
+              .where(and(
+                eq(issues.companyId, result.approval.companyId),
+                inArray(issues.id, linkedIssueIds),
+                eq(issues.status, "needs_approval"),
+              ))
+              .returning({ id: issues.id });
+            if (transitioned.length !== linkedIssueIds.length) {
+              throw conflict("Linked issues changed before approval resolution");
+            }
+          }
+        }
+        return result;
+      });
 
       let hireApprovedAgentId: string | null = null;
       const now = new Date();
