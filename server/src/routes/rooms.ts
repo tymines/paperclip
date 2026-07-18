@@ -548,6 +548,10 @@ export function roomRoutes(db: Db) {
     await assertCouncilScope(companyId, roomId, sessionId);
     const agentId = req.body?.agentId as string;
     if (!agentId) { res.status(400).json({ error: "agentId required" }); return; }
+    const participantAgent = await agentService(db).getById(agentId);
+    if (!participantAgent || participantAgent.companyId !== companyId) {
+      throw notFound("Agent not found");
+    }
     const participant = await addParticipant(db, sessionId, agentId);
     res.status(201).json(participant);
   });
