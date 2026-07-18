@@ -128,7 +128,9 @@ export function designRoutes(db: Db) {
 
   router.get("/design/runs", async (req, res, next) => {
     try {
-      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : null;
+      assertAuthenticated(req);
+      const requestedCompanyId = typeof req.query.companyId === "string" ? req.query.companyId : null;
+      const companyId = requestedCompanyId ?? (req.actor.type === "agent" ? req.actor.companyId ?? null : null);
       const limit = Math.min(200, Number(req.query.limit) || 50);
       if (companyId) assertCompanyAccess(req, companyId);
       const runs = await service.list(companyId, limit);
