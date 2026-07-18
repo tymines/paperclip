@@ -103,8 +103,15 @@ export function designRoutes(db: Db) {
       if (!skill) throw badRequest("skill required");
       if (!prompt) throw badRequest("prompt required");
       const actor = getActorInfo(req);
+      const companyId =
+        typeof body.companyId === "string"
+          ? body.companyId
+          : req.actor.type === "agent"
+            ? req.actor.companyId
+            : null;
+      if (companyId) assertCompanyAccess(req, companyId);
       const run = await service.start({
-        companyId: typeof body.companyId === "string" ? body.companyId : null,
+        companyId,
         skill,
         prompt,
         agentId: typeof body.agentId === "string" ? body.agentId : undefined,
