@@ -249,12 +249,27 @@ function hasBackupTransforms(opts: RunDatabaseBackupOptions): boolean {
     Object.keys(opts.nullifyColumns ?? {}).length > 0;
 }
 
-function formatSqlValue(rawValue: unknown, columnName: string | undefined, nullifiedColumns: Set<string>): string {
+function formatPgArrayLiteral(values: unknown[]): string {
+  const elements = values.map((element) => {
+    if (element === null || element === undefined) return "NULL";
+    if (Array.isArray(element)) return formatPgArrayLiteral(element);
+    if (typeof element === "number" || typeof element === "bigint") return String(element);
+    if (typeof element === "boolean") return element ? "true" : "false";
+    const text = element instanceof Date ? element.toISOString() : String(element);
+    return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  });
+  return `{${elements.join(",")}}`;
+}
+
+function formatSqlValue(rawValue: unknown, columnName: string | undefined, nullifiedColumns: Set<string>, arrayColumns: Set<string>): string {
   const val = columnName && nullifiedColumns.has(columnName) ? null : rawValue;
   if (val === null || val === undefined) return "NULL";
   if (typeof val === "boolean") return val ? "true" : "false";
   if (typeof val === "number") return String(val);
   if (val instanceof Date) return formatSqlLiteral(val.toISOString());
+  if (Array.isArray(val) && columnName && arrayColumns.has(columnName)) {
+    return formatSqlLiteral(formatPgArrayLiteral(val));
+  }
   if (typeof val === "object") return formatSqlLiteral(JSON.stringify(val));
   return formatSqlLiteral(String(val));
 }
@@ -864,6 +879,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
         ORDER BY ordinal_position
       `;
       const colNames = cols.map((c) => `"${c.column_name}"`).join(", ");
+      const arrayColumns = new Set(cols.filter((c) => c.data_type === "ARRAY").map((c) => c.column_name));
 
       emit(`-- Data for: ${schema_name}.${tablename} (${count[0]!.n} rows)`);
 
@@ -895,7 +911,7 @@ export async function runDatabaseBackup(opts: RunDatabaseBackupOptions): Promise
       for await (const rows of rowCursor) {
         for (const row of rows) {
           const values = row.map((rawValue, index) =>
-            formatSqlValue(rawValue, cols[index]?.column_name, nullifiedColumns),
+            formatSqlValue(rawValue, cols[index]?.column_name, nullifiedColumns, arrayColumns),
           );
           emitStatement(`INSERT INTO ${qualifiedTableName} (${colNames}) VALUES (${values.join(", ")});`);
         }

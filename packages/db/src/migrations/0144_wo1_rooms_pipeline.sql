@@ -129,16 +129,21 @@ CREATE INDEX IF NOT EXISTS "gate_policy_company_stage_idx" ON "gate_policy" USIN
 -- 9. Seed gate_policy rows (skip if already seeded)
 INSERT INTO "gate_policy" ("company_id", "stage_name", "required_evidence_types", "min_reviewers", "auto_approve", "config")
 SELECT '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4', 'plan', '["plan_document"]'::jsonb, '1', false, '{"description":"Gate 1: Plan approval"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'plan');
+WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'plan')
+  AND EXISTS (SELECT 1 FROM "companies" WHERE "id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4');
 INSERT INTO "gate_policy" ("company_id", "stage_name", "required_evidence_types", "min_reviewers", "auto_approve", "config")
 SELECT '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4', 'critique', '["critique_verdict"]'::jsonb, '1', false, '{"description":"Gate 2: Critique pass"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'critique');
+WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'critique')
+  AND EXISTS (SELECT 1 FROM "companies" WHERE "id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4');
 INSERT INTO "gate_policy" ("company_id", "stage_name", "required_evidence_types", "min_reviewers", "auto_approve", "config")
 SELECT '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4', 'code', '["code_diff","test_output"]'::jsonb, '1', false, '{"description":"Gate 3: Code complete"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'code');
+WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'code')
+  AND EXISTS (SELECT 1 FROM "companies" WHERE "id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4');
 INSERT INTO "gate_policy" ("company_id", "stage_name", "required_evidence_types", "min_reviewers", "auto_approve", "config")
 SELECT '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4', 'review', '["review_verdict"]'::jsonb, '1', false, '{"description":"Gate 4: Review pass"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'review');
+WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'review')
+  AND EXISTS (SELECT 1 FROM "companies" WHERE "id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4');
 INSERT INTO "gate_policy" ("company_id", "stage_name", "required_evidence_types", "min_reviewers", "auto_approve", "config")
 SELECT '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4', 'merge', '["merge_sha"]'::jsonb, '1', false, '{"description":"Gate 5: Merge gate"}'::jsonb
-WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'merge');
+WHERE NOT EXISTS (SELECT 1 FROM "gate_policy" WHERE "company_id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4' AND "stage_name" = 'merge')
+  AND EXISTS (SELECT 1 FROM "companies" WHERE "id" = '7fdc9dc0-6d39-479d-b53a-fcff30f5c9d4');
