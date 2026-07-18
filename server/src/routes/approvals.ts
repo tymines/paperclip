@@ -429,6 +429,18 @@ export function approvalRoutes(
       return;
     }
 
+    const actor = getActorInfo(req);
+    let runOwnership: { agentId: string; runId: string } | undefined;
+    if (actor.actorType === "agent") {
+      const agentId = actor.agentId;
+      const runId = actor.runId?.trim();
+      if (!agentId || !runId) {
+        res.status(401).json({ error: "Agent run id required" });
+        return;
+      }
+      runOwnership = { agentId, runId };
+    }
+
     const normalizedPayload = req.body.payload
       ? existing.type === "hire_agent"
         ? await secretsSvc.normalizeHireApprovalPayloadForPersistence(
@@ -438,8 +450,7 @@ export function approvalRoutes(
           )
         : req.body.payload
       : undefined;
-    const approval = await svc.resubmit(id, normalizedPayload);
-    const actor = getActorInfo(req);
+    const approval = await svc.resubmit(id, normalizedPayload, { runOwnership });
     await logActivity(db, {
       companyId: approval.companyId,
       actorType: actor.actorType,

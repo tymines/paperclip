@@ -25,8 +25,8 @@ export function approvalService(db: Db) {
     };
   }
 
-  async function getExistingApproval(id: string) {
-    const existing = await db
+  async function getExistingApproval(id: string, dbOrTx: Pick<Db, "select"> = db) {
+    const existing = await dbOrTx
       .select()
       .from(approvals)
       .where(eq(approvals.id, id))
@@ -267,14 +267,29 @@ export function approvalService(db: Db) {
         .then((rows) => rows[0]);
     },
 
-    resubmit: async (id: string, payload?: Record<string, unknown>) => {
-      const existing = await getExistingApproval(id);
+    resubmit: async (
+      id: string,
+      payload?: Record<string, unknown>,
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const existing = await getExistingApproval(id, tx);
       if (existing.status !== "revision_requested") {
         throw unprocessable("Only revision requested approvals can be resubmitted");
       }
 
+      const linkedIssueIds = await tx
+        .select({ issueId: issueApprovals.issueId })
+        .from(issueApprovals)
+        .where(and(
+          eq(issueApprovals.companyId, existing.companyId),
+          eq(issueApprovals.approvalId, id),
+        ));
+      for (const { issueId } of linkedIssueIds) {
+        await assertIssueRunOwnership(tx, issueId, existing.companyId, options.runOwnership);
+      }
+
       const now = new Date();
-      return db
+      const updated = await tx
         .update(approvals)
         .set({
           status: "pending",
@@ -284,10 +299,14 @@ export function approvalService(db: Db) {
           decidedAt: null,
           updatedAt: now,
         })
-        .where(eq(approvals.id, id))
+        .where(and(eq(approvals.id, id), eq(approvals.status, "revision_requested")))
         .returning()
-        .then((rows) => rows[0]);
-    },
+        .then((rows) => rows[0] ?? null);
+      if (!updated) {
+        throw unprocessable("Only revision requested approvals can be resubmitted");
+      }
+      return updated;
+    }),
 
     listComments: async (approvalId: string) => {
       const existing = await getExistingApproval(approvalId);
