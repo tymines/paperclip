@@ -37,14 +37,12 @@ import {
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { issueService } from "./issues.js";
+import { assertIssueRunOwnership, type IssueRunOwnership } from "./issue-run-ownership.js";
 
 type InteractionActor = {
   agentId?: string | null;
   userId?: string | null;
 };
-
-const ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT =
-  "issue_thread_interactions_company_issue_idempotency_uq";
 
 type IssueWakeTarget = {
   id: string;
@@ -69,13 +67,6 @@ type IssueResolutionContext = {
   assigneeAgentId: string | null;
   assigneeUserId: string | null;
 };
-
-function isIssueThreadInteractionIdempotencyConflict(error: unknown): boolean {
-  if (typeof error !== "object" || error === null) return false;
-  const err = error as { code?: string; constraint?: string; constraint_name?: string };
-  const constraint = err.constraint ?? err.constraint_name;
-  return err.code === "23505" && constraint === ISSUE_THREAD_INTERACTION_IDEMPOTENCY_CONSTRAINT;
-}
 
 function isEquivalentCreateRequest(
   row: IssueThreadInteractionRow,
@@ -431,8 +422,8 @@ export function issueThreadInteractionService(db: Db) {
     issueId: string;
     companyId: string;
     idempotencyKey: string;
-  }) {
-    return db
+  }, dbOrTx: Pick<Db, "select"> = db) {
+    return dbOrTx
       .select()
       .from(issueThreadInteractions)
       .where(and(
@@ -627,15 +618,17 @@ export function issueThreadInteractionService(db: Db) {
       issue: { id: string; companyId: string },
       input: CreateIssueThreadInteraction,
       actor: InteractionActor,
-    ) => {
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
       const data = createIssueThreadInteractionSchema.parse(input);
+      await assertIssueRunOwnership(tx, issue.id, issue.companyId, options.runOwnership);
 
       if (data.idempotencyKey) {
         const existing = await getIdempotentInteraction({
           issueId: issue.id,
           companyId: issue.companyId,
           idempotencyKey: data.idempotencyKey,
-        });
+        }, tx);
         if (existing) {
           if (!isEquivalentCreateRequest(existing, data, actor)) {
             throw conflict("Interaction idempotency key already exists for a different request", {
@@ -647,7 +640,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.sourceCommentId) {
-        const sourceComment = await db
+        const sourceComment = await tx
           .select({
             companyId: issueComments.companyId,
             issueId: issueComments.issueId,
@@ -661,7 +654,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.sourceRunId) {
-        const sourceRun = await db
+        const sourceRun = await tx
           .select({
             companyId: heartbeatRuns.companyId,
           })
@@ -674,54 +667,52 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.kind === "request_confirmation") {
-        await assertRequestConfirmationTargetIsCurrent(db, {
+        await assertRequestConfirmationTargetIsCurrent(tx, {
           companyId: issue.companyId,
           issueId: issue.id,
           target: data.payload.target ?? null,
         });
       }
 
-      let created: IssueThreadInteractionRow;
-      try {
-        [created] = await db
-          .insert(issueThreadInteractions)
-          .values({
-            companyId: issue.companyId,
-            issueId: issue.id,
-            kind: data.kind,
-            status: "pending",
-            continuationPolicy: data.continuationPolicy,
-            idempotencyKey: data.idempotencyKey ?? null,
-            sourceCommentId: data.sourceCommentId ?? null,
-            sourceRunId: data.sourceRunId ?? null,
-            title: data.title ?? null,
-            summary: data.summary ?? null,
-            createdByAgentId: actor.agentId ?? null,
-            createdByUserId: actor.userId ?? null,
-            payload: data.payload,
-          })
-          .returning();
-      } catch (error) {
-        if (!data.idempotencyKey || !isIssueThreadInteractionIdempotencyConflict(error)) {
-          throw error;
-        }
-        const existing = await getIdempotentInteraction({
-          issueId: issue.id,
+      const [created] = await tx
+        .insert(issueThreadInteractions)
+        .values({
           companyId: issue.companyId,
-          idempotencyKey: data.idempotencyKey,
-        });
-        if (!existing) throw error;
-        if (!isEquivalentCreateRequest(existing, data, actor)) {
-          throw conflict("Interaction idempotency key already exists for a different request", {
+          issueId: issue.id,
+          kind: data.kind,
+          status: "pending",
+          continuationPolicy: data.continuationPolicy,
+          idempotencyKey: data.idempotencyKey ?? null,
+          sourceCommentId: data.sourceCommentId ?? null,
+          sourceRunId: data.sourceRunId ?? null,
+          title: data.title ?? null,
+          summary: data.summary ?? null,
+          createdByAgentId: actor.agentId ?? null,
+          createdByUserId: actor.userId ?? null,
+          payload: data.payload,
+        })
+        .onConflictDoNothing()
+        .returning();
+
+      if (!created) {
+        const existing = data.idempotencyKey
+          ? await getIdempotentInteraction({
+            issueId: issue.id,
+            companyId: issue.companyId,
             idempotencyKey: data.idempotencyKey,
+          }, tx)
+          : null;
+        if (!existing || !isEquivalentCreateRequest(existing, data, actor)) {
+          throw conflict("Interaction idempotency key already exists for a different request", {
+            idempotencyKey: data.idempotencyKey ?? null,
           });
         }
         return hydrateInteraction(existing);
       }
 
-      await touchIssue(db, issue.id);
+      await touchIssue(tx, issue.id);
       return hydrateInteraction(created);
-    },
+    }),
 
     acceptInteraction: async (
       issue: { id: string; companyId: string; projectId: string | null; goalId: string | null },

@@ -4584,6 +4584,10 @@ export function issueRoutes(
     }, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,
+    }, {
+      runOwnership: req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+        ? { agentId: actor.agentId!, runId: actor.runId! }
+        : undefined,
     });
 
     await logActivity(db, {
