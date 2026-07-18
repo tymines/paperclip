@@ -446,6 +446,7 @@ export function appdevControlRoutes(db: Db) {
         res.status(400).json({ error: `status must be one of ${WO_STATUSES.join(", ")}` });
         return;
       }
+      if (["changes_requested", "done", "killed"].includes(status)) assertBoard(req);
       try {
         const [wo] = await db
           .select()
