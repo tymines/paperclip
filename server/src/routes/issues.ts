@@ -2178,6 +2178,13 @@ export function issueRoutes(
     }
 
     const { actionId, outcome, sourceIssueStatus, resolutionNote } = req.body;
+    if (
+      req.actor.type === "agent" &&
+      (sourceIssueStatus === "done" || sourceIssueStatus === "in_review")
+    ) {
+      res.status(403).json({ error: "Agents cannot resolve recovery into a board-controlled status" });
+      return;
+    }
     if (outcome === "false_positive" || outcome === "cancelled") {
       assertBoard(req);
     }
