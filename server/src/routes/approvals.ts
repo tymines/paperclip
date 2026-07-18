@@ -94,6 +94,7 @@ export function approvalRoutes(
     // before attempting the insert — otherwise a FK violation returns a
     // generic 500 instead of a helpful 400.
     const actor = getActorInfo(req);
+    let runOwnership: { agentId: string; runId: string } | undefined;
     if (actor.actorType === "agent" && uniqueIssueIds.length > 0) {
       const agentId = actor.agentId;
       const runId = actor.runId?.trim();
@@ -101,9 +102,7 @@ export function approvalRoutes(
         res.status(401).json({ error: "Agent run id required" });
         return;
       }
-      for (const issueId of uniqueIssueIds) {
-        await issuesSvc.assertCheckoutOwner(issueId, agentId, runId);
-      }
+      runOwnership = { agentId, runId };
     }
     const resolvedRequestedByAgentId: string | null =
       approvalInput.requestedByAgentId ?? (actor.actorType === "agent" ? actor.agentId : null);
@@ -123,7 +122,7 @@ export function approvalRoutes(
       }
     }
 
-    const approval = await svc.create(companyId, {
+    const approval = await svc.createForIssues(companyId, {
       ...approvalInput,
       payload: normalizedPayload,
       requestedByUserId: actor.actorType === "user" ? actor.actorId : null,
@@ -133,34 +132,23 @@ export function approvalRoutes(
       decidedByUserId: null,
       decidedAt: null,
       updatedAt: new Date(),
-    });
-
-    if (uniqueIssueIds.length > 0) {
-      await issueApprovalsSvc.linkManyForApproval(approval.id, uniqueIssueIds, {
-        agentId: actor.agentId,
-        userId: actor.actorType === "user" ? actor.actorId : null,
-      });
-    }
+    }, uniqueIssueIds, {
+      agentId: actor.agentId,
+      userId: actor.actorType === "user" ? actor.actorId : null,
+    }, { runOwnership });
 
     await logActivity(db, {
       companyId,
       actorType: actor.actorType,
       actorId: actor.actorId,
       agentId: actor.agentId,
+      runId: actor.runId,
       action: "approval.created",
       entityType: "approval",
       entityId: approval.id,
       details: { type: approval.type, issueIds: uniqueIssueIds },
     });
 
-    // Auto-transition linked issues to needs_approval for task_completion approvals
-    if (approval.type === "task_completion" && uniqueIssueIds.length > 0) {
-      for (const issueId of uniqueIssueIds) {
-        await issuesSvc.update(issueId, { status: "needs_approval" }).catch((err) =>
-          logger.warn({ err, issueId, approvalId: approval.id }, "failed to transition issue to needs_approval"),
-        );
-      }
-    }
 
     res.status(201).json(redactApprovalPayload(approval));
   });

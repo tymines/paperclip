@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { approvalComments, approvals, agents } from "@paperclipai/db";
+import { approvalComments, approvals, agents, issueApprovals, issues } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
+import { assertIssueRunOwnership, type IssueRunOwnership } from "./issue-run-ownership.js";
 
 export function approvalService(db: Db) {
   const agentsSvc = agentService(db);
@@ -98,6 +99,64 @@ export function approvalService(db: Db) {
         .values({ ...data, companyId })
         .returning()
         .then((rows) => rows[0]),
+
+    createForIssues: async (
+      companyId: string,
+      data: Omit<typeof approvals.$inferInsert, "companyId">,
+      issueIds: string[],
+      actor: { agentId?: string | null; userId?: string | null } = {},
+      options: { runOwnership?: IssueRunOwnership } = {},
+    ) => db.transaction(async (tx) => {
+      const uniqueIssueIds = Array.from(new Set(issueIds));
+      if (uniqueIssueIds.length > 0) {
+        const issueRows = await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(eq(issues.companyId, companyId), inArray(issues.id, uniqueIssueIds)));
+        if (issueRows.length !== uniqueIssueIds.length) {
+          throw notFound("One or more issues not found");
+        }
+        for (const issueId of uniqueIssueIds) {
+          await assertIssueRunOwnership(tx, issueId, companyId, options.runOwnership);
+        }
+      }
+
+      const approval = await tx
+        .insert(approvals)
+        .values({ ...data, companyId })
+        .returning()
+        .then((rows) => rows[0]);
+
+      if (uniqueIssueIds.length > 0) {
+        await tx
+          .insert(issueApprovals)
+          .values(uniqueIssueIds.map((issueId) => ({
+            companyId,
+            issueId,
+            approvalId: approval.id,
+            linkedByAgentId: actor.agentId ?? null,
+            linkedByUserId: actor.userId ?? null,
+          })))
+          .onConflictDoNothing();
+      }
+
+      if (approval.type === "task_completion" && uniqueIssueIds.length > 0) {
+        await tx
+          .update(issues)
+          .set({
+            status: "needs_approval",
+            checkoutRunId: null,
+            executionRunId: null,
+            executionAgentNameKey: null,
+            executionLockedAt: null,
+            leaseExpiresAt: null,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(issues.companyId, companyId), inArray(issues.id, uniqueIssueIds)));
+      }
+
+      return approval;
+    }),
 
     approve: async (id: string, decidedByUserId: string, decisionNote?: string | null) => {
       const { approval: updated, applied } = await resolveApproval(
