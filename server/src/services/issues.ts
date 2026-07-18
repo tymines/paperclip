@@ -4317,6 +4317,8 @@ export function issueService(db: Db) {
         blockedByIssueIds?: string[];
         actorAgentId?: string | null;
         actorUserId?: string | null;
+        actorRunId?: string | null;
+        enforceRunOwnership?: boolean;
       },
       dbOrTx: any = db,
     ) => {
@@ -4332,6 +4334,8 @@ export function issueService(db: Db) {
         blockedByIssueIds,
         actorAgentId,
         actorUserId,
+        actorRunId,
+        enforceRunOwnership,
         ...issueData
       } = data;
       const isolatedWorkspacesEnabled = (await instanceSettings.getExperimental()).enableIsolatedWorkspaces;
@@ -4532,12 +4536,26 @@ export function issueService(db: Db) {
           projectGoalId: nextProjectGoalId,
           defaultGoalId: defaultCompanyGoal?.id ?? null,
         });
+        const runOwnershipCondition = enforceRunOwnership
+          ? actorAgentId && actorRunId
+            ? and(
+                eq(issues.status, "in_progress"),
+                eq(issues.assigneeAgentId, actorAgentId),
+                eq(issues.checkoutRunId, actorRunId),
+                or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+                runningIssueRunCondition(actorRunId, actorAgentId),
+              )
+            : sql<boolean>`false`
+          : undefined;
         const updated = await tx
           .update(issues)
           .set(patch)
-          .where(eq(issues.id, id))
+          .where(and(eq(issues.id, id), runOwnershipCondition))
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
+        if (!updated && enforceRunOwnership) {
+          throw conflict("Issue checkout ownership conflict");
+        }
         if (!updated) return null;
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);

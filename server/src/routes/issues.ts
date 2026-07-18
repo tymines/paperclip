@@ -3532,6 +3532,8 @@ export function issueRoutes(
               ...updateFields,
               actorAgentId: actor.agentId ?? null,
               actorUserId: actor.actorType === "user" ? actor.actorId : null,
+              actorRunId: actor.runId ?? null,
+              enforceRunOwnership: req.actor.type === "agent" && actor.agentId === existing.assigneeAgentId,
             },
             tx,
           );
@@ -3557,6 +3559,8 @@ export function issueRoutes(
           ...updateFields,
           actorAgentId: actor.agentId ?? null,
           actorUserId: actor.actorType === "user" ? actor.actorId : null,
+          actorRunId: actor.runId ?? null,
+          enforceRunOwnership: req.actor.type === "agent" && actor.agentId === existing.assigneeAgentId,
         });
       }
     } catch (err) {
