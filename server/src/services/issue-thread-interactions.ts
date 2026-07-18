@@ -37,6 +37,7 @@ import {
 } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 import { issueService } from "./issues.js";
+import { assertIssueRunOwnership, type IssueRunOwnership } from "./issue-run-ownership.js";
 
 type InteractionActor = {
   agentId?: string | null;
@@ -431,8 +432,8 @@ export function issueThreadInteractionService(db: Db) {
     issueId: string;
     companyId: string;
     idempotencyKey: string;
-  }) {
-    return db
+  }, dbOrTx: any = db) {
+    return dbOrTx
       .select()
       .from(issueThreadInteractions)
       .where(and(
@@ -440,7 +441,7 @@ export function issueThreadInteractionService(db: Db) {
         eq(issueThreadInteractions.issueId, args.issueId),
         eq(issueThreadInteractions.idempotencyKey, args.idempotencyKey),
       ))
-      .then((rows) => rows[0] ?? null);
+      .then((rows: IssueThreadInteractionRow[]) => rows[0] ?? null);
   }
 
   async function getPendingInteractionForResolution(args: {
@@ -627,15 +628,18 @@ export function issueThreadInteractionService(db: Db) {
       issue: { id: string; companyId: string },
       input: CreateIssueThreadInteraction,
       actor: InteractionActor,
+      options: { runOwnership?: IssueRunOwnership } = {},
     ) => {
       const data = createIssueThreadInteractionSchema.parse(input);
+      return db.transaction(async (tx) => {
+        await assertIssueRunOwnership(tx, issue.id, issue.companyId, options.runOwnership);
 
       if (data.idempotencyKey) {
         const existing = await getIdempotentInteraction({
           issueId: issue.id,
           companyId: issue.companyId,
           idempotencyKey: data.idempotencyKey,
-        });
+        }, tx);
         if (existing) {
           if (!isEquivalentCreateRequest(existing, data, actor)) {
             throw conflict("Interaction idempotency key already exists for a different request", {
@@ -647,7 +651,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.sourceCommentId) {
-        const sourceComment = await db
+        const sourceComment = await tx
           .select({
             companyId: issueComments.companyId,
             issueId: issueComments.issueId,
@@ -661,7 +665,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.sourceRunId) {
-        const sourceRun = await db
+        const sourceRun = await tx
           .select({
             companyId: heartbeatRuns.companyId,
           })
@@ -674,7 +678,7 @@ export function issueThreadInteractionService(db: Db) {
       }
 
       if (data.kind === "request_confirmation") {
-        await assertRequestConfirmationTargetIsCurrent(db, {
+        await assertRequestConfirmationTargetIsCurrent(tx, {
           companyId: issue.companyId,
           issueId: issue.id,
           target: data.payload.target ?? null,
@@ -683,7 +687,7 @@ export function issueThreadInteractionService(db: Db) {
 
       let created: IssueThreadInteractionRow;
       try {
-        [created] = await db
+        [created] = await tx
           .insert(issueThreadInteractions)
           .values({
             companyId: issue.companyId,
@@ -709,7 +713,7 @@ export function issueThreadInteractionService(db: Db) {
           issueId: issue.id,
           companyId: issue.companyId,
           idempotencyKey: data.idempotencyKey,
-        });
+        }, tx);
         if (!existing) throw error;
         if (!isEquivalentCreateRequest(existing, data, actor)) {
           throw conflict("Interaction idempotency key already exists for a different request", {
@@ -719,8 +723,9 @@ export function issueThreadInteractionService(db: Db) {
         return hydrateInteraction(existing);
       }
 
-      await touchIssue(db, issue.id);
+      await touchIssue(tx, issue.id);
       return hydrateInteraction(created);
+      });
     },
 
     acceptInteraction: async (

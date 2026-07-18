@@ -4573,6 +4573,9 @@ export function issueRoutes(
     const actor = getActorInfo(req);
     const agentSourceRunId = req.actor.type === "agent" ? requireAgentRunId(req, res) : null;
     if (req.actor.type === "agent" && !agentSourceRunId) return;
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: agentSourceRunId! }
+      : undefined;
 
     const interaction = await issueThreadInteractionService(db).create(issue, {
       ...req.body,
@@ -4580,7 +4583,7 @@ export function issueRoutes(
     }, {
       agentId: actor.agentId,
       userId: actor.actorType === "user" ? actor.actorId : null,
-    });
+    }, { runOwnership });
 
     await logActivity(db, {
       companyId: issue.companyId,
