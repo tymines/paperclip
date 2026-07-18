@@ -4565,6 +4565,7 @@ export function issueService(db: Db) {
                 eq(issues.status, "in_progress"),
                 eq(issues.assigneeAgentId, actorAgentId),
                 eq(issues.checkoutRunId, actorRunId),
+                eq(issues.executionRunId, actorRunId),
                 gt(issues.leaseExpiresAt, sql`now()`),
                 runningIssueRunCondition(actorRunId, actorAgentId),
               )
@@ -4956,7 +4957,8 @@ export function issueService(db: Db) {
         current.leaseActive &&
         current.status === "in_progress" &&
         current.assigneeAgentId === actorAgentId &&
-        sameRunLock(current.checkoutRunId, actorRunId)
+        sameRunLock(current.checkoutRunId, actorRunId) &&
+        sameRunLock(current.executionRunId, actorRunId)
       ) {
         return { ...current, adoptedFromRunId: null as string | null };
       }

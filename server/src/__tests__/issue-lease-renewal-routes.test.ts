@@ -91,6 +91,11 @@ function createLeaseDb(row: LeaseRow) {
     }),
     select: () => ({
       from: () => ({
+        where: () => Promise.resolve([{
+          ...row,
+          leaseActive: row.leaseExpiresAt !== null && row.leaseExpiresAt > new Date(),
+          actorRunActive: true,
+        }]),
         innerJoin: () => ({
           where: () => ({
             orderBy: () => Promise.resolve([]),
@@ -325,5 +330,17 @@ describe("issue lease service CAS", () => {
     expect(reclaimed).toBeNull();
     expect(row.status).toBe("in_progress");
     expect(row.executionRunId).not.toBe(staleExecutionRunId);
+  });
+
+  it("rejects a mutation after execution ownership moves to another run", async () => {
+    const row = leaseRow(new Date(Date.now() + 10 * 60_000));
+    const actorRunId = row.checkoutRunId!;
+    const fake = createLeaseDb(row);
+    const service = realIssueService(fake.db);
+    row.executionRunId = randomUUID();
+
+    await expect(service.assertCheckoutOwner(row.id, row.assigneeAgentId!, actorRunId)).rejects.toThrow(
+      "Issue run ownership conflict",
+    );
   });
 });
