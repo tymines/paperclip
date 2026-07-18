@@ -217,6 +217,7 @@ export function appdevControlRoutes(db: Db) {
     guarded(async (req, res) => {
       const companyId = req.params.companyId as string;
       assertCompanyAccess(req, companyId);
+      assertBoard(req);
       const actor = getActorInfo(req);
       const gate = req.params.gate as AppdevGate;
       if (!APPDEV_GATES.includes(gate)) {
