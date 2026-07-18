@@ -4559,7 +4559,7 @@ export function issueService(db: Db) {
                 eq(issues.status, "in_progress"),
                 eq(issues.assigneeAgentId, actorAgentId),
                 eq(issues.checkoutRunId, actorRunId),
-                or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+                gt(issues.leaseExpiresAt, sql`now()`),
                 runningIssueRunCondition(actorRunId, actorAgentId),
               )
             : sql<boolean>`false`
@@ -4880,7 +4880,7 @@ export function issueService(db: Db) {
             eq(issues.status, "in_progress"),
             eq(issues.assigneeAgentId, actorAgentId),
             eq(issues.checkoutRunId, actorRunId),
-            or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+            gt(issues.leaseExpiresAt, sql`now()`),
             runningIssueRunCondition(actorRunId, actorAgentId),
           ),
         )
