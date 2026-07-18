@@ -321,7 +321,7 @@ export function roomRoutes(db: Db) {
     const message = await svc.sendMessage({
       roomId,
       senderId: actor.actorId,
-      senderType: req.body.senderType ?? actor.actorType,
+      senderType: actor.actorType,
       senderName,
       content: req.body.content,
       messageType: req.body.messageType,
