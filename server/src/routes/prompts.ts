@@ -2,7 +2,7 @@ import { Router } from "express";
 import { and, asc, desc, eq, isNull, or } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { prompts, promptCategories } from "@paperclipai/db";
-import { assertCompanyAccess } from "./authz.js";
+import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { logger } from "../middleware/logger.js";
 
 /** Parse {{placeholder}} names out of a template body. */
@@ -87,7 +87,7 @@ export function promptsRoutes(db: Db) {
           variables,
           isTemplate: variables.length > 0,
           source: null,
-          createdBy: req.body?.createdBy ? String(req.body.createdBy).slice(0, 120) : "user",
+          createdBy: getActorInfo(req).actorId.slice(0, 120),
         })
         .returning();
       res.status(201).json({ prompt: { ...row, editable: true } });
