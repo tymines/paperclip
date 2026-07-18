@@ -4932,7 +4932,10 @@ export function issueRoutes(
       return;
     }
 
-    const removed = await svc.removeComment(commentId);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
+    const removed = await svc.removeComment(commentId, { runOwnership });
     if (!removed) {
       res.status(404).json({ error: "Comment not found" });
       return;
