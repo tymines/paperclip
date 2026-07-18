@@ -72,17 +72,35 @@ export function gateRoutes(db: Db) {
     const gateResult = checkGate(currentStage, evidence ?? []);
 
     if (decision === "pass") {
-      await db.execute(sql`UPDATE run_stages SET status = 'passed', completed_at = now() WHERE id = ${activeRow.id}`);
-
       const nextIdx = currentIdx + 1;
       if (nextIdx < MANUAL_STAGES.length) {
         const nextStage = MANUAL_STAGES[nextIdx];
         const nextId = randomUUID();
-        await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${nextId}, ${runId}, ${nextStage}, 'active', ${nextIdx})`);
+        const [advanced] = await rows(db, sql`
+          WITH current_stage AS (
+            UPDATE run_stages SET status = 'passed', completed_at = now()
+            WHERE id = ${activeRow.id} AND pipeline_run_id = ${runId} AND status = 'active'
+            RETURNING pipeline_run_id
+          )
+          INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order)
+          SELECT ${nextId}, pipeline_run_id, ${nextStage}, 'active', ${nextIdx} FROM current_stage
+          RETURNING id
+        `);
+        if (!advanced) { res.status(409).json({ error: "gate already advanced" }); return; }
         emitEvent({ type: "stage_advance", runId, from: currentStage, to: nextStage, decision: "pass" });
         res.json({ advanced: true, from: currentStage, to: nextStage, stageId: nextId, gate: gateResult });
       } else {
-        await db.execute(sql`UPDATE pipeline_runs SET status = 'completed', completed_at = now() WHERE id = ${runId}`);
+        const [completed] = await rows(db, sql`
+          WITH current_stage AS (
+            UPDATE run_stages SET status = 'passed', completed_at = now()
+            WHERE id = ${activeRow.id} AND pipeline_run_id = ${runId} AND status = 'active'
+            RETURNING pipeline_run_id
+          )
+          UPDATE pipeline_runs SET status = 'completed', completed_at = now(), updated_at = now()
+          WHERE id IN (SELECT pipeline_run_id FROM current_stage) AND company_id = ${companyId}
+          RETURNING id
+        `);
+        if (!completed) { res.status(409).json({ error: "gate already advanced" }); return; }
         emitEvent({ type: "pipeline_complete", runId });
         res.json({ advanced: false, completed: true, from: currentStage, gate: gateResult });
       }
