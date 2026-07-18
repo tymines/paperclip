@@ -573,6 +573,12 @@ function assertNoAgentBoardControlledIssueStatus(req: Request, status: unknown) 
   }
 }
 
+function assertNoDirectInProgressTransition(status: unknown, currentStatus?: string) {
+  if (status === "in_progress" && currentStatus !== "in_progress") {
+    throw unprocessable("Issue must enter in_progress through checkout");
+  }
+}
+
 function summarizeIssueMonitor(
   issue: {
     monitorNextCheckAt?: Date | null;
@@ -3095,6 +3101,7 @@ export function issueRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     assertNoAgentBoardControlledIssueStatus(req, req.body.status);
+    assertNoDirectInProgressTransition(req.body.status);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
@@ -3191,6 +3198,7 @@ export function issueRoutes(
     }
     assertCompanyAccess(req, parent.companyId);
     assertNoAgentBoardControlledIssueStatus(req, req.body.status);
+    assertNoDirectInProgressTransition(req.body.status);
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, parent))) return;
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
@@ -3343,6 +3351,7 @@ export function issueRoutes(
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, existing))) return;
     assertNoAgentBoardControlledIssueStatus(req, req.body.status);
+    assertNoDirectInProgressTransition(req.body.status, existing.status);
 
     const actor = getActorInfo(req);
     const isClosed = isClosedIssueStatus(existing.status);
