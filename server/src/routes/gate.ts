@@ -55,8 +55,8 @@ export function gateRoutes(db: Db) {
       runId?: string; decision?: string; evidence?: string[]; send_back_to?: string;
     };
 
-    if (!runId || !decision) {
-      res.status(400).json({ error: "runId and decision required" });
+    if (!runId || (decision !== "pass" && decision !== "fail")) {
+      res.status(400).json({ error: "runId and decision=pass|fail required" });
       return;
     }
 
@@ -69,6 +69,7 @@ export function gateRoutes(db: Db) {
 
     const currentStage = activeRow.name as string;
     const currentIdx = MANUAL_STAGES.indexOf(currentStage);
+    if (currentIdx < 0) { res.status(409).json({ error: "unsupported active stage" }); return; }
     const gateResult = checkGate(currentStage, evidence ?? []);
 
     if (decision === "pass") {
