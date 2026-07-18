@@ -2386,6 +2386,9 @@ export function issueRoutes(
     }
 
     const actor = getActorInfo(req);
+    const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+      ? { agentId: actor.agentId!, runId: actor.runId! }
+      : undefined;
     const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
     const result = await documentsSvc.upsertIssueDocument({
       issueId: issue.id,
@@ -2399,6 +2402,7 @@ export function issueRoutes(
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,
       createdByRunId: actor.runId ?? null,
       lockedDocumentStrategy: req.actor.type === "agent" ? "create_new_document" : "conflict",
+      runOwnership,
     });
     const doc = result.document;
     const redirectedFromLockedDocument =
@@ -2590,6 +2594,9 @@ export function issueRoutes(
       }
 
       const actor = getActorInfo(req);
+      const runOwnership = req.actor.type === "agent" && actor.agentId === issue.assigneeAgentId
+        ? { agentId: actor.agentId!, runId: actor.runId! }
+        : undefined;
       const referenceSummaryBefore = await issueReferencesSvc.listIssueReferenceSummary(issue.id);
       const result = await documentsSvc.restoreIssueDocumentRevision({
         issueId: issue.id,
@@ -2597,6 +2604,7 @@ export function issueRoutes(
         revisionId,
         createdByAgentId: actor.agentId ?? null,
         createdByUserId: actor.actorType === "user" ? actor.actorId : null,
+        runOwnership,
       });
       await issueReferencesSvc.syncDocument(result.document.id);
       const referenceSummaryAfter = await issueReferencesSvc.listIssueReferenceSummary(issue.id);

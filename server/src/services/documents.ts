@@ -1,6 +1,6 @@
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
+import { documentRevisions, documents, heartbeatRuns, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
 
@@ -106,6 +106,40 @@ const issueDocumentSelect = {
 };
 
 export function documentService(db: Db) {
+  type DocumentTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+  type RunOwnership = { agentId: string; runId: string };
+
+  async function assertRunOwnership(
+    tx: DocumentTransaction,
+    issueId: string,
+    companyId: string,
+    ownership?: RunOwnership,
+  ) {
+    if (!ownership) return;
+    const owned = await tx
+      .update(issues)
+      .set({ updatedAt: sql`${issues.updatedAt}` })
+      .where(
+        and(
+          eq(issues.id, issueId),
+          eq(issues.companyId, companyId),
+          eq(issues.status, "in_progress"),
+          eq(issues.assigneeAgentId, ownership.agentId),
+          eq(issues.checkoutRunId, ownership.runId),
+          or(isNull(issues.leaseExpiresAt), gt(issues.leaseExpiresAt, sql`now()`)),
+          sql<boolean>`exists (
+            select 1 from ${heartbeatRuns}
+            where ${heartbeatRuns.id} = ${ownership.runId}
+              and ${heartbeatRuns.agentId} = ${ownership.agentId}
+              and ${heartbeatRuns.status} = 'running'
+          )`,
+        ),
+      )
+      .returning({ id: issues.id })
+      .then((rows) => rows[0] ?? null);
+    if (!owned) throw conflict("Issue checkout ownership conflict");
+  }
+
   const filterSystemDocuments = <T extends { key: string }>(rows: T[], includeSystem: boolean) =>
     includeSystem ? rows : rows.filter((row) => !isSystemIssueDocumentKey(row.key));
 
@@ -203,6 +237,7 @@ export function documentService(db: Db) {
       createdByUserId?: string | null;
       createdByRunId?: string | null;
       lockedDocumentStrategy?: "conflict" | "create_new_document";
+      runOwnership?: RunOwnership;
     }) => {
       const key = normalizeDocumentKey(input.key);
       const issue = await db
@@ -216,6 +251,7 @@ export function documentService(db: Db) {
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         try {
           return await db.transaction(async (tx) => {
+          await assertRunOwnership(tx, issue.id, issue.companyId, input.runOwnership);
           const now = new Date();
           const existing = await tx
             .select({
@@ -507,6 +543,7 @@ export function documentService(db: Db) {
       revisionId: string;
       createdByAgentId?: string | null;
       createdByUserId?: string | null;
+      runOwnership?: RunOwnership;
     }) => {
       const key = normalizeDocumentKey(input.key);
       return db.transaction(async (tx) => {
@@ -525,6 +562,7 @@ export function documentService(db: Db) {
             lockedAt: existing.lockedAt,
           });
         }
+        await assertRunOwnership(tx, existing.issueId, existing.companyId, input.runOwnership);
 
         const revision = await tx
           .select({
