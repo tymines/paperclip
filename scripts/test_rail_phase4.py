@@ -1,3 +1,17 @@
+"""
+Phase 4 activation — Python gate scenarios (gate 4: controller-restart replay
+vs projection agreement) + durability/intent tests.
+
+Platform invocation (blocker 3 fix — `python3` is NOT a Windows command name):
+  macOS / Linux:  python3 scripts/test_rail_phase4.py
+  Windows:        py -3 scripts/test_rail_phase4.py
+                  (fallback: python scripts/test_rail_phase4.py)
+
+On Windows the `python3` executable does not exist by default; the `py` launcher
+(`py -3`) is the canonical Windows Python 3 invocation. `python` works as a
+fallback on most Windows installs. NO package.json changes — this is a
+documented platform split, not a shared-script edit.
+"""
 import json
 import sys
 import tempfile
