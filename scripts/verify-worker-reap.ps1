@@ -17,6 +17,22 @@ $ErrorActionPreference = "Stop"
 
 $repo = (Resolve-Path .).Path
 
+function Invoke-NodeCapture {
+  param([Parameter(Mandatory=$true)][string[]]$NodeArguments)
+
+  $previousPreference = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $output = & node @NodeArguments 2>&1
+    $exitCode = $LASTEXITCODE
+  }
+  finally {
+    $ErrorActionPreference = $previousPreference
+  }
+
+  return [pscustomobject]@{ Output = @($output); ExitCode = $exitCode }
+}
+
 function Get-RepoNodeWorkerProcesses {
   return Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
     Where-Object {
@@ -28,8 +44,12 @@ function Get-RepoNodeWorkerProcesses {
 
 function Invoke-AuditSelfTest {
   Write-Host "`n=== STEP 1: audit self-test ===" -ForegroundColor Cyan
-  $output = & node scripts/run-vitest-stable.mjs --audit-self-test 2>&1
+  $result = Invoke-NodeCapture @("scripts/run-vitest-stable.mjs", "--audit-self-test")
+  $output = $result.Output
   $output | ForEach-Object { Write-Host $_ }
+  if ($result.ExitCode -ne 0) {
+    throw "Audit self-test exited $($result.ExitCode)."
+  }
   $joined = $output -join "`n"
   if ($joined -notmatch "PASSED \(tracked \+ pattern found, reaped, final zero\)") {
     throw "Audit self-test did not report PASS."
@@ -42,8 +62,10 @@ function Invoke-AuditSelfTest {
 
 function Invoke-ScopedSuiteRun {
   Write-Host "`n=== STEP 2: scoped suite run ===" -ForegroundColor Cyan
-  $output = & node scripts/run-vitest-stable.mjs --mode general --group general-server 2>&1
+  $result = Invoke-NodeCapture @("scripts/run-vitest-stable.mjs", "--mode", "general", "--group", "general-server")
+  $output = $result.Output
   $output | ForEach-Object { Write-Host $_ }
+  Write-Host "Scoped suite exit code: $($result.ExitCode) (worker-reap proof continues)."
   $joined = $output -join "`n"
   if ($joined -notmatch "zero cwd-attached vitest/tinypool survivors") {
     throw "Scoped suite run did not report zero survivors."
@@ -87,8 +109,12 @@ function Invoke-InducedKill {
   $orphans | Format-Table -AutoSize | Out-String | Write-Host
 
   Write-Host "Running --reap-orphans ..."
-  $reapOutput = & node scripts/run-vitest-stable.mjs --reap-orphans 2>&1
+  $reapResult = Invoke-NodeCapture @("scripts/run-vitest-stable.mjs", "--reap-orphans")
+  $reapOutput = $reapResult.Output
   $reapOutput | ForEach-Object { Write-Host $_ }
+  if ($reapResult.ExitCode -ne 0) {
+    throw "Orphan reap exited $($reapResult.ExitCode)."
+  }
 
   Write-Host "Waiting 3s for settle..."
   Start-Sleep -Seconds 3
