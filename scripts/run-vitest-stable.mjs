@@ -63,6 +63,7 @@ const isWindows = process.platform === "win32";
 const repoRootResolved = path.resolve(repoRoot);
 
 const WORKER_PATTERN = /node.*(?:\(vitest|tinypool|vitest\/dist\/workers)/i;
+const PROCESS_LIST_MAX_BUFFER = 16 * 1024 * 1024;
 
 function log(message) {
   console.log(`[test:run] ${message}`);
@@ -74,7 +75,7 @@ function logError(message) {
 
 function getProcessList() {
   return new Promise((resolve) => {
-    execFile("ps", ["-eo", "pid,ppid,pgid,etime,command"], (error, stdout, stderr) => {
+    execFile("ps", ["-eo", "pid,ppid,pgid,etime,command"], { maxBuffer: PROCESS_LIST_MAX_BUFFER }, (error, stdout, stderr) => {
       if (error) {
         resolve({ ok: false, output: "", error: error.message || String(stderr || error) });
         return;
@@ -175,7 +176,7 @@ function getWindowsProcessList() {
     execFile(
       "powershell.exe",
       ["-NoProfile", "-NonInteractive", "-Command", psCommand],
-      { maxBuffer: 1024 * 1024 },
+      { maxBuffer: PROCESS_LIST_MAX_BUFFER },
       (error, stdout, stderr) => {
         if (error) {
           resolve({ ok: false, output: "", error: error.message || String(stderr || error) });
