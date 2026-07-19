@@ -132,7 +132,17 @@ def load_projection(journal: Path, state_file: Path) -> dict:
     except (OSError, json.JSONDecodeError):
         state = {}
     changed = False
-    if int(state.get("_meta", {}).get("projection_version", 0)) != PROJECTION_VERSION:
+    events = _events(journal)
+    journal_cursor = events[-1]["cursor"] if events else 0
+    meta = state.get("_meta", {})
+    if not isinstance(meta, dict):
+        meta = {}
+    try:
+        projection_version = int(meta.get("projection_version", 0))
+        cursor = int(meta.get("cursor", 0))
+    except (TypeError, ValueError):
+        projection_version, cursor = 0, -1
+    if projection_version != PROJECTION_VERSION or cursor < 0 or cursor > journal_cursor:
         state = {
             task_id: {
                 key: value for key, value in task.items()
@@ -144,9 +154,7 @@ def load_projection(journal: Path, state_file: Path) -> dict:
         state["_meta"] = {"projection_version": PROJECTION_VERSION}
         cursor = 0
         changed = True
-    else:
-        cursor = int(state.get("_meta", {}).get("cursor", 0))
-    for event in _events(journal):
+    for event in events:
         if event["cursor"] <= cursor:
             continue
         cursor = event["cursor"]

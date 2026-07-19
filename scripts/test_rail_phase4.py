@@ -96,6 +96,42 @@ class Phase4DurabilityTests(unittest.TestCase):
             self.assertEqual(state["T-1"]["checkout_run_id"], "run-2")
             self.assertEqual(state["T-1"]["execution_run_id"], "run-2")
 
+    def test_restart_rebuilds_when_persisted_cursor_is_ahead_of_journal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = root / "rail-events.jsonl"
+            state_file = root / ".rail_state.json"
+            append_event(journal, {
+                "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 3,
+                "checkout_run_id": "run-3", "execution_run_id": "run-3",
+                "lease_expires_at": "2026-07-17T07:15:00+00:00",
+            })
+            state_file.write_text(json.dumps({
+                "_meta": {"projection_version": 2, "cursor": 99, "controller_epoch": 99},
+                "T-1": {
+                    "state": "stale", "checkout_run_id": "stale-run",
+                    "execution_run_id": "stale-run", "lease_expires_at": "stale",
+                    "stall_count": 2,
+                },
+            }), encoding="utf-8")
+
+            state = load_projection(journal, state_file)
+
+            self.assertEqual(state["_meta"]["cursor"], 1)
+            self.assertEqual(state["_meta"]["controller_epoch"], 3)
+            self.assertEqual(state["T-1"]["state"], "run_backed_claim")
+            self.assertEqual(state["T-1"]["checkout_run_id"], "run-3")
+            self.assertEqual(state["T-1"]["execution_run_id"], "run-3")
+            self.assertEqual(state["T-1"]["stall_count"], 2)
+
+            state_file.write_text(json.dumps({
+                "_meta": "corrupt",
+                "T-1": {"state": "stale", "stall_count": 3},
+            }), encoding="utf-8")
+            rebuilt = load_projection(journal, state_file)
+            self.assertEqual(rebuilt["_meta"]["cursor"], 1)
+            self.assertEqual(rebuilt["T-1"]["stall_count"], 3)
+
     def test_projection_rebuild_fences_stale_dual_run_event(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -362,6 +398,20 @@ class Phase4ControllerFenceTests(unittest.TestCase):
             assignee_agent_id="agent-1", checkout_run_id="run-1", execution_run_id="run-1",
             lease_expires_at="2099-01-01T00:00:00+00:00",
         )
+
+    def test_allowlisted_storage_issue_is_never_claimed(self):
+        controller.CONTROLLER_EPOCH = 7
+        issue = {"id": "T-1", "identifier": "RAIL-1", "title": "Stored", "status": "storage"}
+        agent = {"id": "agent-1", "urlKey": "zeus", "status": "idle"}
+        with mock.patch.object(controller, "api", side_effect=[issue, [agent]]) as api_call, \
+             mock.patch.object(controller, "emit_event") as emit_event:
+            result = controller.claim_task({
+                "enforcement": "on", "eligible_issue_ids": ["T-1"], "seats": ["zeus"],
+            })
+
+        self.assertIsNone(result)
+        self.assertNotIn("POST", [call.args[0] for call in api_call.call_args_list])
+        emit_event.assert_not_called()
 
 
 class Phase4IntentTests(unittest.TestCase):
