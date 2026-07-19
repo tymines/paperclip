@@ -62,7 +62,7 @@ const trackedChildPids = new Set();
 const isWindows = process.platform === "win32";
 const repoRootResolved = path.resolve(repoRoot);
 
-const WORKER_PATTERN = /node.*(?:tinypool|vitest\/dist\/workers)/;
+const WORKER_PATTERN = /node.*(?:\(vitest|tinypool|vitest\/dist\/workers)/i;
 
 function log(message) {
   console.log(`[test:run] ${message}`);
@@ -426,6 +426,7 @@ function parseCliOptions(argv) {
   let group = null;
   let dryRun = false;
   let auditSelfTest = false;
+  let reapOrphans = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -487,6 +488,11 @@ function parseCliOptions(argv) {
       continue;
     }
 
+    if (arg === "--reap-orphans") {
+      reapOrphans = true;
+      continue;
+    }
+
     fail(`Unknown argument "${arg}".`);
   }
 
@@ -524,6 +530,7 @@ function parseCliOptions(argv) {
       group: null,
       dryRun,
       auditSelfTest,
+      reapOrphans,
     };
   }
 
@@ -534,6 +541,7 @@ function parseCliOptions(argv) {
     group,
     dryRun,
     auditSelfTest,
+    reapOrphans,
   };
 }
 
@@ -812,6 +820,12 @@ async function main() {
     } finally {
       await enforceZeroSurvivors();
     }
+    return;
+  }
+
+  if (options.reapOrphans) {
+    log("reaping any cwd-attached vitest/tinypool orphans");
+    await enforceZeroSurvivors();
     return;
   }
 
