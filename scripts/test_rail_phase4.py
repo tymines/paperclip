@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import rail_controller as controller
 import watchdog
-from rail_durability import append_event, load_projection
+from rail_durability import append_event, atomic_write_json, load_projection
 
 
 class Phase4DurabilityTests(unittest.TestCase):
@@ -95,6 +95,20 @@ class Phase4DurabilityTests(unittest.TestCase):
             self.assertEqual(state["T-1"]["state"], "run_backed_claim")
             self.assertEqual(state["T-1"]["checkout_run_id"], "run-2")
             self.assertEqual(state["T-1"]["execution_run_id"], "run-2")
+
+    def test_atomic_write_failure_keeps_last_good_projection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_file = root / ".rail_state.json"
+            expected = {"_meta": {"projection_version": 2, "cursor": 7}}
+            state_file.write_text(json.dumps(expected), encoding="utf-8")
+
+            with mock.patch("rail_durability.os.replace", side_effect=OSError("replace failed")):
+                with self.assertRaisesRegex(OSError, "replace failed"):
+                    atomic_write_json(state_file, {"_meta": {"projection_version": 2, "cursor": 8}})
+
+            self.assertEqual(json.loads(state_file.read_text(encoding="utf-8")), expected)
+            self.assertEqual(list(root.glob(".*.tmp")), [])
 
     def test_restart_rebuilds_when_persisted_cursor_is_ahead_of_journal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -442,6 +456,42 @@ class Phase4IntentTests(unittest.TestCase):
             proposal["changes"],
         )
         self.assertEqual(manifest, original)
+
+    def test_intent_drift_alerts_immediately_then_hourly_and_daily(self):
+        manifest = {"revision": "7", "updated": "2026-07-17", "agents": [{"name": "Zeus"}]}
+        payload = {"agents": [{"name": "Zeus"}]}
+        drift = {"agent": "Zeus", "field": "model", "declared": "gpt-5", "live": "kimi"}
+        persisted = {}
+
+        def load_state():
+            return json.loads(json.dumps(persisted))
+
+        def save_state(value):
+            persisted.clear()
+            persisted.update(json.loads(json.dumps(value)))
+
+        with mock.patch.object(controller, "load_manifest", return_value=manifest), \
+             mock.patch.object(controller, "api", return_value=payload), \
+             mock.patch.object(controller, "compare_intent", return_value=[drift]) as compare, \
+             mock.patch.object(controller, "load_state", side_effect=load_state), \
+             mock.patch.object(controller, "save_state", side_effect=save_state), \
+             mock.patch.object(controller, "now_ts") as now, \
+             mock.patch.object(controller, "emit_event") as emit_event, \
+             mock.patch.object(controller, "_log"):
+            for clock in (100, 3699, 3700, 90099, 90100):
+                now.return_value = clock
+                controller.report_intent_drift()
+
+            self.assertEqual(
+                [call.kwargs["cadence"] for call in emit_event.call_args_list],
+                ["immediate", "one_hour", "daily"],
+            )
+
+            compare.return_value = []
+            now.return_value = 90101
+            controller.report_intent_drift()
+
+        self.assertEqual(persisted["_meta"]["intent_drift"], {})
 
     def test_watchdog_roster_count_comes_from_fleet_intent(self):
         with tempfile.TemporaryDirectory() as directory:
