@@ -537,6 +537,26 @@ describe("agent issue mutation checkout ownership", () => {
     expect(mockIssueService.update).toHaveBeenCalled();
   });
 
+  it("blocks agents with management override from direct in_progress transitions", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "todo" }));
+    mockAccessService.hasPermission.mockResolvedValue(true);
+
+    const res = await request(await createApp(peerActor())).patch(`/api/issues/${issueId}`).send({ status: "in_progress" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body.error).toBe("Issue must enter in_progress through checkout");
+    expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  it("lets board users move issues directly to in_progress", async () => {
+    mockIssueService.getById.mockResolvedValue(makeIssue({ status: "todo" }));
+
+    const res = await request(await createApp(boardActor())).patch(`/api/issues/${issueId}`).send({ status: "in_progress" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status: "in_progress" }));
+  });
+
   it.each([
     ["todo", "patch", (app: express.Express) => request(app).patch(`/api/issues/${issueId}`).send({ title: "Todo update" })],
     ["todo", "comment", (app: express.Express) => request(app).post(`/api/issues/${issueId}/comments`).send({ body: "Todo noise" })],

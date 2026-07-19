@@ -3094,6 +3094,7 @@ export function issueRoutes(
   router.post("/companies/:companyId/issues", applyCreateIssueStatusDefault, validate(createIssueSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    if (req.actor.type === "agent" && req.body.status === "in_progress") throw unprocessable("Issue must enter in_progress through checkout");
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
       await assertCanAssignTasks(req, companyId);
@@ -3189,6 +3190,7 @@ export function issueRoutes(
       return;
     }
     assertCompanyAccess(req, parent.companyId);
+    if (req.actor.type === "agent" && req.body.status === "in_progress") throw unprocessable("Issue must enter in_progress through checkout");
     assertNoAgentHostWorkspaceCommandMutation(req, collectIssueWorkspaceCommandPaths(req.body));
     if (!(await assertAgentIssueMutationAllowed(req, res, parent))) return;
     if (req.body.assigneeAgentId || req.body.assigneeUserId) {
@@ -3347,6 +3349,7 @@ export function issueRoutes(
       res.status(403).json({ error: "Agents cannot set board-controlled issue status directly" });
       return;
     }
+    if (req.actor.type === "agent" && req.body.status === "in_progress" && existing.status !== "in_progress") throw unprocessable("Issue must enter in_progress through checkout");
 
     const actor = getActorInfo(req);
     const isClosed = isClosedIssueStatus(existing.status);

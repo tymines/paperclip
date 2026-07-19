@@ -30,6 +30,7 @@ vi.mock("../services/index.js", () => ({
   companyService: () => ({
     getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
   }),
+  costService: () => ({}),
   documentService: () => ({
     getIssueDocumentPayload: vi.fn(async () => ({})),
   }),
@@ -95,7 +96,13 @@ vi.mock("../services/index.js", () => ({
   }),
 }));
 
-async function createApp() {
+async function createApp(actor: Record<string, unknown> = {
+  type: "board",
+  userId: "local-board",
+  companyIds: ["company-1"],
+  source: "local_implicit",
+  isInstanceAdmin: false,
+}) {
   const [{ issueRoutes }, { errorHandler }] = await Promise.all([
     vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
     vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
@@ -103,13 +110,7 @@ async function createApp() {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    (req as any).actor = {
-      type: "board",
-      userId: "local-board",
-      companyIds: ["company-1"],
-      source: "local_implicit",
-      isInstanceAdmin: false,
-    };
+    (req as any).actor = actor;
     next();
   });
   app.use("/api", issueRoutes({} as any, {} as any));
@@ -252,6 +253,7 @@ describe("assigned backlog creation contract", () => {
         blockParentUntilDone: true,
         status: "todo",
       }),
+      { runOwnership: undefined },
     );
     expect(res.body).toEqual(expect.objectContaining({
       assigneeAgentId,
@@ -318,5 +320,33 @@ describe("assigned backlog creation contract", () => {
       }),
     );
     expect(mockWakeup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["top-level", (app: express.Express) => request(app).post("/api/companies/company-1/issues").send({ title: "Direct active issue", status: "in_progress" })],
+    ["child", (app: express.Express) => request(app).post("/api/issues/parent-1/children").send({ title: "Direct active child", status: "in_progress" })],
+  ])("blocks agent-created %s issues from entering in_progress without checkout", async (_kind, sendRequest) => {
+    const app = await createApp({
+      type: "agent",
+      agentId: assigneeAgentId,
+      companyId: "company-1",
+      runId: "run-1",
+      source: "agent_key",
+    });
+
+    const res = await sendRequest(app);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(422);
+    expect(res.body.error).toBe("Issue must enter in_progress through checkout");
+  });
+
+  it.each([
+    ["top-level", (app: express.Express) => request(app).post("/api/companies/company-1/issues").send({ title: "Board active issue", status: "in_progress" })],
+    ["child", (app: express.Express) => request(app).post("/api/issues/parent-1/children").send({ title: "Board active child", status: "in_progress" })],
+  ])("lets board users create %s issues directly in_progress", async (_kind, sendRequest) => {
+    const res = await sendRequest(await createApp());
+
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    expect(res.body.status).toBe("in_progress");
   });
 });
