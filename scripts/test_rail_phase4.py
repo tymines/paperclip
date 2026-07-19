@@ -371,6 +371,28 @@ class Phase4IntentTests(unittest.TestCase):
         live = {"agents": [{"name": "zeus"}]}
         self.assertFalse(any(row["field"] == "name" for row in compare_intent(manifest, live)))
 
+    def test_accept_live_proposal_includes_roster_additions_and_removals(self):
+        from rail_intent import accept_live_as_intent
+        manifest = {
+            "revision": "7", "updated": "2026-07-17",
+            "agents": [{"name": "Zeus", "model": "gpt-5"}, {"name": "Retired", "model": "old"}],
+        }
+        original = json.loads(json.dumps(manifest))
+        live = {"agents": [{"name": "Zeus", "model": "gpt-5"}, {"name": "New", "model": "kimi"}]}
+
+        proposal = accept_live_as_intent(manifest, live)
+
+        self.assertEqual(proposal["expected_revision"], "7")
+        self.assertIn(
+            {"agent": "New", "field": "name", "declared": None, "live": "New"},
+            proposal["changes"],
+        )
+        self.assertIn(
+            {"agent": "Retired", "field": "name", "declared": "Retired", "live": None},
+            proposal["changes"],
+        )
+        self.assertEqual(manifest, original)
+
     def test_watchdog_roster_count_comes_from_fleet_intent(self):
         with tempfile.TemporaryDirectory() as directory:
             manifest = Path(directory) / "fleet.yaml"

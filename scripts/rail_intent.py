@@ -136,18 +136,22 @@ def accept_live_as_intent(manifest: dict, payload: dict) -> dict:
     """Return a revision-pinned field proposal; never rewrite the manifest."""
     declared = {_agent_key(a["name"]): dict(a) for a in manifest["agents"] if a.get("name")}
     live_rows = payload.get("agents", payload if isinstance(payload, list) else [])
-    changes = []
-    for row in map(_live_agent, live_rows):
-        if not row.get("name"):
-            continue
-        key = _agent_key(row["name"])
-        target = declared.setdefault(key, {"name": row["name"]})
+    live = {_agent_key(row["name"]): row for row in map(_live_agent, live_rows) if row.get("name")}
+    changes = [
+        {"agent": row["name"], "field": "name", "declared": row["name"], "live": None}
+        for key, row in declared.items() if key not in live
+    ]
+    for key, row in live.items():
+        target = declared.get(key)
+        if target is None:
+            target = {"name": row["name"]}
+            changes.append({"agent": row["name"], "field": "name", "declared": None, "live": row["name"]})
         for field in FIELDS:
-            live = row.get(field)
-            if live is not None and target.get(field) != live:
+            live_value = row.get(field)
+            if live_value is not None and target.get(field) != live_value:
                 changes.append({
                     "agent": target["name"], "field": field,
-                    "declared": target.get(field), "live": live,
+                    "declared": target.get(field), "live": live_value,
                 })
     return {
         "kind": "accept-live-as-intent-proposal",
