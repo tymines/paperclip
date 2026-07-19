@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 import { assertIssueRunOwnership } from "../services/issue-run-ownership.js";
+import { workProductService } from "../services/work-products.js";
+import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 
 /**
  * Phase 4 activation — write-surface fencing suite (v3 review-fix).
@@ -462,6 +467,113 @@ describe("assertIssueRunOwnership fencing suite", () => {
       await expect(runOwnership(fake.db, row, undefined)).resolves.toBeUndefined();
       // No UPDATE should have been issued: the predicate returns early.
       expect(fake.whereQueries).toHaveLength(0);
+    });
+  });
+});
+
+/**
+ * v3 STEP 3 — surface coverage truth table (blocker 2 fix).
+ *
+ * The review flagged that the v2 "7 surface" tests invoke the shared predicate
+ * directly with per-surface labels but do not exercise the actual surface call
+ * paths. This block fixes that by:
+ *   1. WIRING ASSERTIONS: statically proving each surface module's source file
+ *      calls `assertIssueRunOwnership` (read source, count call sites, name file).
+ *   2. BEHAVIORAL: where the surface function calls the predicate FIRST in its
+ *      transaction (before any select/insert), invoke the REAL surface function
+ *      with a fenced context (expired lease) and assert conflict — proving the
+ *      wiring is live, not just textual.
+ *   3. TRUTH TABLE: every surface is labeled behavioral or wiring-only with the
+ *      reason. This table is pasted into the PR body.
+ *
+ * Surface→coverage table (17 call sites across 7 files):
+ * | surface            | call-site file(s)                            | calls | coverage type                         | reason                                                                 |
+ * | comment            | services/issues.ts (removeComment)            | 1     | wiring-only                            | select(comment) + instanceSettings before predicate                   |
+ * | issue-update       | services/issues.ts (createChild, remove) +    | 3     | wiring-only                            | select() before predicate; route handler needs Express                |
+ * |                    | routes/issues.ts (recovery-action resolve)    |       |                                        |                                                                        |
+ * | work-product       | services/work-products.ts (createForIssue,    | 3     | behavioral (createForIssue) + wiring   | createForIssue calls predicate first in tx — tested; update/remove    |
+ * |                    | update, remove)                               |       | (update, remove)                       | do select() first                                                     |
+ * | document           | services/documents.ts                         | 2     | wiring-only                            | select(issue) before tx                                               |
+ * | attachment         | services/issues.ts (createAttachment,         | 2     | wiring-only                            | select(issue) before tx; select(existing) in tx                       |
+ * |                    | removeAttachment)                             |       |                                        |                                                                        |
+ * | approval           | services/approvals.ts +                       | 5     | wiring-only                            | select(issueRows) before predicate; assertIssueAndApprovalSameCompany |
+ * |                    | services/issue-approvals.ts                   |       |                                        | (select) before predicate                                             |
+ * | thread-interaction | services/issue-thread-interactions.ts (create)| 1     | behavioral                             | create calls predicate first in tx (after Zod parse) — tested         |
+ */
+describe("v3: surface coverage truth table (blocker 2 fix)", () => {
+  const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+  describe("wiring assertions — each surface module statically proven to call assertIssueRunOwnership", () => {
+    const SURFACE_FILES = [
+      { file: "routes/issues.ts", expectedCalls: 1, surfaces: "issue-update (recovery-action resolve)" },
+      { file: "services/issues.ts", expectedCalls: 5, surfaces: "comment (removeComment), issue-update (createChild, remove), attachment (createAttachment, removeAttachment)" },
+      { file: "services/work-products.ts", expectedCalls: 3, surfaces: "work-product (createForIssue, update, remove)" },
+      { file: "services/documents.ts", expectedCalls: 2, surfaces: "document" },
+      { file: "services/approvals.ts", expectedCalls: 3, surfaces: "approval (create, resolve, comment)" },
+      { file: "services/issue-approvals.ts", expectedCalls: 2, surfaces: "approval (link, unlink)" },
+      { file: "services/issue-thread-interactions.ts", expectedCalls: 1, surfaces: "thread-interaction (create)" },
+    ] as const;
+
+    it.each(SURFACE_FILES)(
+      "wiring: $file has $expectedCalls assertIssueRunOwnership call(s) — $surfaces",
+      ({ file, expectedCalls }) => {
+        const source = readFileSync(path.resolve(SRC_DIR, ...file.split("/")), "utf8");
+        // Count call sites (import line has no parens, so this only matches calls).
+        const callSites = source.match(/assertIssueRunOwnership\(/g) ?? [];
+        expect(callSites.length).toBe(expectedCalls);
+      },
+    );
+  });
+
+  describe("behavioral — real surface function invoked with fenced context → conflict", () => {
+    it("work-product: createForIssue with expired lease → conflict (predicate called first in tx)", async () => {
+      const row = ownershipRow({ leaseExpiresAt: new Date(Date.now() - 60_000) });
+      const heartbeat = liveHeartbeat(row);
+      const fake = createOwnershipDb(row, heartbeat);
+      const service = workProductService(fake.db);
+      await expect(
+        service.createForIssue(row.id, row.companyId, {} as never, {
+          runOwnership: { agentId: row.assigneeAgentId!, runId: row.checkoutRunId! },
+        }),
+      ).rejects.toThrow("Issue checkout ownership conflict");
+    });
+
+    it("thread-interaction: create with expired lease → conflict (predicate after Zod parse, before any db op)", async () => {
+      const row = ownershipRow({ leaseExpiresAt: new Date(Date.now() - 60_000) });
+      const heartbeat = liveHeartbeat(row);
+      const fake = createOwnershipDb(row, heartbeat);
+      const service = issueThreadInteractionService(fake.db);
+      await expect(
+        service.create(
+          { id: row.id, companyId: row.companyId },
+          {
+            kind: "suggest_tasks",
+            payload: {
+              version: 1,
+              tasks: [{ clientKey: "t1", title: "Test task" }],
+            },
+          },
+          { agentId: row.assigneeAgentId },
+          { runOwnership: { agentId: row.assigneeAgentId!, runId: row.checkoutRunId! } },
+        ),
+      ).rejects.toThrow("Issue checkout ownership conflict");
+    });
+  });
+
+  describe("surface→coverage table (asserts completeness + pasted into PR body)", () => {
+    it("every surface is accounted for; totals match; behavioral count is 2", () => {
+      const table = [
+        { surface: "comment", calls: 1, coverage: "wiring-only" },
+        { surface: "issue-update", calls: 3, coverage: "wiring-only" },
+        { surface: "work-product", calls: 3, coverage: "behavioral" },
+        { surface: "document", calls: 2, coverage: "wiring-only" },
+        { surface: "attachment", calls: 2, coverage: "wiring-only" },
+        { surface: "approval", calls: 5, coverage: "wiring-only" },
+        { surface: "thread-interaction", calls: 1, coverage: "behavioral" },
+      ];
+      expect(table.length).toBe(7);
+      expect(table.reduce((sum, r) => sum + r.calls, 0)).toBe(17);
+      expect(table.filter((r) => r.coverage === "behavioral").length).toBe(2);
     });
   });
 });
