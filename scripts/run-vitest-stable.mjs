@@ -697,7 +697,7 @@ async function runAuditSelfTest() {
   const trackedSentinelEnv = { ...process.env };
   const trackedSentinelPromise = runTrackedCommand(
     "node",
-    ["-e", "setTimeout(()=>{},60000)"],
+    ["-e", "setTimeout(function(){},60000)"],
     trackedSentinelEnv,
     "tracked-child sentinel",
   ).catch(() => {
@@ -706,13 +706,17 @@ async function runAuditSelfTest() {
 
   // Pattern sentinel: command line contains "tinypool" so the worker filter catches it.
   const patternSentinelEnv = { ...process.env };
-  const patternSentinel = spawn("node", ["-e", "/* tinypool sentinel */ setTimeout(()=>{},60000)"], {
-    cwd: repoRoot,
-    env: patternSentinelEnv,
-    stdio: "ignore",
-    shell: isWindows,
-    detached: !isWindows,
-  });
+  const patternSentinel = spawn(
+    "node",
+    ["-e", "/* tinypool sentinel */ setTimeout(function(){},60000)", repoRootResolved],
+    {
+      cwd: repoRoot,
+      env: patternSentinelEnv,
+      stdio: "ignore",
+      shell: false,
+      detached: !isWindows,
+    },
+  );
 
   if (!patternSentinel.pid) {
     fail("audit self-test: failed to start pattern sentinel");
