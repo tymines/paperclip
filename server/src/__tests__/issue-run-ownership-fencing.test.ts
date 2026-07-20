@@ -5,6 +5,7 @@ import path from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it, vi } from "vitest";
 import { assertIssueRunOwnership } from "../services/issue-run-ownership.js";
+import { issueService as realIssueService } from "../services/issues.js";
 import { workProductService } from "../services/work-products.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 
@@ -575,5 +576,179 @@ describe("v3: surface coverage truth table (blocker 2 fix)", () => {
       expect(table.reduce((sum, r) => sum + r.calls, 0)).toBe(17);
       expect(table.filter((r) => r.coverage === "behavioral").length).toBe(2);
     });
+  });
+});
+
+/**
+ * v4 — inline update path CAS predicate pinning (issues.ts:4569).
+ *
+ * The `assertIssueRunOwnership` predicate (pinned above) is a PRE-CHECK called
+ * by surface functions before their writes. But the `issueService.update`
+ * method has its OWN inline ownership CAS when `enforceRunOwnership: true`:
+ *
+ *   db.update(issues).set(patch).where(and(
+ *     eq(issues.id, id),
+ *     eq(issues.status, "in_progress"),
+ *     eq(issues.assigneeAgentId, actorAgentId),
+ *     eq(issues.checkoutRunId, actorRunId),
+ *     eq(issues.executionRunId, actorRunId),
+ *     gt(issues.leaseExpiresAt, sql`now()`),           ← sibling CAS #1
+ *     runningIssueRunCondition(actorRunId, actorAgentId),
+ *   )).returning()
+ *
+ * If zero rows match → throw conflict("Issue checkout ownership conflict").
+ *
+ * This is a DIFFERENT predicate from `assertIssueRunOwnership` (which lives in
+ * issue-run-ownership.ts and has a heartbeat EXISTS subquery). The v3 fencing
+ * suite pinned `assertIssueRunOwnership` but NOT this inline sibling. v4 pins
+ * it using the same parseLeaseOp/compareByOp captured-SQL harness pattern:
+ * the fake-db parses the operator from the WHERE SQL and evaluates lease-liveness
+ * via compareByOp, so a `gt`→`lt` mutation flips the match outcome.
+ */
+describe("v4: inline update path CAS — issues.ts:4569 gt pinned (sibling #1)", () => {
+  /**
+   * Minimal fake-db for the update() method's inline CAS. Handles:
+   *   - select().from(issues).where() → returns the existing row
+   *   - select().from(instanceSettings).where() → returns a settings row
+   *   - update(issues).set().where().returning() → evaluates the CAS using
+   *     the operator PARSED from the captured WHERE SQL
+   *   - transaction() → delegates to the operation
+   */
+  function createInlineUpdateDb(row: IssueRow) {
+    const whereQueries: Array<{ sql: string; params: unknown[] }> = [];
+    const dialect = new PgDialect();
+    const settingsRow = {
+      singletonKey: 1,
+      general: {},
+      experimental: { enableIsolatedWorkspaces: false },
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    const db = {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: (condition: Parameters<PgDialect["sqlToQuery"]>[0]) => {
+            const query = dialect.sqlToQuery(condition);
+            // Build a thenable that also supports orderBy (drizzle chains).
+            const result = query.sql.includes("instance_settings")
+              ? [settingsRow]
+              : [row];
+            const thenable = {
+              orderBy: () => Promise.resolve(result),
+              then: <T>(resolve: (rows: typeof result) => T | Promise<T>) =>
+                Promise.resolve(result).then(resolve),
+            };
+            return thenable;
+          },
+          // Some select chains call orderBy directly after from (no where).
+          orderBy: () => Promise.resolve([row]),
+          // Some select chains call then directly.
+          then: <T>(resolve: (rows: unknown[]) => T | Promise<T>) =>
+            Promise.resolve([row]).then(resolve),
+          // labelMapForIssues uses innerJoin; return empty (no labels).
+          innerJoin: () => ({
+            where: () => ({
+              orderBy: () => Promise.resolve([]),
+              then: <T>(resolve: (rows: unknown[]) => T | Promise<T>) =>
+                Promise.resolve([]).then(resolve),
+            }),
+          }),
+        }),
+      }),
+      update: () => ({
+        set: (_patch: Record<string, unknown>) => ({
+          where: (condition: Parameters<PgDialect["sqlToQuery"]>[0]) => {
+            const query = dialect.sqlToQuery(condition);
+            whereQueries.push({ sql: query.sql, params: query.params });
+            return {
+              returning: () => {
+                const now = new Date();
+                // v4: PARSE the operator from the captured SQL.
+                const leaseOp = parseLeaseOp(query.sql);
+                const leaseLive =
+                  row.leaseExpiresAt !== null &&
+                  compareByOp(leaseOp, row.leaseExpiresAt.getTime(), now.getTime());
+                // The inline CAS checks status, assignee, checkoutRunId,
+                // executionRunId, lease liveness. It does NOT have a heartbeat
+                // EXISTS subquery (that's assertIssueRunOwnership only).
+                const params = query.params as unknown[];
+                const matches =
+                  row.status === "in_progress" &&
+                  params.includes(row.id) &&
+                  params.includes(row.assigneeAgentId) &&
+                  params.includes(row.checkoutRunId) &&
+                  leaseLive;
+                return Promise.resolve(matches ? [{ ...row }] : []);
+              },
+            };
+          },
+        }),
+      }),
+    };
+    const execute = async () => [{ acquired: true }];
+    Object.assign(db, {
+      transaction: async (operation: (tx: typeof db & { execute: typeof execute }) => Promise<unknown>) =>
+        operation({ ...db, execute }),
+    });
+
+    return { db: db as never, row, whereQueries };
+  }
+
+  it("accepts a live lease (expires in the future) — operator is gt (>), not lt or >=", async () => {
+    const row = ownershipRow({ leaseExpiresAt: new Date(Date.now() + LEASE_TTL_MS) });
+    const fake = createInlineUpdateDb(row);
+    const service = realIssueService(fake.db);
+    const updated = await service.update(row.id, {
+      title: "updated",
+      actorAgentId: row.assigneeAgentId,
+      actorRunId: row.checkoutRunId,
+      enforceRunOwnership: true,
+    });
+    expect(updated).not.toBeNull();
+    // Pin the operator in the captured SQL — `gt`→`lt` breaks this regex.
+    const sql = fake.whereQueries.map((q) => q.sql).join("\n");
+    expect(sql).toMatch(/"issues"\."lease_expires_at"\s*>\s*now\(\)/);
+    // Must NOT be <= or >= (strict >).
+    expect(sql).not.toMatch(/"issues"\."lease_expires_at"\s*<=\s*now\(\)/);
+    expect(sql).not.toMatch(/"issues"\."lease_expires_at"\s*>=\s*now\(\)/);
+  });
+
+  it("rejects an expired lease (expires in the past) with conflict", async () => {
+    const row = ownershipRow({ leaseExpiresAt: new Date(Date.now() - 60_000) });
+    const fake = createInlineUpdateDb(row);
+    const service = realIssueService(fake.db);
+    await expect(
+      service.update(row.id, {
+        title: "updated",
+        actorAgentId: row.assigneeAgentId,
+        actorRunId: row.checkoutRunId,
+        enforceRunOwnership: true,
+      }),
+    ).rejects.toThrow("Issue checkout ownership conflict");
+  });
+
+  it("boundary: leaseExpiresAt == now() → conflict (strict >, equal is NOT live)", async () => {
+    // With strict `>`, equal is NOT live → CAS no-matches → conflict.
+    // (A `>=` mutation would make this live → no conflict → test goes RED.)
+    const boundary = new Date("2026-07-20T05:00:00Z").getTime();
+    vi.useFakeTimers({ now: boundary });
+    try {
+      const row = ownershipRow({ leaseExpiresAt: new Date(boundary) });
+      const fake = createInlineUpdateDb(row);
+      const service = realIssueService(fake.db);
+      await expect(
+        service.update(row.id, {
+          title: "updated",
+          actorAgentId: row.assigneeAgentId,
+          actorRunId: row.checkoutRunId,
+          enforceRunOwnership: true,
+        }),
+      ).rejects.toThrow("Issue checkout ownership conflict");
+      const sql = fake.whereQueries.map((q) => q.sql).join("\n");
+      expect(sql).toMatch(/"issues"\."lease_expires_at"\s*>\s*now\(\)/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

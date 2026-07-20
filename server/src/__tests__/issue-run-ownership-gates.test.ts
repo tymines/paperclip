@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { heartbeatRuns } from "@paperclipai/db";
 import { issueService as realIssueService } from "../services/issues.js";
 
@@ -14,6 +14,31 @@ import { issueService as realIssueService } from "../services/issues.js";
  * Gates 1, 2, 3 exercise `reclaimExpiredLease` (uses withRailClaimLock advisory
  * lock 1380010316 + the expired-lease CAS). Gate 5 exercises `renewLease`
  * (direct CAS carrying the runningIssueRunCondition epoch max-subquery).
+ *
+ * v4 REVIEW-FIX (unpinned sibling CAS predicates):
+ * The v3 gates suite had the same mutation-gate gap the v3 fencing suite fixed:
+ * `createGateDb`'s `returning()` callback hardcoded the comparison operators
+ * in JavaScript (lines 104, 110: `<=`; line 116: `>`) instead of parsing them
+ * from the captured WHERE SQL. So inverting `renewLease`'s `gt`→`lt` or
+ * `reclaimExpiredLease`'s `<=`→`>` in production would NOT flip outcomes — the
+ * tests would stay green. This v4 version:
+ *   1. PARSES the comparison operator from the captured WHERE SQL using
+ *      `parseLeaseOp()` and evaluates lease-liveness via `compareByOp()` —
+ *      so operator mutations flip outcomes in both directions.
+ *   2. Pins the operator in test-level regex assertions on the captured SQL
+ *      (`"lease_expires_at" > now()` for renewLease, `<= now()` for reclaim).
+ *   3. Adds named boundary tests: renewLease boundary `leaseExpiresAt == now()`
+ *      → conflict (strict `>`); reclaim boundary `leaseExpiresAt == now()` →
+ *      matches (inclusive `<=`).
+ *   4. Adds unknown-operator failure tests: an unparsable operator causes
+ *      `parseLeaseOp` to return `"?"`, `compareByOp` to return `false`
+ *      (fail-safe), and the test to assert that behavior explicitly.
+ *
+ * Three sibling CAS predicates pinned (source: issues.ts, re-read at 47617fd37):
+ *   a. assertIssueRunOwnership inline update path — issues.ts:4569 `gt` (pinned
+ *      in the fencing suite, v3 step 1).
+ *   b. renewLease — issues.ts:4905 `gt` (pinned HERE, v4).
+ *   c. reclaimExpiredLease — issues.ts:4927 `<=` (raw SQL, pinned HERE, v4).
  *
  * Fake-db harness modeled on createLeaseDb (issue-lease-renewal-routes.test.ts):
  * PgDialect SQL-assertion on captured WHERE + execute SQL. Enhanced with
@@ -46,6 +71,40 @@ type HeartbeatRow = {
 
 const LEASE_TTL_MS = 15 * 60_000;
 const HEARTBEAT_RECENT_WINDOW_MS = 15 * 60_000;
+
+/**
+ * Compare two epoch-ms by the SQL comparison operator parsed from the captured
+ * WHERE clause. This is the v4 mutation-gate fix for the gates suite: the
+ * fake-db no longer hardcodes `>` or `<=` — it uses whatever operator the
+ * production predicate emitted, so a mutation flips lease-liveness and thus the
+ * match outcome.
+ */
+function compareByOp(op: string, a: number, b: number): boolean {
+  switch (op) {
+    case ">":
+      return a > b;
+    case "<":
+      return a < b;
+    case ">=":
+      return a >= b;
+    case "<=":
+      return a <= b;
+    default:
+      // Unknown / unparsable operator → fail safe (treat as no-match).
+      return false;
+  }
+}
+
+/**
+ * Extract the lease comparison operator from the captured WHERE SQL. The
+ * fragment renders as `"issues"."lease_expires_at" <op> now()` in both the
+ * drizzle `gt()` form (renewLease) and the raw `sql<boolean>` form
+ * (reclaimExpiredLease). Returns "?" if the fragment is absent or unparseable.
+ */
+function parseLeaseOp(sql: string): string {
+  const m = sql.match(/"issues"\."lease_expires_at"\s*(>=|<=|<>|!=|>|<)\s*now\(\)/);
+  return m?.[1] ?? "?";
+}
 
 function leaseRow(leaseExpiresAt: Date | null = null): LeaseRow {
   const runId = randomUUID();
@@ -94,6 +153,10 @@ function createGateDb(
               const now = new Date();
               const isReclaim = patch.status === "todo";
               const isHeartbeatExtension = !isReclaim && !query.sql.includes('"assignee_agent_id"');
+              // v4: PARSE the comparison operator from the captured WHERE SQL
+              // instead of hardcoding it. A `gt`→`lt` or `<=`→`>` mutation in
+              // production flips lease-liveness and thus the match outcome.
+              const leaseOp = parseLeaseOp(query.sql);
               const matches = isReclaim
                 ? row.status === "in_progress"
                   && query.sql.includes('"checkout_run_id"')
@@ -101,19 +164,19 @@ function createGateDb(
                   && query.params.includes(row.checkoutRunId)
                   && query.params.includes(row.executionRunId)
                   && row.leaseExpiresAt !== null
-                  && row.leaseExpiresAt.getTime() <= now.getTime()
+                  && compareByOp(leaseOp, row.leaseExpiresAt.getTime(), now.getTime())
                 : isHeartbeatExtension
                   ? row.status === "in_progress"
                     && query.params.includes(row.checkoutRunId)
                     && query.params.includes(row.executionRunId)
                     && row.leaseExpiresAt !== null
-                    && row.leaseExpiresAt.getTime() <= now.getTime()
+                    && compareByOp(leaseOp, row.leaseExpiresAt.getTime(), now.getTime())
                   : row.status === "in_progress"
                     && query.sql.includes('"execution_run_id"')
                     && query.params.includes(row.assigneeAgentId)
                     && query.params.includes(row.checkoutRunId)
                     && query.params.includes(row.executionRunId)
-                    && (row.leaseExpiresAt === null || row.leaseExpiresAt.getTime() > now.getTime());
+                    && (row.leaseExpiresAt === null || compareByOp(leaseOp, row.leaseExpiresAt.getTime(), now.getTime()));
 
               if (!matches) return Promise.resolve([]);
               if (isReclaim) {
@@ -202,6 +265,9 @@ describe("phase 4 activation — gate scenarios", () => {
     expect(row.checkoutRunId).toBeNull();
     expect(row.executionRunId).toBeNull();
     expect(row.leaseExpiresAt).toBeNull();
+    // v4: pin the reclaim operator — `<=`→`>` breaks this regex.
+    const reclaimSql = fake.whereQueries.map((q) => q.sql).join("\n");
+    expect(reclaimSql).toMatch(/"issues"\."lease_expires_at"\s*<=\s*now\(\)/);
   });
 
   it("gate 2: reclaim decision semantics — expired reclaimable once, dual run-ids fenced, live lease rejected, recent heartbeat extends; ≤16-min is a measured gap", async () => {
@@ -309,5 +375,126 @@ describe("phase 4 activation — gate scenarios", () => {
     expect(renewSql).toMatch(/select max.*controllerEpoch.*activity_log.*rail\.controller_epoch/s);
     // The fence must NOT be a no-op (controllerEpoch is null) clause.
     expect(renewSql).not.toMatch(/controllerEpoch.*is null/s);
+    // v4: pin the renewLease operator — `gt`→`lt` breaks this regex.
+    expect(renewSql).toMatch(/"issues"\."lease_expires_at"\s*>\s*now\(\)/);
+  });
+});
+
+/**
+ * v4 — operator-pinning + boundary tests for the two sibling CAS predicates
+ * exercised in this suite: renewLease (`gt` / strict `>`) and
+ * reclaimExpiredLease (`<=` / inclusive `<=`).
+ *
+ * Each predicate gets:
+ *   - A boundary test at `leaseExpiresAt == now()` proving the operator's
+ *     inclusivity/exclusivity (renew: equal → conflict because strict `>`;
+ *     reclaim: equal → matches because inclusive `<=`).
+ *   - An unknown-operator failure test proving `parseLeaseOp` returns `"?"` and
+ *     `compareByOp` returns `false` (fail-safe) for an unparseable fragment.
+ *
+ * These tests prove the harness is LIVE: mutating the production operator
+ * flips the `compareByOp` evaluation and thus the match outcome, causing RED.
+ * They are the gates-suite analog of the fencing suite's
+ * "lease expiry semantics pin the operator (strict >)" block.
+ */
+describe("v4: renewLease operator pinning — strict > boundary + unknown-op failure", () => {
+  it("renewLease boundary: leaseExpiresAt == now() → conflict (strict >, equal is NOT live)", async () => {
+    // Fake timers make the boundary deterministic: leaseExpiresAt == now.
+    // With strict `>`, equal is NOT live → renewLease throws conflict.
+    // (A `>=` mutation would make this live → no conflict → test goes RED.)
+    const boundary = new Date("2026-07-20T05:00:00Z").getTime();
+    vi.useFakeTimers({ now: boundary });
+    try {
+      const row = leaseRow(new Date(boundary)); // == now
+      const fake = createGateDb(row, null);
+      const service = realIssueService(fake.db);
+      await expect(
+        service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!),
+      ).rejects.toThrow("Issue lease renewal conflict");
+      // Pin the operator in the captured SQL.
+      const renewSql = fake.whereQueries[0].sql;
+      expect(renewSql).toMatch(/"issues"\."lease_expires_at"\s*>\s*now\(\)/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renewLease accepts a live lease (expires in the future)", async () => {
+    const row = leaseRow(new Date(Date.now() + 60_000));
+    const fake = createGateDb(row, null);
+    const service = realIssueService(fake.db);
+    const renewed = await service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!);
+    expect(renewed).not.toBeNull();
+    expect(fake.whereQueries[0].sql).toMatch(/"issues"\."lease_expires_at"\s*>\s*now\(\)/);
+  });
+
+  it("renewLease rejects an expired lease (expires in the past) with conflict", async () => {
+    const row = leaseRow(new Date(Date.now() - 60_000));
+    const fake = createGateDb(row, null);
+    const service = realIssueService(fake.db);
+    await expect(
+      service.renewLease(row.id, row.assigneeAgentId!, row.checkoutRunId!),
+    ).rejects.toThrow("Issue lease renewal conflict");
+  });
+
+  it("unknown operator fails safely: parseLeaseOp returns '?', compareByOp returns false", () => {
+    // An unparseable SQL fragment (e.g. a mutated operator to '~=') causes
+    // parseLeaseOp to return "?" and compareByOp to return false (fail-safe).
+    // This proves the harness fails LOUDLY on unknown operators rather than
+    // silently passing.
+    const garbageSql = '"issues"."lease_expires_at" ~= now()';
+    expect(parseLeaseOp(garbageSql)).toBe("?");
+    expect(compareByOp("?", 1000, 500)).toBe(false);
+    // Known operators work correctly.
+    expect(parseLeaseOp('"issues"."lease_expires_at" > now()')).toBe(">");
+    expect(parseLeaseOp('"issues"."lease_expires_at" <= now()')).toBe("<=");
+    expect(compareByOp(">", 1000, 500)).toBe(true);
+    expect(compareByOp("<=", 500, 1000)).toBe(true);
+    expect(compareByOp("<=", 1000, 1000)).toBe(true);
+    expect(compareByOp(">", 1000, 1000)).toBe(false);
+  });
+});
+
+describe("v4: reclaimExpiredLease operator pinning — inclusive <= boundary + unknown-op failure", () => {
+  it("reclaim boundary: leaseExpiresAt == now() → matches (inclusive <=, equal IS expired)", async () => {
+    // Fake timers make the boundary deterministic: leaseExpiresAt == now.
+    // With inclusive `<=`, equal IS expired → reclaim matches.
+    // (A `<` mutation would make equal NOT expired → no match → test goes RED.)
+    const boundary = new Date("2026-07-20T05:00:00Z").getTime();
+    vi.useFakeTimers({ now: boundary });
+    try {
+      const row = leaseRow(new Date(boundary)); // == now
+      const fake = createGateDb(row, staleHeartbeat(row));
+      const service = realIssueService(fake.db);
+      const reclaimed = await service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!);
+      expect(reclaimed).not.toBeNull();
+      expect(row.status).toBe("todo");
+      // Pin the operator in the captured SQL.
+      const reclaimSql = fake.whereQueries.map((q) => q.sql).join("\n");
+      expect(reclaimSql).toMatch(/"issues"\."lease_expires_at"\s*<=\s*now\(\)/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reclaim rejects a live lease (expires in the future) — not expired", async () => {
+    const row = leaseRow(new Date(Date.now() + 60_000));
+    const fake = createGateDb(row, staleHeartbeat(row));
+    const service = realIssueService(fake.db);
+    const result = await service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!);
+    expect(result).toBeNull();
+    expect(row.status).toBe("in_progress");
+  });
+
+  it("reclaim accepts an expired lease (expires in the past) — is expired", async () => {
+    const row = leaseRow(new Date(Date.now() - 60_000));
+    const fake = createGateDb(row, staleHeartbeat(row));
+    const service = realIssueService(fake.db);
+    const reclaimed = await service.reclaimExpiredLease(row.id, row.checkoutRunId!, row.executionRunId!);
+    expect(reclaimed).not.toBeNull();
+    expect(row.status).toBe("todo");
+    expect(fake.whereQueries.map((q) => q.sql).join("\n")).toMatch(
+      /"issues"\."lease_expires_at"\s*<=\s*now\(\)/,
+    );
   });
 });
