@@ -1,3 +1,20 @@
+"""
+Phase 4 activation — Python gate scenarios (gate 4: controller-restart replay
+vs projection agreement) + durability/intent tests.
+
+Platform invocation (v4 fix — module execution avoids sys.path/import issues;
+`python3` is NOT a Windows command name):
+  macOS / Linux:  python3 -m scripts.test_rail_phase4
+  Windows:        py -3 -m scripts.test_rail_phase4
+
+On Windows the `python3` executable does not exist by default; the `py` launcher
+(`py -3`) is the canonical Windows Python 3 invocation. Module execution
+(`-m scripts.test_rail_phase4`) is used instead of direct script invocation
+(`scripts/test_rail_phase4.py`) because it correctly resolves the `scripts`
+package namespace, ensuring sibling imports (rail_controller, watchdog,
+rail_durability) resolve cleanly. NO package.json changes — this is a
+documented platform split, not a shared-script edit.
+"""
 import json
 import sys
 import tempfile
@@ -426,6 +443,81 @@ class Phase4ControllerFenceTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertNotIn("POST", [call.args[0] for call in api_call.call_args_list])
         emit_event.assert_not_called()
+
+    def test_gate4_controller_restart_replay_vs_projection_agreement(self):
+        # Gate 4: on controller restart, the durable projection replay and the
+        # controller's epoch reconcile AGREE on the fence. The projection fences
+        # stale-epoch events (ignored_stale_epoch_events) and lands on the durable
+        # max epoch; a controller restart inherits that same epoch via load_state,
+        # advances past it via next_controller_epoch, and a stale controller
+        # (below the max) is refused by controller.api() — both sides fence the
+        # SAME stale epoch consistently. Existing tests cover projection-fencing,
+        # epoch-advance, and stale-api-refusal SEPARATELY; this test asserts the
+        # full restart sequence agrees end-to-end.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            journal = root / "rail-events.jsonl"
+            state_file = root / ".rail_state.json"
+            # Journal: epoch-2 acquire + renew, then a stale epoch-1 claim_lost.
+            append_event(journal, {
+                "type": "claim_acquired", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+                "lease_expires_at": "2026-07-17T07:00:00+00:00",
+            })
+            append_event(journal, {
+                "type": "claim_renewed", "task_id": "T-1", "controller_epoch": 2,
+                "checkout_run_id": "run-1", "execution_run_id": "run-1",
+                "lease_expires_at": "2026-07-17T07:05:00+00:00",
+            })
+            append_event(journal, {
+                "type": "claim_lost", "task_id": "T-1", "controller_epoch": 1,
+            })
+
+            # --- PROJECTION side: replay fences the stale-epoch event. ---
+            state_file.write_text("{", encoding="utf-8")
+            state = load_projection(journal, state_file)
+            self.assertEqual(state["_meta"]["cursor"], 3)
+            self.assertEqual(state["_meta"]["controller_epoch"], 2)
+            self.assertEqual(state["_meta"]["ignored_stale_epoch_events"], 1)
+            self.assertEqual(state["T-1"]["state"], "run_backed_claim")
+            self.assertEqual(state["T-1"]["last_event"]["type"], "claim_renewed")
+
+            # --- CONTROLLER side: restart inherits the projected epoch, then advances. ---
+            class RestartCursor:
+                def __init__(self):
+                    self.queries = []
+                def __enter__(self):
+                    return self
+                def __exit__(self, *_):
+                    return False
+                def execute(self, query, params=None):
+                    self.queries.append((str(query), params))
+                def fetchone(self):
+                    return (2,)  # durable DB max epoch == projection's max (2)
+            class RestartConnection:
+                def cursor(self):
+                    return RestartCursor()
+            with mock.patch.object(controller, "load_state", return_value=state), \
+                 mock.patch.object(controller, "save_state") as save_state:
+                next_epoch = controller.next_controller_epoch(RestartConnection())
+            # Controller advances past BOTH the durable DB max (2) and the
+            # projected state epoch (2) → next epoch is 3.
+            self.assertEqual(next_epoch, 3)
+            self.assertEqual(state["_meta"]["controller_epoch"], 3)
+            save_state.assert_called_once_with(state)
+
+            # --- AGREEMENT: a stale controller (epoch 1, below the durable max 2)
+            # is refused by controller.api() — the SAME stale epoch the projection
+            # fenced. Both sides agree: epoch 1 is stale, epoch 2 was current. ---
+            controller.CONTROLLER_EPOCH = 1
+            try:
+                with mock.patch.object(controller, "load_state", return_value=state), \
+                     mock.patch.object(controller.urllib.request, "urlopen") as urlopen:
+                    result = controller.api("POST", "/api/issues/T-1/comments", {"body": "stale"})
+                self.assertIsNone(result)
+                urlopen.assert_not_called()
+            finally:
+                controller.CONTROLLER_EPOCH = None
 
 
 class Phase4IntentTests(unittest.TestCase):
