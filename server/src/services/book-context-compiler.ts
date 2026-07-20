@@ -13,6 +13,7 @@ import {
   storyBibleOutline,
   manuscriptChapters,
 } from "@paperclipai/db";
+import { serializeStructured } from "./serialize-structured.js";
 
 const TAIL_WORDS = 700; // ~last 500–800 words of the previous chapter, verbatim
 
@@ -115,7 +116,7 @@ export async function compileChapterContext(
   // 3) Voice cards for the characters in this beat
   if (useChars.length) {
     const cards = useChars.map((c) => {
-      const vc = c.voiceCard ? `\nVoice: ${c.voiceCard}` : "";
+      const vc = c.voiceCard ? `\nVoice:\n${serializeStructured(c.voiceCard)}` : "";
       return `- ${c.name}${c.role ? ` (${c.role})` : ""}: ${c.description ?? ""}${vc}`;
     });
     parts.push(`## CHARACTERS IN THIS SCENE (honor voice cards exactly)\n${cards.join("\n")}`);
@@ -124,7 +125,7 @@ export async function compileChapterContext(
   // 4) Place cards for the beat's locations
   if (useLocs.length) {
     const cards = useLocs.map((l) => {
-      const sensory = l.sensoryNotes ? `\nSensory/mood: ${l.sensoryNotes}` : "";
+      const sensory = l.sensoryNotes ? `\nSensory/mood:\n${serializeStructured(l.sensoryNotes)}` : "";
       return `- ${l.name}: ${l.description ?? ""}${sensory}`;
     });
     parts.push(`## PLACES IN THIS SCENE\n${cards.join("\n")}`);
@@ -133,7 +134,8 @@ export async function compileChapterContext(
   // 5) World rules (hard constraints — never contradict)
   const rules = useLocs.map((l) => l.rules).filter(Boolean);
   if (rules.length) {
-    parts.push(`## WORLD RULES (hard constraints — never contradict)\n${rules.join("\n")}`);
+    const ruleTexts = rules.map((r) => serializeStructured(r));
+    parts.push(`## WORLD RULES (hard constraints — never contradict)\n${ruleTexts.join("\n\n")}`);
   }
 
   // 6) Story so far (rolling summary)
@@ -159,6 +161,14 @@ export async function compileChapterContext(
   const userPrompt =
     `Book: ${book?.title ?? "Untitled"}\nWrite chapter ${chapterNumber} as full prose using ONLY the approved context below.\n\n` +
     (parts.length ? parts.join("\n\n") : "(No bible context is available yet — draft from the premise and keep it consistent.)");
+
+  // Final invariant: the assembled prompt must never contain raw "[object Object]"
+  if (userPrompt.includes("[object Object]")) {
+    throw new Error(
+      "Invariant violation: userPrompt contains raw '[object Object]' — a JSONB field " +
+        "was not properly serialized. All JSONB fields must flow through serializeStructured.",
+    );
+  }
 
   return {
     systemPrompt,
