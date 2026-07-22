@@ -616,9 +616,9 @@ export function Tasks() {
         </button>
       </div>
 
-      {/* Unified filter bar — the three legacy surfaces folded into one set */}
+      {/* Unified filter bar — scroll horizontally on mobile, wrap on desktop */}
       <div
-        className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-4 md:px-6"
+        className="mt-4 flex items-center gap-x-3 gap-y-2 overflow-x-auto px-4 pb-4 flex-nowrap md:flex-wrap md:px-6"
         style={{ borderBottom: `1px solid ${DS.border}` }}
       >
         {LENS_GROUPS.map((group, gi) => (
