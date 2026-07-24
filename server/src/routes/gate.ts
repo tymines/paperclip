@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { checkGate } from "../rooms-rail/gate-checker.js";
+import { roomService } from "../services/rooms.js";
 import { logger } from "../middleware/logger.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -29,17 +30,28 @@ export function gateRoutes(db: Db) {
   router.post("/companies/:companyId/pipeline/start", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
+    const actor = getActorInfo(req);
     const { name } = req.body as { name?: string };
     const runId = randomUUID();
     const stageId = randomUUID();
     const runName = name ?? "New Project";
 
-    await db.execute(sql`INSERT INTO pipeline_runs (id, company_id, name, status) VALUES (${runId}, ${companyId}, ${runName}, 'active')`);
-    await db.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${stageId}, ${runId}, 'idea', 'active', 0)`);
+    const roomId = await db.transaction(async (tx) => {
+      const room = await roomService(tx).create(companyId, {
+        name: `${runName} — Idea`,
+        type: "pipeline-idea",
+        createdBy: actor.actorId,
+      });
 
-    emitEvent({ type: "pipeline_start", runId, stageId, name: runName });
+      await tx.execute(sql`INSERT INTO pipeline_runs (id, company_id, room_id, name, status) VALUES (${runId}, ${companyId}, ${room.id}, ${runName}, 'active')`);
+      await tx.execute(sql`INSERT INTO run_stages (id, pipeline_run_id, name, status, stage_order) VALUES (${stageId}, ${runId}, 'idea', 'active', 0)`);
 
-    res.status(201).json({ runId, stageId, stage: "idea", name: runName });
+      return room.id;
+    });
+
+    emitEvent({ type: "pipeline_start", runId, stageId, name: runName, roomId });
+
+    res.status(201).json({ runId, stageId, stage: "idea", name: runName, roomId });
   });
 
   // ── Gate decision + advance ──
@@ -144,7 +156,7 @@ export function gateRoutes(db: Db) {
   });
   router.get("/companies/:companyId/pipeline/runs/:runId", async (req, res) => {
     const c = req.params.companyId as string; assertCompanyAccess(req, c);
-    const [run] = await rows(db, sql`SELECT id,name,status,created_at FROM pipeline_runs WHERE id=${req.params.runId} AND company_id=${c}`);
+    const [run] = await rows(db, sql`SELECT id,name,status,room_id,created_at FROM pipeline_runs WHERE id=${req.params.runId} AND company_id=${c}`);
     if (!run) { res.status(404).json({ error: "run not found" }); return; }
     const stages = await rows(db, sql`SELECT id,name,status,stage_order,completed_at FROM run_stages WHERE pipeline_run_id=${req.params.runId} ORDER BY stage_order,completed_at`);
     res.json({ run, stages });
