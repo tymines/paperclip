@@ -37,7 +37,7 @@ export function gateRoutes(db: Db) {
     const runName = name ?? "New Project";
 
     const roomId = await db.transaction(async (tx) => {
-      const room = await roomService(tx as unknown as Db).create(companyId, {
+      const room = await roomService(tx).create(companyId, {
         name: `${runName} — Idea`,
         type: "pipeline-idea",
         createdBy: actor.actorId,
@@ -156,7 +156,7 @@ export function gateRoutes(db: Db) {
   });
   router.get("/companies/:companyId/pipeline/runs/:runId", async (req, res) => {
     const c = req.params.companyId as string; assertCompanyAccess(req, c);
-    const [run] = await db.execute(sql`SELECT id, name, status, room_id, created_at FROM pipeline_runs WHERE id=${req.params.runId} AND company_id=${c}`);
+    const [run] = await rows(db, sql`SELECT id,name,status,room_id,created_at FROM pipeline_runs WHERE id=${req.params.runId} AND company_id=${c}`);
     if (!run) { res.status(404).json({ error: "run not found" }); return; }
     const stages = await rows(db, sql`SELECT id,name,status,stage_order,completed_at FROM run_stages WHERE pipeline_run_id=${req.params.runId} ORDER BY stage_order,completed_at`);
     res.json({ run, stages });

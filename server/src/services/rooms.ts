@@ -2,7 +2,7 @@ import { and, asc, count, desc, eq, lt } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { agents, rooms, roomMembers, roomMessages } from "@paperclipai/db";
 
-export function roomService(db: Db) {
+export function roomService(db: Pick<Db, "select" | "insert" | "update" | "delete">) {
   return {
     list: (companyId: string) =>
       db

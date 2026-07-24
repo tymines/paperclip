@@ -81,6 +81,10 @@ function createFakeDb() {
 
     const selectMatch = text.match(/SELECT\s+(.+?)\s+FROM\s+"?(\w+)"?(?:\s+WHERE\s+(.+))?/i);
     if (selectMatch) {
+      const selectedColumns = selectMatch[1].split(",").map((column) => {
+        const [source, alias] = column.trim().split(/\s+AS\s+/i);
+        return { source: source.split(".").pop()!.replace(/"/g, ""), target: (alias ?? source).split(".").pop()!.replace(/"/g, "") };
+      });
       const table = selectMatch[2] as keyof Tables;
       const where = selectMatch[3];
       let rows = state()[table] ?? [];
@@ -97,7 +101,7 @@ function createFakeDb() {
           }
         }
       }
-      return rows;
+      return rows.map((row) => Object.fromEntries(selectedColumns.map(({ source, target }) => [target, row[source]])));
     }
 
     throw new Error(`Unsupported SQL in fake DB: ${text}`);
