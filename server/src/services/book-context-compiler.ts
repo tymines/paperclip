@@ -16,6 +16,10 @@ import {
 
 const TAIL_WORDS = 700; // ~last 500–800 words of the previous chapter, verbatim
 
+function bibleText(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
+
 function beatText(beats: unknown): string {
   if (!beats) return "";
   if (typeof beats === "string") return beats;
@@ -115,7 +119,7 @@ export async function compileChapterContext(
   // 3) Voice cards for the characters in this beat
   if (useChars.length) {
     const cards = useChars.map((c) => {
-      const vc = c.voiceCard ? `\nVoice: ${c.voiceCard}` : "";
+      const vc = c.voiceCard ? `\nVoice: ${bibleText(c.voiceCard)}` : "";
       return `- ${c.name}${c.role ? ` (${c.role})` : ""}: ${c.description ?? ""}${vc}`;
     });
     parts.push(`## CHARACTERS IN THIS SCENE (honor voice cards exactly)\n${cards.join("\n")}`);
@@ -124,14 +128,14 @@ export async function compileChapterContext(
   // 4) Place cards for the beat's locations
   if (useLocs.length) {
     const cards = useLocs.map((l) => {
-      const sensory = l.sensoryNotes ? `\nSensory/mood: ${l.sensoryNotes}` : "";
+      const sensory = l.sensoryNotes ? `\nSensory/mood: ${bibleText(l.sensoryNotes)}` : "";
       return `- ${l.name}: ${l.description ?? ""}${sensory}`;
     });
     parts.push(`## PLACES IN THIS SCENE\n${cards.join("\n")}`);
   }
 
   // 5) World rules (hard constraints — never contradict)
-  const rules = useLocs.map((l) => l.rules).filter(Boolean);
+  const rules = useLocs.map((l) => bibleText(l.rules)).filter(Boolean);
   if (rules.length) {
     parts.push(`## WORLD RULES (hard constraints — never contradict)\n${rules.join("\n")}`);
   }
