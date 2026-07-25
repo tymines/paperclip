@@ -1,0 +1,15 @@
+# Director's Deck UI worker evidence
+
+- Branch: `work/book-studio-ui-20260725`
+- Base: `edf15e7a3f4ba74100865c1efe68eb78e492472d`
+- Verdict: **NO_VERDICT**
+
+## Landed as partial WIP
+
+- RED contract test for Baily decision language, 12 Story Bible sections, all Director modes, PASS/FAIL/NO_VERDICT, lock states, and a 53-row parity registry.
+
+## Verification
+
+`pnpm exec vitest run ui/src/components/book-studio/DirectorDeck.contract.test.tsx` — expected RED; suite failed to collect because `directorDeckContract.ts` and `DirectorDeckShell.tsx` were not produced.
+
+Three Codex sessions and one Aider canary were terminated after hanging before production edits. No Director Deck production UI was completed. This commit is a durable RED-test checkpoint only and must not be merged as completed functionality.
