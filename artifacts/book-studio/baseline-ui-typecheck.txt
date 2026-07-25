@@ -1,0 +1,6 @@
+
+> @paperclipai/ui@0.3.1 typecheck /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/ui
+> tsc -b
+
+
+BASELINE_UI_TYPECHECK_EXIT=0
