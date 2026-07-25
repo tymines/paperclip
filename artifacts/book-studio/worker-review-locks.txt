@@ -1,0 +1,21 @@
+# Review + Locks worker evidence
+
+- Branch: `work/book-studio-review-locks-20260725`
+- Base: `edf15e7a3f4ba74100865c1efe68eb78e492472d`
+- Verdict: **NO_VERDICT**
+
+## Landed as partial WIP
+
+- Draft migration `0157_review_locks.sql`
+- Draft schema for chapter/passage locks and revision proposals
+- `book-locks.ts` helper
+- Pre-generation and canonical pre-persist checks started in chapter generation/prose writer
+
+## Verification
+
+- `pnpm --filter @paperclipai/server typecheck` — PASS
+- `pnpm --filter @paperclipai/db typecheck` — FAIL before TS compile: migration journal/file mismatch (`journal has 153, files have 154`)
+- Lock/review/revision behavior tests — NO_VERDICT (worker never produced them)
+- Exact review/revision routes and full enforcement matrix — NO_VERDICT
+
+Two Codex sessions were terminated after extended idle/hung patch-generation states. This commit is a durable WIP checkpoint only and must not be merged as a completed feature.

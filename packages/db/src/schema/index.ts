@@ -6,9 +6,17 @@ export {
 } from "./books.js";
 export {
   manuscriptChapters,
+  passageLocks,
   type ManuscriptChapter,
   type NewManuscriptChapter,
+  type PassageLock,
+  type NewPassageLock,
 } from "./manuscript_chapters.js";
+export {
+  bookRevisionProposals,
+  type BookRevisionProposal,
+  type NewBookRevisionProposal,
+} from "./book_revision_proposals.js";
 export { companyLogos } from "./company_logos.js";
 export { authUsers, authSessions, authAccounts, authVerifications } from "./auth.js";
 export { instanceSettings } from "./instance_settings.js";

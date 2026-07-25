@@ -8,6 +8,7 @@ import { logActivity } from "../services/index.js";
 import { generateChapterDraft, reviseChapterContent, callLLM, streamLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
+import { assertChapterWriteUnlocked, isLockedContentError, lockedPayload } from "../services/book-locks.js";
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
@@ -43,6 +44,7 @@ export function bookStudioChapterGenRoutes(db: Db) {
           throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
         }
 
+        await assertChapterWriteUnlocked(db, { bookId, chapterNumber });
         const ctx = await compileChapterContext(db, bookId, chapterNumber, guidance);
 
         let prose: string;
@@ -112,6 +114,7 @@ export function bookStudioChapterGenRoutes(db: Db) {
           throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
         }
 
+        await assertChapterWriteUnlocked(db, { bookId, chapterNumber });
         const ctx = await compileChapterContext(db, bookId, chapterNumber, guidance);
 
         res.writeHead(200, {
@@ -236,6 +239,7 @@ export function bookStudioChapterGenRoutes(db: Db) {
             nextDraftSkipped = `Chapter ${nextNumber} already has prose — assisted mode never overwrites.`;
           } else {
             try {
+              await assertChapterWriteUnlocked(db, { bookId, chapterNumber: nextNumber });
               const ctx = await compileChapterContext(db, bookId, nextNumber);
               const prose = await callLLM(ctx.systemPrompt, ctx.userPrompt);
               if (!prose || !prose.trim()) throw new Error("Writer returned empty prose");
@@ -322,6 +326,8 @@ export function bookStudioChapterGenRoutes(db: Db) {
           }`
           : undefined;
 
+        await assertChapterWriteUnlocked(db, { bookId, chapterNumber: nextChapterNumber });
+
         // Generate chapter content via LLM
         const generated = await generateChapterDraft({
           bookTitle: book.title,
@@ -404,10 +410,7 @@ export function bookStudioChapterGenRoutes(db: Db) {
 
         if (!existing) throw notFound(`Chapter ${chNum} not found`);
 
-        // If chapter is locked, refuse revision
-        if (existing.locked) {
-          throw badRequest("Chapter is locked and cannot be revised");
-        }
+        await assertChapterWriteUnlocked(db, { bookId, chapterNumber: chNum });
 
         // Generate revised content
         const revised = await reviseChapterContent({
@@ -445,6 +448,7 @@ export function bookStudioChapterGenRoutes(db: Db) {
 
         res.json({ chapter: updated });
       } catch (err) {
+        if (isLockedContentError(err)) return res.status(409).json(lockedPayload(err as any));
         next(err);
       }
     },

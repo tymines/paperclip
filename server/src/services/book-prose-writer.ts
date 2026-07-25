@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { manuscriptChapters } from "@paperclipai/db";
+import { assertChapterWriteUnlocked } from "./book-locks.js";
 
 const BOOK_VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
@@ -72,6 +73,7 @@ export async function persistChapterProse(
   args: { bookId: string; bookSlug: string; chapterNumber: number; prose: string },
 ): Promise<PersistProseResult> {
   const { bookId, bookSlug, chapterNumber } = args;
+  await assertChapterWriteUnlocked(db, { bookId, chapterNumber });
   // Consistent `## Chapter N: Title` headings across every write path (#7).
   const prose = normalizeChapterHeading(args.prose, chapterNumber);
 
