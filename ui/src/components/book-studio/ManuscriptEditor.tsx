@@ -26,6 +26,10 @@ interface Props {
   highlightRange?: { chapterNumber: number; startOffset: number; endOffset: number } | null;
   /** Writing autonomy dial (persisted in books.metadata.autonomyMode). */
   autonomyMode?: "manual" | "assisted" | "autopilot";
+  /** Bump to force a prose reload (e.g. after an accepted revision proposal — Spec v1 §5.D). */
+  contentRefreshKey?: number;
+  /** Reports the currently open chapter (e.g. so Review defaults to "this chapter", §5.A). */
+  onChapterChange?: (chapterNumber: number | null) => void;
 }
 
 const API_BASE = "/api";
@@ -56,7 +60,7 @@ function markdownToHtml(md: string): string {
     .join("");
 }
 
-export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus, jumpToChapter, highlightRange, autonomyMode = "manual" }: Props) {
+export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus, jumpToChapter, highlightRange, autonomyMode = "manual", contentRefreshKey = 0, onChapterChange }: Props) {
   const chapters = [...outlineEntries].sort((a, b) => a.chapterNumber - b.chapterNumber);
   const [selectedCh, setSelectedCh] = useState<number | null>(chapters[0]?.chapterNumber ?? null);
   const [content, setContent] = useState("");
@@ -118,6 +122,33 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
     return () => { cancelled = true; };
   }, [selectedCh, bookId]);
 
+  // Accepted revision proposal landed server-side (Spec v1 §5.D): reload the
+  // open chapter — with the same never-clobber guard as the autopilot poll, so
+  // unsaved local edits are never overwritten silently.
+  useEffect(() => {
+    if (contentRefreshKey === 0 || selectedCh == null) return;
+    let cancelled = false;
+    apiFetch<{ chapters: Array<{ chapterNumber: number; title: string; content: string }> }>(
+      `${API_PREFIX}/chapters`
+    )
+      .then((res) => {
+        if (cancelled) return;
+        const ch = res.chapters?.find((c) => c.chapterNumber === selectedCh);
+        const fresh = ch?.content ?? "";
+        setContent((current) => {
+          if (current === lastLoadedRef.current) {
+            lastLoadedRef.current = fresh;
+            if (ch?.title) setTitle(ch.title);
+            return fresh;
+          }
+          return current; // local unsaved edits win — never clobber
+        });
+      })
+      .catch(() => { /* transient — the next navigation reloads */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentRefreshKey]);
+
   // While Autopilot is writing chapters server-side, refresh the open chapter
   // so the editor tracks reality (finding #5) — but never clobber local edits:
   // only apply when the pane still matches the last server-loaded content.
@@ -151,6 +182,9 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       setSelectedCh(jumpToChapter);
     }
   }, [jumpToChapter]);
+
+  // Report the open chapter upward (Review "this chapter" default, §5.A)
+  useEffect(() => { onChapterChange?.(selectedCh); }, [selectedCh, onChapterChange]);
 
   // Highlight text range from external signal (e.g. review note offset click)
   useEffect(() => {

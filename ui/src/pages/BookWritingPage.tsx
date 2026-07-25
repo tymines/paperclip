@@ -47,6 +47,7 @@ import { ErrorBoundary } from "@/components/book-studio/ErrorBoundary";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
+import { ReviewDialog } from "@/components/book-studio/ReviewDialog";
 import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -1302,6 +1303,12 @@ export function BookWritingPage() {
 
   // Focus mode for manuscript editor
   const [focusMode, setFocusMode] = useState(false);
+
+  // Spec v1 §5.A: Review is always available, every mode — the dialog owns the
+  // scope picker (this chapter / pick a chapter / whole book) and the report.
+  const [showReviewDialog, setShowReviewDialog] = useState(false);
+  const [openChapterNumber, setOpenChapterNumber] = useState<number | null>(null);
+  const [proseRefreshKey, setProseRefreshKey] = useState(0);
   // Review Notes panel collapse (persists) — part of the fit-in-viewport fix.
   const [notesCollapsed, setNotesCollapsed] = useState<boolean>(() => {
     try { return localStorage.getItem("bookStudio.notesCollapsed") === "1"; } catch { return false; }
@@ -1986,11 +1993,12 @@ export function BookWritingPage() {
             </button>
           )}
           <button
-            onClick={() => { if (autopilotMode) setAutopilotState("reviewing"); }}
+            onClick={() => { if (activeBook) setShowReviewDialog(true); }}
+            disabled={!activeBook}
             className={cn("rounded-md border px-3 py-1.5 text-xs hidden md:flex items-center gap-1.5",
-              autopilotMode ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 hover:text-gray-200 hover:border-gray-600",
+              activeBook ? "border-blue-700 text-blue-400 hover:text-blue-200" : "border-gray-700 text-gray-400 opacity-50",
             )}
-            title={autopilotMode ? "Review current chapter draft" : "Enable Autopilot mode"}
+            title="Run a baseline review — any mode, any chapter"
           >
             <MessageSquare className="w-3 h-3" /> Review
           </button>
@@ -2040,7 +2048,7 @@ export function BookWritingPage() {
                   {([
                     { label: autopilotPaused ? "Resume autopilot" : "Pause autopilot", icon: autopilotPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />, disabled: !autopilotMode, run: handleAutopilotPauseResume },
                     { label: "Steer autopilot", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setShowGuidanceInput(true) },
-                    { label: "Review draft", icon: <MessageSquare className="w-3 h-3" />, disabled: !autopilotMode, run: () => setAutopilotState("reviewing") },
+                    { label: "Review draft", icon: <MessageSquare className="w-3 h-3" />, disabled: !activeBook, run: () => setShowReviewDialog(true) },
                     { label: "Brainstorm", icon: <Sparkles className="w-3 h-3" />, disabled: false, run: () => setIsChatOpen(true) },
                     { label: checkingConsistency ? "Checking…" : "Check consistency", icon: <AlertTriangle className="w-3 h-3" />, disabled: !activeBook || checkingConsistency, run: () => { setShowExportModal(true); void handleCheckConsistency(); } },
                     { label: narrating ? "Generating…" : "Narrate book", icon: <Volume2 className="w-3 h-3" />, disabled: narrating, run: handleNarrateEstimate },
@@ -2507,6 +2515,8 @@ export function BookWritingPage() {
             jumpToChapter={jumpToChapter}
             highlightRange={highlightRange}
             autonomyMode={autonomyMode}
+            contentRefreshKey={proseRefreshKey}
+            onChapterChange={setOpenChapterNumber}
           />
         </div>
 
@@ -2521,6 +2531,7 @@ export function BookWritingPage() {
               companySlug={companySlug}
               onSelectChapter={(ch) => { setJumpToChapter(ch); setMobilePane("write"); }}
               onHighlightOffset={(ch, start, end) => setHighlightRange({ chapterNumber: ch, startOffset: start, endOffset: end })}
+              onRevisionAccepted={() => setProseRefreshKey((k) => k + 1)}
               collapsed={notesCollapsed}
               onToggleCollapse={() => {
                 setNotesCollapsed((v) => {
@@ -2551,6 +2562,17 @@ export function BookWritingPage() {
           isOpen={isChatOpen}
           onClose={() => setIsChatOpen(false)}
           activeBookTitle={activeBook.title}
+        />
+      )}
+
+      {/* Review Dialog — Spec v1 §5.A: always available, scope picker + report */}
+      {showReviewDialog && activeBook && (
+        <ReviewDialog
+          bookId={activeBook.id}
+          companySlug={companySlug}
+          chaptersWithProse={outlineEntries.map((o) => o.chapterNumber).sort((a, b) => a - b)}
+          currentChapter={openChapterNumber}
+          onClose={() => setShowReviewDialog(false)}
         />
       )}
 

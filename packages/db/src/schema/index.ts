@@ -265,3 +265,10 @@ export {
   type BookReviewRun,
   type NewBookReviewRun,
 } from "./book_annotations.js";
+
+// ── Book Studio directed-revision diff proposals (Spec v1 §5) — migration 0157 ──
+export {
+  bookRevisions,
+  type BookRevision,
+  type NewBookRevision,
+} from "./book_revisions.js";
