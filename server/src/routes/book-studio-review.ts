@@ -16,6 +16,7 @@ import { badRequest, conflict, notFound, serviceUnavailable } from "../errors.js
 import { logActivity } from "../services/index.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse, chapterContentHash } from "../services/book-prose-writer.js";
+import { lockedError, findOverlappingLocks, isMissingLocksTable } from "../services/book-locks.js";
 import { runBaselineReview, persistBaselineReport, type BaselineReport } from "../services/book-review.js";
 
 // Gated-migration pattern (same as book_annotations/0151): if 0157 isn't
@@ -252,6 +253,41 @@ export function bookStudioReviewRoutes(db: Db) {
           throw badRequest(`Invalid span [${spanStart}, ${spanEnd}] for chapter of length ${content.length}`);
         }
       }
+
+      // Spec v1 §7 ③: a revision aimed at LOCKED content must NOT burn writer
+      // tokens — answer with a decision card so Baily chooses how to proceed.
+      if (chapter.locked) {
+        res.status(200).json({
+          status: "needs-decision",
+          decisionCard: {
+            type: "locked-content",
+            chapterNumber,
+            message: `Chapter ${chapterNumber} is locked. Unlock it before revising, or apply a one-time unlock.`,
+            options: ["keep-locked", "unlock", "one-time-unlock-apply-relock"],
+          },
+        });
+        return;
+      }
+      if (isPassage) {
+        try {
+          const overlapping = await findOverlappingLocks(db, bookId, chapterNumber, spanStart!, spanEnd!);
+          if (overlapping.length > 0) {
+            res.status(200).json({
+              status: "needs-decision",
+              decisionCard: {
+                type: "locked-content",
+                chapterNumber,
+                passageLocks: overlapping.map((l) => ({ id: l.id, spanStart: l.spanStart, spanEnd: l.spanEnd, note: l.note })),
+                message: `This passage overlaps ${overlapping.length} locked passage${overlapping.length > 1 ? "s" : ""}. Remove the lock(s) before revising.`,
+                options: ["keep-locked", "unlock"],
+              },
+            });
+            return;
+          }
+        } catch (err) {
+          if (!isMissingLocksTable(err)) throw err; // 0159 pending → no passage locks exist; proceed
+        }
+      }
       const originalText = isPassage ? content.slice(spanStart!, spanEnd!) : "";
 
       const canonNote = resolvedScope === "canon-fix"
@@ -356,6 +392,23 @@ export function bookStudioReviewRoutes(db: Db) {
       const book = await loadBook(bookId);
       const chapter = await loadChapter(bookId, revision.chapterNumber);
       const content = chapter?.content ?? "";
+
+      // Spec v1 §7: locks are re-checked at COMMIT time, not just proposal
+      // time — content locked after the proposal was computed still wins.
+      if (chapter?.locked) {
+        throw lockedError("chapter", `Chapter ${revision.chapterNumber} is locked — unlock it before accepting a revision.`);
+      }
+      if (revision.scope === "passage" && chapter) {
+        try {
+          const overlapping = await findOverlappingLocks(db, bookId, revision.chapterNumber, revision.spanStart ?? -1, revision.spanEnd ?? -1);
+          if (overlapping.length > 0) {
+            throw lockedError("passage", `This revision overlaps ${overlapping.length} locked passage${overlapping.length > 1 ? "s" : ""} — remove the lock(s) first.`);
+          }
+        } catch (err) {
+          if (!isMissingLocksTable(err)) throw err;
+        }
+      }
+
       if (chapterContentHash(content) !== revision.contentHash) {
         throw conflict("Chapter changed since this proposal was computed — re-run the revision.", { code: "STALE_PROPOSAL" });
       }

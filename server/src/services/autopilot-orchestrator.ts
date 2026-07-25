@@ -223,13 +223,18 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
       return;
     }
 
-    // Which chapters already have prose (skip — never overwrite).
+    // Which chapters already have prose (skip — never overwrite), and which
+    // are human-locked (skip loudly — spec v1 §7 ②: autopilot must never touch
+    // a locked chapter, and the skip must be visible, never silent).
     const manuscripts = await db
-      .select({ chapterNumber: manuscriptChapters.chapterNumber, content: manuscriptChapters.content })
+      .select({ chapterNumber: manuscriptChapters.chapterNumber, content: manuscriptChapters.content, locked: manuscriptChapters.locked })
       .from(manuscriptChapters)
       .where(eq(manuscriptChapters.bookId, state.bookId));
     const hasProse = new Set(
       manuscripts.filter((m) => (m.content ?? "").trim().length > 0).map((m) => m.chapterNumber),
+    );
+    const lockedChapters = new Set(
+      manuscripts.filter((m) => m.locked).map((m) => m.chapterNumber),
     );
 
     state.totalChapters = outline.length;
@@ -244,6 +249,28 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
     for (const ch of outline) {
       if (state.status !== "running" || state.abortController?.signal.aborted) break;
       if (hasProse.has(ch.chapterNumber)) continue;
+
+      // LOCKED chapters are skipped loudly: status stays pending, the skip is
+      // activity-logged, and the loop moves on. (Spec v1 §7 ②.)
+      if (lockedChapters.has(ch.chapterNumber)) {
+        await logActivity(db, {
+          companyId: state.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "chapter.locked_skipped",
+          entityType: "book",
+          entityId: state.bookId,
+          details: {
+            bookId: state.bookId,
+            chapterNumber: ch.chapterNumber,
+            source: "autopilot",
+            reason: "locked — skipped",
+          },
+        }).catch(() => {});
+        continue;
+      }
 
       const chapterProgress = state.chapters.find((c) => c.chapterNumber === ch.chapterNumber);
       if (!chapterProgress) continue;

@@ -35,6 +35,7 @@ import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
+import { assertHumanActor, lockedError } from "../services/book-locks.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -216,6 +217,17 @@ function entityRoutes(
 
     if (!existing) {
       throw notFound(`${entityLabel} not found`);
+    }
+
+    // Spec v1 §7 ④: bible-entry locks are human-only. Toggling `locked`
+    // requires a human actor, and a locked entry refuses AI edits outright.
+    const patchData = parsed.data as Record<string, unknown>;
+    if ("locked" in patchData) {
+      assertHumanActor(req);
+    }
+    const actorInfo = getActorInfo(req);
+    if ((existing as Record<string, unknown>).locked === true && actorInfo.actorType !== "user" && !("locked" in patchData)) {
+      throw lockedError("bible-entry", `${entityLabel} is locked — AI edits refused. A human must unlock it first.`);
     }
 
     const [updated] = await db

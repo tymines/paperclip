@@ -272,3 +272,10 @@ export {
   type BookRevision,
   type NewBookRevision,
 } from "./book_revisions.js";
+
+// ── Book Studio passage locks (Spec v1 §7) — migration 0159 ──
+export {
+  passageLocks,
+  type PassageLock,
+  type NewPassageLock,
+} from "./passage_locks.js";

@@ -268,7 +268,9 @@ describe("POST .../chapters/:chapterNumber/revise", () => {
       .post("/companies/c1/book-studio/books/book-1/chapters/1/revise")
       .send({ instruction: "Revise this" });
 
-    expect(res.status).toBe(400);
+    // Spec v1 §7 ①: a locked chapter refuses beats revision with 409 LOCKED
+    // (was 400 before the lock system landed) so the UI can render lock state.
+    expect(res.status).toBe(409);
   });
 });
 

@@ -19,12 +19,12 @@ export function chapterContentHash(content: string): string {
   return createHash("sha256").update(content ?? "", "utf8").digest("hex").slice(0, 16);
 }
 
-export function writeChapterToVault(slug: string, chapterNumber: number, title: string, prose: string) {
+export function writeChapterToVault(slug: string, chapterNumber: number, title: string, prose: string, locked = false) {
   try {
     const dir = path.join(BOOK_VAULT_ROOT, slug, "chapters");
     fs.mkdirSync(dir, { recursive: true });
     const pad = String(chapterNumber).padStart(2, "0");
-    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: false\nupdated: ${new Date().toISOString()}\n---\n\n`;
+    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: ${locked}\nupdated: ${new Date().toISOString()}\n---\n\n`;
     fs.writeFileSync(path.join(dir, `ch${pad}.md`), fm + prose, "utf8");
     const vaultDir = path.join(BOOK_VAULT_ROOT, slug);
     try {
@@ -104,7 +104,7 @@ export async function persistChapterProse(
     created = true;
   }
 
-  writeChapterToVault(bookSlug, chapterNumber, title, prose);
+  writeChapterToVault(bookSlug, chapterNumber, title, prose, existing?.locked ?? false);
 
   return { chapterId, chapterNumber, title, created };
 }

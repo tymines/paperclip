@@ -1086,6 +1086,13 @@
       "when": 1785022364000,
       "tag": "0158_ci_schema_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1785022364001,
+      "tag": "0159_chapter_passage_locks",
+      "breakpoints": true
     }
   ]
 }

@@ -32,4 +32,5 @@ export { bookStudioImageGenerateRoutes } from "./book-studio-image-generate.js";
 export { bookStudioExportRoutes } from "./book-studio-export.js";
 export { bookStudioChapterGenRoutes } from "./book-studio-chapter-gen.js";
 export { bookStudioReviewRoutes } from "./book-studio-review.js";
+export { bookStudioLockRoutes } from "./book-studio-locks.js";
 export { influencerStudioRoutes } from "./influencer-studio.js";
