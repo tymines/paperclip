@@ -1072,6 +1072,13 @@
       "when": 1784084005345,
       "tag": "0156_tropes",
       "breakpoints": true
+    },
+    {
+      "idx": 153,
+      "version": "7",
+      "when": 1785010015642,
+      "tag": "0157_book_revisions",
+      "breakpoints": true
     }
   ]
 }

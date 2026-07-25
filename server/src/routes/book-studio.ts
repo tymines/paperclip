@@ -680,6 +680,12 @@ type ReviewNote = {
   text: string;
   startOffset?: number;
   endOffset?: number;
+  // Spec v1 §5.C: notes are first-class — provenance (baily = the author's own /
+  // ai-critic = the pipeline's) + status lifecycle (open/resolved) + optional
+  // link to the directed revision this note spawned (Send-to-revision, §5.E).
+  provenance?: "baily" | "ai-critic";
+  status?: "open" | "resolved";
+  linkedRevisionId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -714,6 +720,10 @@ bookBibleRouter.post("/review-notes", async (req, res) => {
     text: text.trim(),
     startOffset: typeof startOffset === "number" ? startOffset : undefined,
     endOffset: typeof endOffset === "number" ? endOffset : undefined,
+    // Human-added notes are the author's own (§5.C) — the pipeline writes
+    // provenance "ai-critic" via the baseline-review path, never through here.
+    provenance: "baily",
+    status: "open",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -739,8 +749,9 @@ bookBibleRouter.patch("/review-notes/:noteId", async (req, res) => {
   const idx = notes.findIndex((n) => n.id === noteId);
   if (idx === -1) throw notFound("Note not found");
 
-  const { category, text, chapterNumber, startOffset, endOffset } = req.body ?? {};
+  const { category, text, chapterNumber, startOffset, endOffset, status } = req.body ?? {};
   if (category !== undefined && !VALID_CATEGORIES.includes(category)) throw badRequest("Invalid category");
+  if (status !== undefined && !["open", "resolved"].includes(status)) throw badRequest("Invalid status — open | resolved");
 
   notes[idx] = {
     ...notes[idx],
@@ -749,6 +760,7 @@ bookBibleRouter.patch("/review-notes/:noteId", async (req, res) => {
     ...(chapterNumber !== undefined && { chapterNumber: typeof chapterNumber === "number" ? chapterNumber : undefined }),
     ...(startOffset !== undefined && { startOffset: typeof startOffset === "number" ? startOffset : undefined }),
     ...(endOffset !== undefined && { endOffset: typeof endOffset === "number" ? endOffset : undefined }),
+    ...(status !== undefined && { status }),
     updatedAt: new Date().toISOString(),
   };
 
@@ -892,6 +904,8 @@ bookBibleRouter.post("/annotations", async (req, res) => {
       text: body.trim(),
       startOffset: hasSpan ? spanStart : undefined,
       endOffset: hasSpan ? spanEnd : undefined,
+      provenance: "baily",
+      status: "open",
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

@@ -48,6 +48,7 @@ import { storyBibleGenerateRoutes } from "./routes/story-bible-generate.js";
 import { bookStudioExportRoutes } from "./routes/book-studio-export.js";
 import { bookStudioChapterGenRoutes } from "./routes/book-studio-chapter-gen.js";
 import { bookStudioAutopilotRoutes } from "./routes/book-studio-autopilot.js";
+import { bookStudioReviewRoutes } from "./routes/book-studio-review.js";
 import { bookStudioImageGenerateRoutes } from "./routes/book-studio-image-generate.js";
 // Company import/export payloads can inline full portable packages.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -301,6 +302,7 @@ export async function createApp(
   api.use(bookStudioExportRoutes(db));
   api.use(bookStudioChapterGenRoutes(db));
   api.use(bookStudioAutopilotRoutes(db));
+  api.use(bookStudioReviewRoutes(db));
   api.use(bookStudioImageGenerateRoutes(db));
   // (dup gym mounts removed 2026-07-12 Fable — merge cruft; mounted above)
   api.use(storyBibleRoutes(db));

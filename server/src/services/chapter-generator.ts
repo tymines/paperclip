@@ -22,6 +22,55 @@ function providerFailureMessage(feature: string, diag: string[]): string {
 export const BOOK_WRITER_PRIMARY = (process.env.BOOK_WRITER_PRIMARY || "gemini") as
   | "gemini" | "deepseek" | "anthropic";
 
+// Spec v1 (2026-07-24): the CRITIC lane is a DIFFERENT model than the writer —
+// writer = Gemini, critic = DeepSeek, Claude excluded from both lanes (Tyler's
+// ruling). BOOK_CRITIC_PRIMARY is the placeholder knob; the fleet's provider
+// config can repoint it without a code change. Fallback = the writer primary
+// (gemini) — a degraded critic is reported honestly, never silently same-model:
+// callers should surface `criticDegraded: true` when the fallback answered.
+export const BOOK_CRITIC_PRIMARY = (process.env.BOOK_CRITIC_PRIMARY || "deepseek") as
+  | "gemini" | "deepseek";
+
+export interface CriticResult {
+  text: string;
+  /** Which lane actually answered. */
+  provider: "gemini" | "deepseek";
+  /** True when the pinned critic was unavailable and the fallback answered. */
+  criticDegraded: boolean;
+}
+
+/**
+ * Critic lane call (Spec v1 §5.B) — pinned to BOOK_CRITIC_PRIMARY (default
+ * DeepSeek), falling back to Gemini only. Anthropic is NEVER attempted in this
+ * lane. Only configured providers are tried.
+ */
+export async function callCriticLLM(
+  systemPrompt: string,
+  userPrompt: string,
+  feature = "Book Studio critic",
+): Promise<CriticResult> {
+  const chain: Array<{ name: "gemini" | "deepseek"; call: (s: string, u: string) => Promise<string> }> =
+    BOOK_CRITIC_PRIMARY === "gemini"
+      ? [{ name: "gemini", call: callGemini }, { name: "deepseek", call: callDeepSeek }]
+      : [{ name: "deepseek", call: callDeepSeek }, { name: "gemini", call: callGemini }];
+  const diag: string[] = [];
+  let answeredFallback = false;
+  for (const p of chain) {
+    const key = await getRawKey(p.name).catch(() => null);
+    if (!key) { diag.push(`${p.name}: not configured`); continue; }
+    try {
+      const text = await p.call(systemPrompt, userPrompt);
+      return { text, provider: p.name, criticDegraded: answeredFallback };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[chapter-generator] ${feature}: ${p.name} failed:`, err);
+      diag.push(`${p.name}: error (${msg.slice(0, 140)})`);
+      answeredFallback = true;
+    }
+  }
+  throw new Error(providerFailureMessage(feature, diag));
+}
+
 const MAX_RETRIES = 2;
 
 // Output-token ceilings. gemini-2.5-* are THINKING models: reasoning tokens

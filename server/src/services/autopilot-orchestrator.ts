@@ -310,6 +310,47 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
         prose,
       });
       chapterProgress.title = persisted.title;
+
+      // --- Phase: Critiquing (Spec v1 §5.B — the dormant phase, now wired) ---
+      // One automatic baseline pass on every landed draft, run by the critic
+      // lane (a DIFFERENT model than the writer). Annotates and scores only —
+      // never rewrites; `revising` stays dormant until Baily directs it.
+      // Pass → chapter queues silently · Fail / NO_VERDICT → exception for
+      // the review queue. A critic failure never blocks the chain.
+      state.phase = "critiquing";
+      writeCheckpoint(state);
+      try {
+        const { runBaselineReview } = await import("./book-review.js");
+        const report = await runBaselineReview(db, { bookId: state.bookId, chapterNumber: ch.chapterNumber });
+        const [bookRow] = await db.select().from(books).where(eq(books.id, state.bookId));
+        const meta = (bookRow?.metadata ?? {}) as Record<string, unknown>;
+        const chapterStatus = { ...((meta.chapterStatus as Record<string, string>) ?? {}) };
+        chapterStatus[String(ch.chapterNumber)] = report.verdict === "PASS" ? "queued" : "exception";
+        await db.update(books).set({ metadata: { ...meta, chapterStatus }, updatedAt: new Date() }).where(eq(books.id, state.bookId));
+        await logActivity(db, {
+          companyId: state.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "book.baseline_review",
+          entityType: "book",
+          entityId: state.bookId,
+          details: {
+            bookId: state.bookId,
+            chapterNumber: ch.chapterNumber,
+            source: "autopilot",
+            verdict: report.verdict,
+            failures: report.failures,
+            criticProvider: report.criticProvider,
+            noVerdictReason: report.noVerdictReason,
+          },
+        }).catch(() => {});
+      } catch (critErr) {
+        console.warn(`[autopilot] baseline review failed for ch.${ch.chapterNumber} (non-fatal):`, critErr);
+      }
+
+      state.phase = "advancing";
       chapterProgress.status = "complete";
       writeCheckpoint(state);
 

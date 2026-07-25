@@ -1,10 +1,17 @@
 /**
- * ReviewNotesPanel — review notes with category badges, inline add/edit/delete.
- * ponytail: single component, no extra abstractions.
+ * ReviewNotesPanel — first-class review notes (Spec v1 §5.C/E):
+ * provenance badges (Baily = the author's own · AI critic = the pipeline's),
+ * open/resolved status, and ACTIONABLE notes: "Send to revision" creates a
+ * directed revision job whose diff proposal is committed ONLY by Baily's
+ * accept (§5.D — the AI never writes outside an accepted proposal).
+ *
+ * The old "Suggest Rewrite" decoy (it edited the note's own text, never the
+ * manuscript — T0-7) is removed; every proposal now lands as a real diff
+ * against manuscript prose through the revisions API.
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Trash2, Edit3, X, Check, MessageSquare, Loader2 } from "lucide-react";
+import { Plus, Trash2, Edit3, X, Check, MessageSquare, Loader2, Send, CircleCheck, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -16,8 +23,26 @@ interface ReviewNote {
   text: string;
   startOffset?: number;
   endOffset?: number;
+  provenance?: "baily" | "ai-critic";
+  status?: "open" | "resolved";
+  linkedRevisionId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+interface Revision {
+  id: string;
+  chapterNumber: number;
+  scope: "chapter" | "passage" | "canon-fix";
+  spanStart?: number | null;
+  spanEnd?: number | null;
+  instruction: string;
+  sourceNoteId?: string | null;
+  originalText: string;
+  proposedText: string;
+  rationale: string;
+  status: "pending" | "accepted" | "rejected";
+  createdAt: string;
 }
 
 export const CATEGORIES = ["pacing", "character", "plot", "prose", "consistency"] as const;
@@ -59,12 +84,15 @@ interface Props {
   onSelectChapter?: (chapterNumber: number) => void;
   /** ponytail: if a note has text offsets, clicking it calls this to highlight in editor */
   onHighlightOffset?: (chapterNumber: number, startOffset: number, endOffset: number) => void;
+  /** Called after Baily accepts a revision — parent reloads the chapter prose (guarded). */
+  onRevisionAccepted?: (chapterNumber: number) => void;
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onToggleCollapse, onSelectChapter, onHighlightOffset }: Props) {
+export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onToggleCollapse, onSelectChapter, onHighlightOffset, onRevisionAccepted }: Props) {
   const [notes, setNotes] = useState<ReviewNote[]>([]);
+  const [revisions, setRevisions] = useState<Revision[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
@@ -74,9 +102,12 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
   const [formText, setFormText] = useState("");
   const [formChapter, setFormChapter] = useState("");
 
-  // Rewrite proposal state
-  const [rewritingNoteId, setRewritingNoteId] = useState<string | null>(null);
-  const [proposedRewrites, setProposedRewrites] = useState<Record<string, { suggested: string }>>({});
+  // Send-to-revision state
+  const [directingNoteId, setDirectingNoteId] = useState<string | null>(null);
+  const [directText, setDirectText] = useState("");
+  const [directingBusy, setDirectingBusy] = useState(false);
+  const [resolvingRevisionId, setResolvingRevisionId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${bookId}`;
 
@@ -91,7 +122,19 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
     }
   }, [bookId, companySlug]);
 
-  useEffect(() => { fetchNotes(); }, [fetchNotes]);
+  const fetchRevisions = useCallback(async () => {
+    if (!bookId) return;
+    try {
+      const res = await apiFetch<{ available: boolean; revisions: Revision[] }>(
+        `${API_PREFIX}/revisions?status=pending`,
+      );
+      setRevisions(res.available ? (res.revisions ?? []) : []);
+    } catch {
+      // silent — pending proposals are best-effort UI
+    }
+  }, [bookId, companySlug]);
+
+  useEffect(() => { fetchNotes(); fetchRevisions(); }, [fetchNotes, fetchRevisions]);
 
   // ── CRUD ───────────────────────────────────────────────────────────────
   const addNote = async () => {
@@ -112,7 +155,7 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
     } catch { /* handled */ }
   };
 
-  const updateNote = async (id: string, data: Partial<Pick<ReviewNote, "category" | "text" | "chapterNumber">>) => {
+  const updateNote = async (id: string, data: Partial<Pick<ReviewNote, "category" | "text" | "chapterNumber" | "status">>) => {
     try {
       await apiFetch(`${API_PREFIX}/review-notes/${id}`, {
         method: "PATCH",
@@ -130,52 +173,47 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
     } catch { /* handled */ }
   };
 
-  // ── Suggest Rewrite ────────────────────────────────────────────────────
-  const suggestRewrite = async (note: ReviewNote) => {
-    setRewritingNoteId(note.id);
+  // ── Send to revision (§5.E — the real path; replaces the Suggest Rewrite decoy) ──
+  const sendToRevision = async (note: ReviewNote) => {
+    if (!note.chapterNumber) return;
+    setDirectingBusy(true);
+    setActionError(null);
     try {
-      const prompt = [
-        `You are a writing coach reviewing this note about a manuscript:`,
-        `Category: ${note.category}`,
-        `Note: "${note.text}"`,
-        note.chapterNumber ? `Chapter: ${note.chapterNumber}` : "",
-        ``,
-        `Suggest a specific rewrite for the flagged passage. Return ONLY the rewritten text, no explanations.`,
-      ].filter(Boolean).join("\n");
-
-      const res = await apiFetch<{ reply: string }>(`${API_PREFIX}/chat`, {
+      await apiFetch(`${API_PREFIX}/revisions`, {
         method: "POST",
-        body: JSON.stringify({ message: prompt }),
+        body: JSON.stringify({
+          chapterNumber: note.chapterNumber,
+          spanStart: note.startOffset,
+          spanEnd: note.endOffset,
+          instruction: directText.trim() || note.text,
+          noteId: note.id,
+        }),
       });
-
-      setProposedRewrites((prev) => ({
-        ...prev,
-        [note.id]: { suggested: res.reply?.trim() || "(empty response)" },
-      }));
-    } catch {
-      // silent
+      setDirectingNoteId(null);
+      setDirectText("");
+      fetchRevisions();
+      fetchNotes();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     } finally {
-      setRewritingNoteId(null);
+      setDirectingBusy(false);
     }
   };
 
-  const acceptRewrite = (note: ReviewNote) => {
-    const proposal = proposedRewrites[note.id];
-    if (!proposal) return;
-    updateNote(note.id, { text: proposal.suggested });
-    setProposedRewrites((prev) => {
-      const next = { ...prev };
-      delete next[note.id];
-      return next;
-    });
-  };
-
-  const rejectRewrite = (noteId: string) => {
-    setProposedRewrites((prev) => {
-      const next = { ...prev };
-      delete next[noteId];
-      return next;
-    });
+  // ── Revision accept / reject (§5.D — Baily is the only decider) ─────────
+  const resolveRevision = async (revision: Revision, decision: "accept" | "reject") => {
+    setResolvingRevisionId(revision.id);
+    setActionError(null);
+    try {
+      await apiFetch(`${API_PREFIX}/revisions/${revision.id}/${decision}`, { method: "POST" });
+      fetchRevisions();
+      fetchNotes();
+      if (decision === "accept") onRevisionAccepted?.(revision.chapterNumber);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setResolvingRevisionId(null);
+    }
   };
 
   // ── Filter ─────────────────────────────────────────────────────────────
@@ -183,19 +221,21 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
     ? notes.filter((n) => n.category === activeFilter)
     : notes;
 
+  const openCount = notes.filter((n) => (n.status ?? "open") === "open").length + revisions.length;
+
   // ── Render ─────────────────────────────────────────────────────────────
   if (collapsed) {
     return (
       <aside className="flex h-full flex-1 min-w-0 flex-col items-center gap-2 md:border-l border-gray-800 min-h-0 py-3">
         <button
           onClick={onToggleCollapse}
-          title={`Expand review notes${notes.length > 0 ? ` (${notes.length})` : ""}`}
+          title={`Expand review notes${openCount > 0 ? ` (${openCount} open)` : ""}`}
           className="relative rounded p-1.5 text-gray-500 hover:text-gray-200"
         >
           <MessageSquare className="w-4 h-4" />
-          {notes.length > 0 && (
+          {openCount > 0 && (
             <span className="absolute -right-0.5 -top-0.5 rounded-full bg-blue-600 px-1 text-[8px] font-semibold leading-3 text-white">
-              {notes.length > 99 ? "99+" : notes.length}
+              {openCount > 99 ? "99+" : openCount}
             </span>
           )}
         </button>
@@ -260,6 +300,67 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
         })}
       </div>
 
+      {actionError && (
+        <div className="mx-4 mt-2 shrink-0 rounded border border-red-800 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
+          {actionError}
+        </div>
+      )}
+
+      {/* Pending revision proposals — Baily's diff inbox (§5.D) */}
+      {revisions.length > 0 && (
+        <div className="border-b border-gray-800 shrink-0">
+          <p className="px-4 pt-3 text-[10px] font-semibold uppercase tracking-wider text-amber-400">
+            Revision proposals ({revisions.length}) — your call
+          </p>
+          <div className="divide-y divide-gray-800/50">
+            {revisions.map((rev) => (
+              <div key={rev.id} className="px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    onClick={() => onSelectChapter?.(rev.chapterNumber)}
+                    className="text-[10px] font-medium text-blue-400 hover:text-blue-300"
+                  >
+                    Ch.{rev.chapterNumber} · {rev.scope}
+                  </button>
+                  <span className="text-[9px] text-gray-600">{new Date(rev.createdAt).toLocaleDateString()}</span>
+                </div>
+                <p className="mt-1 text-[11px] text-gray-300 italic">“{rev.instruction}”</p>
+                <div className="mt-2 space-y-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5">
+                  {rev.scope === "passage" && rev.originalText ? (
+                    <p className="max-h-20 overflow-y-auto text-xs leading-relaxed text-gray-500 line-through whitespace-pre-wrap">
+                      {rev.originalText}
+                    </p>
+                  ) : (
+                    <p className="text-[10px] uppercase tracking-wider text-gray-500">Full-chapter rewrite</p>
+                  )}
+                  <p className="max-h-32 overflow-y-auto text-xs leading-relaxed text-green-400 whitespace-pre-wrap">
+                    {rev.proposedText}
+                  </p>
+                  {rev.rationale && <p className="text-[10px] text-gray-500">{rev.rationale}</p>}
+                </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <button
+                    onClick={() => resolveRevision(rev, "accept")}
+                    disabled={resolvingRevisionId === rev.id}
+                    className="flex items-center gap-1 rounded bg-green-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-green-600 disabled:opacity-50"
+                  >
+                    {resolvingRevisionId === rev.id ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Check className="w-2.5 h-2.5" />}
+                    Accept — commit to manuscript
+                  </button>
+                  <button
+                    onClick={() => resolveRevision(rev, "reject")}
+                    disabled={resolvingRevisionId === rev.id}
+                    className="rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 disabled:opacity-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Add form */}
       {showForm && (
         <div className="px-4 py-3 border-b border-gray-800 bg-gray-900/50 shrink-0">
@@ -320,8 +421,10 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
           </div>
         ) : (
           <div className="divide-y divide-gray-800/50">
-            {filteredNotes.map((note) => (
-              <div key={note.id} className="px-4 py-3 hover:bg-gray-900/30 group">
+            {filteredNotes.map((note) => {
+              const resolved = (note.status ?? "open") === "resolved";
+              return (
+              <div key={note.id} className={cn("px-4 py-3 hover:bg-gray-900/30 group", resolved && "opacity-60")}>
                 {editingId === note.id ? (
                   /* Edit mode */
                   <div className="space-y-2">
@@ -363,35 +466,53 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
                   /* View mode */
                   <>
                     <div className="flex items-start justify-between gap-2">
-                      <button
-                        onClick={() => {
-                          if (note.chapterNumber && onSelectChapter) onSelectChapter(note.chapterNumber);
-                          if (note.chapterNumber !== undefined && note.startOffset !== undefined && note.endOffset !== undefined && onHighlightOffset) {
-                            onHighlightOffset(note.chapterNumber, note.startOffset, note.endOffset);
-                          }
-                        }}
-                        className={cn(
-                          "inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 mt-0.5 capitalize",
-                          CATEGORY_COLORS[note.category] || "bg-gray-500/20 text-gray-300 border-gray-500/40",
-                          (note.chapterNumber || (note.startOffset !== undefined)) && "cursor-pointer hover:brightness-110",
-                        )}
-                        title={note.chapterNumber ? `Jump to Chapter ${note.chapterNumber}` : undefined}
-                      >
-                        {note.category}
-                      </button>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <button
+                          onClick={() => {
+                            if (note.chapterNumber && onSelectChapter) onSelectChapter(note.chapterNumber);
+                            if (note.chapterNumber !== undefined && note.startOffset !== undefined && note.endOffset !== undefined && onHighlightOffset) {
+                              onHighlightOffset(note.chapterNumber, note.startOffset, note.endOffset);
+                            }
+                          }}
+                          className={cn(
+                            "inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium shrink-0 mt-0.5 capitalize",
+                            CATEGORY_COLORS[note.category] || "bg-gray-500/20 text-gray-300 border-gray-500/40",
+                            (note.chapterNumber || (note.startOffset !== undefined)) && "cursor-pointer hover:brightness-110",
+                          )}
+                          title={note.chapterNumber ? `Jump to Chapter ${note.chapterNumber}` : undefined}
+                        >
+                          {note.category}
+                        </button>
+                        {/* Provenance (§5.C): the author's own notes vs the pipeline's */}
+                        <span
+                          className={cn(
+                            "rounded-full border px-1.5 py-0.5 text-[9px] shrink-0 mt-0.5",
+                            (note.provenance ?? "baily") === "ai-critic"
+                              ? "border-purple-700 text-purple-400"
+                              : "border-gray-700 text-gray-500",
+                          )}
+                          title={(note.provenance ?? "baily") === "ai-critic" ? "Written by the critic lane" : "Your note"}
+                        >
+                          {(note.provenance ?? "baily") === "ai-critic" ? "AI critic" : "You"}
+                        </span>
+                      </div>
                       <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         <button
-                          onClick={() => suggestRewrite(note)}
-                          disabled={rewritingNoteId === note.id}
-                          className="rounded p-0.5 text-gray-500 hover:text-amber-400 disabled:opacity-50"
-                          title="Suggest Rewrite"
+                          onClick={() => updateNote(note.id, { status: resolved ? "open" : "resolved" })}
+                          className="rounded p-0.5 text-gray-500 hover:text-green-400"
+                          title={resolved ? "Reopen" : "Mark resolved"}
                         >
-                          {rewritingNoteId === note.id ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : (
-                            <MessageSquare className="w-3 h-3" />
-                          )}
+                          {resolved ? <Circle className="w-3 h-3" /> : <CircleCheck className="w-3 h-3" />}
                         </button>
+                        {note.chapterNumber !== undefined && !resolved && (
+                          <button
+                            onClick={() => { setDirectingNoteId(directingNoteId === note.id ? null : note.id); setDirectText(note.text); }}
+                            className="rounded p-0.5 text-gray-500 hover:text-amber-400"
+                            title="Send to revision — direct the AI to fix this"
+                          >
+                            <Send className="w-3 h-3" />
+                          </button>
+                        )}
                         <button
                           onClick={() => setEditingId(note.id)}
                           className="rounded p-0.5 text-gray-500 hover:text-blue-400"
@@ -411,6 +532,7 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
                     <p
                       className={cn(
                         "text-xs text-gray-200 mt-1.5 leading-relaxed",
+                        resolved && "line-through",
                         note.startOffset !== undefined && onHighlightOffset && "cursor-pointer hover:text-blue-300",
                       )}
                       onClick={() => {
@@ -430,36 +552,44 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
                         chars {note.startOffset}–{note.endOffset}
                       </p>
                     )}
+                    {note.linkedRevisionId && (
+                      <p className="text-[10px] text-amber-500/80 mt-0.5">↳ sent to revision</p>
+                    )}
 
-                    {/* Diff proposal */}
-                    {proposedRewrites[note.id] && (
-                      <div className="mt-2 border border-amber-500/30 rounded-md bg-amber-500/5 p-2.5">
-                        <div className="flex items-center gap-1.5 mb-1.5">
-                          <MessageSquare className="w-3 h-3 text-amber-400" />
+                    {/* Send-to-revision inline form (§5.E) */}
+                    {directingNoteId === note.id && (
+                      <div className="mt-2 border border-amber-500/30 rounded-md bg-amber-500/5 p-2.5 space-y-2">
+                        <div className="flex items-center gap-1.5">
+                          <Send className="w-3 h-3 text-amber-400" />
                           <span className="text-[10px] font-semibold uppercase tracking-wider text-amber-400">
-                            Suggested Rewrite
+                            Direct the revision
                           </span>
                         </div>
-                        <div className="space-y-1.5">
-                          <p className="text-xs text-gray-500 line-through leading-relaxed">
-                            {note.text}
-                          </p>
-                          <p className="text-xs text-green-400 leading-relaxed">
-                            {proposedRewrites[note.id].suggested}
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-2">
+                        <textarea
+                          className="w-full rounded border border-amber-500/40 bg-gray-900 px-2 py-1 text-xs text-gray-200 resize-none"
+                          rows={2}
+                          value={directText}
+                          onChange={(e) => setDirectText(e.target.value)}
+                          placeholder="Tell the writer exactly what to change…"
+                        />
+                        <p className="text-[9px] text-gray-600">
+                          Produces a diff proposal against Ch.{note.chapterNumber}
+                          {note.startOffset !== undefined ? " (this passage)" : " (whole chapter)"} — nothing is written until you accept it.
+                        </p>
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={() => acceptRewrite(note)}
-                            className="flex items-center gap-1 rounded bg-green-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-green-600"
+                            onClick={() => sendToRevision(note)}
+                            disabled={directingBusy || !directText.trim()}
+                            className="flex items-center gap-1 rounded bg-amber-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-amber-600 disabled:opacity-50"
                           >
-                            <Check className="w-2.5 h-2.5" /> Accept
+                            {directingBusy ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <Send className="w-2.5 h-2.5" />}
+                            Create proposal
                           </button>
                           <button
-                            onClick={() => rejectRewrite(note.id)}
+                            onClick={() => setDirectingNoteId(null)}
                             className="rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"
                           >
-                            Reject
+                            Cancel
                           </button>
                         </div>
                       </div>
@@ -467,7 +597,8 @@ export function ReviewNotesPanel({ bookId, companySlug, collapsed = false, onTog
                   </>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
