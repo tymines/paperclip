@@ -619,9 +619,11 @@ export function createPluginWorkerHandle(
       TZ: process.env.TZ ?? "UTC",
     };
 
-    // Convert to file:// URL for Windows ESM compatibility — raw C:\ paths
-    // cause ERR_UNSUPPORTED_ESM_URL_SCHEME in Node's ESM loader.
-    const entrypointUrl = pathToFileURL(options.entrypointPath).href;
+    // Convert to a file:// URL for Windows ESM compatibility — raw C:\ paths
+    // cause ERR_UNSUPPORTED_ESM_URL_SCHEME in Node's ESM loader. Pass the URL
+    // object itself so child_process.fork does not resolve its href as a
+    // relative filesystem path (for example, cwd/file:/home/...).
+    const entrypointUrl = pathToFileURL(options.entrypointPath);
     const child = fork(entrypointUrl, [], {
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       execArgv: options.execArgv ?? [],
