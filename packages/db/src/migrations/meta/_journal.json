@@ -1079,6 +1079,13 @@
       "when": 1785010015642,
       "tag": "0157_book_revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 154,
+      "version": "7",
+      "when": 1785014982622,
+      "tag": "0158_chapter_passage_locks",
+      "breakpoints": true
     }
   ]
 }
