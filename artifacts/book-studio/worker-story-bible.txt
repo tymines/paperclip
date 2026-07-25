@@ -1,0 +1,16 @@
+# Story Bible worker evidence
+
+- Branch: `work/book-studio-story-bible-20260725`
+- Base: `edf15e7a3f4ba74100865c1efe68eb78e492472d`
+- Verdict: **NO_VERDICT**
+
+## Landed as partial WIP
+
+- RED validator tests for exactly 12 entity types, typed character fields, relationship meter boundaries, and atomic fact provenance.
+- RED service tests for spoiler boundary, withheld-statement leakage, cross-book/company refs, and locked fact conflicts.
+
+## Verification
+
+`pnpm exec vitest run packages/shared/src/validators/story-bible-codex.test.ts server/src/services/story-bible-codex.test.ts` — expected RED, 2 files failed / 4 tests failed because production validators/service do not exist.
+
+Two Codex sessions were terminated after hanging during production patch generation. No schema, migration, routes, compiler integration, or production module was completed. This commit is a durable RED-test checkpoint only and must not be merged as completed functionality.
