@@ -1,0 +1,98 @@
+
+ RUN  v3.2.4 /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725
+
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts [ server/src/__tests__/book-studio-autopilot.test.ts ]
+Error: Cannot find package 'express' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts'
+ ❯ src/__tests__/book-studio-autopilot.test.ts:2:1
+      1| import { describe, expect, it, vi, beforeEach, afterEach } from "vites…
+      2| import express from "express";
+       | ^
+      3| import request from "supertest";
+      4| import type { Router } from "express";
+
+Caused by: Error: Failed to load url express (resolved id: express) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-chapter-gen.test.ts [ server/src/__tests__/book-studio-chapter-gen.test.ts ]
+Error: Cannot find package 'express' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-chapter-gen.test.ts'
+ ❯ src/__tests__/book-studio-chapter-gen.test.ts:2:1
+      1| import { describe, expect, it, vi, beforeEach } from "vitest";
+      2| import express from "express";
+       | ^
+      3| import request from "supertest";
+      4| import type { Router } from "express";
+
+Caused by: Error: Failed to load url express (resolved id: express) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-chat.test.ts [ server/src/__tests__/book-studio-chat.test.ts ]
+Error: Cannot find package 'express' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-chat.test.ts'
+ ❯ src/__tests__/book-studio-chat.test.ts:2:1
+      1| import { afterEach, beforeEach, describe, expect, it, vi } from "vites…
+      2| import express from "express";
+       | ^
+      3| import request from "supertest";
+      4| import type { Db } from "@paperclipai/db";
+
+Caused by: Error: Failed to load url express (resolved id: express) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-export.test.ts [ server/src/__tests__/book-studio-export.test.ts ]
+Error: Cannot find package 'express' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-export.test.ts'
+ ❯ src/__tests__/book-studio-export.test.ts:2:1
+      1| import { describe, expect, it, vi, beforeAll, beforeEach, afterAll } f…
+      2| import express from "express";
+       | ^
+      3| import request from "supertest";
+      4| import type { Router } from "express";
+
+Caused by: Error: Failed to load url express (resolved id: express) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-image-generate.test.ts [ server/src/__tests__/book-studio-image-generate.test.ts ]
+Error: Cannot find package 'express' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-image-generate.test.ts'
+ ❯ src/__tests__/book-studio-image-generate.test.ts:1:1
+      1| import express from "express";
+       | ^
+      2| import request from "supertest";
+      3| import { beforeEach, describe, expect, it, vi } from "vitest";
+
+Caused by: Error: Failed to load url express (resolved id: express) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/__tests__/book-studio-autopilot.test.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  |@paperclipai/server| src/services/book-context-compiler.test.ts [ server/src/services/book-context-compiler.test.ts ]
+Error: Cannot find package 'drizzle-orm' imported from '/Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/services/book-context-compiler.ts'
+ ❯ src/services/book-context-compiler.ts:6:1
+      4| // than the model improvising from a vague memory. Reads existing tabl…
+      5| // (story_bible_*, manuscript_chapters, books) — no new schema.
+      6| import { eq, and } from "drizzle-orm";
+       | ^
+      7| import type { Db } from "@paperclipai/db";
+      8| import {
+
+Caused by: Error: Failed to load url drizzle-orm (resolved id: drizzle-orm) in /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725/server/src/services/book-context-compiler.ts. Does the file exist?
+ ❯ loadAndTransform ../../../paperclip/node_modules/.pnpm/vite@7.3.1_@types+node@25.2.3_jiti@2.6.1_lightningcss@1.30.2_tsx@4.21.0/node_modules/vite/dist/node/chunks/config.js:22663:33
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+
+ Test Files  6 failed (6)
+      Tests  no tests
+   Start at  00:43:56
+   Duration  383ms (transform 324ms, setup 414ms, collect 0ms, tests 0ms, environment 1ms, prepare 439ms)
+
+
+BASELINE_EXIT=1

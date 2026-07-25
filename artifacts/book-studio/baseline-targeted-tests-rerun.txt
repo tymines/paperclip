@@ -1,0 +1,171 @@
+
+ RUN  v3.2.4 /Users/augi/paperclip-worktrees/book-studio-rebuild-20260725
+
+ ✓ |@paperclipai/server| src/services/book-context-compiler.test.ts (6 tests) 3ms
+ ✓ |@paperclipai/server| src/__tests__/book-studio-image-generate.test.ts (19 tests) 1318ms
+   ✓ book studio image generate routes > POST /generate/image > returns 200 + generating response with predictionId  420ms
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > start creates a running autopilot loop
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+ ✓ |@paperclipai/server| src/__tests__/book-studio-chapter-gen.test.ts (9 tests) 2589ms
+   ✓ POST .../chapters/draft > returns 201 with drafted chapter  2567ms
+stderr | src/__tests__/book-studio-chat.test.ts > Book Studio Brainstorm Chat > POST /chat > returns 400 when message is empty
+TEST ERROR: [
+  {
+    "code": "too_small",
+    "minimum": 1,
+    "type": "string",
+    "inclusive": true,
+    "exact": false,
+    "message": "String must contain at least 1 character(s)",
+    "path": [
+      "message"
+    ]
+  }
+]
+
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > status returns current state
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+stderr | src/__tests__/book-studio-chat.test.ts > Book Studio Brainstorm Chat > POST /chat/:messageId/to-draft > returns 404 when message is not found
+TEST ERROR: Message not found
+
+stderr | src/__tests__/book-studio-chat.test.ts > Book Studio Brainstorm Chat > POST /chat/:messageId/to-draft > returns 400 when drafting from a user message
+TEST ERROR: Can only draft from assistant messages
+
+ ✓ |@paperclipai/server| src/__tests__/book-studio-chat.test.ts (10 tests) 53ms
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > pause transitions to paused
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > resume transitions from paused to running
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+ ✓ |@paperclipai/server| src/__tests__/book-studio-export.test.ts (14 tests) 2764ms
+   ✓ POST .../export > returns 201 with the export record (pandoc success)  2586ms
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > steer sets guidance
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > steer rejects missing guidance with 400
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > conflicts on duplicate start
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+stderr | src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > resume on non-paused returns conflict
+[autopilot] chapter undefined draft only 2 words — redrafting once
+
+ ❯ |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts (10 tests | 5 failed) 2977ms
+   ✓ book-studio-autopilot > start creates a running autopilot loop  2613ms
+   × book-studio-autopilot > status returns current state 25ms
+     → expected 'completed' to be 'running' // Object.is equality
+   × book-studio-autopilot > pause transitions to paused 80ms
+     → expected 200 "OK", got 409 "Conflict"
+   × book-studio-autopilot > resume transitions from paused to running 74ms
+     → expected 200 "OK", got 409 "Conflict"
+   ✓ book-studio-autopilot > steer sets guidance 21ms
+   ✓ book-studio-autopilot > steer rejects missing guidance with 400 18ms
+   × book-studio-autopilot > conflicts on duplicate start 72ms
+     → expected 200 "OK", got 409 "Conflict"
+   × book-studio-autopilot > returns 404 for non-existent book 3ms
+     → expected 404 "Not Found", got 200 "OK"
+   ✓ book-studio-autopilot > pause on non-running returns conflict 2ms
+   ✓ book-studio-autopilot > resume on non-paused returns conflict 69ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > status returns current state
+AssertionError: expected 'completed' to be 'running' // Object.is equality
+
+Expected: [32m"running"[39m
+Received: [31m"completed"[39m
+
+ ❯ src/__tests__/book-studio-autopilot.test.ts:127:39
+    125|       .get("/companies/c1/book-studio/books/book-1/autopilot/status")
+    126|       .expect(200);
+    127|     expect(res.body.autopilot.status).toBe("running");
+       |                                       ^
+    128|   });
+    129| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > pause transitions to paused
+Error: expected 200 "OK", got 409 "Conflict"
+ ❯ src/__tests__/book-studio-autopilot.test.ts:141:8
+    139|     const res = await request(app)
+    140|       .post("/companies/c1/book-studio/books/book-1/autopilot/pause")
+    141|       .expect(200);
+       |        ^
+    142|     expect(res.body.autopilot.status).toBe("paused");
+    143|     expect(res.body.autopilot.pausedAt).toBeTruthy();
+ ❯ Test._assertStatus ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:309:14
+ ❯ ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:365:13
+ ❯ Test._assertFunction ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:342:13
+ ❯ Test.assert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:195:23
+ ❯ localAssert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:138:14
+ ❯ Server.<anonymous> ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:152:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > resume transitions from paused to running
+Error: expected 200 "OK", got 409 "Conflict"
+ ❯ src/__tests__/book-studio-autopilot.test.ts:157:8
+    155|     await request(app)
+    156|       .post("/companies/c1/book-studio/books/book-1/autopilot/pause")
+    157|       .expect(200);
+       |        ^
+    158| 
+    159|     const res = await request(app)
+ ❯ Test._assertStatus ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:309:14
+ ❯ ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:365:13
+ ❯ Test._assertFunction ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:342:13
+ ❯ Test.assert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:195:23
+ ❯ localAssert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:138:14
+ ❯ Server.<anonymous> ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:152:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > conflicts on duplicate start
+Error: expected 200 "OK", got 409 "Conflict"
+ ❯ src/__tests__/book-studio-autopilot.test.ts:204:8
+    202|       .post("/companies/c1/book-studio/books/book-1/autopilot/pause")
+    203|       .send({})
+    204|       .expect(200);
+       |        ^
+    205| 
+    206|     // Second start for same book when paused - should be allowed (cre…
+ ❯ Test._assertStatus ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:309:14
+ ❯ ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:365:13
+ ❯ Test._assertFunction ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:342:13
+ ❯ Test.assert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:195:23
+ ❯ localAssert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:138:14
+ ❯ Server.<anonymous> ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:152:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  |@paperclipai/server| src/__tests__/book-studio-autopilot.test.ts > book-studio-autopilot > returns 404 for non-existent book
+Error: expected 404 "Not Found", got 200 "OK"
+ ❯ src/__tests__/book-studio-autopilot.test.ts:217:8
+    215|     await request(app)
+    216|       .get("/companies/c1/book-studio/books/nonexistent/autopilot/stat…
+    217|       .expect(404);
+       |        ^
+    218|   });
+    219| 
+ ❯ Test._assertStatus ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:309:14
+ ❯ ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:365:13
+ ❯ Test._assertFunction ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:342:13
+ ❯ Test.assert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:195:23
+ ❯ localAssert ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:138:14
+ ❯ Server.<anonymous> ../node_modules/.pnpm/supertest@7.2.2/node_modules/supertest/lib/test.js:152:11
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+
+ Test Files  1 failed | 5 passed (6)
+      Tests  5 failed | 63 passed (68)
+   Start at  00:44:31
+   Duration  3.39s (transform 1.77s, setup 435ms, collect 3.96s, tests 9.70s, environment 1ms, prepare 309ms)
+
+
+BASELINE_RERUN_EXIT=1
