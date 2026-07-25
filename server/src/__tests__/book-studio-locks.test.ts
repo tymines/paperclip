@@ -27,15 +27,14 @@ vi.mock("../services/book-context-compiler.js", () => ({
   }),
 }));
 
-// Real hash, fake persistence (never touch the vault filesystem).
-vi.mock("../services/book-prose-writer.js", async () => {
-  const { createHash } = await import("node:crypto");
+// Real module (hash + frontmatter readers), fake persistence (never touch the
+// vault filesystem). Spread actual so book-locks.ts gets the new exports.
+vi.mock("../services/book-prose-writer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/book-prose-writer.js")>();
   return {
-    chapterContentHash: (content: string) =>
-      createHash("sha256").update(content ?? "", "utf8").digest("hex").slice(0, 16),
+    ...actual,
     persistChapterProse: vi.fn(),
     writeChapterToVault: vi.fn(),
-    normalizeChapterHeading: (prose: string) => prose,
   };
 });
 
