@@ -1,0 +1,818 @@
+# Book Studio — Redesign v1 (2026-07-24)
+
+**Author:** Ares · **Status:** Design refresh for Tyler's review — Hermes implements next
+**Scope:** Look/feel + layout redesign ONLY. Every current feature retained; nothing removed. Where this overlaps [[Book Studio - Build Spec v1 (2026-07-19)]] §6, this is the visual language; backend flow unchanged.
+
+## Design stance
+Exception-first editorial control room. Three always-visible surfaces — **chapter spine | workspace | attention rail** — so "what failed, why, and what does Tyler decide" is never more than one glance away. Dark ink theme, amber accent, serif display type for titles and prose.
+
+## Layout
+- **Header** — book switcher · autonomy dial (Co-writer / Chapter / Act = Director Mode levels) · Pause / Steer / Brainstorm / Export
+- **Left spine** — chapter list with live gate-status dots (pass / fail / working / idle) + ready/working/exception counts
+- **Center workspace** — four modes: **Beats** (primary authoring surface, inline edit/reorder, pipeline strip compile→draft→critique→revise→de-AI→consistency→gate, craft vs fast draft) · **Manuscript** (reading surface, annotations, HUMAN LOCKED tag, preview/focus) · **Story Bible** (searchable entity grid, all current types + spec's new ones, per-section AI generate) · **Media** (Cover / Illustrations / Trailer / Narration / Library)
+- **Right attention rail** — "Needs Tyler" exception queue: gate-fail card with 8-dimension rubric + writer/critic provenance, decision cards (pause one chapter, not the run), bible auto-extraction review queue, review notes
+- **Footer** — feature map: every current feature → where it lives (anti-drop reference for Build)
+- **Mobile** — bottom bar: Chapters / Workspace / Attention; decision cards answerable one-handed
+
+## Feature parity (all current features → new home)
+| Current feature | New home |
+|---|---|
+| Image creation (cover, illustrations) | Media tab → Cover / Illustrations |
+| Trailer | Media tab → Trailer |
+| Narration (ElevenLabs, per-chapter) | Media tab → Narration |
+| Media library | Media tab → Library |
+| Writer/critic pipeline + per-chapter gate | Pipeline strip + gate card w/ rubric + provenance |
+| Autopilot phases / Manual-Assisted-Autopilot | Autonomy dial (header) |
+| Director Mode (pause/steer) | Header controls |
+| Story Bible (6 sub-tabs) | Story Bible entity grid (scales to ~12 types) |
+| Manuscript editor + annotations | Manuscript mode |
+| Review notes | Attention rail |
+| Brainstorm chat | Context-aware drawer (knows open chapter) |
+| Export (.md/epub/pdf/audiobook) | Header Export |
+
+## Files
+- Mockup (self-contained HTML, verified desktop 1600×1000 + mobile 390×844, zero horizontal overflow): `augibot2:/Users/augibot2/book-studio-redesign/Book Studio — Redesign v1.html`
+- Screenshots: same folder (`redesign-v1-desktop.png`, `redesign-v1-media.png`, `redesign-v1-mobile.png`)
+
+## Full mockup source
+```html
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book Studio — Redesign v1</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0b0e13;
+    --panel: #11151c;
+    --panel-2: #161b24;
+    --panel-3: #1c2230;
+    --line: #232b38;
+    --line-soft: #1a212c;
+    --ink: #e8e4d9;
+    --ink-dim: #a9b0bd;
+    --ink-faint: #6b7482;
+    --amber: #e0a458;
+    --amber-dim: #8a6a3c;
+    --green: #6fbf8a;
+    --red: #e0705f;
+    --blue: #6fa3bf;
+    --violet: #9a86d1;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.45;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-size: 13px;
+  }
+
+  /* ============ TOP BAR ============ */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 16px; height: 52px; flex: none;
+    background: linear-gradient(180deg, #141922, #10141b);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { font-family: var(--serif); font-size: 17px; letter-spacing: .2px; white-space: nowrap; }
+  .brand em { color: var(--amber); font-style: normal; }
+  .book-switcher {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; cursor: pointer; white-space: nowrap;
+  }
+  .book-switcher .title { font-family: var(--serif); font-size: 13.5px; }
+  .book-switcher .meta { color: var(--ink-faint); font-size: 11px; }
+  .spacer { flex: 1; }
+
+  /* autonomy dial */
+  .dial { display: flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .dial button {
+    appearance: none; background: none; border: none; color: var(--ink-dim);
+    font: 600 11px var(--sans); padding: 7px 12px; cursor: pointer; letter-spacing: .3px;
+  }
+  .dial button.on { background: var(--amber); color: #191204; }
+  .dial button:hover:not(.on) { color: var(--ink); }
+
+  .actions { display: flex; gap: 6px; }
+  .btn {
+    appearance: none; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-dim);
+    border-radius: 8px; padding: 7px 11px; font: 600 11.5px var(--sans); cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .btn:hover { color: var(--ink); border-color: #2f3949; }
+  .btn.primary { background: var(--amber); border-color: var(--amber); color: #191204; }
+  .btn.primary:hover { filter: brightness(1.07); }
+  .btn .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot.green { background: var(--green); } .dot.red { background: var(--red); } .dot.amber { background: var(--amber); }
+
+  /* ============ MAIN GRID ============ */
+  main {
+    flex: 1; display: grid; min-height: 0;
+    grid-template-columns: 216px 1fr 300px;
+    grid-template-rows: 100%;
+  }
+
+  /* ============ CHAPTER SPINE ============ */
+  .spine {
+    background: var(--panel); border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .spine-head {
+    padding: 12px 14px 8px; font: 700 10px var(--sans); letter-spacing: 1.4px;
+    color: var(--ink-faint); text-transform: uppercase; flex: none;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .spine-head .add { cursor: pointer; color: var(--amber); font-size: 13px; letter-spacing: 0; }
+  .spine-list { overflow-y: auto; flex: 1; padding: 0 8px 10px; }
+  .ch {
+    display: flex; align-items: center; gap: 9px; padding: 8px 8px; margin-bottom: 2px;
+    border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+  }
+  .ch:hover { background: var(--panel-2); }
+  .ch.sel { background: var(--panel-3); border-color: var(--line); }
+  .ch .num {
+    font-family: var(--serif); font-size: 14px; width: 22px; text-align: right; color: var(--ink-dim); flex: none;
+  }
+  .ch.sel .num { color: var(--amber); }
+  .ch .body { min-width: 0; flex: 1; }
+  .ch .name { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch .st { font-size: 10.5px; color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .b-pass { background: var(--green); }
+  .b-exc  { background: var(--red); box-shadow: 0 0 0 3px rgba(224,112,95,.18); }
+  .b-work { background: var(--amber); animation: pulse 1.6s infinite; }
+  .b-nov  { background: var(--blue); }
+  .b-idle { background: #3a4353; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .spine-foot {
+    flex: none; border-top: 1px solid var(--line-soft); padding: 10px 14px;
+    font-size: 11px; color: var(--ink-faint);
+  }
+  .spine-foot .row { display: flex; justify-content: space-between; margin-top: 3px; }
+  .spine-foot b { color: var(--ink-dim); font-weight: 600; }
+
+  /* ============ WORKSPACE ============ */
+  .workspace { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
+  .mode-tabs {
+    flex: none; display: flex; gap: 2px; padding: 8px 14px 0;
+    border-bottom: 1px solid var(--line-soft); background: var(--panel);
+    overflow-x: auto;
+  }
+  .mtab {
+    appearance: none; background: none; border: none; border-bottom: 2px solid transparent;
+    color: var(--ink-faint); font: 600 12.5px var(--sans); padding: 9px 14px; cursor: pointer; white-space: nowrap;
+  }
+  .mtab:hover { color: var(--ink-dim); }
+  .mtab.on { color: var(--amber); border-bottom-color: var(--amber); }
+  .mtab .cnt { color: var(--ink-faint); font-weight: 500; font-size: 11px; margin-left: 4px; }
+  .mode-body { flex: 1; overflow-y: auto; min-height: 0; }
+  .mode { display: none; height: 100%; }
+  .mode.on { display: block; }
+
+  /* --- BEATS mode --- */
+  .beats-wrap { max-width: 860px; margin: 0 auto; padding: 22px 28px 60px; }
+  .crumbs { font-size: 11.5px; color: var(--ink-faint); margin-bottom: 4px; }
+  .crumbs b { color: var(--ink-dim); font-weight: 600; }
+  .ch-title-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .ch-title { font-family: var(--serif); font-size: 26px; line-height: 1.2; }
+  .gate-chip {
+    font: 700 10px var(--sans); letter-spacing: .8px; text-transform: uppercase;
+    padding: 4px 9px; border-radius: 20px; border: 1px solid;
+  }
+  .gate-chip.exc { color: var(--red); border-color: rgba(224,112,95,.5); background: rgba(224,112,95,.1); }
+  .gate-chip.pass { color: var(--green); border-color: rgba(111,191,138,.4); background: rgba(111,191,138,.08); }
+  .ch-meta { color: var(--ink-faint); font-size: 11.5px; margin: 6px 0 18px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .ch-meta b { color: var(--ink-dim); font-weight: 600; }
+
+  .pipeline {
+    display: flex; align-items: center; gap: 0; margin-bottom: 22px;
+    background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 14px;
+    overflow-x: auto;
+  }
+  .pstep { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+  .pstep .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; border: 1px solid var(--line); color: var(--ink-faint); }
+  .pstep.done .ic { background: var(--green); border-color: var(--green); color: #0b130d; }
+  .pstep.now .ic { background: var(--amber); border-color: var(--amber); color: #191204; animation: pulse 1.6s infinite; }
+  .pstep.fail .ic { background: var(--red); border-color: var(--red); color: #1a0b08; }
+  .pstep .lbl { font-size: 11px; color: var(--ink-dim); font-weight: 600; }
+  .pstep.done .lbl, .pstep.now .lbl { color: var(--ink); }
+  .parrow { color: #2c3542; margin: 0 10px; font-size: 12px; }
+
+  .beat {
+    display: flex; gap: 12px; padding: 13px 14px; margin-bottom: 8px;
+    background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px;
+    cursor: default;
+  }
+  .beat:hover { border-color: var(--line); }
+  .beat .grip { color: #333d4c; cursor: grab; font-size: 13px; padding-top: 2px; user-select: none; }
+  .beat .bnum { font-family: var(--serif); color: var(--amber); font-size: 13px; width: 18px; flex: none; padding-top: 1px; }
+  .beat .btext { flex: 1; font-size: 13.5px; color: var(--ink); }
+  .beat .btext:focus { outline: none; }
+  .beat[contenteditable-text="true"] .btext { border-bottom: 1px dashed var(--amber-dim); }
+  .beat .bops { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+  .beat:hover .bops { opacity: 1; }
+  .bop { appearance: none; background: none; border: none; color: var(--ink-faint); cursor: pointer; font-size: 12px; padding: 2px 5px; border-radius: 5px; }
+  .bop:hover { color: var(--ink); background: var(--panel-3); }
+  .add-beat {
+    width: 100%; appearance: none; background: none; border: 1px dashed #2a3342; color: var(--ink-faint);
+    border-radius: 10px; padding: 10px; font: 600 12px var(--sans); cursor: pointer; margin-top: 4px;
+  }
+  .add-beat:hover { color: var(--amber); border-color: var(--amber-dim); }
+
+  .draft-row { display: flex; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+  .hint { font-size: 11px; color: var(--ink-faint); margin-top: 8px; }
+  .hint code { font-family: var(--mono); color: var(--ink-dim); font-size: 10.5px; }
+
+  /* --- MANUSCRIPT mode --- */
+  .ms-wrap { max-width: 760px; margin: 0 auto; padding: 26px 30px 80px; }
+  .prose { font-family: var(--serif); font-size: 16.5px; line-height: 1.78; color: #ded9cc; }
+  .prose p { margin-bottom: 1.15em; }
+  .prose .annot { background: rgba(224,164,88,.14); border-bottom: 1px solid var(--amber-dim); cursor: pointer; }
+  .ms-toolbar { display: flex; gap: 6px; margin-bottom: 18px; align-items: center; }
+  .ms-toolbar .sep { flex: 1; }
+  .locked-tag { font-size: 10.5px; color: var(--violet); border: 1px solid rgba(154,134,209,.4); border-radius: 20px; padding: 3px 9px; font-weight: 700; letter-spacing: .5px; }
+
+  /* --- BIBLE mode --- */
+  .bible-wrap { padding: 18px 22px 50px; }
+  .bible-search { width: 100%; max-width: 420px; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink); border-radius: 9px; padding: 9px 12px; font: 13px var(--sans); margin-bottom: 16px; }
+  .bible-search:focus { outline: none; border-color: var(--amber-dim); }
+  .entity-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .entity {
+    background: var(--panel); border: 1px solid var(--line-soft); border-radius: 10px; padding: 13px 14px; cursor: pointer;
+  }
+  .entity:hover { border-color: var(--line); background: var(--panel-2); }
+  .entity .ename { font: 600 13px var(--sans); display: flex; justify-content: space-between; align-items: center; }
+  .entity .ecount { font-family: var(--serif); color: var(--amber); font-size: 15px; }
+  .entity .edesc { font-size: 11px; color: var(--ink-faint); margin-top: 4px; line-height: 1.5; }
+  .entity .egen { margin-top: 9px; font-size: 10.5px; color: var(--blue); font-weight: 600; }
+
+  /* --- MEDIA mode --- */
+  .media-wrap { padding: 18px 22px 50px; }
+  .media-tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .mtab2 {
+    appearance: none; background: var(--panel-2); border: 1px solid var(--line); color: var(--ink-dim);
+    border-radius: 20px; padding: 6px 13px; font: 600 11.5px var(--sans); cursor: pointer;
+  }
+  .mtab2.on { background: var(--amber); border-color: var(--amber); color: #191204; }
+  .cover-block { display: flex; gap: 18px; align-items: flex-start; flex-wrap: wrap; }
+  .cover-thumb {
+    width: 190px; height: 285px; border-radius: 10px; border: 1px solid var(--line); flex: none;
+    background:
+      radial-gradient(ellipse at 50% 20%, #3d2f52 0%, transparent 55%),
+      linear-gradient(160deg, #241d33 0%, #141824 55%, #0d1420 100%);
+    display: flex; flex-direction: column; justify-content: flex-end; padding: 16px; position: relative; overflow: hidden;
+  }
+  .cover-thumb::before {
+    content: ""; position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 70% 75%, rgba(224,164,88,.25), transparent 50%);
+  }
+  .cover-thumb .ct { font-family: var(--serif); font-size: 19px; line-height: 1.25; position: relative; }
+  .cover-thumb .ca { font-size: 10.5px; color: var(--ink-dim); margin-top: 6px; letter-spacing: 1.5px; text-transform: uppercase; position: relative; }
+  .cover-ops { flex: 1; min-width: 240px; }
+  .cover-ops h4 { font: 600 13px var(--sans); margin-bottom: 8px; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 11px; color: var(--ink-faint); margin-bottom: 4px; font-weight: 600; }
+  .field .val { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; color: var(--ink-dim); }
+  .gen-row { display: flex; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+  .illus-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .illus {
+    aspect-ratio: 4/5; border-radius: 9px; border: 1px solid var(--line-soft);
+    display: flex; align-items: flex-end; padding: 9px; font-size: 10.5px; color: var(--ink-dim);
+  }
+  .i1 { background: linear-gradient(150deg,#2b2438,#131824); } .i2 { background: linear-gradient(150deg,#1d3040,#101722); }
+  .i3 { background: linear-gradient(150deg,#3a2a22,#181310); } .i4 { background: linear-gradient(150deg,#22331f,#10160d); }
+  .i5 { background: linear-gradient(150deg,#33203a,#170f1c); } .i6 { background: linear-gradient(150deg,#20343a,#0e161a); }
+  .lib-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .lib-table th { text-align: left; color: var(--ink-faint); font: 700 10px var(--sans); letter-spacing: 1px; text-transform: uppercase; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  .lib-table td { padding: 8px 10px; border-bottom: 1px solid var(--line-soft); color: var(--ink-dim); }
+  .lib-table td:first-child { color: var(--ink); }
+  .pill { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 12px; border: 1px solid var(--line); color: var(--ink-faint); }
+  .pill.img { color: var(--blue); border-color: rgba(111,163,191,.4); }
+  .pill.aud { color: var(--violet); border-color: rgba(154,134,209,.4); }
+  .pill.vid { color: var(--amber); border-color: rgba(224,164,88,.4); }
+
+  /* ============ ATTENTION RAIL ============ */
+  .attention {
+    background: var(--panel); border-left: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .att-head {
+    padding: 12px 14px 8px; font: 700 10px var(--sans); letter-spacing: 1.4px;
+    color: var(--ink-faint); text-transform: uppercase; flex: none;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .att-head .n { color: var(--red); font-size: 13px; letter-spacing: 0; }
+  .att-scroll { overflow-y: auto; flex: 1; padding: 0 10px 12px; }
+
+  .card {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 12px; margin-bottom: 9px;
+  }
+  .card.exc-card { border-color: rgba(224,112,95,.45); }
+  .card .chead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 7px; }
+  .card .ckind { font: 700 9.5px var(--sans); letter-spacing: 1px; text-transform: uppercase; }
+  .ckind.red { color: var(--red); } .ckind.amber { color: var(--amber); } .ckind.blue { color: var(--blue); } .ckind.violet { color: var(--violet); }
+  .card .ctime { font-size: 10px; color: var(--ink-faint); }
+  .card .ctitle { font: 600 12.5px var(--sans); margin-bottom: 5px; }
+  .card .cbody { font-size: 11.5px; color: var(--ink-dim); line-height: 1.55; }
+  .card .cbody b { color: var(--ink); font-weight: 600; }
+
+  .rubric { margin: 9px 0 4px; }
+  .rrow { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .rrow .rl { width: 96px; font-size: 10.5px; color: var(--ink-dim); flex: none; white-space: nowrap; }
+  .rbar { flex: 1; height: 5px; background: #1e2530; border-radius: 3px; overflow: hidden; }
+  .rbar i { display: block; height: 100%; border-radius: 3px; background: var(--green); }
+  .rbar i.low { background: var(--red); }
+  .rbar i.mid { background: var(--amber); }
+  .rrow .rv { width: 26px; text-align: right; font: 600 10.5px var(--mono); color: var(--ink-dim); }
+  .rrow .rv.low { color: var(--red); }
+  .thresh { font-size: 9.5px; color: var(--ink-faint); margin-top: 4px; }
+
+  .provenance { font-size: 10px; color: var(--ink-faint); margin-top: 8px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .provenance code { font-family: var(--mono); color: var(--ink-dim); }
+
+  .opt {
+    display: block; width: 100%; text-align: left; appearance: none; cursor: pointer;
+    background: var(--panel-3); border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; margin-top: 6px; color: var(--ink-dim); font: 500 11.5px var(--sans);
+  }
+  .opt:hover { border-color: var(--amber-dim); color: var(--ink); }
+  .opt b { color: var(--ink); display: block; font-size: 12px; margin-bottom: 2px; }
+  .opt .cons { font-size: 10px; color: var(--ink-faint); margin-top: 3px; }
+
+  .notes-head { font: 700 10px var(--sans); letter-spacing: 1.4px; color: var(--ink-faint); text-transform: uppercase; padding: 12px 4px 8px; display: flex; justify-content: space-between; align-items: center; }
+  .notes-head .add { color: var(--amber); cursor: pointer; font-size: 11px; letter-spacing: 0; text-transform: none; }
+  .note { padding: 9px 11px; border-left: 2px solid var(--line); margin-bottom: 8px; }
+  .note .ncat { font: 700 9.5px var(--sans); letter-spacing: .8px; text-transform: uppercase; color: var(--blue); }
+  .note .ntext { font-size: 11.5px; color: var(--ink-dim); margin-top: 3px; }
+  .note .nch { font-size: 10px; color: var(--ink-faint); margin-top: 4px; }
+
+  /* ============ CHAT DRAWER ============ */
+  .drawer-veil { position: fixed; inset: 0; background: rgba(5,7,10,.55); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 40; }
+  .drawer-veil.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: -420px; width: 400px; max-width: 94vw; height: 100%;
+    background: var(--panel); border-left: 1px solid var(--line); z-index: 50;
+    transition: right .22s ease; display: flex; flex-direction: column;
+  }
+  .drawer.open { right: 0; }
+  .drawer-head { padding: 14px 16px; border-bottom: 1px solid var(--line-soft); display: flex; align-items: center; gap: 10px; }
+  .drawer-head .dt { font-family: var(--serif); font-size: 16px; flex: 1; }
+  .ctx-tag { font-size: 10px; color: var(--blue); border: 1px solid rgba(111,163,191,.35); border-radius: 12px; padding: 3px 8px; }
+  .drawer-close { appearance: none; background: none; border: none; color: var(--ink-faint); font-size: 18px; cursor: pointer; padding: 4px 8px; }
+  .drawer-close:hover { color: var(--ink); }
+  .chat-body { flex: 1; overflow-y: auto; padding: 16px; }
+  .msg { max-width: 88%; padding: 9px 12px; border-radius: 12px; font-size: 12.5px; margin-bottom: 10px; line-height: 1.55; }
+  .msg.user { background: var(--panel-3); margin-left: auto; border-bottom-right-radius: 4px; }
+  .msg.ai { background: #18202c; border-bottom-left-radius: 4px; color: var(--ink-dim); }
+  .msg.ai b { color: var(--ink); }
+  .chat-input { padding: 12px 14px; border-top: 1px solid var(--line-soft); display: flex; gap: 8px; }
+  .chat-input input { flex: 1; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; color: var(--ink); font: 13px var(--sans); }
+  .chat-input input:focus { outline: none; border-color: var(--amber-dim); }
+
+  /* ============ FOOTER: feature map ============ */
+  footer {
+    flex: none; background: #0d1117; border-top: 1px solid var(--line-soft);
+    padding: 6px 16px; display: flex; gap: 16px; align-items: center; overflow-x: auto;
+    font-size: 10px; color: var(--ink-faint); white-space: nowrap;
+  }
+  footer .fm { flex: none; }
+  footer .fm b { color: var(--ink-dim); font-weight: 600; }
+  footer .fmlabel { font: 700 9px var(--sans); letter-spacing: 1.2px; text-transform: uppercase; color: var(--amber-dim); flex: none; }
+
+  /* ============ MOBILE ============ */
+  .mobilebar { display: none; }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    .spine, .attention { display: none; }
+    .spine.m-on, .attention.m-on { display: flex; position: fixed; inset: 52px 0 46px 0; z-index: 30; }
+    .attention.m-on { border-left: none; }
+    .mobilebar {
+      display: flex; flex: none; height: 46px; background: var(--panel); border-top: 1px solid var(--line);
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 35;
+    }
+    .mobilebar button {
+      flex: 1; appearance: none; background: none; border: none; color: var(--ink-faint);
+      font: 600 11px var(--sans); cursor: pointer;
+    }
+    .mobilebar button.on { color: var(--amber); }
+    header { gap: 8px; padding: 0 10px; overflow-x: auto; scrollbar-width: none; }
+    header::-webkit-scrollbar { display: none; }
+    .brand { font-size: 14px; }
+    .book-switcher .meta { display: none; }
+    .dial { flex: none; }
+    .actions { flex: none; }
+    .dial button { padding: 7px 8px; }
+    .actions .btn span.lbl { display: none; }
+    .beats-wrap { padding: 16px 16px 60px; }
+    .ms-wrap, .bible-wrap, .media-wrap { padding-left: 16px; padding-right: 16px; }
+    body { padding-bottom: 46px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">Book <em>Studio</em></div>
+  <div class="book-switcher">
+    <span class="title">Emberfall Academy</span>
+    <span class="meta">10 ch · 16,120 w</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="dial" title="Autonomy level">
+    <button>Co-writer</button>
+    <button class="on">Chapter</button>
+    <button>Act</button>
+  </div>
+  <div class="actions">
+    <button class="btn"><span class="dot amber"></span><span class="lbl">Pause</span></button>
+    <button class="btn"><span class="lbl">Steer</span></button>
+    <button class="btn" id="chatBtn"><span class="lbl">Brainstorm</span></button>
+    <button class="btn primary"><span class="lbl">Export</span></button>
+  </div>
+</header>
+
+<main>
+  <!-- ===== CHAPTER SPINE ===== -->
+  <nav class="spine" id="spine">
+    <div class="spine-head">Chapters <span class="add">+ New</span></div>
+    <div class="spine-list" id="spineList"></div>
+    <div class="spine-foot">
+      <div class="row"><span>Ready</span><b>6</b></div>
+      <div class="row"><span>Working</span><b>1</b></div>
+      <div class="row"><span>Exceptions</span><b style="color:var(--red)">1</b></div>
+    </div>
+  </nav>
+
+  <!-- ===== WORKSPACE ===== -->
+  <section class="workspace">
+    <div class="mode-tabs" id="modeTabs">
+      <button class="mtab on" data-mode="beats">Beats</button>
+      <button class="mtab" data-mode="manuscript">Manuscript</button>
+      <button class="mtab" data-mode="bible">Story Bible<span class="cnt">34</span></button>
+      <button class="mtab" data-mode="media">Media</button>
+    </div>
+
+    <div class="mode-body">
+      <!-- BEATS -->
+      <div class="mode on" id="m-beats">
+        <div class="beats-wrap">
+          <div class="crumbs">Emberfall Academy / <b id="crumbCh">Chapter 7</b></div>
+          <div class="ch-title-row">
+            <div class="ch-title" id="beatTitle">The Ward Below</div>
+            <span class="gate-chip exc" id="beatChip">Gate · Fail</span>
+          </div>
+          <div class="ch-meta">
+            <span>POV <b>Mira Aldenhart</b></span>
+            <span>Target <b>1,800 w</b></span>
+            <span>Tension <b>high</b></span>
+            <span>Act <b>II</b></span>
+          </div>
+
+          <div class="pipeline" id="pipeline"></div>
+
+          <div id="beatList"></div>
+          <button class="add-beat" id="addBeat">+ Add beat</button>
+
+          <div class="draft-row">
+            <button class="btn primary">Draft chapter — craft pass</button>
+            <button class="btn">Fast draft</button>
+            <button class="btn">Redraft</button>
+          </div>
+          <div class="hint">Craft pass runs <code>compile → draft → critique → revise → de-AI → consistency → gate</code>. Fast draft is a single pass, still gated.</div>
+        </div>
+      </div>
+
+      <!-- MANUSCRIPT -->
+      <div class="mode" id="m-manuscript">
+        <div class="ms-wrap">
+          <div class="ms-toolbar">
+            <button class="btn">Preview</button>
+            <button class="btn">Focus</button>
+            <button class="btn">Annotations <span style="color:var(--amber)">3</span></button>
+            <span class="sep"></span>
+            <span class="locked-tag">HUMAN LOCKED</span>
+          </div>
+          <div class="prose">
+            <p>The stair beneath the library did not appear on any plan Mira had ever stolen, and she had stolen most of them. It breathed — that was the only word for it — a slow exhale of cold air that smelled of wet stone and something older, something that had been waiting with the patience of masonry.</p>
+            <p>Behind her, the ward-lantern guttered. <span class="annot" title="Annotation: continuity — the lantern was left in the scriptorium in ch. 5">She raised it anyway</span>, and the flame leaned toward the dark like a thing curious, and that was wrong, because flame feared the deep places. Everything in the Academy's bestiaries said so.</p>
+            <p>"You're following me," she said, not turning. "You've been following me since the refectory."</p>
+            <p>The silence that answered had a shape. Then Casian's voice, low and unhurried: "You're holding my mother's key."</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- STORY BIBLE -->
+      <div class="mode" id="m-bible">
+        <div class="bible-wrap">
+          <input class="bible-search" placeholder="Search the bible — characters, places, facts…">
+          <div class="entity-grid">
+            <div class="entity"><div class="ename">Characters <span class="ecount">9</span></div><div class="edesc">Psychology, aliases, arcs, structured voice cards</div><div class="egen">✦ Generate · Recommend</div></div>
+            <div class="entity"><div class="ename">World &amp; Locations <span class="ecount">6</span></div><div class="edesc">Sensory notes, rules, first-appearance chapters</div><div class="egen">✦ Generate · Recommend</div></div>
+            <div class="entity"><div class="ename">Relationships <span class="ecount">7</span></div><div class="edesc">Arc type, stages, trust / tension meters, escalation rules</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Factions <span class="ecount">3</span></div><div class="edesc">Houses, orders, governments</div><div class="egen">✦ Generate · Recommend</div></div>
+            <div class="entity"><div class="ename">Lore <span class="ecount">12</span></div><div class="edesc">History, mythology, backstory, events</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Objects <span class="ecount">5</span></div><div class="edesc">Artifacts, macguffins — ward-key tracked</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Systems <span class="ecount">2</span></div><div class="edesc">Ward-magic rules, cost structure</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Timeline <span class="ecount">18</span></div><div class="edesc">Dated events, cross-referenced to chapters</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Threads <span class="ecount">6</span></div><div class="edesc">Subplots · status · target resolution chapter</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Themes <span class="ecount">4</span></div><div class="edesc">Statements + the scenes that must test them</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Glossary <span class="ecount">22</span></div><div class="edesc">Terms, invented vocabulary, pronunciation</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Style <span class="ecount">1</span></div><div class="edesc">Voice sample, banned clichés, de-AI rules</div><div class="egen">✦ Generate</div></div>
+            <div class="entity"><div class="ename">Outline <span class="ecount">10</span></div><div class="edesc">Chapters, beats, POV schedule, acts</div><div class="egen">✦ Generate beats</div></div>
+            <div class="entity" style="border-color:rgba(154,134,209,.35)"><div class="ename">Facts <span class="ecount">41</span></div><div class="edesc">Atomic canon with spoiler gating — <span style="color:var(--violet)">known as of ch. N</span></div><div class="egen">Review queue · 3 pending</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MEDIA -->
+      <div class="mode" id="m-media">
+        <div class="media-wrap">
+          <div class="media-tabs">
+            <button class="mtab2 on" data-media="cover">Cover</button>
+            <button class="mtab2" data-media="illus">Illustrations</button>
+            <button class="mtab2" data-media="trailer">Trailer</button>
+            <button class="mtab2" data-media="narr">Narration</button>
+            <button class="mtab2" data-media="lib">Library</button>
+          </div>
+
+          <div class="mpane" id="p-cover">
+            <div class="cover-block">
+              <div class="cover-thumb"><div class="ct">Emberfall<br>Academy</div><div class="ca">T. Switzer</div></div>
+              <div class="cover-ops">
+                <h4>Cover</h4>
+                <div class="field"><label>Prompt</label><div class="val">Dark academia fantasy, ember-lit ward sigils over a stone library stair, violet dusk, painterly…</div></div>
+                <div class="field"><label>Style preset</label><div class="val">Painterly · 2:3 · title-safe margins</div></div>
+                <div class="gen-row">
+                  <button class="btn primary">Generate cover</button>
+                  <button class="btn">Variations</button>
+                  <button class="btn">Upload</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="mpane" id="p-illus" style="display:none">
+            <div class="gen-row" style="margin:0 0 14px"><button class="btn primary">+ New illustration</button><button class="btn">From chapter…</button></div>
+            <div class="illus-grid">
+              <div class="illus i1">Ch.1 — The Arrival</div>
+              <div class="illus i2">Ch.2 — Ward Hall</div>
+              <div class="illus i3">Ch.4 — Refectory duel</div>
+              <div class="illus i4">Ch.5 — Scriptorium</div>
+              <div class="illus i5">Ch.7 — The Ward Below</div>
+              <div class="illus i6">Ch.9 — Ember Court</div>
+            </div>
+          </div>
+
+          <div class="mpane" id="p-trailer" style="display:none">
+            <div class="cover-ops" style="max-width:520px">
+              <h4>Book trailer</h4>
+              <div class="field"><label>Status</label><div class="val">Not started — needs cover + 3 illustrations</div></div>
+              <div class="field"><label>Script beats</label><div class="val">Hook (Ch.1) → Ward mystery (Ch.7) → Ember Court reveal (Ch.9)</div></div>
+              <div class="gen-row"><button class="btn primary">Assemble trailer</button><button class="btn">Voiceover…</button></div>
+            </div>
+          </div>
+
+          <div class="mpane" id="p-narr" style="display:none">
+            <table class="lib-table">
+              <tr><th>Chapter</th><th>Voice</th><th>Length</th><th>Status</th></tr>
+              <tr><td>1 — The Arrival</td><td>Alba (warm)</td><td>11:42</td><td><span class="pill aud">rendered</span></td></tr>
+              <tr><td>2 — Ward Hall</td><td>Alba (warm)</td><td>10:05</td><td><span class="pill aud">rendered</span></td></tr>
+              <tr><td>3 — Lessons in Salt</td><td>Alba (warm)</td><td>—</td><td><span class="pill">queued</span></td></tr>
+              <tr><td colspan="4" style="color:var(--ink-faint)">Narrate book → full-manuscript ElevenLabs render, per-chapter concat</td></tr>
+            </table>
+          </div>
+
+          <div class="mpane" id="p-lib" style="display:none">
+            <table class="lib-table">
+              <tr><th>Asset</th><th>Type</th><th>Chapter</th><th>Created</th><th></th></tr>
+              <tr><td>cover-v3.png</td><td><span class="pill img">image</span></td><td>—</td><td>Jul 21</td><td><button class="btn">Use</button></td></tr>
+              <tr><td>ward-hall.png</td><td><span class="pill img">image</span></td><td>2</td><td>Jul 21</td><td><button class="btn">Use</button></td></tr>
+              <tr><td>ch01-narration.mp3</td><td><span class="pill aud">audio</span></td><td>1</td><td>Jul 22</td><td><button class="btn">▶</button></td></tr>
+              <tr><td>trailer-draft.mp4</td><td><span class="pill vid">video</span></td><td>—</td><td>Jul 23</td><td><button class="btn">▶</button></td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== ATTENTION RAIL ===== -->
+  <aside class="attention" id="attention">
+    <div class="att-head">Needs Tyler <span class="n">2</span></div>
+    <div class="att-scroll">
+
+      <div class="card exc-card">
+        <div class="chead"><span class="ckind red">Gate · Fail</span><span class="ctime">14 min ago</span></div>
+        <div class="ctitle">Ch. 7 — The Ward Below</div>
+        <div class="cbody">2 dimensions below threshold. Iteration <b>2 of 3</b>.</div>
+        <div class="rubric">
+          <div class="rrow"><span class="rl">Tension</span><span class="rbar"><i style="width:82%"></i></span><span class="rv">8.2</span></div>
+          <div class="rrow"><span class="rl">Interiority</span><span class="rbar"><i style="width:74%"></i></span><span class="rv">7.4</span></div>
+          <div class="rrow"><span class="rl">Sensory</span><span class="rbar"><i class="low" style="width:58%"></i></span><span class="rv low">5.8</span></div>
+          <div class="rrow"><span class="rl">Dialogue subtext</span><span class="rbar"><i style="width:76%"></i></span><span class="rv">7.6</span></div>
+          <div class="rrow"><span class="rl">Pacing</span><span class="rbar"><i class="mid" style="width:68%"></i></span><span class="rv">6.8</span></div>
+          <div class="rrow"><span class="rl">Voice match</span><span class="rbar"><i class="low" style="width:59%"></i></span><span class="rv low">5.9</span></div>
+          <div class="rrow"><span class="rl">Beat fulfillment</span><span class="rbar"><i style="width:88%"></i></span><span class="rv">8.8</span></div>
+          <div class="rrow"><span class="rl">Canon</span><span class="rbar"><i style="width:95%"></i></span><span class="rv">9.5</span></div>
+        </div>
+        <div class="thresh">Threshold 7.0 · sensory grounding &amp; voice match failing</div>
+        <div class="provenance"><span>writer <code>gemini-2.5-pro</code></span><span>critic <code>deepseek</code></span></div>
+        <button class="opt" id="applyRev"><b>Apply suggested revision</b>Critic rewrites 3 passages toward Mira's voice card; adds 2 sensory anchors.<div class="cons">Re-runs gate automatically</div></button>
+        <button class="opt"><b>Send to beats</b>Adjust beat 3 and re-draft.<div class="cons">Slower; keeps Tyler's hand on structure</div></button>
+      </div>
+
+      <div class="card">
+        <div class="chead"><span class="ckind blue">Decision</span><span class="ctime">pauses Ch. 9 only</span></div>
+        <div class="ctitle">When does Mira learn the ward-key's origin?</div>
+        <div class="cbody">Outline conflict: thread <b>"Mother's debt"</b> targets ch. 9, but the spoiler gate hides the key's origin until ch. 12.</div>
+        <button class="opt"><b>A — Reveal early in Ch. 9</b>Moves the reveal; retires the ch. 12 twist.<div class="cons">Simplifies Act III · weakens finale</div></button>
+        <button class="opt"><b>B — Partial reveal</b>Mira learns the key is <i>bound</i>, not why.<div class="cons">Keeps twist · needs 1 new beat in Ch. 9</div></button>
+        <button class="opt"><b>C — Hold to Ch. 12</b>Push "Mother's debt" resolution later.<div class="cons">Thread idles for 3 chapters</div></button>
+      </div>
+
+      <div class="card">
+        <div class="chead"><span class="ckind amber">Bible review</span><span class="ctime">3 pending</span></div>
+        <div class="ctitle">Auto-extracted facts from Ch. 6</div>
+        <div class="cbody">→ "Casian carries his mother's ward-key" <span style="color:var(--violet)">known as of ch. 6</span><br>→ "The Understair predates the Academy" <span style="color:var(--violet)">author-only</span><br>→ Relationship: Mira ⇄ Casian tension <b>+2</b></div>
+        <button class="opt"><b>Review queue</b>Approve or reject each — nothing enters canon without a click.</button>
+      </div>
+
+      <div class="notes-head">Review notes <span class="add">+ Add note</span></div>
+      <div class="note"><div class="ncat">Voice</div><div class="ntext">Mira wouldn't say "curious" twice in a scene — watch the echo.</div><div class="nch">Ch. 7 · just now</div></div>
+      <div class="note"><div class="ncat">Pacing</div><div class="ntext">The stair descent can breathe. Don't rush to Casian's line.</div><div class="nch">Ch. 7 · yesterday</div></div>
+      <div class="note"><div class="ncat">Continuity</div><div class="ntext">Lantern was left in the scriptorium — flagged inline in manuscript.</div><div class="nch">Ch. 7 · yesterday</div></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <span class="fmlabel">Feature map</span>
+  <span class="fm"><b>Beats / outline</b> → center workspace</span>
+  <span class="fm"><b>Manuscript + annotations + human-lock</b> → Manuscript tab</span>
+  <span class="fm"><b>Story Bible (all entity types + AI generate)</b> → Bible tab</span>
+  <span class="fm"><b>Writer/critic gate + rubric</b> → pipeline strip + gate card</span>
+  <span class="fm"><b>Autopilot dial · Director Mode (steer/pause)</b> → header</span>
+  <span class="fm"><b>Image gen · cover · trailer · narration · library</b> → Media tab</span>
+  <span class="fm"><b>Review notes + decision cards</b> → attention rail</span>
+  <span class="fm"><b>Brainstorm chat</b> → drawer</span>
+  <span class="fm"><b>Export (.md · epub · pdf · audiobook)</b> → header</span>
+</footer>
+
+<div class="mobilebar">
+  <button id="mbSpine">Chapters</button>
+  <button class="on" id="mbWork">Workspace</button>
+  <button id="mbAtt">Attention <span style="color:var(--red)">2</span></button>
+</div>
+
+<div class="drawer-veil" id="veil"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span class="dt">Brainstorm</span>
+    <span class="ctx-tag">Ch. 7 · The Ward Below</span>
+    <button class="drawer-close" id="drawerClose">✕</button>
+  </div>
+  <div class="chat-body" id="chatBody">
+    <div class="msg ai">Grounded in <b>Ch. 7</b> — 5 beats, Mira POV, the lantern continuity flag, and the spoiler gate through ch. 7. What's on your mind?</div>
+    <div class="msg user">Should Casian already suspect the key is bound to Mira?</div>
+    <div class="msg ai">Per the facts table, Casian knows the key is <b>his mother's</b> (ch. 6) but the binding is <b>author-only</b> until ch. 12 — so he can suspect <i>something</i> without naming it. I'd let him notice the key warms near her and say nothing. Want me to draft that as a beat?</div>
+  </div>
+  <div class="chat-input">
+    <input id="chatIn" placeholder="Ask about your book…">
+    <button class="btn primary" id="chatSend">Send</button>
+  </div>
+</aside>
+
+<script>
+(function(){
+  const $ = s => document.querySelector(s);
+  const $$ = s => Array.from(document.querySelectorAll(s));
+
+  const chapters = [
+    {n:1,t:"The Arrival",s:"pass",st:"Ready · 8.4 avg"},
+    {n:2,t:"Ward Hall",s:"pass",st:"Ready · 8.1 avg"},
+    {n:3,t:"Lessons in Salt",s:"pass",st:"Ready · 7.9 avg"},
+    {n:4,t:"Refectory Duel",s:"pass",st:"Ready · 8.6 avg"},
+    {n:5,t:"The Scriptorium",s:"pass",st:"Ready · 8.2 avg"},
+    {n:6,t:"Mother's Debt",s:"pass",st:"Ready · 7.8 avg"},
+    {n:7,t:"The Ward Below",s:"exc",st:"Gate fail · voice 5.9"},
+    {n:8,t:"Embers Under Ice",s:"work",st:"Critiquing · pass 1"},
+    {n:9,t:"Ember Court",s:"idle",st:"Beats · awaiting decision"},
+    {n:10,t:"What the Fire Keeps",s:"idle",st:"Outline only"},
+  ];
+  const badge = {pass:"b-pass",exc:"b-exc",work:"b-work",nov:"b-nov",idle:"b-idle"};
+  const spineList = $("#spineList");
+  chapters.forEach(c=>{
+    const d = document.createElement("div");
+    d.className = "ch" + (c.n===7 ? " sel" : "");
+    d.innerHTML = '<span class="num">'+c.n+'</span><span class="body"><div class="name">'+c.t+'</div><div class="st">'+c.st+'</div></span><span class="badge '+badge[c.s]+'"></span>';
+    d.onclick = ()=>{ $$(".ch").forEach(x=>x.classList.remove("sel")); d.classList.add("sel");
+      $("#crumbCh").textContent = "Chapter "+c.n; $("#beatTitle").textContent = c.t;
+      const chip = $("#beatChip");
+      if(c.s==="pass"){ chip.className="gate-chip pass"; chip.textContent="Gate · Pass"; }
+      else if(c.s==="exc"){ chip.className="gate-chip exc"; chip.textContent="Gate · Fail"; }
+      else { chip.className="gate-chip"; chip.style.color="var(--ink-faint)"; chip.style.borderColor="var(--line)"; chip.textContent="Not gated"; }
+    };
+    spineList.appendChild(d);
+  });
+
+  const steps = [["Compile","done"],["Draft","done"],["Critique","done"],["Revise","fail"],["De-AI",""],["Consistency",""],["Gate",""]];
+  $("#pipeline").innerHTML = steps.map((s,i)=>
+    (i? '<span class="parrow">→</span>':"") +
+    '<span class="pstep '+s[1]+'"><span class="ic">'+(s[1]==="done"?"✓":s[1]==="fail"?"✕":i+1)+'</span><span class="lbl">'+s[0]+'</span></span>'
+  ).join("");
+
+  const beats = [
+    "Mira finds the hidden stair breathing cold air beneath the library — establishes the Understair and her rule-breaker instinct.",
+    "The ward-lantern gutters and leans toward the dark; wrongness registered through flame behavior, not narration.",
+    "Casian confronts her about the key — accusation without explanation; tension +2 per arc rules.",
+    "First glyph reacts to Mira's presence; she hides it from Casian (plants Ch. 9 decision).",
+    "Exit hook: something below answers the glyph."
+  ];
+  const beatList = $("#beatList");
+  function renderBeats(){
+    beatList.innerHTML = "";
+    beats.forEach((b,i)=>{
+      const d = document.createElement("div");
+      d.className = "beat";
+      d.innerHTML = '<span class="grip">⠿</span><span class="bnum">'+(i+1)+'</span><span class="btext" contenteditable="true" spellcheck="false">'+b+'</span><span class="bops"><button class="bop" title="Move up">↑</button><button class="bop" title="Move down">↓</button><button class="bop" title="Delete">✕</button></span>';
+      const [up,dn,del] = d.querySelectorAll(".bop");
+      up.onclick = ()=>{ if(i>0){ beats.splice(i-1,0,beats.splice(i,1)[0]); renderBeats(); } };
+      dn.onclick = ()=>{ if(i<beats.length-1){ beats.splice(i+1,0,beats.splice(i,1)[0]); renderBeats(); } };
+      del.onclick = ()=>{ beats.splice(i,1); renderBeats(); };
+      d.querySelector(".btext").addEventListener("input", e=>{ beats[i] = e.target.textContent; });
+      beatList.appendChild(d);
+    });
+  }
+  renderBeats();
+  $("#addBeat").onclick = ()=>{ beats.push("New beat — click to edit."); renderBeats(); beatList.lastChild.querySelector(".btext").focus(); };
+
+  // mode tabs
+  $$("#modeTabs .mtab").forEach(t=>{
+    t.onclick = ()=>{
+      $$("#modeTabs .mtab").forEach(x=>x.classList.remove("on"));
+      t.classList.add("on");
+      $$(".mode").forEach(m=>m.classList.remove("on"));
+      $("#m-"+t.dataset.mode).classList.add("on");
+    };
+  });
+  // media subtabs
+  $$(".mtab2").forEach(t=>{
+    t.onclick = ()=>{
+      $$(".mtab2").forEach(x=>x.classList.remove("on"));
+      t.classList.add("on");
+      $$(".mpane").forEach(p=>p.style.display="none");
+      $("#p-"+t.dataset.media).style.display="block";
+    };
+  });
+  // drawer
+  const drawer=$("#drawer"), veil=$("#veil");
+  const openD=()=>{drawer.classList.add("open");veil.classList.add("open");};
+  const closeD=()=>{drawer.classList.remove("open");veil.classList.remove("open");};
+  $("#chatBtn").onclick=openD; $("#drawerClose").onclick=closeD; veil.onclick=closeD;
+  function sendChat(){
+    const v=$("#chatIn").value.trim(); if(!v) return;
+    const m=document.createElement("div"); m.className="msg user"; m.textContent=v;
+    $("#chatBody").appendChild(m);
+    const a=document.createElement("div"); a.className="msg ai";
+    a.innerHTML="Noted — I'll hold that against <b>Ch. 7</b> context. (Mockup: responses are illustrative.)";
+    setTimeout(()=>{$("#chatBody").appendChild(a); $("#chatBody").scrollTop=1e6;},350);
+    $("#chatIn").value=""; $("#chatBody").scrollTop=1e6;
+  }
+  $("#chatSend").onclick=sendChat;
+  $("#chatIn").addEventListener("keydown",e=>{if(e.key==="Enter")sendChat();});
+  // apply revision
+  $("#applyRev").onclick=function(){
+    this.querySelector("b").textContent="✓ Revision applied — gate re-running";
+    this.style.borderColor="var(--amber)";
+  };
+  // mobile bar
+  const spine=$("#spine"), att=$("#attention");
+  const mbs={mbSpine:spine,mbAtt:att};
+  function mob(which){
+    spine.classList.remove("m-on"); att.classList.remove("m-on");
+    $$(".mobilebar button").forEach(b=>b.classList.remove("on"));
+    $("#"+which).classList.add("on");
+    if(which!=="mbWork") mbs[which].classList.add("m-on");
+  }
+  $("#mbSpine").onclick=()=>mob("mbSpine");
+  $("#mbWork").onclick=()=>mob("mbWork");
+  $("#mbAtt").onclick=()=>mob("mbAtt");
+})();
+</script>
+</body>
+</html>
+
+```
