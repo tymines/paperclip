@@ -1,5 +1,20 @@
 ALTER TABLE "manuscript_chapters"
-  ADD COLUMN IF NOT EXISTS "locked" boolean DEFAULT false NOT NULL;
+  ADD COLUMN IF NOT EXISTS "locked" boolean;
+--> statement-breakpoint
+UPDATE "manuscript_chapters"
+SET "locked" = CASE
+  WHEN "content" ~* '(^|[[:space:]])human_locked[[:space:]]*:[[:space:]]*true([[:space:]]|$)' THEN true
+  WHEN "content" ~* '(^|[[:space:]])human_locked[[:space:]]*:[[:space:]]*false([[:space:]]|$)' THEN false
+  -- Older rows may store prose without the vault frontmatter. Fail closed so
+  -- an existing human-authored chapter is never silently unlocked on migrate.
+  WHEN BTRIM("content") <> '' THEN true
+  ELSE false
+END
+WHERE "locked" IS NULL;
+--> statement-breakpoint
+ALTER TABLE "manuscript_chapters"
+  ALTER COLUMN "locked" SET DEFAULT false,
+  ALTER COLUMN "locked" SET NOT NULL;
 --> statement-breakpoint
 CREATE TABLE IF NOT EXISTS "passage_locks" (
   "id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
