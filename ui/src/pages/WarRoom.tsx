@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Play, XCircle, Send, Lock, FileText, Users, Crown, ChevronLeft, MessageSquare, GitBranch, Skull } from "lucide-react";
 import { WarRoomHermesChat } from "../components/WarRoomHermesChat";
+import { WarRoomRooms } from "../components/WarRoomRooms";
 import { pipelineApi } from "../api/pipeline";
 import { roomsApi } from "../api/rooms";
 import { useCompany } from "../context/CompanyContext";
@@ -54,7 +55,7 @@ export function WarRoom() {
   const [sendBack, setSendBack] = useState("");
   const [reason, setReason] = useState("");
   const [chatText, setChatText] = useState("");
-  const [view, setView] = useState<"pipeline" | "hermes">("pipeline");
+  const [view, setView] = useState<"pipeline" | "hermes" | "rooms">("pipeline");
   const [killOpen, setKillOpen] = useState(false);
   const [killReason, setKillReason] = useState("");
   const chatEndRef = useRef<HTMLDivElement | null>(null);
@@ -156,7 +157,7 @@ export function WarRoom() {
       {/* View toggle: the phased Pipeline surface vs the Hermes direct-line chat */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", borderBottom: `1px solid ${DS.border}` }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginRight: 10 }}>War Room</div>
-        {([["pipeline", "Pipeline", GitBranch], ["hermes", "Hermes", MessageSquare]] as const).map(([v, label, Icon]) => (
+        {([[ "pipeline", "Pipeline", GitBranch ], [ "rooms", "Rooms", Users ], [ "hermes", "Hermes", MessageSquare ]] as const).map(([v, label, Icon]) => (
           <button key={v} onClick={() => setView(v)}
             style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 999, cursor: "pointer", fontSize: 12.5,
               background: view === v ? DS.primary : DS.surface2, color: view === v ? "#fff" : DS.textMuted,
@@ -168,6 +169,8 @@ export function WarRoom() {
 
       {view === "hermes" ? (
         <div style={{ flex: 1, minHeight: 0, overflow: "hidden" }}><WarRoomHermesChat /></div>
+      ) : view === "rooms" ? (
+        <WarRoomRooms />
       ) : (
       <div style={{ flex: 1, display: "flex", flexDirection: isMobile ? "column" : "row", minHeight: 0, overflow: "hidden" }}>
       {/* ── Run list ── */}

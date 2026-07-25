@@ -819,6 +819,27 @@ function handleLiveEvent(
     return;
   }
 
+  // Room events — shared A2A chat. Invalidate the room list plus the affected
+  // room's detail/messages so every mounted surface (War Room Rooms-tab lanes,
+  // RoomDetail, pipeline room chat) updates live. No toasts: message traffic
+  // is high-frequency and the rooms themselves are the notification surface.
+  if (
+    event.type === "room.message" ||
+    event.type === "room.member.joined" ||
+    event.type === "room.member.left" ||
+    event.type === "room.updated"
+  ) {
+    queryClient.invalidateQueries({ queryKey: queryKeys.rooms.list(expectedCompanyId) });
+    const roomId = readString(payload.roomId);
+    if (roomId) {
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms.detail(expectedCompanyId, roomId) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.rooms.messages(expectedCompanyId, roomId) });
+      // WarRoom pipeline chat uses its own ad-hoc key.
+      queryClient.invalidateQueries({ queryKey: ["war-room-messages", expectedCompanyId, roomId] });
+    }
+    return;
+  }
+
   if (event.type === "heartbeat.run.queued" || event.type === "heartbeat.run.status") {
     invalidateHeartbeatQueries(queryClient, expectedCompanyId, payload);
     invalidateVisibleIssueRunQueries(queryClient, pathname, payload);
