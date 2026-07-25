@@ -35,7 +35,7 @@ import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
-import { assertHumanActor, lockedError } from "../services/book-locks.js";
+import { assertHumanActor, lockedError, assertProsePersistAllowed } from "../services/book-locks.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -289,6 +289,15 @@ function entityRoutes(
 
     if (!existing) {
       throw notFound(`${entityLabel} not found`);
+    }
+
+    // Spec v1 §7 ④: a LOCKED bible entry refuses AI deletion — only the human
+    // author may delete locked canon (and her delete is activity-logged below).
+    if ((existing as Record<string, unknown>).locked === true) {
+      const actorInfo = getActorInfo(req);
+      if (actorInfo.actorType !== "user") {
+        throw lockedError("bible-entry", `${entityLabel} is locked — AI deletion refused. A human must unlock it first.`);
+      }
     }
 
     await db.delete(table).where(eq(table.id, id));
@@ -567,6 +576,23 @@ export function bookStudioRoutes(db: Db) {
         eq(manuscriptChapters.chapterNumber, chNum),
       ))
       .then((r) => r[0]);
+
+    // Spec v1 §7: an AI actor may never write locked content through this
+    // direct PATCH either — chapter lock (DB + vault human_locked), and any
+    // content change must preserve locked passages verbatim. The human author
+    // herself edits freely (she owns the text; her saves are not AI writes).
+    const patchActor = getActorInfo(req);
+    if (patchActor.actorType !== "user") {
+      const [bookRow] = await db.select({ slug: books.slug }).from(books).where(eq(books.id, bookId));
+      await assertProsePersistAllowed(db, {
+        bookId,
+        bookSlug: bookRow?.slug ?? "",
+        chapterNumber: chNum,
+        prose: content ?? existing?.content ?? "",
+        existingContent: existing?.content ?? "",
+        existingLocked: existing?.locked ?? false,
+      });
+    }
 
     if (existing) {
       const [updated] = await db

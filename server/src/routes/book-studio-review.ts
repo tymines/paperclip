@@ -16,7 +16,7 @@ import { badRequest, conflict, notFound, serviceUnavailable } from "../errors.js
 import { logActivity } from "../services/index.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse, chapterContentHash } from "../services/book-prose-writer.js";
-import { lockedError, findOverlappingLocks, isMissingLocksTable } from "../services/book-locks.js";
+import { lockedError, findOverlappingLocks, isMissingLocksTable, assertChapterWritable, getPassageLocks, spansOverlap, resolveChapterLocked } from "../services/book-locks.js";
 import { runBaselineReview, persistBaselineReport, type BaselineReport } from "../services/book-review.js";
 
 // Gated-migration pattern (same as book_annotations/0151): if 0157 isn't
@@ -256,7 +256,8 @@ export function bookStudioReviewRoutes(db: Db) {
 
       // Spec v1 §7 ③: a revision aimed at LOCKED content must NOT burn writer
       // tokens — answer with a decision card so Baily chooses how to proceed.
-      if (chapter.locked) {
+      // Fail-closed: DB locked AND vault human_locked are honored.
+      if (await resolveChapterLocked(db, bookId, chapterNumber, book.slug)) {
         res.status(200).json({
           status: "needs-decision",
           decisionCard: {
@@ -290,13 +291,32 @@ export function bookStudioReviewRoutes(db: Db) {
       }
       const originalText = isPassage ? content.slice(spanStart!, spanEnd!) : "";
 
+      // Whole-chapter / canon-fix scopes must preserve locked passages
+      // verbatim — tell the writer exactly which spans are untouchable, and
+      // the accept path + shared sink verify preservation before any write.
+      let lockedSpansForPrompt: string[] = [];
+      if (!isPassage) {
+        try {
+          const { locks } = await getPassageLocks(db, bookId, chapterNumber, content);
+          lockedSpansForPrompt = locks
+            .map((l) => content.slice(l.spanStart, l.spanEnd))
+            .filter((t) => t.trim().length > 0);
+        } catch (err) {
+          if (!isMissingLocksTable(err)) throw err;
+        }
+      }
+
       const canonNote = resolvedScope === "canon-fix"
         ? "This is a CANON-FIX: the revision MUST conform to the story bible — resolve the cited contradiction without introducing new ones."
+        : "";
+      const lockedSpansNote = lockedSpansForPrompt.length > 0
+        ? `The following ${lockedSpansForPrompt.length} passage(s) are LOCKED by the author — reproduce each of them VERBATIM, character-for-character, in your revised chapter:\n${lockedSpansForPrompt.map((t, i) => `LOCKED ${i + 1}: «${t}»`).join("\n")}`
         : "";
       const systemPrompt = [
         "You are the writer lane for a book studio performing a DIRECTED revision.",
         "The author (Baily) has directed this specific change — follow her instruction exactly and change nothing else.",
         canonNote,
+        lockedSpansNote,
         "Return ONLY valid JSON: { \"revised\": \"the revised text\", \"rationale\": \"one sentence on what changed and why\" }",
         isPassage
           ? "Revise ONLY the quoted passage — your \"revised\" field replaces it verbatim."
@@ -395,14 +415,29 @@ export function bookStudioReviewRoutes(db: Db) {
 
       // Spec v1 §7: locks are re-checked at COMMIT time, not just proposal
       // time — content locked after the proposal was computed still wins.
-      if (chapter?.locked) {
-        throw lockedError("chapter", `Chapter ${revision.chapterNumber} is locked — unlock it before accepting a revision.`);
-      }
-      if (revision.scope === "passage" && chapter) {
+      // Fail-closed: DB locked AND vault human_locked are honored.
+      await assertChapterWritable(db, bookId, revision.chapterNumber, book.slug);
+      // Passage locks apply to EVERY scope, not just "passage" — a
+      // whole-chapter or canon-fix replacement must also preserve locked
+      // spans. The shared sink re-verifies this atomically at write time;
+      // here we fail fast with a precise error before touching anything.
+      if (chapter) {
         try {
-          const overlapping = await findOverlappingLocks(db, bookId, revision.chapterNumber, revision.spanStart ?? -1, revision.spanEnd ?? -1);
-          if (overlapping.length > 0) {
-            throw lockedError("passage", `This revision overlaps ${overlapping.length} locked passage${overlapping.length > 1 ? "s" : ""} — remove the lock(s) first.`);
+          const { locks } = await getPassageLocks(db, bookId, revision.chapterNumber, content);
+          if (revision.scope === "passage") {
+            const overlapping = locks.filter((l) =>
+              spansOverlap(revision.spanStart ?? -1, revision.spanEnd ?? -1, l.spanStart, l.spanEnd));
+            if (overlapping.length > 0) {
+              throw lockedError("passage", `This revision overlaps ${overlapping.length} locked passage${overlapping.length > 1 ? "s" : ""} — remove the lock(s) first.`);
+            }
+          } else {
+            const violated = locks.filter((l) => {
+              const lockedText = content.slice(l.spanStart, l.spanEnd);
+              return lockedText.length === 0 || !revision.proposedText.includes(lockedText);
+            });
+            if (violated.length > 0) {
+              throw lockedError("passage", `This revision would overwrite ${violated.length} locked passage${violated.length > 1 ? "s" : ""} — locked spans must survive verbatim. Unlock them first.`);
+            }
           }
         } catch (err) {
           if (!isMissingLocksTable(err)) throw err;

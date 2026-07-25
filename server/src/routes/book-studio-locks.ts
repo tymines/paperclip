@@ -62,8 +62,10 @@ export function bookStudioLockRoutes(db: Db) {
         .catch(() => { /* outline row may not exist */ });
 
       // Vault frontmatter reflects the lock (best-effort; DB is authoritative).
+      // This is the human author's explicit lock/unlock — it MAY clear
+      // human_locked (preserveVaultLock: false); every AI write-through can't.
       if (existing && (existing.content ?? "").trim()) {
-        writeChapterToVault(book.slug, chapterNumber, existing.title, existing.content, locked);
+        writeChapterToVault(book.slug, chapterNumber, existing.title, existing.content, locked, { preserveVaultLock: false });
       }
 
       await logActivity(db, {
