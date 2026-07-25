@@ -54,6 +54,18 @@ No incomplete worker commit was merged into the integration branch.
 4. Implement Director's Deck production components against RED test in `d642b83ac` and run UI typecheck/build.
 5. Merge only green commits; then run full local QA and produce the 53-row parity report.
 
+## Delayed process-notification reconciliation
+
+A later Slack notification described two workers as having exited normally with code 0. Live verification did not support that claim:
+
+- `proc_9d22fe6ad934` reports `exit_code: -15`, `completion_reason: killed`, `termination_source: process.kill`.
+- `proc_c6448ec76bd9` is no longer present in the process registry.
+- Story branch remains unchanged at `5a28631a1` (RED tests only).
+- Review/Locks branch remains unchanged at `4901670ab` (partial WIP with failed DB migration gate).
+- Integration branch contains neither worker commit.
+
+Therefore the delayed notification is not accepted as completion evidence and the verdict remains **NO_VERDICT**.
+
 ## Evidence pointers
 
 - `doc/plans/2026-07-25-book-studio-rebuild.md`
