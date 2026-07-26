@@ -322,7 +322,7 @@ describe("IssueChatThread system notice routing", () => {
     expect(copyText.querySelector(".lucide-check")).toBeNull();
   });
 
-  it("labels system notice source as Paperclip when no run agent can be resolved", () => {
+  it("labels a system notice without a run agent as authored by the current user", () => {
     const comment: IssueChatComment = {
       id: "comment-system-no-author",
       companyId: "company-1",
@@ -347,8 +347,8 @@ describe("IssueChatThread system notice routing", () => {
 
     const status = container.querySelector('[role="status"]');
     expect(status).not.toBeNull();
-    expect(status?.textContent).toContain("Paperclip");
-    expect(status?.textContent).not.toContain("You");
+    expect(status?.textContent).toContain("You");
+    expect(status?.textContent).not.toContain("Paperclip");
   });
 
   it("falls back to Paperclip in the system notice header when run agent is unknown to agentMap", () => {

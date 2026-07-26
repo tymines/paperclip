@@ -58,6 +58,7 @@ vi.mock("../services/index.js", () => ({
   companyService: () => mockCompanyService,
   environmentService: () => mockEnvironmentService,
   issueReferenceService: () => mockIssueReferenceService,
+  costService: () => ({}),
   logActivity: mockLogActivity,
   workspaceOperationService: () => ({}),
   accessService: () => ({

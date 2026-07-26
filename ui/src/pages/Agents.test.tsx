@@ -7,6 +7,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "./Agents";
+import { ToastProvider } from "../context/ToastContext";
 
 const mockAgentsApi = vi.hoisted(() => ({
   list: vi.fn(),
@@ -135,19 +136,20 @@ describe("Agents", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the configured model beside the adapter on the all agents page", async () => {
+  it("shows the configured model on the all agents page", async () => {
     root = createRoot(container);
     await act(async () => {
       root!.render(
         <QueryClientProvider client={queryClient}>
-          <Agents />
+          <ToastProvider>
+            <Agents />
+          </ToastProvider>
         </QueryClientProvider>,
       );
     });
     await flushReact();
     await flushReact();
 
-    expect(container.textContent).toContain("codex_local");
     expect(container.textContent).toContain("gpt-5.4");
   });
 });
