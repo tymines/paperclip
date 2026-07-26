@@ -8,10 +8,10 @@
 import type { Request } from "express";
 import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { manuscriptChapters, passageLocks } from "@paperclipai/db";
+import { manuscriptChapters, passageLocks, books } from "@paperclipai/db";
 import { conflict, forbidden } from "../errors.js";
 import { getActorInfo } from "../routes/authz.js";
-import { chapterContentHash, readVaultChapterFrontmatter, BOOK_VAULT_ROOT } from "./book-prose-writer.js";
+import { chapterContentHash, readVaultChapterFrontmatter, bookVaultRoot } from "./book-prose-writer.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -70,7 +70,7 @@ const backfilledBooks = new Set<string>();
 export async function backfillChapterLocksFromVault(db: Db, bookId: string, bookSlug: string): Promise<number> {
   let dir: string[];
   try {
-    dir = fs.readdirSync(path.join(BOOK_VAULT_ROOT, bookSlug, "chapters"));
+    dir = fs.readdirSync(path.join(bookVaultRoot(), bookSlug, "chapters"));
   } catch {
     return 0; // no vault chapters dir — nothing to import
   }
@@ -102,6 +102,26 @@ async function ensureLocksBackfilled(db: Db, bookId: string, bookSlug: string) {
   } catch (err) {
     console.warn(`[book-locks] lock backfill failed for book ${bookId} (enforcement still reads vault live):`, err);
   }
+}
+
+/**
+ * Eager migration-time backfill (0158 follow-through): run at server startup
+ * over EVERY book — not lazily on first enforcement. Idempotent and strictly
+ * upward. Returns the total rows imported.
+ */
+export async function backfillAllChapterLocksFromVault(db: Db): Promise<number> {
+  const allBooks = await db.select({ id: books.id, slug: books.slug }).from(books);
+  let total = 0;
+  for (const b of allBooks) {
+    backfilledBooks.add(b.id);
+    try {
+      total += await backfillChapterLocksFromVault(db, b.id, b.slug);
+    } catch (err) {
+      console.warn(`[book-locks] startup backfill failed for book ${b.id}:`, err);
+    }
+  }
+  if (total > 0) console.warn(`[book-locks] startup backfill complete: ${total} human_locked chapter(s) imported into manuscript_chapters.locked`);
+  return total;
 }
 
 /**

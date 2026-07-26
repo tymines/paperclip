@@ -120,8 +120,12 @@ export function bookStudioCodexRoutes(db: Db) {
         if (!existing) throw notFound("Codex entry not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, patch, "This codex entry", "edit");
         patch.updatedAt = new Date();
-        const [updated] = await db.update(table).set(patch as never).where(eq(table.id, id)).returning();
+        // Atomic for AI actors: the lock predicate rides on the UPDATE.
         const actor = getActorInfo(req);
+        const [updated] = actor.actorType !== "user" && !("locked" in patch)
+          ? await db.update(table).set(patch as never).where(and(eq(table.id, id), eq(table.locked, false))).returning()
+          : await db.update(table).set(patch as never).where(eq(table.id, id)).returning();
+        if (!updated) throw lockedError("bible-entry", "This codex entry was locked while editing — nothing was saved.");
         await logActivity(db, {
           companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
           action: `codex.${entityType}.updated`, entityType: `bible_${entityType}`, entityId: id,
@@ -145,7 +149,14 @@ export function bookStudioCodexRoutes(db: Db) {
         const [existing] = await db.select().from(table).where(and(eq(table.id, id), eq(table.bookId, bookId)));
         if (!existing) throw notFound("Codex entry not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, {}, "This codex entry", "delete");
-        await db.delete(table).where(eq(table.id, id));
+        // Atomic for AI actors: lock predicate rides on the DELETE.
+        const delActor = getActorInfo(req);
+        if (delActor.actorType !== "user") {
+          const deleted = await db.delete(table).where(and(eq(table.id, id), eq(table.locked, false))).returning({ id: table.id });
+          if (deleted.length === 0) throw lockedError("bible-entry", "This codex entry was locked while deleting — nothing was removed.");
+        } else {
+          await db.delete(table).where(eq(table.id, id));
+        }
         const actor = getActorInfo(req);
         await logActivity(db, {
           companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId,
@@ -242,7 +253,11 @@ export function bookStudioCodexRoutes(db: Db) {
         if (!existing) throw notFound("Relationship not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, patch, "This relationship", "edit");
         patch.updatedAt = new Date();
-        const [updated] = await db.update(bibleRelationships).set(patch as never).where(eq(bibleRelationships.id, id)).returning();
+        const relActor = getActorInfo(req);
+        const [updated] = relActor.actorType !== "user" && !("locked" in patch)
+          ? await db.update(bibleRelationships).set(patch as never).where(and(eq(bibleRelationships.id, id), eq(bibleRelationships.locked, false))).returning()
+          : await db.update(bibleRelationships).set(patch as never).where(eq(bibleRelationships.id, id)).returning();
+        if (!updated) throw lockedError("bible-entry", "This relationship was locked while editing — nothing was saved.");
         res.json({ available: true, relationship: updated });
       } catch (err) {
         if (!isMissingCodexTable(err)) throw err;
@@ -260,7 +275,13 @@ export function bookStudioCodexRoutes(db: Db) {
           .where(and(eq(bibleRelationships.id, id), eq(bibleRelationships.bookId, bookId)));
         if (!existing) throw notFound("Relationship not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, {}, "This relationship", "delete");
-        await db.delete(bibleRelationships).where(eq(bibleRelationships.id, id));
+        const relDelActor = getActorInfo(req);
+        if (relDelActor.actorType !== "user") {
+          const deleted = await db.delete(bibleRelationships).where(and(eq(bibleRelationships.id, id), eq(bibleRelationships.locked, false))).returning({ id: bibleRelationships.id });
+          if (deleted.length === 0) throw lockedError("bible-entry", "This relationship was locked while deleting — nothing was removed.");
+        } else {
+          await db.delete(bibleRelationships).where(eq(bibleRelationships.id, id));
+        }
         res.status(204).send();
       } catch (err) {
         if (!isMissingCodexTable(err)) throw err;
@@ -341,7 +362,11 @@ export function bookStudioCodexRoutes(db: Db) {
         if (!existing) throw notFound("Fact not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, patch, "This fact", "edit");
         patch.updatedAt = new Date();
-        const [updated] = await db.update(bibleFacts).set(patch as never).where(eq(bibleFacts.id, id)).returning();
+        const factActor = getActorInfo(req);
+        const [updated] = factActor.actorType !== "user" && !("locked" in patch)
+          ? await db.update(bibleFacts).set(patch as never).where(and(eq(bibleFacts.id, id), eq(bibleFacts.locked, false))).returning()
+          : await db.update(bibleFacts).set(patch as never).where(eq(bibleFacts.id, id)).returning();
+        if (!updated) throw lockedError("bible-entry", "This fact was locked while editing — nothing was saved.");
         res.json({ available: true, fact: updated });
       } catch (err) {
         if (!isMissingCodexTable(err)) throw err;
@@ -359,7 +384,13 @@ export function bookStudioCodexRoutes(db: Db) {
           .where(and(eq(bibleFacts.id, id), eq(bibleFacts.bookId, bookId)));
         if (!existing) throw notFound("Fact not found");
         enforceCodexLocks(req, existing as Record<string, unknown>, {}, "This fact", "delete");
-        await db.delete(bibleFacts).where(eq(bibleFacts.id, id));
+        const factDelActor = getActorInfo(req);
+        if (factDelActor.actorType !== "user") {
+          const deleted = await db.delete(bibleFacts).where(and(eq(bibleFacts.id, id), eq(bibleFacts.locked, false))).returning({ id: bibleFacts.id });
+          if (deleted.length === 0) throw lockedError("bible-entry", "This fact was locked while deleting — nothing was removed.");
+        } else {
+          await db.delete(bibleFacts).where(eq(bibleFacts.id, id));
+        }
         res.status(204).send();
       } catch (err) {
         if (!isMissingCodexTable(err)) throw err;

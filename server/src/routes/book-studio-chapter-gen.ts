@@ -463,7 +463,8 @@ export function bookStudioChapterGenRoutes(db: Db) {
         }
         await assertChapterWritable(db, bookId, chNum, book.slug);
 
-        // Update the outline entry
+        // Update the outline entry — CONDITIONALLY: `WHERE locked = false`
+        // binds the check to the write in one statement (no TOCTOU window).
         const [updated] = await db
           .update(storyBibleOutline)
           .set({
@@ -472,8 +473,11 @@ export function bookStudioChapterGenRoutes(db: Db) {
             source: "ai-revise",
             updatedAt: new Date(),
           })
-          .where(eq(storyBibleOutline.id, existing.id))
+          .where(and(eq(storyBibleOutline.id, existing.id), eq(storyBibleOutline.locked, false)))
           .returning();
+        if (!updated) {
+          throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
+        }
 
         // Log activity
         const actor = getActorInfo(req);

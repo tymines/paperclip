@@ -309,6 +309,14 @@ export async function createApp(
   api.use(bookStudioLockRoutes(db));
   api.use(bookStudioCodexRoutes(db));
   api.use(bookStudioBibleExtractionRoutes(db));
+  // Migration 0158 follow-through: eager, idempotent import of vault
+  // human_locked frontmatter into manuscript_chapters.locked at startup
+  // (strictly upward; enforcement also reads the vault live at write time).
+  void import("./services/book-locks.js").then((m) =>
+    m.backfillAllChapterLocksFromVault(db).catch((err) =>
+      console.warn("[book-locks] startup backfill failed (enforcement still reads vault live):", err),
+    ),
+  );
   api.use(bookStudioImageGenerateRoutes(db));
   // (dup gym mounts removed 2026-07-12 Fable — merge cruft; mounted above)
   api.use(storyBibleRoutes(db));
