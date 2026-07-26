@@ -1,0 +1,3 @@
+name: paperclip-cost-telemetry
+version: 1
+description: Captures Hermes API-call latency and Paperclip run ids for the local fleet cost dashboard.

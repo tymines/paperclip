@@ -36,6 +36,7 @@ import { EmptyState } from "../components/EmptyState";
 import { FinanceBillerCard } from "../components/FinanceBillerCard";
 import { FinanceKindCard } from "../components/FinanceKindCard";
 import { FinanceTimelineCard } from "../components/FinanceTimelineCard";
+import { FleetCostDashboardPanel } from "../components/FleetCostDashboardPanel";
 import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
@@ -488,6 +489,11 @@ export function Costs() {
   });
 
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [fleetProjectId, setFleetProjectId] = useState("");
+  const [fleetIssueId, setFleetIssueId] = useState("");
+  const [fleetAgentId, setFleetAgentId] = useState("");
+  const [fleetModel, setFleetModel] = useState("");
+  const [fleetGrain, setFleetGrain] = useState<"day" | "week" | "month">("day");
   useEffect(() => {
     setExpandedAgents(new Set());
   }, [companyId, from, to]);
@@ -513,6 +519,35 @@ export function Costs() {
     }
     return map;
   }, [spendData?.byAgentModel]);
+
+  const fleetProjectOptions = useMemo(
+    () => (spendData?.byProject ?? []).filter((row) => row.projectId),
+    [spendData?.byProject],
+  );
+  const fleetAgentOptions = useMemo(
+    () => (spendData?.byAgent ?? []).filter((row) => row.agentId),
+    [spendData?.byAgent],
+  );
+  const fleetModelOptions = useMemo(
+    () => [...new Set((spendData?.byAgentModel ?? []).map((row) => row.model))].sort(),
+    [spendData?.byAgentModel],
+  );
+
+  const { data: fleetCostDashboard } = useQuery({
+    queryKey: ["costs", "fleet-dashboard", companyId, from || undefined, to || undefined, fleetProjectId, fleetIssueId, fleetAgentId, fleetModel, fleetGrain],
+    queryFn: () => costsApi.fleetDashboard(companyId, {
+      from: from || undefined,
+      to: to || undefined,
+      projectId: fleetProjectId || undefined,
+      issueId: fleetIssueId || undefined,
+      agentId: fleetAgentId || undefined,
+      model: fleetModel || undefined,
+      grain: fleetGrain,
+    }),
+    enabled: !!selectedCompanyId && customReady,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
   const { data: providerData } = useQuery({
     queryKey: queryKeys.usageByProvider(companyId, from || undefined, to || undefined),
@@ -1226,6 +1261,81 @@ export function Costs() {
                     )}
                   </div>
                 </div>
+              </div>
+
+              <div style={surfaceCard} className="space-y-3 p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <SectionLabel>Fleet collector</SectionLabel>
+                    <div className="mt-1 text-[13px]" style={{ color: DS.textMuted }}>
+                      Combined cost and speed filters from the local Hermes observation source.
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    <select
+                      value={fleetProjectId}
+                      onChange={(event) => setFleetProjectId(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet project filter"
+                    >
+                      <option value="">All projects</option>
+                      {fleetProjectOptions.map((row) => (
+                        <option key={row.projectId ?? ""} value={row.projectId ?? ""}>{row.projectName ?? "Unnamed project"}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={fleetAgentId}
+                      onChange={(event) => setFleetAgentId(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet agent filter"
+                    >
+                      <option value="">All agents</option>
+                      {fleetAgentOptions.map((row) => (
+                        <option key={row.agentId} value={row.agentId}>{row.agentName ?? row.agentId}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={fleetIssueId}
+                      onChange={(event) => setFleetIssueId(event.target.value)}
+                      placeholder="Issue id"
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet issue filter"
+                    />
+                    <select
+                      value={fleetModel}
+                      onChange={(event) => setFleetModel(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet model filter"
+                    >
+                      <option value="">All models</option>
+                      {fleetModelOptions.map((model) => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={fleetGrain}
+                      onChange={(event) => setFleetGrain(event.target.value as "day" | "week" | "month")}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet trend grain"
+                    >
+                      <option value="day">Day</option>
+                      <option value="week">Week</option>
+                      <option value="month">Month</option>
+                    </select>
+                  </div>
+                </div>
+                {fleetCostDashboard ? (
+                  <FleetCostDashboardPanel payload={fleetCostDashboard} />
+                ) : (
+                  <div className="rounded-lg border border-dashed p-4 text-sm" style={{ borderColor: DS.border2, color: DS.textMuted }}>
+                    Fleet dashboard data is loading.
+                  </div>
+                )}
               </div>
 
               {/* Row 2: inference ledger + finance ledger tables */}

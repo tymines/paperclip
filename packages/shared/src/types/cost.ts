@@ -127,6 +127,93 @@ export interface CostByProject {
   outputTokens: number;
 }
 
+export type FleetCostDashboardGrain = "day" | "week" | "month";
+
+export interface FleetCostDashboardPayload {
+  companyId: string;
+  grain: FleetCostDashboardGrain;
+  filters: Record<string, string | undefined>;
+  freshness: {
+    observedAt: string | null;
+    checkpoint: { sequence: number; cursor?: string | null } | null;
+    errors: string[];
+  };
+  availability: Record<string, "available" | "unavailable">;
+  trends: Array<{
+    bucket: string;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    completedTasks: number;
+  }>;
+  modelRows: Array<{
+    provider: string;
+    model: string;
+    billingMode: string;
+    costStatus: string;
+    costSource: string;
+    pricingVersion: string | null;
+    estimatedCostUsd: number;
+    actualCostUsd: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+    apiCalls: number;
+    avgLatencyMs: number | null;
+    avgTtftMs: number | null;
+    throughputOutputTokensPerSecond: number | null;
+  }>;
+  taskRows: Array<{
+    issueId: string | null;
+    issueIdentifier: string | null;
+    issueTitle: string | null;
+    projectId: string | null;
+    projectName: string | null;
+    agentId: string | null;
+    agentName: string | null;
+    runIds: string[];
+    sessionIds: string[];
+    completionState: string | null;
+    costUsd: number;
+    costPerCompletedTaskUsd: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    wallClockMs: number | null;
+    turns: number;
+    throughputOutputTokensPerSecond: number | null;
+    avgLatencyMs: number | null;
+    avgTtftMs: number | null;
+    compactions: number;
+    stalls: number | null;
+    models: Array<{
+      provider: string;
+      model: string;
+      billingMode: string;
+      costStatus: string;
+      costSource: string;
+      pricingVersion: string | null;
+      estimatedCostUsd: number | null;
+      actualCostUsd: number | null;
+      costUsd: number | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      reasoningTokens: number;
+    }>;
+  }>;
+  unattributedSessions: Array<{
+    sessionId: string;
+    startedAt: string | null;
+    billingMode: string;
+    costStatus: string;
+    estimatedCostUsd: number | null;
+    actualCostUsd: number | null;
+  }>;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Cost Watcher — unified merge of bridge usage, provider-credit balances, and
 // per-agent attribution surfaced on a single page. Server returns one payload

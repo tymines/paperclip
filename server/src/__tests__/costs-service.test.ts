@@ -84,6 +84,17 @@ const mockCostService = vi.hoisted(() => ({
   }),
   windowSpend: vi.fn().mockResolvedValue([]),
   byProject: vi.fn().mockResolvedValue([]),
+  fleetDashboard: vi.fn().mockResolvedValue({
+    companyId: "company-1",
+    grain: "day",
+    filters: {},
+    freshness: { observedAt: null, checkpoint: null, errors: [] },
+    availability: {},
+    trends: [],
+    taskRows: [],
+    modelRows: [],
+    unattributedSessions: [],
+  }),
 }));
 const mockFinanceService = vi.hoisted(() => ({
   createEvent: vi.fn(),
@@ -257,6 +268,58 @@ describe("cost routes", () => {
       runCount: 0,
       runtimeMs: 0,
     });
+  });
+
+  it("routes combined fleet dashboard filters through the company-scoped cost service", async () => {
+    const app = await createApp();
+    mockCostService.fleetDashboard.mockResolvedValueOnce({
+      companyId: "company-1",
+      grain: "week",
+      filters: {
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+      },
+      freshness: {
+        observedAt: "2026-07-24T01:02:10.000Z",
+        checkpoint: { sequence: 7 },
+        errors: [],
+      },
+      availability: { avgTtftMs: "available" },
+      trends: [],
+      taskRows: [],
+      modelRows: [],
+      unattributedSessions: [],
+    });
+
+    const res = await request(app)
+      .get("/api/companies/company-1/costs/fleet-dashboard")
+      .query({
+        from: "2026-07-01T00:00:00.000Z",
+        to: "2026-07-31T23:59:59.999Z",
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+        grain: "week",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockCostService.fleetDashboard).toHaveBeenCalledWith("company-1", {
+      range: {
+        from: new Date("2026-07-01T00:00:00.000Z"),
+        to: new Date("2026-07-31T23:59:59.999Z"),
+      },
+      filters: {
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+      },
+      grain: "week",
+    });
+    expect(res.body.grain).toBe("week");
   });
 
   it("returns 400 for invalid finance event list limits", async () => {

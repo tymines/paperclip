@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
+import { buildLocalFleetCostDashboard, type FleetDashboardQuery } from "./fleet-cost-dashboard.js";
 
 export interface CostDateRange {
   from?: Date;
@@ -539,6 +540,16 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions, sql`${effectiveProjectId} is not null`))
         .groupBy(effectiveProjectId, projects.name)
         .orderBy(desc(costCentsExpr));
+    },
+
+    fleetDashboard: async (companyId: string, query: FleetDashboardQuery = {}) => {
+      const company = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, companyId))
+        .then((rows) => rows[0] ?? null);
+      if (!company) throw notFound("Company not found");
+      return buildLocalFleetCostDashboard(db, companyId, query);
     },
   };
 }

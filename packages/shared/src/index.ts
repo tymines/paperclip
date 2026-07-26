@@ -517,6 +517,8 @@ export type {
   CostByAgentModel,
   CostWindowSpendRow,
   CostByProject,
+  FleetCostDashboardGrain,
+  FleetCostDashboardPayload,
   CostWatcherTotals,
   CostWatcherProviderCard,
   CostWatcherTimelineSeries,

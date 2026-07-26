@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
+import type { FleetDashboardGrain } from "../services/fleet-cost-dashboard.js";
 import {
   createCostEventSchema,
   createFinanceEventSchema,
@@ -42,6 +43,30 @@ export function parseCostLimit(query: Record<string, unknown>) {
     throw badRequest("invalid 'limit' value");
   }
   return limit;
+}
+
+export function parseFleetDashboardQuery(query: Record<string, unknown>) {
+  const range = parseCostDateRange(query);
+  const grainRaw = Array.isArray(query.grain) ? query.grain[0] : query.grain;
+  const grain = (grainRaw == null || grainRaw === "" ? "day" : String(grainRaw)) as FleetDashboardGrain;
+  if (grain !== "day" && grain !== "week" && grain !== "month") {
+    throw badRequest("invalid 'grain' value");
+  }
+  const optionalString = (key: string) => {
+    const raw = Array.isArray(query[key]) ? query[key][0] : query[key];
+    return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+  };
+  const filters = {
+    projectId: optionalString("projectId"),
+    issueId: optionalString("issueId"),
+    agentId: optionalString("agentId"),
+    model: optionalString("model"),
+  };
+  return {
+    range,
+    filters: Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)),
+    grain,
+  };
 }
 
 export function costRoutes(
@@ -164,6 +189,14 @@ export function costRoutes(
     const range = parseCostDateRange(req.query);
     const rows = await costs.byAgentModel(companyId, range);
     res.json(rows);
+  });
+
+  router.get("/companies/:companyId/costs/fleet-dashboard", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const query = parseFleetDashboardQuery(req.query);
+    const payload = await costs.fleetDashboard(companyId, query);
+    res.json(payload);
   });
 
   router.get("/companies/:companyId/costs/by-provider", async (req, res) => {
