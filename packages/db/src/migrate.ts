@@ -10,19 +10,19 @@ async function main(): Promise<void> {
     const before = await inspectMigrations(resolved.connectionString);
     if (before.status === "upToDate") {
       console.log("No pending migrations");
-      return;
+    } else {
+      console.log(`Applying ${before.pendingMigrations.length} pending migration(s)...`);
+      await applyPendingMigrations(resolved.connectionString);
+
+      const after = await inspectMigrations(resolved.connectionString);
+      if (after.status !== "upToDate") {
+        throw new Error(`Migrations incomplete: ${after.pendingMigrations.join(", ")}`);
+      }
+      console.log("Migrations complete");
     }
 
-    console.log(`Applying ${before.pendingMigrations.length} pending migration(s)...`);
-    await applyPendingMigrations(resolved.connectionString);
-
-    const after = await inspectMigrations(resolved.connectionString);
-    if (after.status !== "upToDate") {
-      throw new Error(`Migrations incomplete: ${after.pendingMigrations.join(", ")}`);
-    }
-    console.log("Migrations complete");
-
-    // Data migrations — awaited, part of the deploy gate: writes must never
+    // Data migrations ALWAYS run, including schema-current databases. This is
+    // an awaited deploy gate: writes must never
     // be accepted against un-backfilled state (0158 vault human_locked →
     // manuscript_chapters.locked, idempotent, strictly upward).
     const { runChapterLockBackfill } = await import("./data-migrations/index.js");

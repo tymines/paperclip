@@ -6,7 +6,7 @@
 // activity-logged · ④ locks compose — a chapter lock covers its prose + beats +
 // passage locks; a passage lock covers its span; bible locks cover entry fields.
 import type { Request } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { manuscriptChapters, passageLocks } from "@paperclipai/db";
 import { conflict, forbidden } from "../errors.js";
@@ -14,6 +14,26 @@ import { getActorInfo } from "../routes/authz.js";
 import { chapterContentHash, readVaultChapterFrontmatter } from "./book-prose-writer.js";
 
 export const LOCKED_CODE = "LOCKED";
+
+/**
+ * Shared chapter mutation protocol.
+ *
+ * Every lock setter and every AI writer takes the same transaction-scoped
+ * advisory lock before reading or mutating chapter, passage-lock, or beats
+ * state. This supplies the cross-table serialization boundary that row locks
+ * alone cannot provide (notably a passage_locks INSERT racing a manuscript
+ * UPDATE). The key is stable for one book/chapter pair and is released only
+ * when the surrounding PostgreSQL transaction commits or rolls back.
+ */
+export async function acquireChapterMutationLock(
+  db: Db,
+  bookId: string,
+  chapterNumber: number,
+): Promise<void> {
+  await db.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${bookId}:${chapterNumber}`}, 0))`,
+  );
+}
 
 /** Postgres serialization failure (40001) — possibly wrapped by drizzle. */
 export function isSerializationError(err: unknown): boolean {

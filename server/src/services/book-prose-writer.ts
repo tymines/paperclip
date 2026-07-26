@@ -7,14 +7,19 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { manuscriptChapters } from "@paperclipai/db";
 // LOCK (Spec v1 §7): the sink enforces locks itself — every prose path lands
-// here, so a single serializable transaction covers them all atomically.
+// here, so the shared chapter advisory-lock protocol covers them all atomically.
 // Function-level use only (book-locks imports chapterContentHash from this
 // module — circular refs stay inside function bodies).
-import { assertProsePersistAllowed, lockedError, isSerializationError } from "./book-locks.js";
+import {
+  acquireChapterMutationLock,
+  assertProsePersistAllowed,
+  lockedError,
+  isSerializationError,
+} from "./book-locks.js";
 
 export const BOOK_VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
@@ -105,10 +110,11 @@ export interface PersistProseResult {
  *
  * LOCK (Spec v1 §7 ①): this shared sink is the enforcement point, and it is
  * ATOMIC — not check-then-write. The lock read, the passage-lock preservation
- * check, and the mutation all run inside ONE serializable transaction whose
+ * check, and the mutation all run inside ONE transaction holding the same
+ * chapter advisory lock used by lock-setter endpoints; the
  * UPDATE carries `WHERE locked = false`: a lock set by anyone, at any moment
- * before commit, either fails the predicate (0 rows → 409) or aborts the
- * transaction (serialization failure → 409). No TOCTOU window exists.
+ * before commit is observed after the writer waits, then fails the guard or
+ * predicate (0 rows → 409). No protocol TOCTOU window exists.
  * Pass `lockGuard: false` only for trusted human-actor paths that already ran
  * their own actor check.
  */
@@ -174,22 +180,20 @@ export async function persistChapterProse(
   };
 
   let result: PersistProseResult & { wasLocked: boolean };
-  if (opts?.lockGuard === false) {
-    result = await writeTx(db, false);
-  } else {
-    try {
-      result = await db.transaction(async (tx) => {
-        // Serializable: a concurrent passage-lock INSERT aborts us rather
-        // than letting a locked span be clobbered mid-flight.
-        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
-        return writeTx(tx as unknown as Db, true);
-      });
-    } catch (err) {
-      if (isSerializationError(err)) {
-        throw lockedError("chapter", `Chapter ${chapterNumber}'s locks changed while writing — the write was refused. Re-run if the lock is gone.`);
-      }
-      throw err;
+  try {
+    result = await db.transaction(async (tx) => {
+        // Shared protocol under READ COMMITTED: acquire first, then every
+        // subsequent statement sees lock-state commits that completed while
+        // this transaction waited. SERIALIZABLE would freeze a stale snapshot
+        // at the advisory-lock query and miss the just-committed lock row.
+        await acquireChapterMutationLock(tx as unknown as Db, bookId, chapterNumber);
+        return writeTx(tx as unknown as Db, opts?.lockGuard !== false);
+    });
+  } catch (err) {
+    if (isSerializationError(err)) {
+      throw lockedError("chapter", `Chapter ${chapterNumber}'s locks changed while writing — the write was refused. Re-run if the lock is gone.`);
     }
+    throw err;
   }
 
   writeChapterToVault(bookSlug, chapterNumber, result.title, prose, result.wasLocked);

@@ -144,6 +144,8 @@ function mockDb(opts?: Partial<MockState>) {
         return Promise.resolve([]);
       },
     }),
+    execute: async () => ({}),
+    transaction: async (fn: (tx: any) => Promise<any>) => fn(db),
     __state: state,
   };
   return db;

@@ -17,6 +17,7 @@ import {
   applyPendingMigrations,
   createEmbeddedPostgresLogBuffer,
   reconcilePendingMigrationHistory,
+  runChapterLockBackfill,
   formatDatabaseBackupResult,
   runDatabaseBackup,
   authUsers,
@@ -546,6 +547,18 @@ export async function startServer(): Promise<StartedServer> {
     resolvedEmbeddedPostgresPort = port;
     startupDbInfo = { mode: "embedded-postgres", dataDir, port };
   }
+
+  // Book Studio data migration gate. SQL schema inspection can be current while
+  // legacy vault `human_locked` state has never been imported. Run this on
+  // EVERY server startup path (external or embedded DB), await it before auth,
+  // app construction, or listen(), and keep it idempotent/upward-only.
+  const importedChapterLocks = await runChapterLockBackfill(db as any);
+  logger.info(
+    { importedChapterLocks },
+    importedChapterLocks > 0
+      ? "Book Studio chapter-lock backfill complete"
+      : "Book Studio chapter-lock backfill checked (nothing to import)",
+  );
   
   if (config.deploymentMode === "local_trusted" && !isLoopbackHost(config.host)) {
     throw new Error(

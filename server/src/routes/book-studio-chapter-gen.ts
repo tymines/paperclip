@@ -8,7 +8,13 @@ import { logActivity } from "../services/index.js";
 import { generateChapterDraft, reviseChapterContent, callLLM, streamLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
-import { lockedError, assertChapterWritable, resolveChapterLocked, isSerializationError } from "../services/book-locks.js";
+import {
+  acquireChapterMutationLock,
+  lockedError,
+  assertChapterWritable,
+  resolveChapterLocked,
+  isSerializationError,
+} from "../services/book-locks.js";
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
@@ -452,13 +458,13 @@ export function bookStudioChapterGenRoutes(db: Db) {
         });
 
         // Spec v1 §7 ① ATOMIC: the live recheck and the mutation run in ONE
-        // serializable transaction — a composing manuscript/vault lock (or a
-        // lock toggle) landing mid-flight aborts or fails the predicate.
+        // transaction holding the shared chapter advisory lock — a composing
+        // manuscript/vault lock or lock toggle serializes before this write.
         // ④ locks compose: a manuscript chapter lock covers its beats row.
         let updated: typeof storyBibleOutline.$inferSelect | undefined;
         try {
           updated = await db.transaction(async (tx) => {
-            await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+            await acquireChapterMutationLock(tx as unknown as Db, bookId, chNum);
             const [outlineNow] = await tx
               .select({ locked: storyBibleOutline.locked })
               .from(storyBibleOutline)

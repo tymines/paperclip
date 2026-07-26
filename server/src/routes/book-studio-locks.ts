@@ -14,7 +14,12 @@ import { assertCompanyAccess } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { chapterContentHash, writeChapterToVault } from "../services/book-prose-writer.js";
-import { assertHumanActor, isMissingLocksTable, getPassageLocks } from "../services/book-locks.js";
+import {
+  acquireChapterMutationLock,
+  assertHumanActor,
+  isMissingLocksTable,
+  getPassageLocks,
+} from "../services/book-locks.js";
 
 const PENDING_0159 =
   "passage_locks table pending migration 0159 — passage locks unavailable until it is applied.";
@@ -35,31 +40,34 @@ export function bookStudioLockRoutes(db: Db) {
       const { locked } = (req.body ?? {}) as { locked?: boolean };
       if (typeof locked !== "boolean") throw badRequest("locked (boolean) is required");
 
-      const [book] = await db.select().from(books).where(eq(books.id, bookId));
-      if (!book) throw notFound("Book not found");
+      const { book, existing } = await db.transaction(async (tx) => {
+        await acquireChapterMutationLock(tx as unknown as Db, bookId, chapterNumber);
+        const [book] = await tx.select().from(books).where(eq(books.id, bookId));
+        if (!book) throw notFound("Book not found");
 
-      // Upsert the manuscript row (a chapter can be locked before it has prose).
-      const [existing] = await db
-        .select()
-        .from(manuscriptChapters)
-        .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
-      if (existing) {
-        await db
-          .update(manuscriptChapters)
+        // Upsert the manuscript row (a chapter can be locked before it has prose).
+        const [existing] = await tx
+          .select()
+          .from(manuscriptChapters)
+          .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+        if (existing) {
+          await tx
+            .update(manuscriptChapters)
+            .set({ locked, updatedAt: new Date() })
+            .where(eq(manuscriptChapters.id, existing.id));
+        } else {
+          await tx.insert(manuscriptChapters).values({
+            id: randomUUID(), bookId, chapterNumber, title: `Chapter ${chapterNumber}`, content: "", locked,
+          });
+        }
+
+        // ④ The same switch gates the outline/beats row atomically.
+        await tx
+          .update(storyBibleOutline)
           .set({ locked, updatedAt: new Date() })
-          .where(eq(manuscriptChapters.id, existing.id));
-      } else {
-        await db.insert(manuscriptChapters).values({
-          id: randomUUID(), bookId, chapterNumber, title: `Chapter ${chapterNumber}`, content: "", locked,
-        });
-      }
-
-      // ④ The same switch gates the outline/beats row for this chapter.
-      await db
-        .update(storyBibleOutline)
-        .set({ locked, updatedAt: new Date() })
-        .where(and(eq(storyBibleOutline.bookId, bookId), eq(storyBibleOutline.chapterNumber, chapterNumber)))
-        .catch(() => { /* outline row may not exist */ });
+          .where(and(eq(storyBibleOutline.bookId, bookId), eq(storyBibleOutline.chapterNumber, chapterNumber)));
+        return { book, existing };
+      });
 
       // Vault frontmatter reflects the lock (best-effort; DB is authoritative).
       // This is the human author's explicit lock/unlock — it MAY clear
@@ -113,31 +121,34 @@ export function bookStudioLockRoutes(db: Db) {
       if (!Number.isFinite(chapterNumber) || chapterNumber < 1) throw badRequest("Invalid chapter number");
       const { spanStart, spanEnd, note } = (req.body ?? {}) as { spanStart?: number; spanEnd?: number; note?: string };
 
-      const [chapter] = await db
-        .select()
-        .from(manuscriptChapters)
-        .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
-      if (!chapter || !(chapter.content ?? "").trim()) {
-        throw badRequest(`Chapter ${chapterNumber} has no prose yet — nothing to lock.`);
-      }
-      const content = chapter.content ?? "";
-      if (typeof spanStart !== "number" || typeof spanEnd !== "number"
-        || spanStart < 0 || spanEnd <= spanStart || spanEnd > content.length) {
-        throw badRequest(`Invalid span [${spanStart}, ${spanEnd}] for chapter of length ${content.length}`);
-      }
-
       try {
-        const [lock] = await db
-          .insert(passageLocks)
-          .values({
-            bookId, companyId,
-            chapterId: chapter.id, chapterNumber,
-            spanStart, spanEnd,
-            contentHash: chapterContentHash(content),
-            note: typeof note === "string" ? note.slice(0, 500) : "",
-            createdBy: actor.actorId,
-          })
-          .returning();
+        const lock = await db.transaction(async (tx) => {
+          await acquireChapterMutationLock(tx as unknown as Db, bookId, chapterNumber);
+          const [chapter] = await tx
+            .select()
+            .from(manuscriptChapters)
+            .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+          if (!chapter || !(chapter.content ?? "").trim()) {
+            throw badRequest(`Chapter ${chapterNumber} has no prose yet — nothing to lock.`);
+          }
+          const content = chapter.content ?? "";
+          if (typeof spanStart !== "number" || typeof spanEnd !== "number"
+            || spanStart < 0 || spanEnd <= spanStart || spanEnd > content.length) {
+            throw badRequest(`Invalid span [${spanStart}, ${spanEnd}] for chapter of length ${content.length}`);
+          }
+          const [created] = await tx
+            .insert(passageLocks)
+            .values({
+              bookId, companyId,
+              chapterId: chapter.id, chapterNumber,
+              spanStart, spanEnd,
+              contentHash: chapterContentHash(content),
+              note: typeof note === "string" ? note.slice(0, 500) : "",
+              createdBy: actor.actorId,
+            })
+            .returning();
+          return created;
+        });
 
         await logActivity(db, {
           companyId, actorType: actor.actorType, actorId: actor.actorId,
@@ -163,12 +174,21 @@ export function bookStudioLockRoutes(db: Db) {
       const actor = assertHumanActor(req);
 
       try {
-        const [existing] = await db
-          .select()
-          .from(passageLocks)
-          .where(and(eq(passageLocks.id, lockId), eq(passageLocks.bookId, bookId)));
-        if (!existing) throw notFound("Passage lock not found");
-        await db.delete(passageLocks).where(eq(passageLocks.id, lockId));
+        const existing = await db.transaction(async (tx) => {
+          const [candidate] = await tx
+            .select()
+            .from(passageLocks)
+            .where(and(eq(passageLocks.id, lockId), eq(passageLocks.bookId, bookId)));
+          if (!candidate) throw notFound("Passage lock not found");
+          await acquireChapterMutationLock(tx as unknown as Db, bookId, candidate.chapterNumber);
+          const [current] = await tx
+            .select()
+            .from(passageLocks)
+            .where(and(eq(passageLocks.id, lockId), eq(passageLocks.bookId, bookId)));
+          if (!current) throw notFound("Passage lock not found");
+          await tx.delete(passageLocks).where(eq(passageLocks.id, lockId));
+          return current;
+        });
 
         await logActivity(db, {
           companyId, actorType: actor.actorType, actorId: actor.actorId,

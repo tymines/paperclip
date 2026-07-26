@@ -35,7 +35,13 @@ import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
-import { assertHumanActor, lockedError, assertProsePersistAllowed, isSerializationError } from "../services/book-locks.js";
+import {
+  acquireChapterMutationLock,
+  assertHumanActor,
+  lockedError,
+  assertProsePersistAllowed,
+  isSerializationError,
+} from "../services/book-locks.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -577,15 +583,15 @@ export function bookStudioRoutes(db: Db) {
     const patchActor = getActorInfo(req);
 
     // Spec v1 §7, ATOMIC (Zeus train r2): the guard (chapter DB lock + vault
-    // human_locked + passage locks) and the mutation run in ONE serializable
-    // transaction — for BOTH the update and the insert paths. A passage lock
-    // landing mid-flight aborts the tx (40001 → 409); a chapter lock landing
-    // mid-flight fails the conditional write (0 rows → 409). The human
+    // human_locked + passage locks) and the mutation run under the shared
+    // chapter advisory-lock protocol — for BOTH update and insert paths. A
+    // lock setter that starts first commits before this writer reads state; a
+    // chapter lock then fails the guard/predicate (409). The human
     // author's own edits always land (she owns the text).
     let result: { chapter: Record<string, unknown>; created: boolean };
     try {
       result = await db.transaction(async (tx) => {
-        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        await acquireChapterMutationLock(tx as unknown as Db, bookId, chNum);
         const [existing] = await tx
           .select()
           .from(manuscriptChapters)
