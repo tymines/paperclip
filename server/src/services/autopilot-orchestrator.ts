@@ -78,6 +78,10 @@ const loops = new Map<string, AutopilotState>();
 
 // --- Init: load existing checkpoints, demote crashed ---
 export function initAutopilotOrchestrator() {
+  // Initialization is authoritative: discard process-local state before
+  // rebuilding from durable checkpoints. This also makes repeated startup
+  // initialization deterministic instead of retaining stale/deleted loops.
+  loops.clear();
   ensureCheckpointDir();
   const files = readdirSync(CHECKPOINT_DIR).filter((f) => f.endsWith(".json"));
   for (const file of files) {

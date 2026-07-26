@@ -176,9 +176,9 @@ describe("writeChapterToVault — human_locked is never flipped back to false", 
   });
 });
 
-// ── 0158 migration-time backfill (packages/db data-migrations, awaited) ──
+// ── 0159 migration-time backfill (packages/db data-migrations, awaited) ──
 
-describe("runChapterLockBackfill — 0158 imports pre-existing human_locked", () => {
+describe("runChapterLockBackfill — 0159 imports pre-existing human_locked", () => {
   it("syncs vault human_locked: true chapters UP into manuscript_chapters.locked", async () => {
     vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     const db = mockDb();

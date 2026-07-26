@@ -2,7 +2,7 @@
 // the SQL journal is applied and BEFORE the deploy is considered complete
 // (so writes are never accepted against un-backfilled state).
 //
-// 0158 follow-through (Spec v1 §7): SQL cannot read the vault filesystem, so
+// 0159 follow-through (Spec v1 §7): SQL cannot read the vault filesystem, so
 // the import of pre-existing `human_locked: true` chapter frontmatter into
 // manuscript_chapters.locked lives here. Idempotent and strictly UPWARD —
 // a vault `human_locked: false` never clears a DB lock (only the human

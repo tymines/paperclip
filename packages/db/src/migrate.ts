@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
     // Data migrations ALWAYS run, including schema-current databases. This is
     // an awaited deploy gate: writes must never
-    // be accepted against un-backfilled state (0158 vault human_locked →
+    // be accepted against un-backfilled state (0159 vault human_locked →
     // manuscript_chapters.locked, idempotent, strictly upward).
     const { runChapterLockBackfill } = await import("./data-migrations/index.js");
     const { createDb } = await import("./client.js");
