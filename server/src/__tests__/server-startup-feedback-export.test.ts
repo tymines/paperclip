@@ -106,6 +106,7 @@ vi.mock("@paperclipai/db", () => ({
   inspectMigrations: vi.fn(async () => ({ status: "upToDate" })),
   applyPendingMigrations: vi.fn(),
   reconcilePendingMigrationHistory: vi.fn(async () => ({ repairedMigrations: [] })),
+  runChapterLockBackfill: vi.fn(async () => 0),
   formatDatabaseBackupResult: vi.fn(() => "ok"),
   runDatabaseBackup: vi.fn(),
   authUsers: {},
