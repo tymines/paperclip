@@ -3,7 +3,7 @@
  * ponytail: textarea + dangerouslySetInnerHTML for preview, no editor lib.
  */
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Maximize, Minimize, Eye, Edit3, Sparkles, Square, CheckCircle2, MessageSquare, Loader2 } from "lucide-react";
+import { Maximize, Minimize, Eye, Edit3, Sparkles, Square, CheckCircle2, MessageSquare, Loader2, Lock, LockOpen, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnnotationSidebar } from "./AnnotationSidebar";
 
@@ -12,6 +12,16 @@ interface OutlineEntry {
   chapterNumber: number;
   title: string;
   beats: Record<string, unknown>[];
+  /** Spec v1 §7 — locked chapters refuse every AI write (server-enforced; this mirrors it for display). */
+  locked?: boolean;
+}
+
+interface PassageLock {
+  id: string;
+  spanStart: number;
+  spanEnd: number;
+  note: string;
+  stale: boolean;
 }
 
 interface Props {
@@ -86,6 +96,11 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   // Assisted-mode mark-done
   const [markingDone, setMarkingDone] = useState(false);
   const [assistNotice, setAssistNotice] = useState<string | null>(null);
+  // Spec v1 §7 LOCK — chapter lock + passage locks (human-only; AI write paths 409)
+  const [chapterLocked, setChapterLocked] = useState(false);
+  const [passageLocks, setPassageLocks] = useState<PassageLock[]>([]);
+  const [lockBusy, setLockBusy] = useState(false);
+  const [lockNotice, setLockNotice] = useState<string | null>(null);
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${bookId}`;
   // Last content loaded from / saved to the server — used to detect whether
@@ -121,6 +136,75 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       .catch(() => { if (!cancelled) setSaveStatus("error"); });
     return () => { cancelled = true; };
   }, [selectedCh, bookId]);
+
+  // Spec v1 §7 — load lock state (chapter + passage locks) per chapter.
+  const refreshLocks = useCallback(() => {
+    if (selectedCh == null) return;
+    apiFetch<{ locked: boolean; passageLocks: PassageLock[]; available: boolean }>(
+      `${API_PREFIX}/chapters/${selectedCh}/locks`
+    )
+      .then((res) => {
+        setChapterLocked(res.locked ?? false);
+        setPassageLocks(res.passageLocks ?? []);
+      })
+      .catch(() => { /* locks are advisory in the UI — the server enforces */ });
+  }, [selectedCh, API_PREFIX]);
+
+  useEffect(() => {
+    setLockNotice(null);
+    refreshLocks();
+  }, [refreshLocks]);
+
+  const toggleChapterLock = useCallback(async () => {
+    if (selectedCh == null || lockBusy) return;
+    setLockBusy(true); setLockNotice(null);
+    const next = !chapterLocked;
+    try {
+      await apiFetch<{ chapterNumber: number; locked: boolean }>(
+        `${API_PREFIX}/chapters/${selectedCh}/lock`,
+        { method: "PATCH", body: JSON.stringify({ locked: next }) },
+      );
+      setChapterLocked(next);
+      setLockNotice(next
+        ? `🔒 Chapter ${selectedCh} locked — the AI will skip or ask, never overwrite.`
+        : `🔓 Chapter ${selectedCh} unlocked — AI writes allowed again.`);
+    } catch (e) {
+      setLockNotice(`⛔ Lock change refused: ${(e as Error).message}`);
+    } finally {
+      setLockBusy(false);
+    }
+  }, [selectedCh, chapterLocked, lockBusy, API_PREFIX]);
+
+  const lockPassage = useCallback(async () => {
+    if (selectedCh == null || !selection || lockBusy) return;
+    setLockBusy(true); setLockNotice(null);
+    try {
+      await apiFetch<{ lock: PassageLock }>(
+        `${API_PREFIX}/chapters/${selectedCh}/passage-locks`,
+        { method: "POST", body: JSON.stringify({ spanStart: selection.start, spanEnd: selection.end }) },
+      );
+      setSelection(null);
+      setLockNotice("🔒 Passage locked — revisions overlapping it will ask before touching it.");
+      refreshLocks();
+    } catch (e) {
+      setLockNotice(`⛔ Passage lock refused: ${(e as Error).message}`);
+    } finally {
+      setLockBusy(false);
+    }
+  }, [selectedCh, selection, lockBusy, API_PREFIX, refreshLocks]);
+
+  const unlockPassage = useCallback(async (lockId: string) => {
+    if (lockBusy) return;
+    setLockBusy(true); setLockNotice(null);
+    try {
+      await apiFetch<void>(`${API_PREFIX}/passage-locks/${lockId}`, { method: "DELETE" });
+      refreshLocks();
+    } catch (e) {
+      setLockNotice(`⛔ Unlock refused: ${(e as Error).message}`);
+    } finally {
+      setLockBusy(false);
+    }
+  }, [lockBusy, API_PREFIX, refreshLocks]);
 
   // Accepted revision proposal landed server-side (Spec v1 §5.D): reload the
   // open chapter — with the same never-clobber guard as the autopilot poll, so
@@ -251,6 +335,18 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       if (!res.ok || !res.body || !ctype.includes("text/event-stream")) {
         if (!res.ok) {
           const text = await res.text().catch(() => "");
+          // Spec v1 §7: 409 LOCKED — the server refused an AI write on locked
+          // content. Surface the lock state, not a generic failure.
+          let lockedMsg: string | null = null;
+          try {
+            const body = JSON.parse(text) as { error?: string; details?: { code?: string } };
+            if (body?.details?.code === "LOCKED") lockedMsg = body.error ?? "Chapter is locked.";
+          } catch { /* non-JSON error body */ }
+          if (lockedMsg) {
+            setLockNotice(`⛔ ${lockedMsg}`);
+            refreshLocks();
+            return;
+          }
           throw new Error(`API ${res.status}: ${text || res.statusText}`);
         }
         // Stream endpoint unavailable — non-streaming fallback (kept working).
@@ -302,6 +398,12 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
             lastLoadedRef.current = typeof j.content === "string" ? j.content : "";
             setSaveStatus("saved");
           } else if (ev === "error") {
+            // Spec v1 §7 TOCTOU: locked mid-draft — the server discarded the draft.
+            if (j.code === "LOCKED") {
+              setLockNotice(`⛔ ${typeof j.message === "string" ? j.message : "Chapter was locked while drafting."}`);
+              refreshLocks();
+              throw new Error("__LOCKED__");
+            }
             throw new Error(typeof j.message === "string" ? j.message : "Stream error");
           }
         }
@@ -312,6 +414,8 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
         setDraftError(streamedAny
           ? "Draft cancelled — partial text shown but NOT saved (edit it to keep it)."
           : "Draft cancelled.");
+      } else if ((e as Error).message === "__LOCKED__") {
+        // Already surfaced via lockNotice + lock state refresh — no draft error.
       } else {
         setDraftError((e as Error).message || "Draft failed");
       }
@@ -321,7 +425,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       streamAbortRef.current = null;
       setDrafting(false);
     }
-  }, [selectedCh, drafting, content, API_PREFIX]);
+  }, [selectedCh, drafting, content, API_PREFIX, refreshLocks]);
 
   const cancelDraftStream = useCallback(() => {
     streamAbortRef.current?.abort();
@@ -378,7 +482,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
             >
               {chapters.map((ch) => (
                 <option key={ch.id} value={ch.chapterNumber}>
-                  Ch.{ch.chapterNumber}: {ch.title}
+                  Ch.{ch.chapterNumber}: {ch.title}{(ch.locked || ch.chapterNumber === selectedCh && chapterLocked) ? " 🔒" : ""}
                 </option>
               ))}
             </select>
@@ -387,21 +491,52 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
             <h2 className="truncate text-sm font-semibold text-gray-100" title={chapterTitle}>{chapterTitle}</h2>
             <p className="text-xs text-gray-500 whitespace-nowrap">{noChapters ? "No chapters" : `${wordCount.toLocaleString()} words`}</p>
           </div>
+          {!noChapters && selectedCh != null && (
+            <button
+              onClick={toggleChapterLock}
+              disabled={lockBusy}
+              title={chapterLocked
+                ? "Unlock this chapter — allow AI writes again (human-only action)"
+                : "Lock this chapter — the AI will skip or ask before touching it, never overwrite (Spec v1 §7)"}
+              className={cn(
+                "shrink-0 rounded-md border px-2 py-1.5 text-xs flex items-center gap-1",
+                chapterLocked
+                  ? "border-amber-500/50 bg-amber-600/15 text-amber-300 hover:bg-amber-600/25"
+                  : "border-gray-700 text-gray-400 hover:text-gray-200",
+              )}
+            >
+              {lockBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : chapterLocked ? <Lock className="w-3 h-3" /> : <LockOpen className="w-3 h-3" />}
+              {chapterLocked ? "Locked" : "Lock"}
+            </button>
+          )}
         </div>
 
         <div className="flex w-full items-center gap-2 overflow-x-auto pb-1 md:w-auto md:flex-wrap md:justify-end md:overflow-visible md:pb-0 [&>button]:shrink-0 [&>button]:whitespace-nowrap">
           <button
             onClick={draftProse}
-            disabled={drafting || selectedCh == null}
-            title={content.trim() ? "Redraft this chapter with AI (overwrites) — streams tokens live" : "Draft this chapter with AI from the approved bible — streams tokens live"}
+            disabled={drafting || selectedCh == null || chapterLocked}
+            title={chapterLocked
+              ? "Chapter is locked 🔒 — the AI never writes locked content. Unlock it to draft."
+              : content.trim() ? "Redraft this chapter with AI (overwrites) — streams tokens live" : "Draft this chapter with AI from the approved bible — streams tokens live"}
             className={cn(
               "rounded-md border px-3 py-1.5 text-xs flex items-center gap-1.5",
+              chapterLocked ? "border-gray-800 text-gray-600 cursor-not-allowed" :
               drafting ? "border-blue-500/40 bg-blue-600/10 text-blue-300" : "border-blue-500/30 text-blue-300 hover:bg-blue-600/10",
             )}
           >
-            {drafting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+            {drafting ? <Loader2 className="w-3 h-3 animate-spin" /> : chapterLocked ? <Lock className="w-3 h-3" /> : <Sparkles className="w-3 h-3" />}
             {streaming ? "Streaming…" : drafting ? "Drafting…" : content.trim() ? "Redraft" : "AI Draft"}
           </button>
+          {selection && !preview && selectedCh != null && (
+            <button
+              onClick={lockPassage}
+              disabled={lockBusy}
+              title={`Lock the selected passage (${selection.end - selection.start} chars) — directed revisions overlapping it will ask first (Spec v1 §7)`}
+              className="rounded-md border border-amber-500/40 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-600/10 flex items-center gap-1.5"
+            >
+              <Lock className="w-3 h-3" /> Lock passage
+            </button>
+          )}
           {streaming && (
             <button
               onClick={cancelDraftStream}
@@ -456,6 +591,34 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
           </button>
         </div>
       </div>
+
+      {/* Spec v1 §7 — passage locks for the open chapter (amber; stale flagged) */}
+      {passageLocks.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-gray-800 px-5 py-1.5 shrink-0">
+          <span className="text-[10px] uppercase tracking-wide text-gray-500">Locked passages</span>
+          {passageLocks.map((l) => (
+            <span
+              key={l.id}
+              title={`${l.note || "Locked passage"} — offsets ${l.spanStart}–${l.spanEnd}${l.stale ? " — chapter changed since this lock was set (stale anchor, still honored)" : ""}`}
+              className={cn(
+                "flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px]",
+                l.stale ? "border-orange-500/40 text-orange-300" : "border-amber-500/40 text-amber-300",
+              )}
+            >
+              <Lock className="w-2.5 h-2.5" />
+              {l.spanStart}–{l.spanEnd}{l.stale ? " (stale)" : ""}
+              <button
+                onClick={() => unlockPassage(l.id)}
+                disabled={lockBusy}
+                title="Remove this passage lock (human-only)"
+                className="ml-0.5 text-gray-500 hover:text-red-400"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Editor / Preview (+ annotation sidebar) */}
       <div className="flex-1 min-h-0 flex overflow-hidden">
@@ -519,7 +682,9 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       {/* Status bar */}
       <div className="flex items-center justify-between border-t border-gray-800 px-5 py-2 shrink-0">
         <span className="text-xs text-gray-600">
-          {draftError ? (
+          {lockNotice ? (
+            <span className="text-amber-400">{lockNotice}</span>
+          ) : draftError ? (
             <span className="text-red-500">{draftError}</span>
           ) : assistNotice ? (
             <span className="text-green-400">{assistNotice}</span>
