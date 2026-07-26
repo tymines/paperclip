@@ -120,26 +120,6 @@ def _check_session_rotation(task_id: str, state: dict, cfg: dict) -> dict:
     }
 
 
-def _write_rail_event_db(event: dict):
-    """Best-effort DB mirror for JSONL events. ponytail: try/except, never blocks."""
-    try:
-        import psycopg2
-        conn = psycopg2.connect(
-            host="127.0.0.1", port=54329, user="paperclip",
-            password="paperclip", dbname="paperclip"
-        )
-        cur = conn.cursor()
-        cur.execute(
-            """INSERT INTO rail_events (event_type, task_id, payload, created_at)
-               VALUES (%s, %s, %s, NOW())""",
-            (event.get("type", "unknown"), event.get("task_id", ""),
-             json.dumps(event, default=str))
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass  # ponytail: DB mirror is best-effort, JSONL is the durable log
-
 STATES = [
     "ready", "claimed", "planning", "plan_ready", "critiqued",
     "coding", "in_review", "closed",
@@ -188,8 +168,6 @@ def emit_event(event_type, task_id, **extra):
             f.write(json.dumps(ev, default=str) + "\n")
     except Exception:
         pass
-    # ponytail: DB mirror best-effort, never blocks pipeline
-    _write_rail_event_db(ev)
     if VERBOSE:
         _log("event", f"{event_type} {task_id} {json.dumps(extra, default=str)[:120]}")
 
@@ -457,39 +435,12 @@ def check_heartbeat(task_id, worktree_path, stall_count, last_artifact_at, cfg):
 # main loop
 # ═══════════════════════════════════════════════════════════════
 
-def query_board_direct(limit=5):
-    """Direct PG query — fallback when Paperclip API is unreachable."""
-    try:
-        import psycopg2
-        conn = psycopg2.connect(
-            "host=127.0.0.1 port=54329 dbname=paperclip user=paperclip password=paperclip",
-            connect_timeout=5
-        )
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, identifier, title, description, status, "
-            "assignee_agent_id, created_at, parent_id, iteration_count, "
-            "last_verdict "
-            "FROM issues WHERE status = %s "
-            "ORDER BY priority DESC, created_at ASC LIMIT %s",
-            ("backlog", limit)
-        )
-        cols = [d[0] for d in cur.description]
-        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-        conn.close()
-        return rows
-    except Exception as e:
-        _log("pg", f"Direct PG query failed: {e}")
-        return []
-
 def claim_task(cfg=None):
     """Claim one ready task from backlog. Atomic via status-guard PATCH."""
     enforcement = (cfg or {}).get("enforcement", "shadow")
     issues = api("GET", f"/api/companies/{CID}/issues?status=backlog&limit=5")
     if not issues:
-        # Fallback: direct PG access when API is unreachable (shadow mode or no valid key)
-        _log("rail", "API returned no tasks — trying direct PG fallback")
-        issues = query_board_direct(5)
+        return None
     for issue in issues:
         ident = issue.get("identifier", issue["id"][:8])
         if enforcement == "shadow":
