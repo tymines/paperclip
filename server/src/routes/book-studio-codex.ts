@@ -368,5 +368,29 @@ export function bookStudioCodexRoutes(db: Db) {
     } catch (err) { next(err); }
   });
 
+  // ── Context packet audit (§2 "what the writer saw") ──────────────────
+  // Returns the compiled packet METADATA for chapter N: consulted entities,
+  // the facts that entered (usedFacts) and the withheld facts as author-only
+  // audit metadata. Read-only; never triggers generation.
+  router.get(`${BASE}/chapters/:chapterNumber/context-packet`, async (req, res, next) => {
+    try {
+      const { companyId, bookId } = req.params as Record<string, string>;
+      assertCompanyAccess(req, companyId);
+      const chapterNumber = Number(req.params.chapterNumber);
+      if (!Number.isFinite(chapterNumber) || chapterNumber < 1) throw badRequest("Invalid chapter number");
+      const { compileChapterContext } = await import("../services/book-context-compiler.js");
+      const ctx = await compileChapterContext(db, bookId, chapterNumber);
+      res.json({
+        chapterNumber,
+        usedCharacters: ctx.usedCharacters,
+        usedLocations: ctx.usedLocations,
+        hasStyle: ctx.hasStyle,
+        hasBeat: ctx.hasBeat,
+        usedFacts: ctx.usedFacts,
+        withheldFacts: ctx.withheldFacts,
+      });
+    } catch (err) { next(err); }
+  });
+
   return router;
 }
