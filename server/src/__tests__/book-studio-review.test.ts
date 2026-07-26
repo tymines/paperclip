@@ -355,3 +355,56 @@ describe("POST /revisions/:id/accept|reject", () => {
     expect(db.__state.book.metadata.reviewNotes[0].status).toBe("resolved");
   });
 });
+
+// ── one-time-unlock-apply-relock (§7 Locked-Content card execution) ────
+
+describe("POST /revisions/:id/accept — one-time-unlock-apply-relock", () => {
+  it("a locked chapter refuses a normal accept (409 LOCKED), nothing written", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const res = await request(app).post(`${BASE}/revisions/${rev.id}/accept`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/locked/i);
+    expect(persistChapterProse).not.toHaveBeenCalled();
+  });
+
+  it("Baily's one-time unlock: accepts through the guard (passage locks still on), then re-locks", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const res = await request(app)
+      .post(`${BASE}/revisions/${rev.id}/accept`)
+      .send({ override: "one-time-unlock-apply-relock" });
+    expect(res.status).toBe(200);
+    expect(res.body.revision.status).toBe("accepted");
+    // The sink guard was bypassed ONLY for the chapter lock (passages still guarded).
+    expect(persistChapterProse).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(persistChapterProse).mock.calls[0][2]).toEqual({ skipChapterLock: true });
+  });
+
+  it("an AI actor can NEVER spend a one-time unlock (403)", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const mod = await import("../routes/book-studio-review.js");
+    const agentApp = express();
+    agentApp.use(express.json());
+    agentApp.use((req: any, _res: any, next: any) => {
+      req.actor = { type: "agent", agentId: "agent-1", companyId: "co-1" };
+      next();
+    });
+    agentApp.use(mod.bookStudioReviewRoutes(db));
+    agentApp.use((err: any, _req: any, res: any, _next: any) => {
+      res.status(err.status || 500).json({ error: err.message });
+    });
+    const res = await request(agentApp)
+      .post(`${BASE}/revisions/${rev.id}/accept`)
+      .send({ override: "one-time-unlock-apply-relock" });
+    expect(res.status).toBe(403);
+    expect(persistChapterProse).not.toHaveBeenCalled();
+  });
+});

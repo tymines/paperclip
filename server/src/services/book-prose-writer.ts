@@ -108,7 +108,7 @@ export interface PersistProseResult {
 export async function persistChapterProse(
   db: Db,
   args: { bookId: string; bookSlug: string; chapterNumber: number; prose: string },
-  opts?: { lockGuard?: boolean },
+  opts?: { lockGuard?: boolean; skipChapterLock?: boolean },
 ): Promise<PersistProseResult> {
   const { bookId, bookSlug, chapterNumber } = args;
   // Consistent `## Chapter N: Title` headings across every write path (#7).
@@ -120,6 +120,8 @@ export async function persistChapterProse(
     .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
 
   // ① TOCTOU at the sink: verify locks live, immediately before any write.
+  // skipChapterLock is ONLY for the human-approved one-time-unlock-apply-
+  // relock execution — passage locks still apply in full.
   if (opts?.lockGuard !== false) {
     await assertProsePersistAllowed(db, {
       bookId,
@@ -128,6 +130,7 @@ export async function persistChapterProse(
       prose,
       existingContent: existing?.content ?? "",
       existingLocked: existing?.locked ?? false,
+      skipChapterLock: opts?.skipChapterLock === true,
     });
   }
 

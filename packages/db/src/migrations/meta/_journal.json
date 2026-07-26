@@ -1086,6 +1086,13 @@
       "when": 1785014982622,
       "tag": "0158_chapter_passage_locks",
       "breakpoints": true
+    },
+    {
+      "idx": 155,
+      "version": "7",
+      "when": 1785024968677,
+      "tag": "0159_bible_codex",
+      "breakpoints": true
     }
   ]
 }

@@ -15,8 +15,8 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, conflict, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { callLLM } from "../services/chapter-generator.js";
-import { persistChapterProse, chapterContentHash } from "../services/book-prose-writer.js";
-import { lockedError, findOverlappingLocks, isMissingLocksTable, assertChapterWritable, getPassageLocks, spansOverlap, resolveChapterLocked } from "../services/book-locks.js";
+import { persistChapterProse, chapterContentHash, writeChapterToVault } from "../services/book-prose-writer.js";
+import { lockedError, findOverlappingLocks, isMissingLocksTable, assertChapterWritable, getPassageLocks, spansOverlap, resolveChapterLocked, assertHumanActor } from "../services/book-locks.js";
 import { runBaselineReview, persistBaselineReport, type BaselineReport } from "../services/book-review.js";
 
 // Gated-migration pattern (same as book_annotations/0151): if 0157 isn't
@@ -416,7 +416,19 @@ export function bookStudioReviewRoutes(db: Db) {
       // Spec v1 §7: locks are re-checked at COMMIT time, not just proposal
       // time — content locked after the proposal was computed still wins.
       // Fail-closed: DB locked AND vault human_locked are honored.
-      await assertChapterWritable(db, bookId, revision.chapterNumber, book.slug);
+      // Exception: §7's Locked-Content card option "one-time-unlock-apply-
+      // relock" — the human author explicitly approves THIS accept; the
+      // chapter lock is bypassed for this single write (passage locks still
+      // apply in full) and the chapter is re-locked immediately after.
+      const { override } = (req.body ?? {}) as { override?: string };
+      const oneTimeUnlock = override === "one-time-unlock-apply-relock";
+      let chapterWasLocked = false;
+      if (oneTimeUnlock) {
+        assertHumanActor(req); // only Baily can spend a one-time unlock
+        chapterWasLocked = await resolveChapterLocked(db, bookId, revision.chapterNumber, book.slug);
+      } else {
+        await assertChapterWritable(db, bookId, revision.chapterNumber, book.slug);
+      }
       // Passage locks apply to EVERY scope, not just "passage" — a
       // whole-chapter or canon-fix replacement must also preserve locked
       // spans. The shared sink re-verifies this atomically at write time;
@@ -462,7 +474,30 @@ export function bookStudioReviewRoutes(db: Db) {
 
       const { title } = await persistChapterProse(db, {
         bookId, bookSlug: book.slug, chapterNumber: revision.chapterNumber, prose: newContent,
-      });
+      }, oneTimeUnlock && chapterWasLocked ? { skipChapterLock: true } : undefined);
+
+      // One-time-unlock-apply-relock: the lock goes straight back on (DB +
+      // vault frontmatter) and the whole sequence is activity-logged. The
+      // unlock never stands — it existed only for this accepted proposal.
+      if (oneTimeUnlock && chapterWasLocked) {
+        await db
+          .update(manuscriptChapters)
+          .set({ locked: true, updatedAt: new Date() })
+          .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, revision.chapterNumber)));
+        const [relockedChapter] = await db
+          .select()
+          .from(manuscriptChapters)
+          .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, revision.chapterNumber)));
+        if (relockedChapter) {
+          writeChapterToVault(book.slug, revision.chapterNumber, title, newContent, true, { preserveVaultLock: false });
+        }
+        await logActivity(db, {
+          companyId, actorType: getActorInfo(req).actorType, actorId: getActorInfo(req).actorId,
+          action: "chapter.one_time_unlock_applied_relocked",
+          entityType: "book", entityId: bookId,
+          details: { bookId, chapterNumber: revision.chapterNumber, revisionId: revision.id },
+        }).catch(() => {});
+      }
 
       const [updated] = await db
         .update(bookRevisions)
