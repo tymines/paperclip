@@ -23,16 +23,16 @@ vi.mock("../services/book-review.js", () => ({
   PASS_THRESHOLD: 7,
 }));
 
-// Prose persistence: real chapterContentHash (accept path re-checks hashes),
-// but persistChapterProse is mocked so tests NEVER touch the vault filesystem.
-vi.mock("../services/book-prose-writer.js", async () => {
-  const { createHash } = await import("node:crypto");
+// Prose persistence: real module (chapterContentHash, frontmatter readers),
+// but persistChapterProse/writeChapterToVault are mocked so tests NEVER touch
+// the vault filesystem. Spread the actual module so book-locks.ts still gets
+// readVaultChapterFrontmatter + BOOK_VAULT_ROOT.
+vi.mock("../services/book-prose-writer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/book-prose-writer.js")>();
   return {
-    chapterContentHash: (content: string) =>
-      createHash("sha256").update(content ?? "", "utf8").digest("hex").slice(0, 16),
+    ...actual,
     persistChapterProse: vi.fn(),
     writeChapterToVault: vi.fn(),
-    normalizeChapterHeading: (prose: string) => prose,
   };
 });
 
@@ -353,5 +353,58 @@ describe("POST /revisions/:id/accept|reject", () => {
     const acc = await request(app).post(`${BASE}/revisions/${rev.id}/accept`);
     expect(acc.status).toBe(200);
     expect(db.__state.book.metadata.reviewNotes[0].status).toBe("resolved");
+  });
+});
+
+// ── one-time-unlock-apply-relock (§7 Locked-Content card execution) ────
+
+describe("POST /revisions/:id/accept — one-time-unlock-apply-relock", () => {
+  it("a locked chapter refuses a normal accept (409 LOCKED), nothing written", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const res = await request(app).post(`${BASE}/revisions/${rev.id}/accept`);
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/locked/i);
+    expect(persistChapterProse).not.toHaveBeenCalled();
+  });
+
+  it("Baily's one-time unlock: accepts through the guard (passage locks still on), then re-locks", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const res = await request(app)
+      .post(`${BASE}/revisions/${rev.id}/accept`)
+      .send({ override: "one-time-unlock-apply-relock" });
+    expect(res.status).toBe(200);
+    expect(res.body.revision.status).toBe("accepted");
+    // The sink guard was bypassed ONLY for the chapter lock (passages still guarded).
+    expect(persistChapterProse).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(persistChapterProse).mock.calls[0][2]).toEqual({ skipChapterLock: true });
+  });
+
+  it("an AI actor can NEVER spend a one-time unlock (403)", async () => {
+    const db = mockDb();
+    const app = await createTestApp(db);
+    const rev = await createPendingRevision(app, db);
+    db.__state.chapters[0].locked = true;
+    const mod = await import("../routes/book-studio-review.js");
+    const agentApp = express();
+    agentApp.use(express.json());
+    agentApp.use((req: any, _res: any, next: any) => {
+      req.actor = { type: "agent", agentId: "agent-1", companyId: "co-1" };
+      next();
+    });
+    agentApp.use(mod.bookStudioReviewRoutes(db));
+    agentApp.use((err: any, _req: any, res: any, _next: any) => {
+      res.status(err.status || 500).json({ error: err.message });
+    });
+    const res = await request(agentApp)
+      .post(`${BASE}/revisions/${rev.id}/accept`)
+      .send({ override: "one-time-unlock-apply-relock" });
+    expect(res.status).toBe(403);
+    expect(persistChapterProse).not.toHaveBeenCalled();
   });
 });

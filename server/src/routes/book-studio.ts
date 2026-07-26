@@ -24,7 +24,7 @@ import {
   sendChatMessageSchema,
   toDraftQuerySchema,
 } from "@paperclipai/shared";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -35,6 +35,7 @@ import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
+import { assertHumanActor, lockedError, assertProsePersistAllowed, isSerializationError } from "../services/book-locks.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -218,6 +219,17 @@ function entityRoutes(
       throw notFound(`${entityLabel} not found`);
     }
 
+    // Spec v1 §7 ④: bible-entry locks are human-only. Toggling `locked`
+    // requires a human actor, and a locked entry refuses AI edits outright.
+    const patchData = parsed.data as Record<string, unknown>;
+    if ("locked" in patchData) {
+      assertHumanActor(req);
+    }
+    const actorInfo = getActorInfo(req);
+    if ((existing as Record<string, unknown>).locked === true && actorInfo.actorType !== "user" && !("locked" in patchData)) {
+      throw lockedError("bible-entry", `${entityLabel} is locked — AI edits refused. A human must unlock it first.`);
+    }
+
     const [updated] = await db
       .update(table)
       .set({ ...parsed.data, updatedAt: new Date() })
@@ -279,7 +291,23 @@ function entityRoutes(
       throw notFound(`${entityLabel} not found`);
     }
 
-    await db.delete(table).where(eq(table.id, id));
+    // Spec v1 §7 ④: a LOCKED bible entry refuses AI deletion — only the human
+    // author may delete locked canon (and her delete is activity-logged below).
+    const deleteActor = getActorInfo(req);
+    if ((existing as Record<string, unknown>).locked === true && deleteActor.actorType !== "user") {
+      throw lockedError("bible-entry", `${entityLabel} is locked — AI deletion refused. A human must unlock it first.`);
+    }
+
+    // Atomic for AI actors: the lock predicate rides on the DELETE itself —
+    // a lock set between the read above and this statement yields 0 rows → 409.
+    if (deleteActor.actorType !== "user") {
+      const deleted = await db.delete(table).where(and(eq(table.id, id), eq(table.locked, false))).returning({ id: table.id });
+      if (deleted.length === 0) {
+        throw lockedError("bible-entry", `${entityLabel} was locked while deleting — nothing was removed.`);
+      }
+    } else {
+      await db.delete(table).where(eq(table.id, id));
+    }
 
     // Vault delete
     try {
@@ -546,30 +574,73 @@ export function bookStudioRoutes(db: Db) {
     if (isNaN(chNum)) throw badRequest("chapterNumber must be an integer");
 
     const { title, content } = (req.body ?? {}) as { title?: string; content?: string };
+    const patchActor = getActorInfo(req);
 
-    const existing = await db
-      .select()
-      .from(manuscriptChapters)
-      .where(and(
-        eq(manuscriptChapters.bookId, bookId),
-        eq(manuscriptChapters.chapterNumber, chNum),
-      ))
-      .then((r) => r[0]);
+    // Spec v1 §7, ATOMIC (Zeus train r2): the guard (chapter DB lock + vault
+    // human_locked + passage locks) and the mutation run in ONE serializable
+    // transaction — for BOTH the update and the insert paths. A passage lock
+    // landing mid-flight aborts the tx (40001 → 409); a chapter lock landing
+    // mid-flight fails the conditional write (0 rows → 409). The human
+    // author's own edits always land (she owns the text).
+    let result: { chapter: Record<string, unknown>; created: boolean };
+    try {
+      result = await db.transaction(async (tx) => {
+        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        const [existing] = await tx
+          .select()
+          .from(manuscriptChapters)
+          .where(and(
+            eq(manuscriptChapters.bookId, bookId),
+            eq(manuscriptChapters.chapterNumber, chNum),
+          ));
 
-    if (existing) {
-      const [updated] = await db
-        .update(manuscriptChapters)
-        .set({ title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() })
-        .where(eq(manuscriptChapters.id, existing.id))
-        .returning();
-      res.json({ chapter: updated });
+        if (patchActor.actorType !== "user") {
+          const [bookRow] = await tx.select({ slug: books.slug }).from(books).where(eq(books.id, bookId));
+          await assertProsePersistAllowed(tx as unknown as typeof db, {
+            bookId,
+            bookSlug: bookRow?.slug ?? "",
+            chapterNumber: chNum,
+            prose: content ?? existing?.content ?? "",
+            existingContent: existing?.content ?? "",
+            existingLocked: existing?.locked ?? false,
+          });
+        }
+
+        if (existing) {
+          const setValues = { title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() };
+          const [updated] = patchActor.actorType !== "user"
+            ? await tx
+                .update(manuscriptChapters)
+                .set(setValues)
+                .where(and(eq(manuscriptChapters.id, existing.id), eq(manuscriptChapters.locked, false)))
+                .returning()
+            : await tx
+                .update(manuscriptChapters)
+                .set(setValues)
+                .where(eq(manuscriptChapters.id, existing.id))
+                .returning();
+          if (!updated) throw lockedError("chapter", `Chapter ${chNum} was locked while writing — nothing was saved.`);
+          return { chapter: updated, created: false };
+        }
+
+        const id = randomUUID();
+        const [inserted] = await tx
+          .insert(manuscriptChapters)
+          .values({ id, bookId, chapterNumber: chNum, title: title || "", content: content || "" })
+          .returning();
+        return { chapter: inserted, created: true };
+      });
+    } catch (err) {
+      if (isSerializationError(err)) {
+        throw lockedError("chapter", `Chapter ${chNum}'s locks changed while writing — nothing was saved.`);
+      }
+      throw err;
+    }
+
+    if (result.created) {
+      res.status(201).json({ chapter: result.chapter });
     } else {
-      const id = randomUUID();
-      const [inserted] = await db
-        .insert(manuscriptChapters)
-        .values({ id, bookId, chapterNumber: chNum, title: title || "", content: content || "" })
-        .returning();
-      res.status(201).json({ chapter: inserted });
+      res.json({ chapter: result.chapter });
     }
   });
 

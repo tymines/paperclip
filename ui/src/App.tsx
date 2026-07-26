@@ -49,7 +49,7 @@ import DesignLibrary from "./pages/DesignLibrary";
 import { ImageStudio } from "./pages/ImageStudio";
 import { GymPage } from "./pages/GymPage";
 import { CreativeStudio } from "./pages/CreativeStudio";
-import { BookWritingPage } from "./pages/BookWritingPage";
+import { DirectorsDeckPage } from "./pages/DirectorsDeckPage";
 import { ErrorBoundary as BookStudioErrorBoundary } from "./components/book-studio/ErrorBoundary";
 import { OrgChart } from "./pages/OrgChart";
 import { Personas } from "./pages/Personas";
@@ -119,7 +119,7 @@ function boardRoutes() {
       <Route path="war-room" element={<WarRoom />} />
       <Route path="gym" element={<GymPage />} />
       <Route path="creative-studio" element={<CreativeStudio />} />
-      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><DirectorsDeckPage /></BookStudioErrorBoundary>} />
       <Route path="rooms/:roomId" element={<RoomDetail />} />
       <Route path="social" element={<SocialScheduler />} />
       <Route path="social/posts/:postId" element={<SocialPostDetail />} />
@@ -194,7 +194,7 @@ function boardRoutes() {
       <Route path="image-studio" element={<ImageStudio />} />
 <Route path="gym" element={<GymPage />} />
       <Route path="creative-studio" element={<CreativeStudio />} />
-      <Route path="book-writing" element={<BookStudioErrorBoundary><BookWritingPage /></BookStudioErrorBoundary>} />
+      <Route path="book-writing" element={<BookStudioErrorBoundary><DirectorsDeckPage /></BookStudioErrorBoundary>} />
       {/* Legacy standalone tool routes — collapsed into the unified Image Studio
           workbench. Redirect old links to the matching ?tab= rather than 404. */}
       <Route path="image-studio/tools/photoshoot" element={<LegacyImageToolRedirect tab="photoshoot" />} />
