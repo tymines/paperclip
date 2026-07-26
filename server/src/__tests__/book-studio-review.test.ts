@@ -23,16 +23,16 @@ vi.mock("../services/book-review.js", () => ({
   PASS_THRESHOLD: 7,
 }));
 
-// Prose persistence: real chapterContentHash (accept path re-checks hashes),
-// but persistChapterProse is mocked so tests NEVER touch the vault filesystem.
-vi.mock("../services/book-prose-writer.js", async () => {
-  const { createHash } = await import("node:crypto");
+// Prose persistence: real module (chapterContentHash, frontmatter readers),
+// but persistChapterProse/writeChapterToVault are mocked so tests NEVER touch
+// the vault filesystem. Spread the actual module so book-locks.ts still gets
+// readVaultChapterFrontmatter + BOOK_VAULT_ROOT.
+vi.mock("../services/book-prose-writer.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../services/book-prose-writer.js")>();
   return {
-    chapterContentHash: (content: string) =>
-      createHash("sha256").update(content ?? "", "utf8").digest("hex").slice(0, 16),
+    ...actual,
     persistChapterProse: vi.fn(),
     writeChapterToVault: vi.fn(),
-    normalizeChapterHeading: (prose: string) => prose,
   };
 });
 
