@@ -3,6 +3,10 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   createDb,
   companies,
@@ -20,6 +24,68 @@ import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+
+const tempPaths: string[] = [];
+
+async function tempDirectory() {
+  const path = await mkdtemp(join(tmpdir(), "paperclip-cost-route-"));
+  tempPaths.push(path);
+  return path;
+}
+
+function createHermesStateDb(path: string, sessionId = "20260724_010203_unbound") {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      started_at REAL,
+      ended_at REAL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT
+    );
+    CREATE TABLE session_model_usage (
+      session_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      billing_provider TEXT NOT NULL,
+      task TEXT NOT NULL DEFAULT '',
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT,
+      first_seen REAL,
+      last_seen REAL
+    );
+  `);
+  db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(sessionId, 1_785_000_000, 1_785_000_010, 10, 5, 0, 0, 0, 1, 0, null, "subscription_included", "included", "none", "hermes-2026-07");
+  db.prepare("INSERT INTO session_model_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(sessionId, "included-model", "provider-a", "", 1, 10, 5, 0, 0, 0, 0, null, "subscription_included", "included", "none", "hermes-2026-07", 1_785_000_000, 1_785_000_010);
+  db.close();
+}
+
+function createIncompatibleHermesStateDb(path: string) {
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+  db.close();
+}
 
 function makeDb(overrides: Record<string, unknown> = {}) {
   const selectChain = {
@@ -211,6 +277,10 @@ beforeEach(() => {
   mockBudgetService.upsertPolicy.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("cost routes", () => {
   it("accepts valid ISO date strings", async () => {
     const { parseCostDateRange } = await loadCostParsers();
@@ -320,6 +390,16 @@ describe("cost routes", () => {
       grain: "week",
     });
     expect(res.body.grain).toBe("week");
+  });
+
+  it("returns 503 when the fleet dashboard collector fails closed", async () => {
+    const app = await createApp();
+    mockCostService.fleetDashboard.mockRejectedValueOnce(Object.assign(new Error("HERMES_COST_COMPANY_ID is required"), { status: 503 }));
+
+    const res = await request(app).get("/api/companies/company-1/costs/fleet-dashboard");
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "HERMES_COST_COMPANY_ID is required" });
   });
 
   it("returns 400 for invalid finance event list limits", async () => {
@@ -470,6 +550,7 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await Promise.all(tempPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
     await db.delete(financeEvents);
     await db.delete(costEvents);
     await db.delete(activityLog);
@@ -557,6 +638,89 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byAgentRow?.inputTokens).toBe(4_000_000_000);
     expect(byProjectRow?.costCents).toBe(4_000_000_000);
     expect(byAgentModelRow?.costCents).toBe(4_000_000_000);
+  });
+
+  it("fails the local fleet dashboard endpoint closed when the collector company binding is missing", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", undefined);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const service = costService(db);
+    await expect(service.fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/HERMES_COST_COMPANY_ID/i);
+  });
+
+  it("fails the local fleet dashboard endpoint closed when the collector company binding mismatches", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", randomUUID());
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const service = costService(db);
+    await expect(service.fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/collector company binding/i);
+  });
+
+  it("allows unattributed local sessions only when the collector company binding matches", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", companyId);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const dashboard = await costService(db).fleetDashboard(companyId, { grain: "day" });
+
+    expect(dashboard.unattributedSessions).toEqual([
+      expect.objectContaining({
+        sessionId: "20260724_010203_unbound",
+        billingMode: "subscription_included",
+        costStatus: "included",
+        actualCostUsd: null,
+      }),
+    ]);
+  });
+
+  it("fails the local fleet dashboard endpoint loudly on incompatible Hermes state schema", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createIncompatibleHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", companyId);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await expect(costService(db).fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/Hermes aggregate usage is unavailable/i);
   });
 
   it("aggregates issue costs across recursive descendants only", async () => {

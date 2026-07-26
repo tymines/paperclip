@@ -164,6 +164,13 @@ export interface FleetCostDashboardPayload {
     avgLatencyMs: number | null;
     avgTtftMs: number | null;
     throughputOutputTokensPerSecond: number | null;
+    completedTasks: number;
+    costPerCompletedTaskUsd: number | null;
+    avgTaskWallClockMs: number | null;
+    turns: number;
+    compactions: number;
+    stalls: number | null;
+    stallsAvailability: "available" | "unavailable";
   }>;
   taskRows: Array<{
     issueId: string | null;

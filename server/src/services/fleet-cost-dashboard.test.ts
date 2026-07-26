@@ -241,6 +241,88 @@ describe("fleet cost dashboard collector", () => {
     expect(() => readHermesSessionUsage(statePath)).toThrowError(/Hermes aggregate usage is unavailable/i);
   });
 
+  it("keeps model rows separate when cost source or pricing version differ", async () => {
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      range: { from: new Date("2026-07-25T00:00:00.000Z"), to: new Date("2026-07-26T00:00:00.000Z") },
+      grain: "day",
+      usage: {
+        sessions: [{
+          sessionId: "session-1",
+          startedAt: 1_785_000_000,
+          endedAt: 1_785_000_010,
+          inputTokens: 20,
+          outputTokens: 10,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          apiCallCount: 2,
+          estimatedCostUsd: 0.03,
+          actualCostUsd: null,
+          billingMode: "metered",
+          costStatus: "estimated",
+          costSource: "mixed",
+          pricingVersion: null,
+        }],
+        modelUsage: [
+          {
+            sessionId: "session-1",
+            model: "same-model",
+            provider: "provider-a",
+            task: "",
+            apiCallCount: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+            estimatedCostUsd: 0.01,
+            actualCostUsd: null,
+            billingMode: "metered",
+            costStatus: "estimated",
+            costSource: "pricing_table",
+            pricingVersion: "v1",
+            firstSeen: 1_785_000_000,
+            lastSeen: 1_785_000_005,
+          },
+          {
+            sessionId: "session-1",
+            model: "same-model",
+            provider: "provider-a",
+            task: "",
+            apiCallCount: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+            estimatedCostUsd: 0.02,
+            actualCostUsd: null,
+            billingMode: "metered",
+            costStatus: "estimated",
+            costSource: "provider_estimate",
+            pricingVersion: "v2",
+            firstSeen: 1_785_000_005,
+            lastSeen: 1_785_000_010,
+          },
+        ],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-24T01:02:10.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    expect(dashboard.modelRows.map((row) => ({
+      costSource: row.costSource,
+      pricingVersion: row.pricingVersion,
+      estimatedCostUsd: row.estimatedCostUsd,
+    }))).toEqual([
+      { costSource: "provider_estimate", pricingVersion: "v2", estimatedCostUsd: 0.02 },
+      { costSource: "pricing_table", pricingVersion: "v1", estimatedCostUsd: 0.01 },
+    ]);
+  });
+
   it("builds versioned generic observations and deduplicates replay by observation id", async () => {
     const dir = await tempDirectory();
     const statePath = join(dir, "state.db");

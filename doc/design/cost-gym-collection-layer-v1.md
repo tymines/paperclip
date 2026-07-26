@@ -82,7 +82,10 @@ Set these environment variables only when defaults are not correct:
 HERMES_HOME=~/.hermes
 HERMES_STATE_DB_PATH=~/.hermes/state.db
 HERMES_COST_TELEMETRY_DB_PATH=~/.hermes/cost-dashboard/telemetry.sqlite3
+HERMES_COST_COMPANY_ID=<paperclip-company-id>
 ```
+
+`HERMES_COST_TELEMETRY_DB_PATH` is shared by the server and the Hermes user plugin; set it in both environments when using a custom sidecar location. `HERMES_COST_COMPANY_ID` is required for the local endpoint because Hermes `state.db` is global to the local profile. Paperclip fails closed with HTTP 503 when the binding is missing or does not match the requested company.
 
 For Paperclip-launched Hermes runs, inject:
 

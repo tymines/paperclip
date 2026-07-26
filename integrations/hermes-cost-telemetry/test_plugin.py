@@ -110,6 +110,25 @@ class HermesCostTelemetryPluginTest(unittest.TestCase):
 
         self.assertFalse((Path(self.temp.name) / "cost-dashboard" / "telemetry.sqlite3").exists())
 
+    def test_honors_telemetry_db_path_override(self):
+        override_path = Path(self.temp.name) / "custom" / "paperclip-telemetry.sqlite3"
+        with patch.dict(os.environ, {"HERMES_COST_TELEMETRY_DB_PATH": str(override_path)}, clear=False):
+            plugin = load_plugin()
+            plugin.on_post_api_request(
+                session_id="session-1",
+                turn_id="turn-1",
+                api_request_id="request-1",
+                model="model",
+                provider="provider",
+                started_at=1,
+                ended_at=2,
+                api_duration=1,
+                usage={},
+            )
+
+        self.assertTrue(override_path.exists())
+        self.assertFalse((Path(self.temp.name) / "cost-dashboard" / "telemetry.sqlite3").exists())
+
     def test_registers_only_supported_post_api_request_hook(self):
         plugin = load_plugin()
 

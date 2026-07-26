@@ -22,7 +22,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
-import { badRequest } from "../errors.js";
+import { badRequest, HttpError, serviceUnavailable } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 export function parseCostDateRange(query: Record<string, unknown>) {
@@ -195,8 +195,17 @@ export function costRoutes(
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
     const query = parseFleetDashboardQuery(req.query);
-    const payload = await costs.fleetDashboard(companyId, query);
-    res.json(payload);
+    try {
+      const payload = await costs.fleetDashboard(companyId, query);
+      res.json(payload);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      const status = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : 503;
+      if (status === 503) {
+        throw serviceUnavailable(error instanceof Error ? error.message : "Fleet dashboard collector unavailable");
+      }
+      throw error;
+    }
   });
 
   router.get("/companies/:companyId/costs/by-provider", async (req, res) => {

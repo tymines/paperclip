@@ -44,6 +44,9 @@ def _hermes_home() -> Path:
 
 
 def telemetry_db_path() -> Path:
+    configured = os.environ.get("HERMES_COST_TELEMETRY_DB_PATH")
+    if configured:
+        return Path(configured).expanduser()
     return _hermes_home() / "cost-dashboard" / "telemetry.sqlite3"
 
 

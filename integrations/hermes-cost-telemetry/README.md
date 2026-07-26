@@ -12,6 +12,8 @@ The plugin writes:
 $HERMES_HOME/cost-dashboard/telemetry.sqlite3
 ```
 
+Set `HERMES_COST_TELEMETRY_DB_PATH` when Paperclip and the plugin should use a non-default sidecar path. The plugin and server honor the same override.
+
 Paperclip reads Hermes aggregate billing data from:
 
 ```text
@@ -25,5 +27,7 @@ and per-call telemetry from:
 $HERMES_COST_TELEMETRY_DB_PATH
 # default: ~/.hermes/cost-dashboard/telemetry.sqlite3
 ```
+
+The Paperclip local endpoint also requires `HERMES_COST_COMPANY_ID=<company-id>`. This binds the global local Hermes database to one Paperclip company and fails closed when missing or mismatched.
 
 The sidecar table is idempotent on `(session_id, api_request_id)`, so replayed hook deliveries do not duplicate observations. Missing sidecar data is treated as unavailable latency/TTFT rather than fabricated zero-speed metrics.

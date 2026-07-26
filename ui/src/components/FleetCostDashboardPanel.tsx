@@ -12,12 +12,23 @@ function ms(value: number | null | undefined): string {
   return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
 }
 
+function rate(value: number | null | undefined): string {
+  if (value == null) return "unavailable";
+  return `${value.toFixed(2)} tok/s`;
+}
+
 function billingLabel(row: { billingMode: string; costStatus: string; actualCostUsd: number | null }) {
   if (row.costStatus === "included" || row.billingMode === "subscription_included") {
     return `Included · actual unavailable`;
   }
   if (row.actualCostUsd == null) return "Unknown actual";
   return "Metered";
+}
+
+function costLabel(row: { actualCostUsd: number | null; estimatedCostUsd?: number | null }) {
+  if (row.actualCostUsd != null) return `actual ${usd(row.actualCostUsd)}`;
+  if (row.estimatedCostUsd != null) return `estimated ${usd(row.estimatedCostUsd)}`;
+  return "unknown";
 }
 
 export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboardPayload }) {
@@ -37,7 +48,7 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
-          <Metric label="Observed cost" value={usd(totalCost)} />
+          <Metric label="Estimated or included cost" value={usd(totalCost)} />
           <Metric label="Output tokens" value={formatTokens(totalOutput)} />
           <Metric label="Unattributed" value={String(payload.unattributedSessions.length)} />
         </div>
@@ -52,15 +63,26 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
 
       <div className="grid gap-4 p-4 lg:grid-cols-[1.2fr_1fr]">
         <div className="overflow-x-auto">
+          <div className="mb-3 rounded-md border border-border p-3">
+            <div className="text-sm font-medium">{payload.grain} trend</div>
+            <div className="mt-2 grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+              {payload.trends.map((row) => (
+                <div key={row.bucket} className="rounded border border-border px-2 py-1">
+                  <div className="font-mono text-card-foreground">{row.bucket}</div>
+                  <div>{usd(row.costUsd)} · {formatTokens(row.outputTokens)} out · {row.completedTasks} done</div>
+                </div>
+              ))}
+            </div>
+          </div>
           <table className="w-full min-w-[760px] text-sm">
             <thead className="text-left text-xs uppercase text-muted-foreground">
               <tr>
                 <th className="py-2 pr-3">Task</th>
                 <th className="py-2 pr-3">Agent</th>
                 <th className="py-2 pr-3">Cost</th>
-                <th className="py-2 pr-3">Speed</th>
+                <th className="py-2 pr-3">Wall / Speed</th>
                 <th className="py-2 pr-3">Turns</th>
-                <th className="py-2 pr-3">Compactions</th>
+                <th className="py-2 pr-3">Compactions / Stalls</th>
               </tr>
             </thead>
             <tbody>
@@ -76,11 +98,18 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                     <div className="text-xs text-muted-foreground">per done {usd(row.costPerCompletedTaskUsd)}</div>
                   </td>
                   <td className="py-2 pr-3">
-                    <div className="flex items-center gap-1"><TimerReset className="h-3.5 w-3.5" /> {ms(row.avgLatencyMs)} latency</div>
+                    <div>{ms(row.wallClockMs)} wall</div>
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground"><TimerReset className="h-3.5 w-3.5" /> {ms(row.avgLatencyMs)} latency</div>
                     <div className="text-xs text-muted-foreground">{ms(row.avgTtftMs)} TTFT</div>
+                    <div className="text-xs text-muted-foreground">{rate(row.throughputOutputTokensPerSecond)}</div>
                   </td>
                   <td className="py-2 pr-3">{row.turns}</td>
-                  <td className="py-2 pr-3">{row.compactions}</td>
+                  <td className="py-2 pr-3">
+                    <div>{row.compactions}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.stalls == null ? "Stalls unavailable" : `${row.stalls} stalls`}
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -106,10 +135,17 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                     {billingLabel(row)}
                   </span>
                 </div>
-                <div className="mt-1 grid grid-cols-3 gap-2 text-xs text-muted-foreground">
-                  <span>{usd(row.actualCostUsd ?? row.estimatedCostUsd)}</span>
+                <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                  <span>{costLabel(row)}</span>
+                  <span>{row.completedTasks} Completed tasks</span>
+                  <span>{usd(row.costPerCompletedTaskUsd)} Cost / completed</span>
+                  <span>{ms(row.avgTaskWallClockMs)} Task wall</span>
+                  <span>{row.turns} turns</span>
+                  <span>{rate(row.throughputOutputTokensPerSecond)}</span>
                   <span>{ms(row.avgLatencyMs)} latency</span>
                   <span>{ms(row.avgTtftMs)} TTFT</span>
+                  <span>{row.compactions} compactions</span>
+                  <span>{row.stallsAvailability === "unavailable" ? "Stalls unavailable" : `${row.stalls ?? 0} stalls`}</span>
                 </div>
               </div>
             ))}

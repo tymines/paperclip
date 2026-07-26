@@ -6,6 +6,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, heartbeatRuns, issues, projects } from "@paperclipai/db";
+import { serviceUnavailable } from "../errors.js";
 
 export type FleetDashboardGrain = "day" | "week" | "month";
 
@@ -382,6 +383,24 @@ function usdToDashboardCost(usage: HermesModelUsage): number | null {
   return usage.estimatedCostUsd;
 }
 
+function modelAggregationKey(usage: {
+  provider: string;
+  model: string;
+  billingMode: string;
+  costStatus: string;
+  costSource: string;
+  pricingVersion: string | null;
+}): string {
+  return [
+    usage.provider,
+    usage.model,
+    usage.billingMode,
+    usage.costStatus,
+    usage.costSource,
+    usage.pricingVersion ?? "",
+  ].join("\0");
+}
+
 function matchesRange(session: HermesSessionUsage, range?: FleetDashboardQuery["range"]): boolean {
   if (session.startedAt < 1_000_000_000) return true;
   const started = new Date(session.startedAt * 1000);
@@ -477,7 +496,7 @@ export function aggregateFleetCostDashboard(input: {
     const ttftSamples = taskCalls.map((row) => row.ttft).filter((value): value is number => value !== null);
     const models = taskUsage.map((usage) => {
       const cost = usdToDashboardCost(usage);
-      const modelKey = `${usage.provider}\0${usage.model}\0${usage.billingMode}\0${usage.costStatus}`;
+      const modelKey = modelAggregationKey(usage);
       const modelRow = modelRowsByKey.get(modelKey) ?? {
         provider: usage.provider,
         model: usage.model,
@@ -496,6 +515,13 @@ export function aggregateFleetCostDashboard(input: {
         avgLatencyMs: null,
         avgTtftMs: null,
         throughputOutputTokensPerSecond: null,
+        completedTasks: 0,
+        costPerCompletedTaskUsd: null,
+        avgTaskWallClockMs: null,
+        turns: 0,
+        compactions: 0,
+        stalls: null,
+        stallsAvailability: "unavailable",
       };
       modelRow.estimatedCostUsd += usage.estimatedCostUsd ?? 0;
       modelRow.actualCostUsd = usage.actualCostUsd === null ? modelRow.actualCostUsd : (modelRow.actualCostUsd ?? 0) + usage.actualCostUsd;
@@ -570,9 +596,22 @@ export function aggregateFleetCostDashboard(input: {
   }
 
   const modelRows = [...modelRowsByKey.values()].map((row) => {
+    const matchingTaskRows = taskRows.filter((task) =>
+      task.models.some((model) =>
+        model.provider === row.provider
+        && model.model === row.model
+        && model.billingMode === row.billingMode
+        && model.costStatus === row.costStatus
+        && model.costSource === row.costSource
+        && (model.pricingVersion ?? null) === (row.pricingVersion ?? null),
+      ),
+    );
     const calls = apiCalls.filter((call) => call.model === row.model && call.provider === row.provider);
     const durationMs = calls.reduce((sum, call) => sum + call.apiDuration * 1000, 0);
     const ttftSamples = calls.map((call) => call.ttft).filter((value): value is number => value !== null);
+    const completedTasks = matchingTaskRows.filter((task) => task.completionState === "succeeded" || task.completionState === "done").length;
+    const wallClockSamples = matchingTaskRows.map((task) => task.wallClockMs).filter((value): value is number => value !== null);
+    const costPerCompletedTaskUsd = completedTasks > 0 ? row.estimatedCostUsd / completedTasks : null;
     return {
       ...row,
       estimatedCostUsd: round(row.estimatedCostUsd),
@@ -580,6 +619,15 @@ export function aggregateFleetCostDashboard(input: {
       avgLatencyMs: calls.length > 0 ? round(durationMs / calls.length) : null,
       avgTtftMs: ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
       throughputOutputTokensPerSecond: durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
+      completedTasks,
+      costPerCompletedTaskUsd: costPerCompletedTaskUsd === null ? null : round(costPerCompletedTaskUsd),
+      avgTaskWallClockMs: wallClockSamples.length > 0
+        ? round(wallClockSamples.reduce((sum, value) => sum + value, 0) / wallClockSamples.length)
+        : null,
+      turns: matchingTaskRows.reduce((sum, task) => sum + task.turns, 0),
+      compactions: matchingTaskRows.reduce((sum, task) => sum + task.compactions, 0),
+      stalls: null,
+      stallsAvailability: "unavailable" as const,
     };
   });
 
@@ -689,21 +737,26 @@ function defaultHermesSidecarPath(): string {
 }
 
 export async function buildLocalFleetCostDashboard(db: Db, companyId: string, query: FleetDashboardQuery = {}) {
+  const collectorCompanyId = process.env.HERMES_COST_COMPANY_ID;
+  if (!collectorCompanyId) {
+    throw serviceUnavailable("HERMES_COST_COMPANY_ID is required for local Hermes cost collection");
+  }
+  if (collectorCompanyId !== companyId) {
+    throw serviceUnavailable("Local Hermes collector company binding does not match requested company");
+  }
   const stateDbPath = defaultHermesStateDbPath();
   const sidecarDbPath = defaultHermesSidecarPath();
-  const errors: string[] = [];
   let usage: HermesUsageSnapshot = { sessions: [], modelUsage: [] };
   let apiCalls: HermesApiCall[] = [];
-  try {
-    if (!existsSync(stateDbPath)) {
-      errors.push(`Hermes state database not configured or missing: ${stateDbPath}`);
-    } else {
-      usage = readHermesSessionUsage(stateDbPath);
-    }
-    apiCalls = readHermesApiCalls(sidecarDbPath);
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
+  if (!existsSync(stateDbPath)) {
+    throw serviceUnavailable(`Hermes state database not configured or missing: ${stateDbPath}`);
   }
+  try {
+    usage = readHermesSessionUsage(stateDbPath);
+  } catch (error) {
+    throw serviceUnavailable(error instanceof Error ? error.message : String(error));
+  }
+  apiCalls = readHermesApiCalls(sidecarDbPath);
   const attributions = await loadHermesRunAttributions(db, companyId);
   const observedAt = new Date().toISOString();
   return aggregateFleetCostDashboard({
@@ -717,7 +770,7 @@ export async function buildLocalFleetCostDashboard(db: Db, companyId: string, qu
     freshness: {
       observedAt,
       checkpoint: { sequence: Date.now(), cursor: stateDbPath },
-      errors,
+      errors: [],
     },
   });
 }
