@@ -56,7 +56,7 @@ function mockDb(bookOverride?: any, chaptersOverride?: any, insertOverride?: any
     createdAt: new Date(),
     updatedAt: new Date(),
   }];
-  return {
+  const db: any = {
     select: () => ({
       from: () => ({
         where: () => {
@@ -71,7 +71,11 @@ function mockDb(bookOverride?: any, chaptersOverride?: any, insertOverride?: any
     }),
     insert: () => ({ values: () => ({ returning: () => q(insertVal), onConflictDoUpdate: () => q(insertVal) }) }),
     update: () => ({ set: () => ({ where: () => ({ returning: () => q(insertVal) }) }) }),
+    execute: () => q({}),
   };
+  // Serializable-tx passthrough for the atomic revise path.
+  db.transaction = (fn: (tx: any) => Promise<any>) => fn(db);
+  return db;
 }
 
 // ── Test app builder ─────────────────────────────────────────────────

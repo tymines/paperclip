@@ -24,7 +24,7 @@ import {
   sendChatMessageSchema,
   toDraftQuerySchema,
 } from "@paperclipai/shared";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -35,7 +35,7 @@ import { logActivity } from "../services/index.js";
 import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
-import { assertHumanActor, lockedError, assertProsePersistAllowed } from "../services/book-locks.js";
+import { assertHumanActor, lockedError, assertProsePersistAllowed, isSerializationError } from "../services/book-locks.js";
 
 const VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT ||
@@ -574,61 +574,73 @@ export function bookStudioRoutes(db: Db) {
     if (isNaN(chNum)) throw badRequest("chapterNumber must be an integer");
 
     const { title, content } = (req.body ?? {}) as { title?: string; content?: string };
-
-    const existing = await db
-      .select()
-      .from(manuscriptChapters)
-      .where(and(
-        eq(manuscriptChapters.bookId, bookId),
-        eq(manuscriptChapters.chapterNumber, chNum),
-      ))
-      .then((r) => r[0]);
-
-    // Spec v1 §7: an AI actor may never write locked content through this
-    // direct PATCH either — chapter lock (DB + vault human_locked), and any
-    // content change must preserve locked passages verbatim. The human author
-    // herself edits freely (she owns the text; her saves are not AI writes).
     const patchActor = getActorInfo(req);
-    if (patchActor.actorType !== "user") {
-      const [bookRow] = await db.select({ slug: books.slug }).from(books).where(eq(books.id, bookId));
-      await assertProsePersistAllowed(db, {
-        bookId,
-        bookSlug: bookRow?.slug ?? "",
-        chapterNumber: chNum,
-        prose: content ?? existing?.content ?? "",
-        existingContent: existing?.content ?? "",
-        existingLocked: existing?.locked ?? false,
+
+    // Spec v1 §7, ATOMIC (Zeus train r2): the guard (chapter DB lock + vault
+    // human_locked + passage locks) and the mutation run in ONE serializable
+    // transaction — for BOTH the update and the insert paths. A passage lock
+    // landing mid-flight aborts the tx (40001 → 409); a chapter lock landing
+    // mid-flight fails the conditional write (0 rows → 409). The human
+    // author's own edits always land (she owns the text).
+    let result: { chapter: Record<string, unknown>; created: boolean };
+    try {
+      result = await db.transaction(async (tx) => {
+        await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+        const [existing] = await tx
+          .select()
+          .from(manuscriptChapters)
+          .where(and(
+            eq(manuscriptChapters.bookId, bookId),
+            eq(manuscriptChapters.chapterNumber, chNum),
+          ));
+
+        if (patchActor.actorType !== "user") {
+          const [bookRow] = await tx.select({ slug: books.slug }).from(books).where(eq(books.id, bookId));
+          await assertProsePersistAllowed(tx as unknown as typeof db, {
+            bookId,
+            bookSlug: bookRow?.slug ?? "",
+            chapterNumber: chNum,
+            prose: content ?? existing?.content ?? "",
+            existingContent: existing?.content ?? "",
+            existingLocked: existing?.locked ?? false,
+          });
+        }
+
+        if (existing) {
+          const setValues = { title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() };
+          const [updated] = patchActor.actorType !== "user"
+            ? await tx
+                .update(manuscriptChapters)
+                .set(setValues)
+                .where(and(eq(manuscriptChapters.id, existing.id), eq(manuscriptChapters.locked, false)))
+                .returning()
+            : await tx
+                .update(manuscriptChapters)
+                .set(setValues)
+                .where(eq(manuscriptChapters.id, existing.id))
+                .returning();
+          if (!updated) throw lockedError("chapter", `Chapter ${chNum} was locked while writing — nothing was saved.`);
+          return { chapter: updated, created: false };
+        }
+
+        const id = randomUUID();
+        const [inserted] = await tx
+          .insert(manuscriptChapters)
+          .values({ id, bookId, chapterNumber: chNum, title: title || "", content: content || "" })
+          .returning();
+        return { chapter: inserted, created: true };
       });
+    } catch (err) {
+      if (isSerializationError(err)) {
+        throw lockedError("chapter", `Chapter ${chNum}'s locks changed while writing — nothing was saved.`);
+      }
+      throw err;
     }
 
-    if (existing) {
-      // Atomic for AI actors: `WHERE locked = false` binds the check to the
-      // write — a lock set between the guard above and this UPDATE yields
-      // 0 rows → 409. The human author's own edits always land.
-      const setValues = { title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() };
-      if (patchActor.actorType !== "user") {
-        const [updated] = await db
-          .update(manuscriptChapters)
-          .set(setValues)
-          .where(and(eq(manuscriptChapters.id, existing.id), eq(manuscriptChapters.locked, false)))
-          .returning();
-        if (!updated) throw lockedError("chapter", `Chapter ${chNum} was locked while writing — nothing was saved.`);
-        res.json({ chapter: updated });
-      } else {
-        const [updated] = await db
-          .update(manuscriptChapters)
-          .set(setValues)
-          .where(eq(manuscriptChapters.id, existing.id))
-          .returning();
-        res.json({ chapter: updated });
-      }
+    if (result.created) {
+      res.status(201).json({ chapter: result.chapter });
     } else {
-      const id = randomUUID();
-      const [inserted] = await db
-        .insert(manuscriptChapters)
-        .values({ id, bookId, chapterNumber: chNum, title: title || "", content: content || "" })
-        .returning();
-      res.status(201).json({ chapter: inserted });
+      res.json({ chapter: result.chapter });
     }
   });
 

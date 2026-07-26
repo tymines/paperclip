@@ -14,9 +14,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, execSync: vi.fn() };
 });
 
-import { books, manuscriptChapters, passageLocks } from "@paperclipai/db";
+import { books, manuscriptChapters, passageLocks, runChapterLockBackfill } from "@paperclipai/db";
 import { persistChapterProse, writeChapterToVault } from "../services/book-prose-writer.js";
-import { backfillChapterLocksFromVault } from "../services/book-locks.js";
 
 const PROSE = "The quick brown fox jumps over the lazy dog. More prose follows here.";
 const LOCKED_FM = (n: number) => `---\nnumber: ${n}\ntitle: "One"\nhuman_locked: true\nupdated: x\n---\n\n`;
@@ -177,20 +176,20 @@ describe("writeChapterToVault — human_locked is never flipped back to false", 
   });
 });
 
-// ── 0158 fail-closed backfill ──────────────────────────────────────────
+// ── 0158 migration-time backfill (packages/db data-migrations, awaited) ──
 
-describe("backfillChapterLocksFromVault — 0158 imports pre-existing human_locked", () => {
+describe("runChapterLockBackfill — 0158 imports pre-existing human_locked", () => {
   it("syncs vault human_locked: true chapters UP into manuscript_chapters.locked", async () => {
     vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     const db = mockDb();
-    await backfillChapterLocksFromVault(db, "book-1", "test-novel");
+    await runChapterLockBackfill(db, { bookId: "book-1", bookSlug: "test-novel" });
     expect(db.__state.chapters[0].locked).toBe(true);
   });
 
   it("never clears a DB lock from a vault human_locked: false (upward only)", async () => {
     vaultChapter("test-novel", 1, "---\nnumber: 1\ntitle: \"One\"\nhuman_locked: false\nupdated: x\n---\n\n" + PROSE);
     const db = mockDb({ chapters: [{ id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: PROSE, locked: true }] });
-    await backfillChapterLocksFromVault(db, "book-1", "test-novel");
+    await runChapterLockBackfill(db, { bookId: "book-1", bookSlug: "test-novel" });
     expect(db.__state.chapters[0].locked).toBe(true);
   });
 });

@@ -14,7 +14,7 @@ import { manuscriptChapters } from "@paperclipai/db";
 // here, so a single serializable transaction covers them all atomically.
 // Function-level use only (book-locks imports chapterContentHash from this
 // module — circular refs stay inside function bodies).
-import { assertProsePersistAllowed, lockedError } from "./book-locks.js";
+import { assertProsePersistAllowed, lockedError, isSerializationError } from "./book-locks.js";
 
 export const BOOK_VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
@@ -185,8 +185,7 @@ export async function persistChapterProse(
         return writeTx(tx as unknown as Db, true);
       });
     } catch (err) {
-      const e = err as { code?: string; status?: number };
-      if (e?.code === "40001") {
+      if (isSerializationError(err)) {
         throw lockedError("chapter", `Chapter ${chapterNumber}'s locks changed while writing — the write was refused. Re-run if the lock is gone.`);
       }
       throw err;

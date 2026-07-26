@@ -1,14 +1,14 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { books, storyBibleOutline, manuscriptChapters } from "@paperclipai/db";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { generateChapterDraft, reviseChapterContent, callLLM, streamLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
-import { lockedError, assertChapterWritable, resolveChapterLocked } from "../services/book-locks.js";
+import { lockedError, assertChapterWritable, resolveChapterLocked, isSerializationError } from "../services/book-locks.js";
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
@@ -451,32 +451,42 @@ export function bookStudioChapterGenRoutes(db: Db) {
           revisionInstruction: instruction,
         });
 
-        // Spec v1 §7 ① TOCTOU: re-check live right before updating — a lock
-        // set while the LLM was running still wins. ④ locks compose: a
-        // manuscript chapter lock covers its outline/beats row too.
-        const [outlineNow] = await db
-          .select({ locked: storyBibleOutline.locked })
-          .from(storyBibleOutline)
-          .where(eq(storyBibleOutline.id, existing.id));
-        if (outlineNow?.locked) {
-          throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
-        }
-        await assertChapterWritable(db, bookId, chNum, book.slug);
-
-        // Update the outline entry — CONDITIONALLY: `WHERE locked = false`
-        // binds the check to the write in one statement (no TOCTOU window).
-        const [updated] = await db
-          .update(storyBibleOutline)
-          .set({
-            title: revised.title,
-            beats: revised.beats,
-            source: "ai-revise",
-            updatedAt: new Date(),
-          })
-          .where(and(eq(storyBibleOutline.id, existing.id), eq(storyBibleOutline.locked, false)))
-          .returning();
-        if (!updated) {
-          throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
+        // Spec v1 §7 ① ATOMIC: the live recheck and the mutation run in ONE
+        // serializable transaction — a composing manuscript/vault lock (or a
+        // lock toggle) landing mid-flight aborts or fails the predicate.
+        // ④ locks compose: a manuscript chapter lock covers its beats row.
+        let updated: typeof storyBibleOutline.$inferSelect | undefined;
+        try {
+          updated = await db.transaction(async (tx) => {
+            await tx.execute(sql`SET TRANSACTION ISOLATION LEVEL SERIALIZABLE`);
+            const [outlineNow] = await tx
+              .select({ locked: storyBibleOutline.locked })
+              .from(storyBibleOutline)
+              .where(eq(storyBibleOutline.id, existing.id));
+            if (outlineNow?.locked) {
+              throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
+            }
+            await assertChapterWritable(tx as unknown as typeof db, bookId, chNum, book.slug);
+            const [u] = await tx
+              .update(storyBibleOutline)
+              .set({
+                title: revised.title,
+                beats: revised.beats,
+                source: "ai-revise",
+                updatedAt: new Date(),
+              })
+              .where(and(eq(storyBibleOutline.id, existing.id), eq(storyBibleOutline.locked, false)))
+              .returning();
+            if (!u) {
+              throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
+            }
+            return u;
+          });
+        } catch (err) {
+          if (isSerializationError(err)) {
+            throw lockedError("chapter", `Chapter ${chNum}'s locks changed while revising — the revision was not saved.`);
+          }
+          throw err;
         }
 
         // Log activity

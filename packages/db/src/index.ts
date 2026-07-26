@@ -17,6 +17,7 @@ export {
   type EmbeddedPostgresTestDatabase,
   type EmbeddedPostgresTestSupport,
 } from "./test-embedded-postgres.js";
+export { runChapterLockBackfill } from "./data-migrations/index.js";
 export {
   runDatabaseBackup,
   runDatabaseRestore,
