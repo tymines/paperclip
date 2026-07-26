@@ -5,7 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Plus, Lock, LockOpen, Trash2, ScrollText, Users2, Gem, Cog, Clock,
-  GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles,
+  GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles, Inbox,
 } from "lucide-react";
 
 const API_BASE = "/api";
@@ -69,6 +69,18 @@ interface WithheldFact {
   locked: boolean;
 }
 
+interface QueueItem {
+  id: string;
+  kind: "fact" | "entity";
+  entityType?: string;
+  statement?: string;
+  knownAsOf?: number;
+  name?: string;
+  summary?: string;
+  sourceChapter: number;
+  status: "pending" | "approved" | "rejected" | "skipped-locked";
+}
+
 const CODEX_SECTIONS = [
   { id: "lore", label: "Lore", icon: <ScrollText className="w-3 h-3" /> },
   { id: "factions", label: "Factions", icon: <Users2 className="w-3 h-3" /> },
@@ -80,7 +92,7 @@ const CODEX_SECTIONS = [
   { id: "glossary", label: "Glossary", icon: <BookA className="w-3 h-3" /> },
 ] as const;
 
-type SectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts";
+type SectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts" | "review-queue";
 
 const REL_ENTITY_TYPES = ["character", "location", "lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"];
 
@@ -130,6 +142,8 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [knownFacts, setKnownFacts] = useState<Fact[]>([]);
   const [withheldFacts, setWithheldFacts] = useState<WithheldFact[]>([]);
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [extracting, setExtracting] = useState(false);
   const [available, setAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -154,6 +168,9 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
         setAvailable(res.available);
         setKnownFacts(res.known ?? []);
         setWithheldFacts(res.withheld ?? []);
+      } else if (section === "review-queue") {
+        const res = await apiFetch<{ items: QueueItem[]; pendingCount: number }>(`${prefix}/bible-review-queue`);
+        setQueueItems(res.items ?? []);
       } else {
         const res = await apiFetch<{ available: boolean; entities: CodexEntity[] }>(`${prefix}/codex/${section}`);
         setAvailable(res.available);
@@ -224,6 +241,28 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
     setShowAdd(false); load();
   }
 
+  // ── Bible review queue (extraction proposes; Baily approves/rejects) ──
+  async function extractFromChapter() {
+    setExtracting(true);
+    try {
+      await apiFetch(`${prefix}/bible-extract`, {
+        method: "POST",
+        body: JSON.stringify({ chapterNumber: currentChapter ?? 1 }),
+      });
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  async function resolveQueueItem(id: string, action: "approve" | "reject") {
+    await apiFetch(`${prefix}/bible-review-queue/${id}/${action}`, { method: "POST" })
+      .catch((e) => setError(e.message));
+    load();
+  }
+
   const inputCls = "w-full bg-gray-900 border border-gray-800 rounded px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-700 focus:outline-none";
 
   return (
@@ -245,6 +284,9 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
         <button onClick={() => { setSection("facts"); setShowAdd(false); }} className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] ${section === "facts" ? "bg-blue-900/50 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
           <ShieldCheck className="w-3 h-3" />Facts
         </button>
+        <button onClick={() => { setSection("review-queue"); setShowAdd(false); }} className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] ${section === "review-queue" ? "bg-blue-900/50 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
+          <Inbox className="w-3 h-3" />Review Queue
+        </button>
       </div>
 
       {!available && (
@@ -261,7 +303,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
 
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
         {/* ── Entity sections ── */}
-        {section !== "relationships" && section !== "facts" && (
+        {section !== "relationships" && section !== "facts" && section !== "review-queue" && (
           <>
             {entities.length === 0 && available && (
               <div className="text-xs text-gray-500 italic py-2">No entries yet — canon starts here.</div>
@@ -430,6 +472,50 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
                 <Sparkles className="w-3 h-3" /> Add Fact
               </button>
             )}
+          </>
+        )}
+
+        {/* ── Bible review queue (auto-extracted canon; Baily decides) ── */}
+        {section === "review-queue" && (
+          <>
+            <div className="flex items-center justify-between">
+              <p className="text-[11px] text-gray-500">Extraction only proposes — nothing enters canon without your approval.</p>
+              <button
+                onClick={extractFromChapter}
+                disabled={extracting}
+                className="flex items-center gap-1 px-2 py-1 text-[11px] text-purple-300 hover:text-purple-200 disabled:opacity-50"
+              >
+                <Sparkles className="w-3 h-3" />{extracting ? "Extracting…" : `Extract from ch.${currentChapter ?? 1}`}
+              </button>
+            </div>
+            {queueItems.length === 0 && (
+              <div className="text-xs text-gray-500 italic py-2">Queue is empty — extract from a landed chapter to propose canon.</div>
+            )}
+            {queueItems.map((item) => (
+              <div key={item.id} className={`border rounded p-2.5 ${item.status === "pending" ? "border-gray-800 bg-gray-900/40" : "border-gray-800/50 opacity-60"}`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded border border-purple-800 text-purple-300">
+                        {item.kind === "fact" ? "fact" : item.entityType}
+                      </span>
+                      <span className="text-[10px] text-gray-500">from ch.{item.sourceChapter}</span>
+                      {item.status !== "pending" && <span className="text-[10px] text-gray-500">{item.status}</span>}
+                    </div>
+                    <p className="text-[11px] text-gray-300 mt-1">
+                      {item.kind === "fact" ? item.statement : `${item.name} — ${item.summary}`}
+                    </p>
+                    {item.kind === "fact" && <span className="text-[10px] text-gray-500">known ch.{item.knownAsOf}</span>}
+                  </div>
+                  {item.status === "pending" && (
+                    <div className="flex gap-1.5 shrink-0">
+                      <button onClick={() => resolveQueueItem(item.id, "approve")} className="px-2 py-1 text-[11px] bg-green-800/60 hover:bg-green-700/60 text-green-200 rounded">Approve</button>
+                      <button onClick={() => resolveQueueItem(item.id, "reject")} className="px-2 py-1 text-[11px] bg-gray-800 hover:bg-gray-700 text-gray-300 rounded">Reject</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </>
         )}
       </div>
