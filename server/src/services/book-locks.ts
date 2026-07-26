@@ -214,12 +214,14 @@ export async function assertProsePersistAllowed(
     prose: string;
     existingContent: string;
     existingLocked: boolean;
+    /** Human-approved one-time-unlock ONLY — passage locks still enforced. */
+    skipChapterLock?: boolean;
   },
 ): Promise<void> {
-  const { bookId, bookSlug, chapterNumber, prose, existingContent, existingLocked } = args;
+  const { bookId, bookSlug, chapterNumber, prose, existingContent, existingLocked, skipChapterLock } = args;
 
   // 1. Chapter lock — DB flag OR vault frontmatter (fail-closed; syncs up).
-  if (existingLocked || (await resolveChapterLocked(db, bookId, chapterNumber, bookSlug))) {
+  if (!skipChapterLock && (existingLocked || (await resolveChapterLocked(db, bookId, chapterNumber, bookSlug)))) {
     throw lockedError("chapter", `Chapter ${chapterNumber} is locked — the AI never writes locked content. Unlock it first (or ask the author).`);
   }
 
