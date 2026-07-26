@@ -5,7 +5,7 @@
  * Add new feature routes here following the existing pattern.
  *
  * Route structure:
- *   /:company/book-writing    → BookWritingPage
+ *   /:company/book-writing    → DirectorsDeckPage (the Director's Deck)
  *   /:company/dashboard       → DashboardPage (when created)
  *   /:company/settings        → SettingsPage (when created)
  */
@@ -15,7 +15,7 @@ import { Routes, Route, Navigate, Outlet, useParams } from "react-router-dom";
 import { CompanySidebar } from "@/components/sidebar/CompanySidebar";
 
 // Lazy-load pages for code splitting
-const BookWritingPage = lazy(() => import("@/pages/BookWritingPage"));
+const DirectorsDeckPage = lazy(() => import("@/pages/DirectorsDeckPage"));
 const GymPage = lazy(() => import("@/pages/GymPage").then((m) => ({ default: m.GymPage })));
 const SkillsCatalog = lazy(() =>
   import("@/pages/SkillsCatalog").then((m) => ({ default: m.SkillsCatalog })),
@@ -56,10 +56,11 @@ export function CompanyRouter() {
   return (
     <Routes>
       <Route element={<CompanyLayout />}>
-        {/* Book Writing feature */}
+        {/* Book Studio — the Director's Deck is the tab (3c cutover; classic
+            page kept in-repo but no longer routed) */}
         <Route path="book-writing" element={
           <Suspense fallback={<PageLoading />}>
-            <BookWritingPage />
+            <DirectorsDeckPage />
           </Suspense>
         } />
 
