@@ -1,52 +1,13 @@
-// Book Studio — LOCK fail-closed sink guard (Spec v1 §7, review follow-up).
+// Book Studio — LOCK fail-closed sink guard (Spec v1 §7, atomic review pass).
 // persistChapterProse is the shared write sink: it must refuse, atomically and
 // at write time, ① DB-locked chapters ② vault human_locked frontmatter
 // ③ any write that would clobber a locked passage — and write-through must
-// never flip human_locked back to false. The 0158 backfill imports vault
-// human_locked upward into the DB.
-import { describe, expect, it, vi, beforeEach } from "vitest";
-
-// ── Virtual vault filesystem ──────────────────────────────────────────
-// vaultFiles: path → content. Everything else behaves as "not found".
-const vaultFiles = new Map<string, string>();
-const CH1 = "F:\\Augi Vault\\09 - Book Studio\\Books\\test-novel\\chapters\\ch01.md";
-
-vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  const readFileSync = (p: unknown, enc?: unknown) => {
-    const key = String(p);
-    if (vaultFiles.has(key)) return vaultFiles.get(key)!;
-    return actual.readFileSync(p as never, enc as never);
-  };
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      readFileSync,
-      readdirSync: (p: unknown) => {
-        const prefix = String(p);
-        const names = [...vaultFiles.keys()]
-          .filter((k) => k.startsWith(prefix))
-          .map((k) => k.slice(prefix.length).replace(/^\\|^\//, "").split(/[\\/]/)[0]);
-        if (names.length === 0) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-        return [...new Set(names)];
-      },
-      writeFileSync: vi.fn((p: unknown, data: unknown) => { vaultFiles.set(String(p), String(data)); }),
-      mkdirSync: vi.fn(),
-    },
-    readFileSync,
-    readdirSync: (p: unknown) => {
-      const prefix = String(p);
-      const names = [...vaultFiles.keys()]
-        .filter((k) => k.startsWith(prefix))
-        .map((k) => k.slice(prefix.length).replace(/^\\|^\//, "").split(/[\\/]/)[0]);
-      if (names.length === 0) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-      return [...new Set(names)];
-    },
-    writeFileSync: vi.fn((p: unknown, data: unknown) => { vaultFiles.set(String(p), String(data)); }),
-    mkdirSync: vi.fn(),
-  };
-});
+// never flip human_locked back to false. Portable: real temp vault via
+// BOOK_STUDIO_VAULT_ROOT, no hardcoded paths, no fs mocks.
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -58,7 +19,21 @@ import { persistChapterProse, writeChapterToVault } from "../services/book-prose
 import { backfillChapterLocksFromVault } from "../services/book-locks.js";
 
 const PROSE = "The quick brown fox jumps over the lazy dog. More prose follows here.";
-const LOCKED_FM = "---\nnumber: 1\ntitle: \"One\"\nhuman_locked: true\nupdated: x\n---\n\n";
+const LOCKED_FM = (n: number) => `---\nnumber: ${n}\ntitle: "One"\nhuman_locked: true\nupdated: x\n---\n\n`;
+
+let vaultRoot: string;
+
+function vaultChapter(slug: string, chapterNumber: number, content: string) {
+  const dir = path.join(vaultRoot, slug, "chapters");
+  fs.mkdirSync(dir, { recursive: true });
+  const pad = String(chapterNumber).padStart(2, "0");
+  fs.writeFileSync(path.join(dir, `ch${pad}.md`), content, "utf8");
+}
+
+function readVaultChapter(slug: string, chapterNumber: number): string {
+  const pad = String(chapterNumber).padStart(2, "0");
+  return fs.readFileSync(path.join(vaultRoot, slug, "chapters", `ch${pad}.md`), "utf8");
+}
 
 interface MockState { chapters: any[]; passageLocks: any[] }
 
@@ -69,7 +44,7 @@ function mockDb(opts?: Partial<MockState>) {
     ],
     passageLocks: opts?.passageLocks ?? [],
   };
-  const pick = (table: unknown) =>
+  const pick = (table: unknown): any[] =>
     table === books ? [{ id: "book-1", slug: "test-novel" }]
     : table === manuscriptChapters ? state.chapters
     : table === passageLocks ? state.passageLocks
@@ -99,24 +74,37 @@ function mockDb(opts?: Partial<MockState>) {
         where: () => {
           if (table === manuscriptChapters) {
             state.chapters = state.chapters.map((c) => ({ ...c, ...v }));
+            const p: any = Promise.resolve(state.chapters);
+            p.returning = () => Promise.resolve(state.chapters.length ? [{ id: state.chapters[0].id }] : []);
+            return p;
           }
-          return Promise.resolve([]);
+          const p: any = Promise.resolve([]);
+          p.returning = () => Promise.resolve([]);
+          return p;
         },
       }),
     }),
+    execute: async () => ({}),
+    transaction: async (fn: (tx: any) => Promise<any>) => fn(db),
     __state: state,
   };
   return db;
 }
 
-beforeEach(() => {
-  vaultFiles.clear();
+beforeEach(async () => {
+  vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), "book-vault-"));
+  process.env.BOOK_STUDIO_VAULT_ROOT = vaultRoot;
   vi.clearAllMocks();
 });
 
-// ── Sink guard ─────────────────────────────────────────────────────────
+afterEach(() => {
+  fs.rmSync(vaultRoot, { recursive: true, force: true });
+  delete process.env.BOOK_STUDIO_VAULT_ROOT;
+});
 
-describe("persistChapterProse — the shared sink enforces locks (Spec v1 §7 ①)", () => {
+// ── Sink guard (atomic: guard + mutation in one serializable tx) ───────
+
+describe("persistChapterProse — the shared sink enforces locks atomically (§7 ①)", () => {
   it("refuses a DB-locked chapter with 409 LOCKED, writing nothing", async () => {
     const db = mockDb({ chapters: [{ id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: PROSE, locked: true }] });
     await expect(
@@ -126,7 +114,7 @@ describe("persistChapterProse — the shared sink enforces locks (Spec v1 §7 �
   });
 
   it("refuses a vault human_locked chapter even when the DB flag is false (fail-closed)", async () => {
-    vaultFiles.set(CH1, LOCKED_FM + PROSE);
+    vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     const db = mockDb();
     await expect(
       persistChapterProse(db, { bookId: "book-1", bookSlug: "test-novel", chapterNumber: 1, prose: "AI overwrite attempt." }),
@@ -154,6 +142,14 @@ describe("persistChapterProse — the shared sink enforces locks (Spec v1 §7 �
     expect(db.__state.chapters[0].content).toBe(newProse);
   });
 
+  it("a serialization-failure (lock changed mid-write) maps to 409 LOCKED", async () => {
+    const db = mockDb();
+    db.transaction = async () => { throw Object.assign(new Error("could not serialize access"), { code: "40001" }); };
+    await expect(
+      persistChapterProse(db, { bookId: "book-1", bookSlug: "test-novel", chapterNumber: 1, prose: "x" }),
+    ).rejects.toMatchObject({ status: 409, details: { code: "LOCKED" } });
+  });
+
   it("lockGuard: false opts out (trusted human paths that already actor-checked)", async () => {
     const db = mockDb({ chapters: [{ id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: PROSE, locked: true }] });
     const res = await persistChapterProse(
@@ -169,15 +165,15 @@ describe("persistChapterProse — the shared sink enforces locks (Spec v1 §7 �
 
 describe("writeChapterToVault — human_locked is never flipped back to false", () => {
   it("preserves an existing human_locked: true on a routine write-through", () => {
-    vaultFiles.set(CH1, LOCKED_FM + PROSE);
+    vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     writeChapterToVault("test-novel", 1, "One", "Fresh prose.", false);
-    expect(vaultFiles.get(CH1)).toContain("human_locked: true");
+    expect(readVaultChapter("test-novel", 1)).toContain("human_locked: true");
   });
 
   it("the human unlock route (preserveVaultLock: false) is the ONLY downgrade path", () => {
-    vaultFiles.set(CH1, LOCKED_FM + PROSE);
+    vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     writeChapterToVault("test-novel", 1, "One", PROSE, false, { preserveVaultLock: false });
-    expect(vaultFiles.get(CH1)).toContain("human_locked: false");
+    expect(readVaultChapter("test-novel", 1)).toContain("human_locked: false");
   });
 });
 
@@ -185,15 +181,14 @@ describe("writeChapterToVault — human_locked is never flipped back to false", 
 
 describe("backfillChapterLocksFromVault — 0158 imports pre-existing human_locked", () => {
   it("syncs vault human_locked: true chapters UP into manuscript_chapters.locked", async () => {
-    vaultFiles.set(CH1, LOCKED_FM + PROSE);
+    vaultChapter("test-novel", 1, LOCKED_FM(1) + PROSE);
     const db = mockDb();
-    const imported = await backfillChapterLocksFromVault(db, "book-1", "test-novel");
-    expect(imported).toBeGreaterThanOrEqual(0); // mock update reports no rowCount
+    await backfillChapterLocksFromVault(db, "book-1", "test-novel");
     expect(db.__state.chapters[0].locked).toBe(true);
   });
 
   it("never clears a DB lock from a vault human_locked: false (upward only)", async () => {
-    vaultFiles.set(CH1, "---\nnumber: 1\ntitle: \"One\"\nhuman_locked: false\nupdated: x\n---\n\n" + PROSE);
+    vaultChapter("test-novel", 1, "---\nnumber: 1\ntitle: \"One\"\nhuman_locked: false\nupdated: x\n---\n\n" + PROSE);
     const db = mockDb({ chapters: [{ id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: PROSE, locked: true }] });
     await backfillChapterLocksFromVault(db, "book-1", "test-novel");
     expect(db.__state.chapters[0].locked).toBe(true);

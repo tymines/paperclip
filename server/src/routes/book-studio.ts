@@ -293,14 +293,21 @@ function entityRoutes(
 
     // Spec v1 §7 ④: a LOCKED bible entry refuses AI deletion — only the human
     // author may delete locked canon (and her delete is activity-logged below).
-    if ((existing as Record<string, unknown>).locked === true) {
-      const actorInfo = getActorInfo(req);
-      if (actorInfo.actorType !== "user") {
-        throw lockedError("bible-entry", `${entityLabel} is locked — AI deletion refused. A human must unlock it first.`);
-      }
+    const deleteActor = getActorInfo(req);
+    if ((existing as Record<string, unknown>).locked === true && deleteActor.actorType !== "user") {
+      throw lockedError("bible-entry", `${entityLabel} is locked — AI deletion refused. A human must unlock it first.`);
     }
 
-    await db.delete(table).where(eq(table.id, id));
+    // Atomic for AI actors: the lock predicate rides on the DELETE itself —
+    // a lock set between the read above and this statement yields 0 rows → 409.
+    if (deleteActor.actorType !== "user") {
+      const deleted = await db.delete(table).where(and(eq(table.id, id), eq(table.locked, false))).returning({ id: table.id });
+      if (deleted.length === 0) {
+        throw lockedError("bible-entry", `${entityLabel} was locked while deleting — nothing was removed.`);
+      }
+    } else {
+      await db.delete(table).where(eq(table.id, id));
+    }
 
     // Vault delete
     try {
@@ -595,12 +602,26 @@ export function bookStudioRoutes(db: Db) {
     }
 
     if (existing) {
-      const [updated] = await db
-        .update(manuscriptChapters)
-        .set({ title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() })
-        .where(eq(manuscriptChapters.id, existing.id))
-        .returning();
-      res.json({ chapter: updated });
+      // Atomic for AI actors: `WHERE locked = false` binds the check to the
+      // write — a lock set between the guard above and this UPDATE yields
+      // 0 rows → 409. The human author's own edits always land.
+      const setValues = { title: title ?? existing.title, content: content ?? existing.content, updatedAt: new Date() };
+      if (patchActor.actorType !== "user") {
+        const [updated] = await db
+          .update(manuscriptChapters)
+          .set(setValues)
+          .where(and(eq(manuscriptChapters.id, existing.id), eq(manuscriptChapters.locked, false)))
+          .returning();
+        if (!updated) throw lockedError("chapter", `Chapter ${chNum} was locked while writing — nothing was saved.`);
+        res.json({ chapter: updated });
+      } else {
+        const [updated] = await db
+          .update(manuscriptChapters)
+          .set(setValues)
+          .where(eq(manuscriptChapters.id, existing.id))
+          .returning();
+        res.json({ chapter: updated });
+      }
     } else {
       const id = randomUUID();
       const [inserted] = await db
