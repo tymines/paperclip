@@ -13,6 +13,7 @@ import {
   storyBibleOutline,
   manuscriptChapters,
 } from "@paperclipai/db";
+import { factsForChapter } from "./book-bible-codex.js";
 
 const TAIL_WORDS = 700; // ~last 500–800 words of the previous chapter, verbatim
 
@@ -43,6 +44,10 @@ export interface CompiledContext {
   usedLocations: string[];
   hasStyle: boolean;
   hasBeat: boolean;
+  /** §4.1④ spoiler-gated canon facts that entered the packet (known_as_of ≤ N). */
+  usedFacts: string[];
+  /** Author-only audit metadata: facts WITHHELD from the model (statement not included). */
+  withheldFacts: { id: string; knownAsOf: number }[];
 }
 
 /**
@@ -74,6 +79,10 @@ export async function compileChapterContext(
     .select()
     .from(manuscriptChapters)
     .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber - 1)));
+
+  // §4.1④ Spoiler gating: only facts with known_as_of ≤ chapterNumber enter
+  // the packet; withheld facts never reach the model (audit metadata only).
+  const facts = await factsForChapter(db, bookId, chapterNumber);
 
   const thisBeatText = beatText(thisBeat?.beats);
   const nextBeatText = beatText(nextBeat?.beats);
@@ -136,6 +145,13 @@ export async function compileChapterContext(
     parts.push(`## WORLD RULES (hard constraints — never contradict)\n${rules.join("\n")}`);
   }
 
+  // 5b) Canon facts — spoiler-gated: only what is known as of this chapter.
+  // These are hard constraints; facts beyond the reveal chapter were withheld.
+  if (facts.known.length) {
+    const lines = facts.known.map((f) => `- ${f.statement}`);
+    parts.push(`## CANON FACTS (known as of chapter ${chapterNumber} — never contradict)\n${lines.join("\n")}`);
+  }
+
   // 6) Story so far (rolling summary)
   if (storySoFar) parts.push(`## STORY SO FAR\n${storySoFar}`);
   else if (premise) parts.push(`## PREMISE\n${premise}`);
@@ -167,5 +183,7 @@ export async function compileChapterContext(
     usedLocations: useLocs.map((l) => l.name),
     hasStyle: Boolean(style),
     hasBeat: Boolean(thisBeatText),
+    usedFacts: facts.known.map((f) => f.statement),
+    withheldFacts: facts.withheld.map((f) => ({ id: f.id, knownAsOf: f.knownAsOf })),
   };
 }

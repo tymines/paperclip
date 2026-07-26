@@ -16,6 +16,7 @@ import { CompanySidebar } from "@/components/sidebar/CompanySidebar";
 
 // Lazy-load pages for code splitting
 const BookWritingPage = lazy(() => import("@/pages/BookWritingPage"));
+const DirectorsDeckPage = lazy(() => import("@/pages/DirectorsDeckPage"));
 const GymPage = lazy(() => import("@/pages/GymPage").then((m) => ({ default: m.GymPage })));
 const SkillsCatalog = lazy(() =>
   import("@/pages/SkillsCatalog").then((m) => ({ default: m.SkillsCatalog })),
@@ -60,6 +61,12 @@ export function CompanyRouter() {
         <Route path="book-writing" element={
           <Suspense fallback={<PageLoading />}>
             <BookWritingPage />
+          </Suspense>
+        } />
+        {/* Director's Deck — the new Book Studio (slice 3a, parallel build) */}
+        <Route path="book-deck" element={
+          <Suspense fallback={<PageLoading />}>
+            <DirectorsDeckPage />
           </Suspense>
         } />
 
