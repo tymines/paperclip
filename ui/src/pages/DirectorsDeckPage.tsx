@@ -7,7 +7,11 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DeckTopBar, type DirectorMode } from "@/components/book-studio/deck/DeckTopBar";
 import { DeckRail, type DeckChapter, type DeckBibleSection } from "@/components/book-studio/deck/DeckRail";
 import { DeckWorkspace, type Beat } from "@/components/book-studio/deck/DeckWorkspace";
+import { DeckInspector } from "@/components/book-studio/deck/DeckInspector";
+import { DecisionInbox, TasteSheet, RunPlanSheet, ExportSheet } from "@/components/book-studio/deck/DeckOverlays";
 import { CodexPanel } from "@/components/book-studio/CodexPanel";
+import { ChatDrawer } from "@/components/book-studio/ChatDrawer";
+import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
 import { useCompany } from "../context/CompanyContext";
 
 const API_BASE = "/api";
@@ -59,6 +63,9 @@ export function DirectorsDeckPage() {
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [mode, setMode] = useState<DirectorMode>("co");
   const [showCodex, setShowCodex] = useState(false);
+  const [overlay, setOverlay] = useState<"inbox" | "taste" | "runplan" | "export" | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [proseRefreshKey, setProseRefreshKey] = useState(0);
 
   const activeBook = useMemo(() => books.find((b) => b.id === activeBookId) ?? null, [books, activeBookId]);
 
@@ -206,21 +213,26 @@ export function DirectorsDeckPage() {
         }}
         mode={mode}
         onModeChange={handleModeChange}
-        onTaste={() => {}} onRunPlan={() => {}} onBrainstorm={() => {}}
-        onMedia={() => {}} onExport={() => {}}
+        onTaste={() => setOverlay("taste")}
+        onRunPlan={() => setOverlay("runplan")}
+        onBrainstorm={() => setChatOpen(true)}
+        onMedia={() => { /* BookMediaPanel is self-launching (mounted below) */ }}
+        onExport={() => setOverlay("export")}
       />
-      <div className="grid grid-cols-[272px_minmax(460px,1fr)] min-h-0">
-        <DeckRail
-          chapters={deckChapters}
-          activeChapter={activeChapter}
-          onSelectChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
-          onUnlockChapter={handleUnlockChapter}
-          sections={deckSections}
-          activeSection={activeSection}
-          onSelectSection={(id) => { setActiveSection(id); setShowCodex(true); }}
-          reviewCount={reviewCount}
-          onOpenReviewQueue={() => { setActiveSection("review-queue"); setShowCodex(true); }}
-        />
+      <div className="grid grid-cols-1 lg:grid-cols-[272px_minmax(460px,1fr)_322px] md:grid-cols-[240px_minmax(0,1fr)] min-h-0">
+        <div className="hidden md:block min-h-0">
+          <DeckRail
+            chapters={deckChapters}
+            activeChapter={activeChapter}
+            onSelectChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+            onUnlockChapter={handleUnlockChapter}
+            sections={deckSections}
+            activeSection={activeSection}
+            onSelectSection={(id) => { setActiveSection(id); setShowCodex(true); }}
+            reviewCount={reviewCount}
+            onOpenReviewQueue={() => { setActiveSection("review-queue"); setShowCodex(true); }}
+          />
+        </div>
         <main className="min-w-0 overflow-hidden bg-[#0a0c10] flex flex-col">
           {showCodex && activeBook ? (
             <div className="flex-1 overflow-auto"><CodexPanel bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} /></div>
@@ -237,7 +249,7 @@ export function DirectorsDeckPage() {
                 chapterStatus={chapterStatusMap[String(activeChapter)] ?? null}
                 onLockToggle={() => handleLockToggle(activeChapter, !activeChapterLocked)}
                 onNeedsRefresh={() => loadBookData(activeBook.id)}
-                onOpenDecisionInbox={() => { /* 3c: decision inbox overlay */ }}
+                onOpenDecisionInbox={() => setOverlay("inbox")}
               />
             </div>
           ) : (
@@ -246,7 +258,51 @@ export function DirectorsDeckPage() {
             </div>
           )}
         </main>
+        {activeBook && (
+          <div className="hidden lg:block min-h-0">
+            <DeckInspector
+              bookId={activeBook.id}
+              companySlug={companySlug}
+              chapterNumber={activeChapter}
+              chapterStatus={activeChapter != null ? chapterStatusMap[String(activeChapter)] ?? null : null}
+              onJumpToBeats={() => { /* workspace beats tab is the default view */ setShowCodex(false); }}
+              onOpenDecisionInbox={() => setOverlay("inbox")}
+              onSelectChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+              onHighlightOffset={() => { /* deep-link highlight lands with the Prose view rework */ }}
+              onRevisionAccepted={() => { setProseRefreshKey((k) => k + 1); loadBookData(activeBook.id); }}
+            />
+          </div>
+        )}
       </div>
+
+      {/* overlays */}
+      {overlay === "inbox" && activeBook && (
+        <DecisionInbox
+          bookId={activeBook.id}
+          companySlug={companySlug}
+          onClose={() => setOverlay(null)}
+          onOpenChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+        />
+      )}
+      {overlay === "taste" && activeBook && (
+        <TasteSheet bookId={activeBook.id} companySlug={companySlug} metadata={activeBook.metadata ?? {}} onClose={() => setOverlay(null)} />
+      )}
+      {overlay === "runplan" && activeBook && (
+        <RunPlanSheet bookId={activeBook.id} companySlug={companySlug} onClose={() => setOverlay(null)} onChanged={() => loadBookData(activeBook.id)} />
+      )}
+      {overlay === "export" && activeBook && (
+        <ExportSheet bookId={activeBook.id} companySlug={companySlug} bookTitle={activeBook.title} chapterCount={outline.length} onClose={() => setOverlay(null)} />
+      )}
+      {activeBook && (
+        <ChatDrawer
+          bookId={activeBook.id}
+          companySlug={companySlug}
+          isOpen={chatOpen}
+          onClose={() => setChatOpen(false)}
+          activeBookTitle={activeBook.title}
+        />
+      )}
+      {activeBook && <BookMediaPanel bookId={activeBook.id} />}
     </div>
   );
 }
