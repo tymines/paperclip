@@ -8,6 +8,7 @@ import { logActivity } from "../services/index.js";
 import { generateChapterDraft, reviseChapterContent, callLLM, streamLLM, BOOK_WRITER_PRIMARY } from "../services/chapter-generator.js";
 import { compileChapterContext } from "../services/book-context-compiler.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
+import { lockedError, assertChapterWritable, resolveChapterLocked } from "../services/book-locks.js";
 
 export function bookStudioChapterGenRoutes(db: Db) {
   const router = Router();
@@ -36,8 +37,12 @@ export function bookStudioChapterGenRoutes(db: Db) {
         const [existing] = await db
           .select().from(manuscriptChapters)
           .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
-        // (human_locked lives in vault frontmatter; DB has no column yet — treat
-        // any existing non-empty content as protected unless ?overwrite=1.)
+        // Spec v1 §7 ①: a LOCKED chapter refuses EVERY AI write — checked
+        // before generating; ?overwrite=1 does NOT bypass a lock (Tyler's ruling).
+        // Fail-closed: honors DB locked AND vault human_locked frontmatter.
+        await assertChapterWritable(db, bookId, chapterNumber, book.slug);
+        // (human_locked lives in vault frontmatter — enforced above and again
+        // at the shared sink; non-empty content still needs ?overwrite=1.)
         const overwrite = req.query.overwrite === "1";
         if (existing && existing.content && existing.content.trim().length > 0 && !overwrite) {
           throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
@@ -55,6 +60,11 @@ export function bookStudioChapterGenRoutes(db: Db) {
           throw serviceUnavailable(`Writer lane unavailable: ${(err as Error).message}`);
         }
         if (!prose || !prose.trim()) throw serviceUnavailable("Writer returned empty prose — check provider keys (GOOGLE/DeepSeek/Anthropic).");
+
+        // ① TOCTOU: re-check the lock right before persisting — it may have
+        // been set while the draft was being generated. Vault human_locked is
+        // honored here too; persistChapterProse re-verifies at the sink.
+        await assertChapterWritable(db, bookId, chapterNumber, book.slug);
 
         // Single source of truth: same persistence as the SSE streaming path.
         const { title } = await persistChapterProse(db, {
@@ -107,6 +117,9 @@ export function bookStudioChapterGenRoutes(db: Db) {
         const [existing] = await db
           .select().from(manuscriptChapters)
           .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+        // Spec v1 §7 ①: LOCKED refuses every AI write — ?overwrite=1 is no bypass.
+        // Fail-closed: honors DB locked AND vault human_locked frontmatter.
+        await assertChapterWritable(db, bookId, chapterNumber, book.slug);
         const overwrite = req.query.overwrite === "1";
         if (existing && existing.content && existing.content.trim().length > 0 && !overwrite) {
           throw badRequest("Chapter already has prose. Pass ?overwrite=1 to redraft (a diff-proposal flow is the safe path for edited text).");
@@ -158,6 +171,17 @@ export function bookStudioChapterGenRoutes(db: Db) {
         if (controller.signal.aborted) { try { res.end(); } catch { /* ignore */ } return; }
         if (!prose.trim()) {
           send("error", { message: "Writer returned empty prose — check provider keys (GOOGLE/DeepSeek/Anthropic)." });
+          res.end();
+          return;
+        }
+
+        // ① TOCTOU: re-check the lock right before persisting (SSE variant —
+        // surfaced as a stream error, nothing is saved). The sink re-verifies.
+        try {
+          await assertChapterWritable(db, bookId, chapterNumber, book.slug);
+        } catch (err) {
+          if ((err as { status?: number })?.status !== 409) throw err;
+          send("error", { message: `Chapter ${chapterNumber} was locked while drafting — the draft was not saved.`, code: "LOCKED" });
           res.end();
           return;
         }
@@ -232,6 +256,9 @@ export function bookStudioChapterGenRoutes(db: Db) {
 
           if (!nextBeat) {
             nextDraftSkipped = `No outline beat for chapter ${nextNumber} — nothing to draft.`;
+          } else if (await resolveChapterLocked(db, bookId, nextNumber, book.slug)) {
+            // Spec v1 §7: locked units are skipped + reported, never silent.
+            nextDraftSkipped = `Chapter ${nextNumber} is locked — assisted mode skips it. Unlock it to draft.`;
           } else if (nextChapter && nextChapter.content && nextChapter.content.trim().length > 0) {
             nextDraftSkipped = `Chapter ${nextNumber} already has prose — assisted mode never overwrites.`;
           } else {
@@ -245,7 +272,13 @@ export function bookStudioChapterGenRoutes(db: Db) {
               chapterStatus[String(nextNumber)] = "draft-pending-review";
               nextDraft = { chapterNumber: nextNumber, title: persisted.title, chars: prose.length };
             } catch (err) {
-              nextDraftError = String((err as Error)?.message || err).slice(0, 300);
+              const e = err as { status?: number; details?: { code?: string } };
+              if (e?.status === 409 && e?.details?.code === "LOCKED") {
+                // Locked between the pre-check and the sink (TOCTOU) — loud skip.
+                nextDraftSkipped = `Chapter ${nextNumber} was locked while drafting — skipped, nothing written.`;
+              } else {
+                nextDraftError = String((err as Error)?.message || err).slice(0, 300);
+              }
             }
           }
         }
@@ -404,9 +437,10 @@ export function bookStudioChapterGenRoutes(db: Db) {
 
         if (!existing) throw notFound(`Chapter ${chNum} not found`);
 
-        // If chapter is locked, refuse revision
+        // Spec v1 §7 ①: a LOCKED chapter refuses every AI write — beats
+        // revision included. 409 LOCKED so the UI can render the lock state.
         if (existing.locked) {
-          throw badRequest("Chapter is locked and cannot be revised");
+          throw lockedError("chapter", `Chapter ${chNum} is locked and cannot be revised — unlock it first.`);
         }
 
         // Generate revised content
@@ -416,6 +450,18 @@ export function bookStudioChapterGenRoutes(db: Db) {
           existingBeats: (existing.beats as Record<string, unknown>[]) ?? [],
           revisionInstruction: instruction,
         });
+
+        // Spec v1 §7 ① TOCTOU: re-check live right before updating — a lock
+        // set while the LLM was running still wins. ④ locks compose: a
+        // manuscript chapter lock covers its outline/beats row too.
+        const [outlineNow] = await db
+          .select({ locked: storyBibleOutline.locked })
+          .from(storyBibleOutline)
+          .where(eq(storyBibleOutline.id, existing.id));
+        if (outlineNow?.locked) {
+          throw lockedError("chapter", `Chapter ${chNum} was locked while revising — the revision was not saved.`);
+        }
+        await assertChapterWritable(db, bookId, chNum, book.slug);
 
         // Update the outline entry
         const [updated] = await db
