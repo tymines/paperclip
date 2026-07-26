@@ -272,3 +272,34 @@ export {
   type BookRevision,
   type NewBookRevision,
 } from "./book_revisions.js";
+
+// ── Book Studio passage locks (Spec v1 §7) — migration 0158 ──
+export {
+  passageLocks,
+  type PassageLock,
+  type NewPassageLock,
+} from "./passage_locks.js";
+
+// ── Book Studio Story Bible codex (Spec v1 §4.1) — migration 0159 ──
+export {
+  bibleLore,
+  bibleFactions,
+  bibleObjects,
+  bibleSystems,
+  bibleTimelineEvents,
+  bibleThreads,
+  bibleThemes,
+  bibleGlossary,
+  bibleRelationships,
+  bibleFacts,
+  type BibleLore,
+  type BibleFaction,
+  type BibleObject,
+  type BibleSystem,
+  type BibleTimelineEvent,
+  type BibleThread,
+  type BibleTheme,
+  type BibleGlossaryEntry,
+  type BibleRelationship,
+  type BibleFact,
+} from "./story_bible_codex.js";

@@ -39,6 +39,7 @@ import {
   Loader2,
   FileDown,
   Volume2,
+  Library,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerateDraftPanel } from "@/components/book-studio/GenerateDraftPanel";
@@ -49,6 +50,7 @@ import { AssistedModePanel } from "@/components/book-studio/AssistedModePanel";
 import { ReviewNotesPanel } from "@/components/book-studio/ReviewNotesPanel";
 import { ReviewDialog } from "@/components/book-studio/ReviewDialog";
 import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
+import { CodexPanel } from "@/components/book-studio/CodexPanel";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 
@@ -60,7 +62,8 @@ type StoryBibleTab =
   | "world"
   | "style"
   | "outline"
-  | "manuscript";
+  | "manuscript"
+  | "codex";
 
 interface BibleTabDef {
   id: StoryBibleTab;
@@ -75,6 +78,7 @@ const BIBLE_TABS: BibleTabDef[] = [
   { id: "style", label: "Style", icon: <Palette className="w-3.5 h-3.5" /> },
   { id: "outline", label: "Outline", icon: <List className="w-3.5 h-3.5" /> },
   { id: "manuscript", label: "Manuscript", icon: <FileText className="w-3.5 h-3.5" /> },
+  { id: "codex", label: "Codex", icon: <Library className="w-3.5 h-3.5" /> },
 ];
 
 // ── API data types ──────────────────────────────────────────────────────────
@@ -2495,6 +2499,14 @@ export function BookWritingPage() {
                   <p className="text-xs text-gray-600 mt-1">Select a chapter in the editor</p>
                 </div>
               </div>
+            )}
+            {/* Codex Tab (Spec §4.1 — structured canon store) */}
+            {activeBibleTab === "codex" && activeBook && (
+              <CodexPanel
+                bookId={activeBook.id}
+                companySlug={companySlug}
+                currentChapter={openChapterNumber ?? 1}
+              />
             )}
             </ErrorBoundary>
           </div>
