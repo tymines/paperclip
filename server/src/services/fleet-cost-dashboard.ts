@@ -611,7 +611,8 @@ export function aggregateFleetCostDashboard(input: {
     const ttftSamples = calls.map((call) => call.ttft).filter((value): value is number => value !== null);
     const completedTasks = matchingTaskRows.filter((task) => task.completionState === "succeeded" || task.completionState === "done").length;
     const wallClockSamples = matchingTaskRows.map((task) => task.wallClockMs).filter((value): value is number => value !== null);
-    const costPerCompletedTaskUsd = completedTasks > 0 ? row.estimatedCostUsd / completedTasks : null;
+    const modelCostUsd = row.actualCostUsd ?? row.estimatedCostUsd;
+    const costPerCompletedTaskUsd = completedTasks > 0 ? modelCostUsd / completedTasks : null;
     return {
       ...row,
       estimatedCostUsd: round(row.estimatedCostUsd),

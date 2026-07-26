@@ -420,4 +420,73 @@ describe("fleet cost dashboard collector", () => {
       expect.objectContaining({ sessionId: "20260724_010203_bbbbbbbb" }),
     ]);
   });
+
+  it("uses actual metered cost for model cost per completed task", () => {
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [{
+          sessionId: "session-actual",
+          startedAt: 1_785_000_000,
+          endedAt: 1_785_000_010,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          apiCallCount: 1,
+          estimatedCostUsd: 0.1,
+          actualCostUsd: 0.25,
+          billingMode: "metered_api",
+          costStatus: "actual",
+          costSource: "provider",
+          pricingVersion: "v1",
+        }],
+        modelUsage: [{
+          sessionId: "session-actual",
+          model: "model-actual",
+          provider: "provider-a",
+          task: "",
+          apiCallCount: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          estimatedCostUsd: 0.1,
+          actualCostUsd: 0.25,
+          billingMode: "metered_api",
+          costStatus: "actual",
+          costSource: "provider",
+          pricingVersion: "v1",
+          firstSeen: 1_785_000_000,
+          lastSeen: 1_785_000_010,
+        }],
+      },
+      apiCalls: [],
+      attributions: [{
+        runId: "run-actual",
+        sessionId: "session-actual",
+        agentId: "agent-1",
+        agentName: "Agent",
+        issueId: "issue-1",
+        issueIdentifier: "PAP-1",
+        issueTitle: "Completed task",
+        projectId: "project-1",
+        projectName: "Project",
+        status: "succeeded",
+        runStartedAt: new Date("2026-07-25T00:00:00.000Z"),
+        runFinishedAt: new Date("2026-07-25T00:00:10.000Z"),
+      }],
+      freshness: { observedAt: "2026-07-25T00:00:10.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows[0]).toMatchObject({
+      actualCostUsd: 0.25,
+      estimatedCostUsd: 0.1,
+      completedTasks: 1,
+      costPerCompletedTaskUsd: 0.25,
+    });
+  });
 });
