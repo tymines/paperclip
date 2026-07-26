@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { DeckTopBar, type DirectorMode } from "@/components/book-studio/deck/DeckTopBar";
 import { DeckRail, type DeckChapter, type DeckBibleSection } from "@/components/book-studio/deck/DeckRail";
-import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
+import { DeckWorkspace, type Beat } from "@/components/book-studio/deck/DeckWorkspace";
 import { CodexPanel } from "@/components/book-studio/CodexPanel";
 import { useCompany } from "../context/CompanyContext";
 
@@ -23,7 +23,7 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 interface BookData { id: string; slug: string; title: string; metadata: Record<string, unknown> }
-interface OutlineEntry { id: string; chapterNumber: number; title: string; locked: boolean }
+interface OutlineEntry { id: string; chapterNumber: number; title: string; locked: boolean; beats?: Beat[] }
 interface ChapterRow { id: string; chapterNumber: number; title: string; content: string; locked: boolean }
 
 const BIBLE_SECTION_DEFS = [
@@ -173,6 +173,25 @@ export function DirectorsDeckPage() {
     loadBookData(activeBook.id);
   }
 
+  async function handleLockToggle(n: number, locked: boolean) {
+    if (!activeBook) return;
+    await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}/chapters/${n}/lock`, {
+      method: "PATCH",
+      body: JSON.stringify({ locked }),
+    }).catch(() => {});
+    loadBookData(activeBook.id);
+  }
+
+  const activeOutline = useMemo(
+    () => outline.find((o) => o.chapterNumber === activeChapter) ?? null,
+    [outline, activeChapter],
+  );
+  const activeChapterLocked = useMemo(() => {
+    const ch = chapters.find((c) => c.chapterNumber === activeChapter);
+    return Boolean(ch?.locked || activeOutline?.locked);
+  }, [chapters, activeOutline, activeChapter]);
+  const chapterStatusMap = (activeBook?.metadata?.chapterStatus ?? {}) as Record<string, string>;
+
   return (
     <div className="grid grid-rows-[52px_1fr] h-full bg-[#0a0c10] text-[#ece9e2] font-sans">
       <DeckTopBar
@@ -202,24 +221,29 @@ export function DirectorsDeckPage() {
           reviewCount={reviewCount}
           onOpenReviewQueue={() => { setActiveSection("review-queue"); setShowCodex(true); }}
         />
-        <main className="min-w-0 overflow-auto bg-[#0a0c10]">
+        <main className="min-w-0 overflow-hidden bg-[#0a0c10] flex flex-col">
           {showCodex && activeBook ? (
-            <CodexPanel bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} />
-          ) : activeBook ? (
-            <ManuscriptEditor
-              bookId={activeBook.id}
-              companySlug={companySlug}
-              outlineEntries={outline as never}
-              focusMode={false}
-              onToggleFocus={() => {}}
-              jumpToChapter={activeChapter}
-              highlightRange={null}
-              autonomyMode={mode === "act" ? "autopilot" : mode === "chapter" ? "assisted" : "manual"}
-              contentRefreshKey={0}
-              onChapterChange={setActiveChapter}
-            />
+            <div className="flex-1 overflow-auto"><CodexPanel bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} /></div>
+          ) : activeBook && activeChapter != null ? (
+            <div className="flex-1 min-h-0">
+              <DeckWorkspace
+                bookId={activeBook.id}
+                bookSlug={activeBook.slug}
+                companySlug={companySlug}
+                chapterNumber={activeChapter}
+                chapterTitle={activeOutline?.title || chapters.find((c) => c.chapterNumber === activeChapter)?.title || `Chapter ${activeChapter}`}
+                outlineEntry={activeOutline ? { id: activeOutline.id, chapterNumber: activeOutline.chapterNumber, title: activeOutline.title, beats: activeOutline.beats ?? [] } : null}
+                locked={activeChapterLocked}
+                chapterStatus={chapterStatusMap[String(activeChapter)] ?? null}
+                onLockToggle={() => handleLockToggle(activeChapter, !activeChapterLocked)}
+                onNeedsRefresh={() => loadBookData(activeBook.id)}
+                onOpenDecisionInbox={() => { /* 3c: decision inbox overlay */ }}
+              />
+            </div>
           ) : (
-            <div className="flex items-center justify-center h-full text-gray-600 text-sm">Select or create a book</div>
+            <div className="flex items-center justify-center h-full text-gray-600 text-sm">
+              {activeBook ? "Select a chapter in the queue" : "Select or create a book"}
+            </div>
           )}
         </main>
       </div>
