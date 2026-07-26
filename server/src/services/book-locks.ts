@@ -8,14 +8,18 @@
 import type { Request } from "express";
 import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { manuscriptChapters, passageLocks, books } from "@paperclipai/db";
+import { manuscriptChapters, passageLocks } from "@paperclipai/db";
 import { conflict, forbidden } from "../errors.js";
 import { getActorInfo } from "../routes/authz.js";
-import { chapterContentHash, readVaultChapterFrontmatter, bookVaultRoot } from "./book-prose-writer.js";
-import fs from "node:fs";
-import path from "node:path";
+import { chapterContentHash, readVaultChapterFrontmatter } from "./book-prose-writer.js";
 
 export const LOCKED_CODE = "LOCKED";
+
+/** Postgres serialization failure (40001) — possibly wrapped by drizzle. */
+export function isSerializationError(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "40001" || e?.cause?.code === "40001";
+}
 
 /** 409 payload shape — the UI maps this to the Locked-Content decision card. */
 export function lockedError(scope: "chapter" | "passage" | "bible-entry", message: string) {
@@ -55,32 +59,19 @@ export function readVaultHumanLocked(bookSlug: string, chapterNumber: number): b
   return readVaultChapterFrontmatter(bookSlug, chapterNumber).humanLocked;
 }
 
-// Lazily memoized per book: the vault→DB human_locked backfill runs at most
-// once per book per process (see backfillChapterLocksFromVault).
-const backfilledBooks = new Set<string>();
-
 /**
- * Fail-closed backfill (migration 0158 follow-through): SQL cannot read the
- * vault, so the import of pre-existing `human_locked: true` frontmatter into
- * `manuscript_chapters.locked` happens here, at runtime — once per book,
- * before any enforcement decision. Sync is strictly UPWARD (false→true);
- * a vault `human_locked: false` never clears a DB lock (only the human
- * author unlocks, through the lock route).
+ * The fail-closed chapter-lock truth: DB `locked` OR vault `human_locked`
+ * frontmatter. With a bookSlug, a vault lock is ALSO synced UP into the DB
+ * row so the two never drift (strictly upward — a vault `false` never
+ * clears a DB lock). The migration-time backfill of pre-existing vault locks
+ * runs in the migration runner (packages/db data-migrations, awaited before
+ * deploy completes); this is write-time enforcement, not a backfill.
  */
-export async function backfillChapterLocksFromVault(db: Db, bookId: string, bookSlug: string): Promise<number> {
-  let dir: string[];
-  try {
-    dir = fs.readdirSync(path.join(bookVaultRoot(), bookSlug, "chapters"));
-  } catch {
-    return 0; // no vault chapters dir — nothing to import
-  }
-  let imported = 0;
-  for (const file of dir) {
-    const m = /^ch(\d+)\.md$/.exec(file);
-    if (!m) continue;
-    const chapterNumber = Number(m[1]);
-    if (!readVaultHumanLocked(bookSlug, chapterNumber)) continue;
-    const res = await db
+export async function resolveChapterLocked(
+  db: Db, bookId: string, chapterNumber: number, bookSlug?: string,
+): Promise<boolean> {
+  if (bookSlug && readVaultHumanLocked(bookSlug, chapterNumber)) {
+    await db
       .update(manuscriptChapters)
       .set({ locked: true })
       .where(and(
@@ -88,64 +79,7 @@ export async function backfillChapterLocksFromVault(db: Db, bookId: string, book
         eq(manuscriptChapters.chapterNumber, chapterNumber),
         eq(manuscriptChapters.locked, false),
       ));
-    imported += (res as { rowCount?: number } | undefined)?.rowCount ?? 0;
-  }
-  return imported;
-}
-
-async function ensureLocksBackfilled(db: Db, bookId: string, bookSlug: string) {
-  if (backfilledBooks.has(bookId)) return;
-  backfilledBooks.add(bookId); // mark first — a failed backfill must not hot-loop
-  try {
-    const imported = await backfillChapterLocksFromVault(db, bookId, bookSlug);
-    if (imported > 0) console.warn(`[book-locks] fail-closed backfill: imported ${imported} human_locked chapter(s) for book ${bookId}`);
-  } catch (err) {
-    console.warn(`[book-locks] lock backfill failed for book ${bookId} (enforcement still reads vault live):`, err);
-  }
-}
-
-/**
- * Eager migration-time backfill (0158 follow-through): run at server startup
- * over EVERY book — not lazily on first enforcement. Idempotent and strictly
- * upward. Returns the total rows imported.
- */
-export async function backfillAllChapterLocksFromVault(db: Db): Promise<number> {
-  const allBooks = await db.select({ id: books.id, slug: books.slug }).from(books);
-  let total = 0;
-  for (const b of allBooks) {
-    backfilledBooks.add(b.id);
-    try {
-      total += await backfillChapterLocksFromVault(db, b.id, b.slug);
-    } catch (err) {
-      console.warn(`[book-locks] startup backfill failed for book ${b.id}:`, err);
-    }
-  }
-  if (total > 0) console.warn(`[book-locks] startup backfill complete: ${total} human_locked chapter(s) imported into manuscript_chapters.locked`);
-  return total;
-}
-
-/**
- * The fail-closed chapter-lock truth: DB `locked` OR vault `human_locked`
- * frontmatter. With a bookSlug, also triggers the one-time 0158 backfill and
- * syncs a vault lock UP into the DB row so the two never drift again.
- */
-export async function resolveChapterLocked(
-  db: Db, bookId: string, chapterNumber: number, bookSlug?: string,
-): Promise<boolean> {
-  if (bookSlug) {
-    await ensureLocksBackfilled(db, bookId, bookSlug);
-    if (readVaultHumanLocked(bookSlug, chapterNumber)) {
-      // Sync upward — enforcement reads DB elsewhere too.
-      await db
-        .update(manuscriptChapters)
-        .set({ locked: true })
-        .where(and(
-          eq(manuscriptChapters.bookId, bookId),
-          eq(manuscriptChapters.chapterNumber, chapterNumber),
-          eq(manuscriptChapters.locked, false),
-        ));
-      return true;
-    }
+    return true;
   }
   return getChapterLocked(db, bookId, chapterNumber);
 }
