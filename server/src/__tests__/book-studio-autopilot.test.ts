@@ -1,7 +1,16 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach, afterAll } from "vitest";
 import express from "express";
 import request from "supertest";
 import type { Router } from "express";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// Never let synthetic autopilot state touch ~/.paperclip. This must be set
+// before the orchestrator's first dynamic import because it resolves the
+// checkpoint root at module initialization.
+const checkpointDir = mkdtempSync(path.join(os.tmpdir(), "paperclip-autopilot-test-"));
+process.env.AUTOPILOT_CHECKPOINT_DIR = checkpointDir;
 
 // Mock chapter-generator completely
 vi.mock("../services/chapter-generator.js", () => ({
@@ -89,6 +98,8 @@ describe("book-studio-autopilot", () => {
         })),
       })),
     } as any;
+    mockDb.execute = vi.fn(async () => []);
+    mockDb.transaction = vi.fn(async (fn: (tx: any) => Promise<any>) => fn(mockDb));
 
     const router: Router = bookStudioAutopilotRoutes(mockDb);
     app = express();
@@ -102,6 +113,10 @@ describe("book-studio-autopilot", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterAll(() => {
+    rmSync(checkpointDir, { recursive: true, force: true });
   });
 
   it("start creates a running autopilot loop", async () => {
@@ -211,10 +226,11 @@ describe("book-studio-autopilot", () => {
     expect(res.body.autopilot.status).toBe("running");
   });
 
-  it("returns 404 for non-existent book", async () => {
-    await request(app)
+  it("returns normal empty state for a book with no active loop", async () => {
+    const res = await request(app)
       .get("/companies/c1/book-studio/books/nonexistent/autopilot/status")
-      .expect(404);
+      .expect(200);
+    expect(res.body.autopilot).toBeNull();
   });
 
   it("pause on non-running returns conflict", async () => {

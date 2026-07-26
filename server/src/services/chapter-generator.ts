@@ -14,58 +14,62 @@ function providerFailureMessage(feature: string, diag: string[]): string {
   );
 }
 
-// Tyler's ruling (2026-07-12): Gemini is THE Book Studio writer model — the
-// pinned PRIMARY, not a coin-flip. DeepSeek/Anthropic are explicit FALLBACKS
-// only, used when Gemini is unconfigured or errors. Override the primary via
-// BOOK_WRITER_PRIMARY if ever needed; default stays gemini. callLLM() below
-// honors this order (Gemini first, fallbacks after).
-export const BOOK_WRITER_PRIMARY = (process.env.BOOK_WRITER_PRIMARY || "gemini") as
-  | "gemini" | "deepseek" | "anthropic";
+// Writer lane primary (2026-07-25, Tyler's update): the default stays Gemini,
+// but the lane is a registry, not a pin — set BOOK_WRITER_PRIMARY to any
+// LaneProvider (see below). The old OpenAI hard-ban is lifted.
+export const BOOK_WRITER_PRIMARY = (process.env.BOOK_WRITER_PRIMARY || "gemini") as LaneProvider;
 
-// Spec v1 (2026-07-24): the CRITIC lane is a DIFFERENT model than the writer —
-// writer = Gemini, critic = DeepSeek, Claude excluded from both lanes (Tyler's
-// ruling). BOOK_CRITIC_PRIMARY is the placeholder knob; the fleet's provider
-// config can repoint it without a code change. Fallback = the writer primary
-// (gemini) — a degraded critic is reported honestly, never silently same-model:
-// callers should surface `criticDegraded: true` when the fallback answered.
-export const BOOK_CRITIC_PRIMARY = (process.env.BOOK_CRITIC_PRIMARY || "deepseek") as
-  | "gemini" | "deepseek";
+// Spec v1 (2026-07-24): the CRITIC lane is a DIFFERENT model than the writer.
+// BOOK_CRITIC_PRIMARY is the placeholder knob; the fleet's provider config can
+// repoint it without a code change. Fallback = the writer primary — a degraded
+// critic is reported honestly via `criticDegraded`, never silently same-model.
+//
+// Lane providers (2026-07-25, Tyler's update): the lanes are no longer
+// Gemini/DeepSeek-only. Both lanes accept any of:
+//   gemini · deepseek · anthropic · openai (ChatGPT) · moonshot (Kimi)
+// e.g. writer=ChatGPT, critic=Kimi: BOOK_WRITER_PRIMARY=openai
+// BOOK_CRITIC_PRIMARY=moonshot (+ matching keys in the provider-key store —
+// "openai" and "moonshot" are first-class slots there). Models/endpoints are
+// env-overridable: BOOK_OPENAI_MODEL / BOOK_OPENAI_BASE_URL /
+// BOOK_MOONSHOT_MODEL / BOOK_MOONSHOT_BASE_URL.
+export type LaneProvider = "gemini" | "deepseek" | "anthropic" | "openai" | "moonshot";
+export const BOOK_CRITIC_PRIMARY = (process.env.BOOK_CRITIC_PRIMARY || "deepseek") as LaneProvider;
 
 export interface CriticResult {
   text: string;
   /** Which lane actually answered. */
-  provider: "gemini" | "deepseek";
+  provider: LaneProvider;
   /** True when the pinned critic was unavailable and the fallback answered. */
   criticDegraded: boolean;
 }
 
 /**
  * Critic lane call (Spec v1 §5.B) — pinned to BOOK_CRITIC_PRIMARY (default
- * DeepSeek), falling back to Gemini only. Anthropic is NEVER attempted in this
- * lane. Only configured providers are tried.
+ * DeepSeek), falling back through the remaining lane providers (writer primary
+ * first). A non-pinned answerer sets criticDegraded — surfaced honestly,
+ * never silently same-model. Only configured providers are tried.
  */
 export async function callCriticLLM(
   systemPrompt: string,
   userPrompt: string,
   feature = "Book Studio critic",
 ): Promise<CriticResult> {
-  const chain: Array<{ name: "gemini" | "deepseek"; call: (s: string, u: string) => Promise<string> }> =
-    BOOK_CRITIC_PRIMARY === "gemini"
-      ? [{ name: "gemini", call: callGemini }, { name: "deepseek", call: callDeepSeek }]
-      : [{ name: "deepseek", call: callDeepSeek }, { name: "gemini", call: callGemini }];
+  const order: LaneProvider[] = [
+    BOOK_CRITIC_PRIMARY,
+    BOOK_WRITER_PRIMARY,
+    ...LANE_ORDER.filter((p) => p !== BOOK_CRITIC_PRIMARY && p !== BOOK_WRITER_PRIMARY),
+  ];
   const diag: string[] = [];
-  let answeredFallback = false;
-  for (const p of chain) {
-    const key = await getRawKey(p.name).catch(() => null);
-    if (!key) { diag.push(`${p.name}: not configured`); continue; }
+  for (const name of order) {
+    const key = await getRawKey(name).catch(() => null);
+    if (!key) { diag.push(`${name}: not configured`); continue; }
     try {
-      const text = await p.call(systemPrompt, userPrompt);
-      return { text, provider: p.name, criticDegraded: answeredFallback };
+      const text = await LANE_CALLS[name](systemPrompt, userPrompt);
+      return { text, provider: name, criticDegraded: name !== BOOK_CRITIC_PRIMARY };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[chapter-generator] ${feature}: ${p.name} failed:`, err);
-      diag.push(`${p.name}: error (${msg.slice(0, 140)})`);
-      answeredFallback = true;
+      console.warn(`[chapter-generator] ${feature}: ${name} failed:`, err);
+      diag.push(`${name}: error (${msg.slice(0, 140)})`);
     }
   }
   throw new Error(providerFailureMessage(feature, diag));
@@ -250,35 +254,91 @@ async function callAnthropic(systemPrompt: string, userPrompt: string): Promise<
   return full;
 }
 
+// ── OpenAI-compatible lanes: openai (ChatGPT) · moonshot (Kimi) ─────────────
+// Same chat-completions shape as DeepSeek. Models and endpoints are
+// env-overridable so the fleet can repoint at gateways or newer models without
+// a code change.
+const OPENAI_COMPAT: Record<"openai" | "moonshot", { baseUrl: string; model: string; maxTokens: number }> = {
+  openai: {
+    baseUrl: process.env.BOOK_OPENAI_BASE_URL || "https://api.openai.com/v1/chat/completions",
+    model: process.env.BOOK_OPENAI_MODEL || "gpt-4o",
+    maxTokens: 16384,
+  },
+  moonshot: {
+    baseUrl: process.env.BOOK_MOONSHOT_BASE_URL || "https://api.moonshot.ai/v1/chat/completions",
+    model: process.env.BOOK_MOONSHOT_MODEL || "kimi-k2-0711-preview",
+    maxTokens: 8192,
+  },
+};
+
+async function callOpenAICompat(provider: "openai" | "moonshot", systemPrompt: string, userPrompt: string): Promise<string> {
+  const cfg = OPENAI_COMPAT[provider];
+  const key = await getRawKey(provider);
+  if (!key) throw new Error(`${provider} not configured`);
+  const messages: Array<{ role: string; content: string }> = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+  let full = "";
+  for (let seg = 0; seg <= MAX_CONTINUATIONS; seg++) {
+    const resp = await fetch(cfg.baseUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: cfg.model, messages, temperature: 0.8, max_tokens: cfg.maxTokens }),
+    });
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => "");
+      throw new Error(`${provider} API error (${resp.status}): ${errBody.slice(0, 300)}`);
+    }
+    const data = await resp.json() as any;
+    const choice = data.choices?.[0];
+    const text: string = choice?.message?.content ?? "";
+    full += text;
+    if (choice?.finish_reason !== "length" || !text) return full;
+    console.warn(`[chapter-generator] ${provider} hit max_tokens (segment ${seg + 1}) — continuing`);
+    messages.push({ role: "assistant", content: text });
+    messages.push({ role: "user", content: CONTINUE_PROMPT });
+  }
+  return full;
+}
+
+const callOpenAI = (s: string, u: string) => callOpenAICompat("openai", s, u);
+const callMoonshot = (s: string, u: string) => callOpenAICompat("moonshot", s, u);
+
+/** Lane registry — both writer and critic chains resolve through this. */
+const LANE_ORDER: LaneProvider[] = ["gemini", "deepseek", "anthropic", "openai", "moonshot"];
+const LANE_CALLS: Record<LaneProvider, (s: string, u: string) => Promise<string>> = {
+  gemini: callGemini,
+  deepseek: callDeepSeek,
+  anthropic: callAnthropic,
+  openai: callOpenAI,
+  moonshot: callMoonshot,
+};
+
 /**
  * Calls an LLM to generate chapter content.
- * Provider priority: Gemini (primary) → DeepSeek (fallback) → Anthropic (last resort).
- * OpenAI is NOT in this chain (hard-banned).
+ * Chain order: BOOK_WRITER_PRIMARY first, then the remaining lane providers.
+ * Only providers whose key is configured (store or env) are attempted.
  */
 export async function callLLM(
   systemPrompt: string,
   userPrompt: string,
   feature = "Book Studio",
 ): Promise<string> {
-  // Gemini (pinned primary) → DeepSeek → Anthropic, but ONLY providers whose key
-  // is configured (store or env) are attempted. Unconfigured providers are
-  // skipped, never invoked — so the surfaced error can't be a downstream
-  // "Anthropic not configured" masking the real (Gemini) cause.
-  const chain: Array<{ name: ProviderKey; call: (s: string, u: string) => Promise<string> }> = [
-    { name: "gemini", call: callGemini },
-    { name: "deepseek", call: callDeepSeek },
-    { name: "anthropic", call: callAnthropic },
+  const order: LaneProvider[] = [
+    BOOK_WRITER_PRIMARY,
+    ...LANE_ORDER.filter((p) => p !== BOOK_WRITER_PRIMARY),
   ];
   const diag: string[] = [];
-  for (const p of chain) {
-    const key = await getRawKey(p.name).catch(() => null);
-    if (!key) { diag.push(`${p.name}: not configured`); continue; }
+  for (const name of order) {
+    const key = await getRawKey(name).catch(() => null);
+    if (!key) { diag.push(`${name}: not configured`); continue; }
     try {
-      return await p.call(systemPrompt, userPrompt);
+      return await LANE_CALLS[name](systemPrompt, userPrompt);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`[chapter-generator] ${feature}: ${p.name} failed:`, err);
-      diag.push(`${p.name}: error (${msg.slice(0, 140)})`);
+      console.warn(`[chapter-generator] ${feature}: ${name} failed:`, err);
+      diag.push(`${name}: error (${msg.slice(0, 140)})`);
     }
   }
   throw new Error(providerFailureMessage(feature, diag));

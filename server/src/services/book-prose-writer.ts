@@ -10,23 +10,64 @@ import { execSync } from "node:child_process";
 import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { manuscriptChapters } from "@paperclipai/db";
+// LOCK (Spec v1 §7): the sink enforces locks itself — every prose path lands
+// here, so the shared chapter advisory-lock protocol covers them all atomically.
+// Function-level use only (book-locks imports chapterContentHash from this
+// module — circular refs stay inside function bodies).
+import {
+  acquireChapterMutationLock,
+  assertProsePersistAllowed,
+  lockedError,
+  isSerializationError,
+} from "./book-locks.js";
 
-const BOOK_VAULT_ROOT =
+export const BOOK_VAULT_ROOT =
   process.env.BOOK_STUDIO_VAULT_ROOT || "F:\\Augi Vault\\09 - Book Studio\\Books";
+
+/** Vault root resolved per call — honors BOOK_STUDIO_VAULT_ROOT changes (tests, multi-env). */
+export function bookVaultRoot(): string {
+  return process.env.BOOK_STUDIO_VAULT_ROOT || BOOK_VAULT_ROOT;
+}
 
 /** Stable hash of chapter content — annotation anchors pin to this. */
 export function chapterContentHash(content: string): string {
   return createHash("sha256").update(content ?? "", "utf8").digest("hex").slice(0, 16);
 }
 
-export function writeChapterToVault(slug: string, chapterNumber: number, title: string, prose: string) {
+/**
+ * Read a chapter's vault frontmatter. Tolerant: a missing/unparseable file
+ * means "no vault lock". Only the frontmatter head is read.
+ */
+export function readVaultChapterFrontmatter(bookSlug: string, chapterNumber: number): { humanLocked: boolean } {
   try {
-    const dir = path.join(BOOK_VAULT_ROOT, slug, "chapters");
+    const pad = String(chapterNumber).padStart(2, "0");
+    const file = path.join(bookVaultRoot(), bookSlug, "chapters", `ch${pad}.md`);
+    const head = fs.readFileSync(file, "utf8").slice(0, 1000);
+    const m = head.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+    if (!m) return { humanLocked: false };
+    return { humanLocked: /^\s*human_locked:\s*true\s*$/m.test(m[1]) };
+  } catch {
+    return { humanLocked: false };
+  }
+}
+
+export function writeChapterToVault(
+  slug: string, chapterNumber: number, title: string, prose: string, locked = false,
+  opts?: { preserveVaultLock?: boolean },
+) {
+  try {
+    const dir = path.join(bookVaultRoot(), slug, "chapters");
     fs.mkdirSync(dir, { recursive: true });
     const pad = String(chapterNumber).padStart(2, "0");
-    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: false\nupdated: ${new Date().toISOString()}\n---\n\n`;
+    // LOCK: write-through NEVER downgrades a vault human_locked back to false —
+    // once the author human-locks a chapter file, only she unlocks it. Her
+    // explicit unlock route opts out via preserveVaultLock: false.
+    const effectiveLocked = opts?.preserveVaultLock === false
+      ? locked
+      : locked || readVaultChapterFrontmatter(slug, chapterNumber).humanLocked;
+    const fm = `---\nnumber: ${chapterNumber}\ntitle: ${JSON.stringify(title)}\nhuman_locked: ${effectiveLocked}\nupdated: ${new Date().toISOString()}\n---\n\n`;
     fs.writeFileSync(path.join(dir, `ch${pad}.md`), fm + prose, "utf8");
-    const vaultDir = path.join(BOOK_VAULT_ROOT, slug);
+    const vaultDir = path.join(bookVaultRoot(), slug);
     try {
       execSync("git add .", { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
       execSync(`git commit -m "draft: ch${pad}"`, { cwd: vaultDir, stdio: "ignore", timeout: 5000 });
@@ -66,45 +107,96 @@ export interface PersistProseResult {
  * Upsert chapter prose into manuscript_chapters and write through to the vault.
  * Derives a title from the first prose line unless the existing row already has
  * one. Does NOT decide overwrite policy — callers enforce that before drafting.
+ *
+ * LOCK (Spec v1 §7 ①): this shared sink is the enforcement point, and it is
+ * ATOMIC — not check-then-write. The lock read, the passage-lock preservation
+ * check, and the mutation all run inside ONE transaction holding the same
+ * chapter advisory lock used by lock-setter endpoints; the
+ * UPDATE carries `WHERE locked = false`: a lock set by anyone, at any moment
+ * before commit is observed after the writer waits, then fails the guard or
+ * predicate (0 rows → 409). No protocol TOCTOU window exists.
+ * Pass `lockGuard: false` only for trusted human-actor paths that already ran
+ * their own actor check.
  */
 export async function persistChapterProse(
   db: Db,
   args: { bookId: string; bookSlug: string; chapterNumber: number; prose: string },
+  opts?: { lockGuard?: boolean; skipChapterLock?: boolean },
 ): Promise<PersistProseResult> {
   const { bookId, bookSlug, chapterNumber } = args;
   // Consistent `## Chapter N: Title` headings across every write path (#7).
   const prose = normalizeChapterHeading(args.prose, chapterNumber);
+  const skipChapterLock = opts?.skipChapterLock === true;
 
-  const [existing] = await db
-    .select()
-    .from(manuscriptChapters)
-    .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
+  const writeTx = async (tx: Db, guarded: boolean): Promise<PersistProseResult & { wasLocked: boolean }> => {
+    const [existing] = await tx
+      .select()
+      .from(manuscriptChapters)
+      .where(and(eq(manuscriptChapters.bookId, bookId), eq(manuscriptChapters.chapterNumber, chapterNumber)));
 
-  const firstLine = prose.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
-  const derivedTitle = firstLine.replace(/^#+\s*/, "").slice(0, 120).trim();
-  const title = existing?.title?.trim() || derivedTitle || `Chapter ${chapterNumber}`;
+    // ① Guard: chapter lock (DB + vault human_locked) + passage-lock
+    // preservation — evaluated INSIDE the transaction when guarded.
+    if (guarded) {
+      await assertProsePersistAllowed(tx, {
+        bookId,
+        bookSlug,
+        chapterNumber,
+        prose,
+        existingContent: existing?.content ?? "",
+        existingLocked: existing?.locked ?? false,
+        skipChapterLock,
+      });
+    }
 
-  let chapterId: string;
-  let created = false;
-  if (existing) {
-    await db
-      .update(manuscriptChapters)
-      .set({ content: prose, title, updatedAt: new Date() })
-      .where(eq(manuscriptChapters.id, existing.id));
-    chapterId = existing.id;
-  } else {
-    chapterId = randomUUID();
-    await db.insert(manuscriptChapters).values({
-      id: chapterId,
-      bookId,
-      chapterNumber,
-      title,
-      content: prose,
+    const firstLine = prose.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
+    const derivedTitle = firstLine.replace(/^#+\s*/, "").slice(0, 120).trim();
+    const title = existing?.title?.trim() || derivedTitle || `Chapter ${chapterNumber}`;
+
+    if (existing) {
+      // ② Conditional write (guarded paths only): lands only if the row is
+      // STILL unlocked (or the human's one-time-unlock is in play). 0 rows =
+      // a lock won the race.
+      const conditional = guarded && !skipChapterLock;
+      const updated = conditional
+        ? await tx
+            .update(manuscriptChapters)
+            .set({ content: prose, title, updatedAt: new Date() })
+            .where(and(eq(manuscriptChapters.id, existing.id), eq(manuscriptChapters.locked, false)))
+            .returning({ id: manuscriptChapters.id })
+        : await tx
+            .update(manuscriptChapters)
+            .set({ content: prose, title, updatedAt: new Date() })
+            .where(eq(manuscriptChapters.id, existing.id))
+            .returning({ id: manuscriptChapters.id });
+      if (updated.length === 0) {
+        throw lockedError("chapter", `Chapter ${chapterNumber} was locked while writing — nothing was saved.`);
+      }
+      return { chapterId: existing.id, chapterNumber, title, created: false, wasLocked: existing.locked };
+    }
+
+    const chapterId = randomUUID();
+    await tx.insert(manuscriptChapters).values({ id: chapterId, bookId, chapterNumber, title, content: prose });
+    return { chapterId, chapterNumber, title, created: true, wasLocked: false };
+  };
+
+  let result: PersistProseResult & { wasLocked: boolean };
+  try {
+    result = await db.transaction(async (tx) => {
+        // Shared protocol under READ COMMITTED: acquire first, then every
+        // subsequent statement sees lock-state commits that completed while
+        // this transaction waited. SERIALIZABLE would freeze a stale snapshot
+        // at the advisory-lock query and miss the just-committed lock row.
+        await acquireChapterMutationLock(tx as unknown as Db, bookId, chapterNumber);
+        return writeTx(tx as unknown as Db, opts?.lockGuard !== false);
     });
-    created = true;
+  } catch (err) {
+    if (isSerializationError(err)) {
+      throw lockedError("chapter", `Chapter ${chapterNumber}'s locks changed while writing — the write was refused. Re-run if the lock is gone.`);
+    }
+    throw err;
   }
 
-  writeChapterToVault(bookSlug, chapterNumber, title, prose);
+  writeChapterToVault(bookSlug, chapterNumber, result.title, prose, result.wasLocked);
 
-  return { chapterId, chapterNumber, title, created };
+  return { chapterId: result.chapterId, chapterNumber, title: result.title, created: result.created };
 }

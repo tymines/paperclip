@@ -56,7 +56,7 @@ function mockDb(bookOverride?: any, chaptersOverride?: any, insertOverride?: any
     createdAt: new Date(),
     updatedAt: new Date(),
   }];
-  return {
+  const db: any = {
     select: () => ({
       from: () => ({
         where: () => {
@@ -71,7 +71,11 @@ function mockDb(bookOverride?: any, chaptersOverride?: any, insertOverride?: any
     }),
     insert: () => ({ values: () => ({ returning: () => q(insertVal), onConflictDoUpdate: () => q(insertVal) }) }),
     update: () => ({ set: () => ({ where: () => ({ returning: () => q(insertVal) }) }) }),
+    execute: () => q({}),
   };
+  // Serializable-tx passthrough for the atomic revise path.
+  db.transaction = (fn: (tx: any) => Promise<any>) => fn(db);
+  return db;
 }
 
 // ── Test app builder ─────────────────────────────────────────────────
@@ -268,7 +272,9 @@ describe("POST .../chapters/:chapterNumber/revise", () => {
       .post("/companies/c1/book-studio/books/book-1/chapters/1/revise")
       .send({ instruction: "Revise this" });
 
-    expect(res.status).toBe(400);
+    // Spec v1 §7 ①: a locked chapter refuses beats revision with 409 LOCKED
+    // (was 400 before the lock system landed) so the UI can render lock state.
+    expect(res.status).toBe(409);
   });
 });
 
