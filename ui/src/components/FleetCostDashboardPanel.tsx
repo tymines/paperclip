@@ -161,13 +161,25 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                 </div>
                 <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                   <span>{costLabel(row)}</span>
+                  <span>{row.usageApiCalls} usage calls (state.db)</span>
                   <span>{row.completedTasks} Completed tasks</span>
                   <span>{usd(row.costPerCompletedTaskUsd)} Cost / completed</span>
                   <span>{ms(row.avgTaskWallClockMs)} Task wall</span>
-                  <span>{row.turns} turns</span>
-                  <span>{rate(row.throughputOutputTokensPerSecond)}</span>
-                  <span>{ms(row.avgLatencyMs)} latency</span>
-                  <span>{ms(row.avgTtftMs)} TTFT</span>
+                  <span>{row.turns === null ? "turns unavailable" : `${row.turns} turns`}</span>
+                  {row.speedAvailability === "available" ? (
+                    <>
+                      <span>{row.speedSampleApiCalls} observed speed samples</span>
+                      <span>{rate(row.throughputOutputTokensPerSecond)}</span>
+                      <span>{ms(row.avgLatencyMs)} latency</span>
+                      <span>{ms(row.avgTtftMs)} TTFT</span>
+                    </>
+                  ) : (
+                    <span className="col-span-2">
+                      {row.speedAvailability === "ambiguous"
+                        ? "speed ambiguous (split billing identity; observed calls not attributed)"
+                        : "speed unavailable (no attributed observed calls)"}
+                    </span>
+                  )}
                   <span>{row.compactions} compactions</span>
                   <span>{row.stallsAvailability === "unavailable" ? "Stalls unavailable" : `${row.stalls ?? 0} stalls`}</span>
                 </div>

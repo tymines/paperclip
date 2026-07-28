@@ -66,9 +66,40 @@ Only the full Hermes `session_id` is used. The 16-character display id is ignore
 
 Sessions that cannot be attributed are returned in `unattributedSessions` instead of being dropped.
 
+Run-level issue attribution (`loadHermesRunAttributions`) surfaces only the issue resolved by the company-scoped `issues` join. Raw `context_snapshot.issueId` or `activity_log.entityId` references that fail that scoped join — cross-company UUIDs, missing issues, non-UUID external identifiers, or stale links — leave the run unattributed (`issueId: null`) and are never echoed into the payload, so no cross-company id can leak through the dashboard.
+
 ## Freshness And Availability
 
 Collector failures are returned in `freshness.errors`. Missing per-call sidecar data makes latency and TTFT unavailable; the API returns `null` metrics with `availability` metadata. Stall signals are reserved and currently reported as unavailable rather than fabricated.
+
+### Call-count contract
+
+Model rows report two explicitly sourced call counts; a bare ambiguous `apiCalls` figure no longer exists:
+
+- `usageApiCalls: number` — sum of Hermes `state.db` `session_model_usage.api_call_count` for this exact billing/cost identity. This is the aggregate cost-usage telemetry source.
+- `speedSampleApiCalls: number | null` — count of observed sidecar `api_calls` speed samples uniquely attributed to this exact billing/cost identity. `null` when ownership is ambiguous; exact (possibly `0`) otherwise.
+
+The two may legitimately differ: they are different sources. UI and docs must never present them as interchangeable.
+
+### Per-row speed availability
+
+Each model row carries `speedAvailability`:
+
+- `available` — at least one observed sidecar call is uniquely attributed to this identity; speed values, `speedSampleApiCalls`, and `turns` are exact.
+- `unavailable` — no attributable observed calls; `speedSampleApiCalls` is `0` (exact), speed values and `turns` are `null`.
+- `ambiguous` — one session reports multiple billing/cost identities for the same provider/model, so observed-call ownership cannot be determined without guessing. `speedSampleApiCalls`, speed values, and `turns` are `null`; nothing is fabricated or duplicated across the split rows.
+
+Per-model `turns` is the count of distinct observed `turnId`s among calls uniquely attributed to that exact model identity — never the whole-task turn count. Per-model `compactions` is the sum of `api_call_count` over that identity's own `session_model_usage` rows with `task = "compression"` — exact per identity and never copied from another model or from task totals.
+
+Global `availability` is derived from what rows actually render, never from raw sidecar presence:
+
+- `availability.modelSpeed.{avgLatencyMs,avgTtftMs,throughputOutputTokensPerSecond}` — `available` only if at least one model row renders that metric. If every model row is ambiguous or has no attributed samples, model speed is globally `unavailable` even when observed calls exist.
+- `availability.taskSpeed.*` — computed from each task's own observed calls and reported independently of model-row attribution ambiguity.
+- `availability.stalls` — reserved; currently always `unavailable`.
+
+### Envelope payload validation
+
+`fleet-observation/v1` observations are validated completely per discriminated `payloadKind` (`cost.usage.session`, `cost.usage.model`, `cost.speed.api_call`) before ingest or dedupe: required ids/strings, timestamps, billing enum fields, nullable fields, finite numeric types, and nonnegative counts/durations/tokens, plus the observation wrapper (`observedAt`, `checkpoint`, `freshness`) and the box/source invariant (observation source must match the envelope source). Any missing, string, `NaN`/`Infinity`, negative, malformed, or wrong-kind field rejects the whole envelope with `FleetObservationEnvelopeError` identifying the observation, kind, and field. Nothing invalid enters the dedupe store and there is no partial normalization.
 
 ## Security
 

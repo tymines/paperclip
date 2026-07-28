@@ -38,7 +38,19 @@ function payload(): FleetCostDashboardPayload {
       checkpoint: { sequence: 7, cursor: "state.db:7" },
       errors: ["Hermes sidecar missing"],
     },
-    availability: { avgLatencyMs: "available", avgTtftMs: "available", stalls: "unavailable" },
+    availability: {
+      modelSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      taskSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      stalls: "unavailable",
+    },
     sources: [
       {
         boxId: "mac-local",
@@ -79,7 +91,9 @@ function payload(): FleetCostDashboardPayload {
         cacheReadTokens: 200,
         cacheWriteTokens: 50,
         reasoningTokens: 25,
-        apiCalls: 3,
+        usageApiCalls: 3,
+        speedSampleApiCalls: 2,
+        speedAvailability: "available",
         avgLatencyMs: 2000,
         avgTtftMs: 420,
         throughputOutputTokensPerSecond: 300,
@@ -106,14 +120,16 @@ function payload(): FleetCostDashboardPayload {
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         reasoningTokens: 0,
-        apiCalls: 1,
+        usageApiCalls: 1,
+        speedSampleApiCalls: null,
+        speedAvailability: "ambiguous",
         avgLatencyMs: null,
         avgTtftMs: null,
         throughputOutputTokensPerSecond: null,
         completedTasks: 0,
         costPerCompletedTaskUsd: null,
         avgTaskWallClockMs: null,
-        turns: 0,
+        turns: null,
         compactions: 0,
         stalls: null,
         stallsAvailability: "unavailable",
@@ -189,5 +205,20 @@ describe("FleetCostDashboardPanel", () => {
     expect(node.textContent).toContain("box-2-windows · unavailable");
     expect(node.textContent).toContain("box-2-windows, mac-local");
     expect(node.textContent).toContain("box-2-windows:20260724_010203_bbbbbbbb");
+  });
+
+  it("labels call-count sources and per-row speed availability so they cannot be misread", () => {
+    const node = render(payload());
+
+    // The Hermes state.db usage count and the observed sidecar speed-sample
+    // count are labeled with their sources; a bare ambiguous "apiCalls"
+    // figure is never shown.
+    expect(node.textContent).toContain("3 usage calls (state.db)");
+    expect(node.textContent).toContain("2 observed speed samples");
+    // Ambiguous split billing identities render an explicit ambiguous label
+    // instead of a zero or a guessed count, and turns are unavailable.
+    expect(node.textContent).toContain("speed ambiguous");
+    expect(node.textContent).toContain("turns unavailable");
+    expect(node.textContent).not.toContain("apiCalls");
   });
 });

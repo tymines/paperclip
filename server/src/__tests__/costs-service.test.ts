@@ -155,7 +155,19 @@ const mockCostService = vi.hoisted(() => ({
     grain: "day",
     filters: {},
     freshness: { observedAt: null, checkpoint: null, errors: [] },
-    availability: {},
+    availability: {
+      modelSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      taskSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      stalls: "unavailable",
+    },
     trends: [],
     taskRows: [],
     modelRows: [],
@@ -356,7 +368,19 @@ describe("cost routes", () => {
         checkpoint: { sequence: 7 },
         errors: [],
       },
-      availability: { avgTtftMs: "available" },
+      availability: {
+        modelSpeed: {
+          avgLatencyMs: "unavailable",
+          avgTtftMs: "available",
+          throughputOutputTokensPerSecond: "unavailable",
+        },
+        taskSpeed: {
+          avgLatencyMs: "unavailable",
+          avgTtftMs: "unavailable",
+          throughputOutputTokensPerSecond: "unavailable",
+        },
+        stalls: "unavailable",
+      },
       trends: [],
       taskRows: [],
       modelRows: [],

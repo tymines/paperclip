@@ -423,7 +423,33 @@ describe("fleet cost dashboard collector", () => {
       expect(row.avgLatencyMs).toBeNull();
       expect(row.avgTtftMs).toBeNull();
       expect(row.throughputOutputTokensPerSecond).toBeNull();
+      // Ambiguous ownership: the observed-sample count, per-row availability,
+      // and observed turns must be null/ambiguous, never zero or guessed.
+      expect(row.speedSampleApiCalls).toBeNull();
+      expect(row.speedAvailability).toBe("ambiguous");
+      expect(row.turns).toBeNull();
+      // The Hermes state.db per-identity usage count stays exact and is
+      // contracted under its own source-explicit name.
+      expect(row.usageApiCalls).toBe(1);
+      expect(row).not.toHaveProperty("apiCalls");
     }
+    // Global availability must reflect what rows actually render: every model
+    // row is ambiguous, so model speed is globally unavailable even though a
+    // sidecar call exists. The task surface is computed from the task's own
+    // calls and stays honest independently.
+    expect(dashboard.availability).toEqual({
+      modelSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      taskSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      stalls: "unavailable",
+    });
   });
 
   it("attributes an observed API call to exactly one model row when the session has a single billing identity", () => {
@@ -447,11 +473,106 @@ describe("fleet cost dashboard collector", () => {
       model: "same-model",
       costSource: "pricing_table",
       pricingVersion: "v1",
-      apiCalls: 1,
+      usageApiCalls: 1,
+      speedSampleApiCalls: 1,
+      speedAvailability: "available",
       avgLatencyMs: 2000,
       avgTtftMs: 500,
       throughputOutputTokensPerSecond: 2.5,
+      turns: 1,
+      compactions: 0,
     });
+    expect(dashboard.modelRows[0]).not.toHaveProperty("apiCalls");
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "available",
+      avgTtftMs: "available",
+      throughputOutputTokensPerSecond: "available",
+    });
+  });
+
+  it("derives global model speed availability from attributed rows, not sidecar row presence", () => {
+    // An observed sidecar call exists but matches no billing identity in its
+    // own session: no model row can render speed, so global model speed must
+    // report unavailable rather than leaning on sidecar presence.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture({ model: "other-model", provider: "other-provider" })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      usageApiCalls: 1,
+      speedSampleApiCalls: 0,
+      speedAvailability: "unavailable",
+      avgLatencyMs: null,
+      avgTtftMs: null,
+      throughputOutputTokensPerSecond: null,
+      turns: null,
+    });
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "unavailable",
+      avgTtftMs: "unavailable",
+      throughputOutputTokensPerSecond: "unavailable",
+    });
+  });
+
+  it("partitions per-model turns and compactions for a task spanning two models", () => {
+    // Regression for Atlas PR #27 rereview P1: per-model turns/compactions
+    // must come from the model identity's own attributed calls and usage
+    // rows, never copied from whole-task totals onto every model row.
+    const attributions: HermesRunAttribution[] = [{
+      runId: "run-1",
+      sessionId: "session-1",
+      agentId: "agent-1",
+      agentName: "Fleet Agent",
+      issueId: "issue-1",
+      issueIdentifier: "PAP-1",
+      issueTitle: "Two-model task",
+      projectId: "project-1",
+      projectName: "Cost visibility",
+      status: "succeeded",
+      runStartedAt: new Date("2026-07-25T00:00:00.000Z"),
+      runFinishedAt: new Date("2026-07-25T00:01:00.000Z"),
+    }];
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 4 })],
+        modelUsage: [
+          fleetModelUsageFixture({ model: "model-a", provider: "provider-a", apiCallCount: 2 }),
+          fleetModelUsageFixture({ model: "model-a", provider: "provider-a", task: "compression", apiCallCount: 1 }),
+          fleetModelUsageFixture({ model: "model-b", provider: "provider-b", apiCallCount: 1 }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ model: "model-a", provider: "provider-a", apiRequestId: "req-a1", turnId: "turn-1" }),
+        fleetApiCallFixture({ model: "model-a", provider: "provider-a", apiRequestId: "req-a2", turnId: "turn-2" }),
+        fleetApiCallFixture({ model: "model-b", provider: "provider-b", apiRequestId: "req-b1", turnId: "turn-3" }),
+      ],
+      attributions,
+      freshness: { observedAt: "2026-07-25T00:01:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows).toHaveLength(1);
+    expect(dashboard.taskRows[0]).toMatchObject({ issueId: "issue-1", turns: 3, compactions: 1 });
+
+    const rowA = dashboard.modelRows.find((row) => row.model === "model-a");
+    const rowB = dashboard.modelRows.find((row) => row.model === "model-b");
+    expect(rowA).toMatchObject({ turns: 2, compactions: 1, usageApiCalls: 3, speedSampleApiCalls: 2 });
+    expect(rowB).toMatchObject({ turns: 1, compactions: 0, usageApiCalls: 1, speedSampleApiCalls: 1 });
+    // Neither row may carry the whole-task totals, and per-model turns
+    // partition the task's observed turns.
+    expect(rowA?.turns).not.toBe(dashboard.taskRows[0].turns);
+    expect(rowB?.turns).not.toBe(dashboard.taskRows[0].turns);
+    expect((rowA?.turns ?? 0) + (rowB?.turns ?? 0)).toBe(dashboard.taskRows[0].turns);
   });
 
   it("correlates observed API calls by box-qualified session identity, not provider/model alone", () => {

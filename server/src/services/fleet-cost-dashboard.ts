@@ -7,6 +7,7 @@ import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { serviceUnavailable } from "../errors.js";
+import type { FleetCostDashboardPayload } from "@paperclipai/shared";
 
 export type FleetDashboardGrain = "day" | "week" | "month";
 
@@ -377,12 +378,19 @@ export function ingestFleetObservations(store: FleetObservationStore, envelope: 
   if (envelope.schemaVersion !== "fleet-observation/v1") {
     throw new Error(`Unsupported fleet observation schema: ${(envelope as { schemaVersion?: string }).schemaVersion ?? "missing"}`);
   }
-  let inserted = 0;
-  let skipped = 0;
+  // Fail loud before any insertion: validate every observation's wrapper and
+  // per-kind payload completely so a malformed observation can never enter
+  // the dedupe store and a replay can never partially normalize.
   for (const observation of envelope.observations) {
     if (observation.schemaVersion !== "fleet-observation/v1") {
       throw new Error(`Unsupported fleet observation schema: ${observation.schemaVersion}`);
     }
+    validateFleetObservationWrapper(observation as unknown as Record<string, unknown>, envelope.source);
+    validateFleetObservationPayload(observation.observationId, observation.payloadKind, observation.payload);
+  }
+  let inserted = 0;
+  let skipped = 0;
+  for (const observation of envelope.observations) {
     if (store.has(observation.observationId)) {
       skipped += 1;
       continue;
@@ -406,6 +414,164 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const FLEET_PAYLOAD_KINDS = new Set(["cost.usage.session", "cost.usage.model", "cost.speed.api_call"]);
+
+function invalidPayload(observationId: string, kind: string, field: string, reason: string): FleetObservationEnvelopeError {
+  return new FleetObservationEnvelopeError(
+    `Fleet observation ${observationId} (${kind}) has an invalid payload field "${field}": ${reason}`,
+  );
+}
+
+function isFiniteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNullableFiniteNonNegative(value: unknown): value is number | null {
+  return value === null || isFiniteNonNegative(value);
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+/** required nonnegative integer count/token field */
+function requireCount(payload: Record<string, unknown>, observationId: string, kind: string, field: string) {
+  if (!isNonNegativeInteger(payload[field])) {
+    throw invalidPayload(observationId, kind, field, "expected a nonnegative integer");
+  }
+}
+
+/** required nonnegative finite duration/timestamp field (fractional allowed) */
+function requireMeasure(payload: Record<string, unknown>, observationId: string, kind: string, field: string) {
+  if (!isFiniteNonNegative(payload[field])) {
+    throw invalidPayload(observationId, kind, field, "expected a nonnegative finite number");
+  }
+}
+
+function requireNullableMeasure(payload: Record<string, unknown>, observationId: string, kind: string, field: string) {
+  if (!isNullableFiniteNonNegative(payload[field])) {
+    throw invalidPayload(observationId, kind, field, "expected null or a nonnegative finite number");
+  }
+}
+
+function requireString(payload: Record<string, unknown>, observationId: string, kind: string, field: string) {
+  if (!isNonEmptyString(payload[field])) {
+    throw invalidPayload(observationId, kind, field, "expected a nonempty string");
+  }
+}
+
+function requireNullableString(payload: Record<string, unknown>, observationId: string, kind: string, field: string) {
+  if (!isNullableString(payload[field])) {
+    throw invalidPayload(observationId, kind, field, "expected null or a string");
+  }
+}
+
+const USAGE_COUNT_FIELDS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheReadTokens",
+  "cacheWriteTokens",
+  "reasoningTokens",
+  "apiCallCount",
+] as const;
+
+const USAGE_COST_FIELDS = ["estimatedCostUsd", "actualCostUsd"] as const;
+
+const USAGE_BILLING_FIELDS = ["billingMode", "costStatus", "costSource"] as const;
+
+/**
+ * Complete per-kind payload validation. Every discriminated payload kind is
+ * validated field by field before the observation may be ingested or
+ * deduplicated: required ids/strings, timestamps, enum/source fields,
+ * nullable fields, finite numeric types, and nonnegative counts/durations/
+ * tokens. Any missing, string, NaN/infinite, negative, malformed, or
+ * wrong-kind field rejects the whole envelope with a
+ * FleetObservationEnvelopeError identifying the observation, kind, and
+ * field. No partial normalization and no NaN propagation.
+ */
+export function validateFleetObservationPayload(
+  observationId: string,
+  payloadKind: FleetObservation["payloadKind"],
+  payload: unknown,
+): void {
+  if (!isRecord(payload)) {
+    throw invalidPayload(observationId, payloadKind, "(payload)", "expected an object");
+  }
+  if (payloadKind === "cost.usage.session") {
+    requireString(payload, observationId, payloadKind, "sessionId");
+    requireMeasure(payload, observationId, payloadKind, "startedAt");
+    requireNullableMeasure(payload, observationId, payloadKind, "endedAt");
+    for (const field of USAGE_COUNT_FIELDS) requireCount(payload, observationId, payloadKind, field);
+    for (const field of USAGE_COST_FIELDS) requireNullableMeasure(payload, observationId, payloadKind, field);
+    for (const field of USAGE_BILLING_FIELDS) requireString(payload, observationId, payloadKind, field);
+    requireNullableString(payload, observationId, payloadKind, "pricingVersion");
+    return;
+  }
+  if (payloadKind === "cost.usage.model") {
+    requireString(payload, observationId, payloadKind, "sessionId");
+    requireString(payload, observationId, payloadKind, "model");
+    requireString(payload, observationId, payloadKind, "provider");
+    if (typeof payload.task !== "string") {
+      throw invalidPayload(observationId, payloadKind, "task", "expected a string");
+    }
+    for (const field of USAGE_COUNT_FIELDS) requireCount(payload, observationId, payloadKind, field);
+    for (const field of USAGE_COST_FIELDS) requireNullableMeasure(payload, observationId, payloadKind, field);
+    for (const field of USAGE_BILLING_FIELDS) requireString(payload, observationId, payloadKind, field);
+    requireNullableString(payload, observationId, payloadKind, "pricingVersion");
+    requireNullableMeasure(payload, observationId, payloadKind, "firstSeen");
+    requireNullableMeasure(payload, observationId, payloadKind, "lastSeen");
+    return;
+  }
+  requireString(payload, observationId, payloadKind, "sessionId");
+  requireString(payload, observationId, payloadKind, "turnId");
+  requireString(payload, observationId, payloadKind, "apiRequestId");
+  requireNullableString(payload, observationId, payloadKind, "paperclipRunId");
+  requireString(payload, observationId, payloadKind, "model");
+  requireString(payload, observationId, payloadKind, "provider");
+  for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const) {
+    requireCount(payload, observationId, payloadKind, field);
+  }
+  requireMeasure(payload, observationId, payloadKind, "startedAt");
+  requireMeasure(payload, observationId, payloadKind, "endedAt");
+  requireMeasure(payload, observationId, payloadKind, "apiDuration");
+  requireNullableMeasure(payload, observationId, payloadKind, "ttft");
+}
+
+/** envelope/observation wrapper fields shared by every observation */
+function validateFleetObservationWrapper(
+  observation: Record<string, unknown>,
+  envelopeSource: { boxId: string; collectorId: string },
+): void {
+  const observationId = typeof observation.observationId === "string" ? observation.observationId : "(unknown)";
+  const kind = typeof observation.payloadKind === "string" ? observation.payloadKind : "(unknown)";
+  if (!isNonEmptyString(observation.observedAt) || Number.isNaN(Date.parse(observation.observedAt))) {
+    throw invalidPayload(observationId, kind, "observedAt", "expected an ISO timestamp string");
+  }
+  const checkpoint = observation.checkpoint;
+  if (!isRecord(checkpoint) || !isFiniteNonNegative(checkpoint.sequence) || !isNullableString(checkpoint.cursor)) {
+    throw invalidPayload(observationId, kind, "checkpoint.sequence", "expected { sequence: nonnegative finite number, cursor: string | null }");
+  }
+  const freshness = observation.freshness;
+  if (!isRecord(freshness) || !Array.isArray(freshness.errors) || !freshness.errors.every((error) => typeof error === "string")) {
+    throw invalidPayload(observationId, kind, "freshness.errors", "expected { errors: string[] }");
+  }
+  const source = observation.source;
+  if (
+    !isRecord(source)
+    || source.boxId !== envelopeSource.boxId
+    || source.collectorId !== envelopeSource.collectorId
+    || !isNullableString(source.profileId)
+  ) {
+    throw invalidPayload(observationId, kind, "source", "observation source must match the envelope source boxId/collectorId");
+  }
+}
 
 /**
  * Structural validation of a staged cross-box envelope. Fails loudly on any
@@ -434,6 +600,7 @@ export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnv
   if (!Array.isArray(raw.observations)) {
     throw new FleetObservationEnvelopeError("Fleet observation envelope is missing an observations array");
   }
+  const envelopeSource = { boxId: source.boxId, collectorId: source.collectorId };
   for (const observation of raw.observations) {
     if (!isRecord(observation)) {
       throw new FleetObservationEnvelopeError("Fleet observation is not an object");
@@ -452,6 +619,12 @@ export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnv
     if (!isRecord(observation.payload)) {
       throw new FleetObservationEnvelopeError(`Fleet observation ${observation.observationId} has a non-object payload`);
     }
+    validateFleetObservationWrapper(observation, envelopeSource);
+    validateFleetObservationPayload(
+      observation.observationId,
+      observation.payloadKind as FleetObservation["payloadKind"],
+      observation.payload,
+    );
   }
   return raw as unknown as FleetObservationEnvelope;
 }
@@ -616,6 +789,18 @@ function serializeTaskSessionIds(
     .sort();
 }
 
+/**
+ * Internal model-row accumulator: the public model-row fields from
+ * FleetCostDashboardPayload plus the transient box set. Keeps the
+ * aggregation strongly typed so contract drift fails typecheck instead of
+ * compiling silently.
+ */
+type FleetModelRow = FleetCostDashboardPayload["modelRows"][number];
+
+interface ModelRowAccumulator extends Omit<FleetModelRow, "boxes"> {
+  boxes: Set<string>;
+}
+
 export function aggregateFleetCostDashboard(input: {
   companyId: string;
   range?: FleetDashboardQuery["range"];
@@ -631,7 +816,7 @@ export function aggregateFleetCostDashboard(input: {
     checkpoint: FleetObservation["checkpoint"] | null;
     errors: string[];
   };
-}) {
+}): FleetCostDashboardPayload {
   const attributionBySession = new Map(input.attributions.map((row) => [row.sessionId, row]));
   const sessionById = new Map(input.usage.sessions.map((session) => [fleetSessionKey(session), session]));
   const sessionIds = new Set(
@@ -728,7 +913,7 @@ export function aggregateFleetCostDashboard(input: {
     taskMap.set(key, row);
   }
 
-  const modelRowsByKey = new Map<string, any>();
+  const modelRowsByKey = new Map<string, ModelRowAccumulator>();
   const taskRows = [...taskMap.values()].map((task) => {
     const taskSessionIds = task.sessionIds;
     const taskUsage = modelUsage.filter((usage) => taskSessionIds.has(fleetSessionKey(usage)));
@@ -763,17 +948,19 @@ export function aggregateFleetCostDashboard(input: {
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         reasoningTokens: 0,
-        apiCalls: 0,
+        usageApiCalls: 0,
+        speedSampleApiCalls: null,
+        speedAvailability: "unavailable" as const,
         avgLatencyMs: null,
         avgTtftMs: null,
         throughputOutputTokensPerSecond: null,
         completedTasks: 0,
         costPerCompletedTaskUsd: null,
         avgTaskWallClockMs: null,
-        turns: 0,
+        turns: null,
         compactions: 0,
         stalls: null,
-        stallsAvailability: "unavailable",
+        stallsAvailability: "unavailable" as const,
         boxes: new Set<string>(),
       };
       modelRow.boxes.add(fleetItemBoxId(usage));
@@ -784,7 +971,11 @@ export function aggregateFleetCostDashboard(input: {
       modelRow.cacheReadTokens += usage.cacheReadTokens;
       modelRow.cacheWriteTokens += usage.cacheWriteTokens;
       modelRow.reasoningTokens += usage.reasoningTokens;
-      modelRow.apiCalls += usage.apiCallCount;
+      modelRow.usageApiCalls += usage.apiCallCount;
+      // Compactions come from this identity's own compression-task usage
+      // rows, so one model's compactions can never land on another row and
+      // whole-task totals are never copied onto every model row.
+      if (usage.task === "compression") modelRow.compactions += usage.apiCallCount;
       modelRowsByKey.set(modelKey, modelRow);
       return {
         provider: usage.provider,
@@ -870,8 +1061,12 @@ export function aggregateFleetCostDashboard(input: {
     const calls = callsByModelKey.get(modelKey) ?? [];
     // Fail-honest ambiguity policy: when one session reports multiple billing
     // identities for this provider/model, observed calls cannot be attributed
-    // without guessing, so speed telemetry is reported as unavailable.
-    const speedUnavailable = ambiguousSpeedModelKeys.has(modelKey);
+    // without guessing. Speed values, the observed-sample count, and observed
+    // turns become null/ambiguous — never zero and never duplicated across
+    // split rows. Unsplit rows report the exact attributed sample count (0 is
+    // exact when no calls were attributed).
+    const ambiguous = ambiguousSpeedModelKeys.has(modelKey);
+    const speedAvailability = ambiguous ? "ambiguous" as const : calls.length > 0 ? "available" as const : "unavailable" as const;
     const durationMs = calls.reduce((sum, call) => sum + call.apiDuration * 1000, 0);
     const ttftSamples = calls.map((call) => call.ttft).filter((value): value is number => value !== null);
     const completedTasks = matchingTaskRows.filter((task) => task.completionState === "succeeded" || task.completionState === "done").length;
@@ -882,20 +1077,35 @@ export function aggregateFleetCostDashboard(input: {
       ...row,
       estimatedCostUsd: round(row.estimatedCostUsd),
       actualCostUsd: row.actualCostUsd === null ? null : round(row.actualCostUsd),
-      avgLatencyMs: !speedUnavailable && calls.length > 0 ? round(durationMs / calls.length) : null,
-      avgTtftMs: !speedUnavailable && ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
-      throughputOutputTokensPerSecond: !speedUnavailable && durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
+      speedSampleApiCalls: ambiguous ? null : calls.length,
+      speedAvailability,
+      avgLatencyMs: !ambiguous && calls.length > 0 ? round(durationMs / calls.length) : null,
+      avgTtftMs: !ambiguous && ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
+      throughputOutputTokensPerSecond: !ambiguous && durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
       completedTasks,
       costPerCompletedTaskUsd: costPerCompletedTaskUsd === null ? null : round(costPerCompletedTaskUsd),
       avgTaskWallClockMs: wallClockSamples.length > 0
         ? round(wallClockSamples.reduce((sum, value) => sum + value, 0) / wallClockSamples.length)
         : null,
-      turns: matchingTaskRows.reduce((sum, task) => sum + task.turns, 0),
-      compactions: matchingTaskRows.reduce((sum, task) => sum + task.compactions, 0),
+      // Turns come only from calls uniquely attributed to this identity; the
+      // identity's own compactions were folded from its compression usage
+      // rows during accumulation. Whole-task totals are never copied here.
+      turns: !ambiguous && calls.length > 0 ? new Set(calls.map((call) => call.turnId)).size : null,
+      compactions: row.compactions,
       stalls: null,
       stallsAvailability: "unavailable" as const,
       boxes: [...(row.boxes as Set<string>)].sort(),
     };
+  });
+
+  // Global availability is derived from what rows actually render, never
+  // from raw sidecar presence: if every model row is ambiguous or has no
+  // attributed samples, model speed is globally unavailable even when
+  // observed calls exist. The task surface is reported independently.
+  const speedAvailabilityOf = (rows: Array<{ avgLatencyMs: number | null; avgTtftMs: number | null; throughputOutputTokensPerSecond: number | null }>) => ({
+    avgLatencyMs: rows.some((row) => row.avgLatencyMs !== null) ? "available" as const : "unavailable" as const,
+    avgTtftMs: rows.some((row) => row.avgTtftMs !== null) ? "available" as const : "unavailable" as const,
+    throughputOutputTokensPerSecond: rows.some((row) => row.throughputOutputTokensPerSecond !== null) ? "available" as const : "unavailable" as const,
   });
 
   return {
@@ -905,8 +1115,8 @@ export function aggregateFleetCostDashboard(input: {
     freshness: input.freshness,
     sources: input.sources ?? [],
     availability: {
-      avgLatencyMs: apiCalls.length > 0 ? "available" : "unavailable",
-      avgTtftMs: apiCalls.some((call) => call.ttft !== null) ? "available" : "unavailable",
+      modelSpeed: speedAvailabilityOf(modelRows),
+      taskSpeed: speedAvailabilityOf(taskRows),
       stalls: "unavailable",
     },
     trends: [...trends.values()].map((row) => ({ ...row, costUsd: round(row.costUsd) })).sort((a, b) => a.bucket.localeCompare(b.bucket)),
@@ -967,8 +1177,6 @@ export async function loadHermesRunAttributions(db: Db, companyId: string): Prom
       status: heartbeatRuns.status,
       runStartedAt: heartbeatRuns.startedAt,
       runFinishedAt: heartbeatRuns.finishedAt,
-      contextIssueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
-      activityIssueId: runIssueLinks.entityId,
       issueId: issues.id,
       issueIdentifier: issues.identifier,
       issueTitle: issues.title,
@@ -996,7 +1204,10 @@ export async function loadHermesRunAttributions(db: Db, companyId: string): Prom
       sessionId,
       agentId: row.agentId,
       agentName: row.agentName ?? null,
-      issueId: row.issueId ?? row.contextIssueId ?? row.activityIssueId ?? null,
+      // Only the company-scoped join result may be surfaced. Raw context or
+      // activity references that fail the scoped join (cross-company,
+      // missing, non-UUID, or stale) stay unattributed and are never echoed.
+      issueId: row.issueId ?? null,
       issueIdentifier: row.issueIdentifier ?? null,
       issueTitle: row.issueTitle ?? null,
       projectId: row.projectId ?? null,
@@ -1088,7 +1299,7 @@ export async function buildFleetCostDashboard(
   companyId: string,
   query: FleetDashboardQuery = {},
   options: { includeCrossBox?: boolean } = {},
-) {
+): Promise<FleetCostDashboardPayload> {
   const collectorCompanyId = process.env.HERMES_COST_COMPANY_ID;
   if (!collectorCompanyId) {
     throw serviceUnavailable("HERMES_COST_COMPANY_ID is required for local Hermes cost collection");

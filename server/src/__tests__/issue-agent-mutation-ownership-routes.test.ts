@@ -111,6 +111,9 @@ function registerRouteMocks() {
     accessService: () => mockAccessService,
     agentService: () => mockAgentService,
     companyService: () => mockCompanyService,
+    costService: () => ({
+      byIssueIds: vi.fn(async () => new Map()),
+    }),
     documentService: () => mockDocumentService,
     executionWorkspaceService: () => ({}),
     feedbackService: () => ({

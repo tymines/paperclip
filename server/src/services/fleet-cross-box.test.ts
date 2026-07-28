@@ -269,6 +269,113 @@ describe("windows envelope adapter (zero-footprint contract)", () => {
   });
 });
 
+describe("envelope payload validation (fail-loud contract)", () => {
+  function validEnvelope() {
+    return JSON.parse(readFileSync(WINDOWS_FIXTURE_PATH, "utf8"));
+  }
+
+  function observationOfKind(envelope: any, kind: string) {
+    return envelope.observations.find((observation: any) => observation.payloadKind === kind);
+  }
+
+  function expectPayloadRejection(envelope: any, fieldPattern: RegExp) {
+    expect(() => parseFleetObservationEnvelope(envelope)).toThrowError(FleetObservationEnvelopeError);
+    expect(() => parseFleetObservationEnvelope(envelope)).toThrowError(fieldPattern);
+    // Invalid observations must never enter the dedupe store, and
+    // normalization must not partially succeed.
+    const store: FleetObservationStore = new Map();
+    expect(() => normalizeFleetEnvelopeToUsage(envelope, store)).toThrowError(FleetObservationEnvelopeError);
+    expect(store.size).toBe(0);
+  }
+
+  it("accepts the full valid fixture for all three payload kinds", () => {
+    const envelope = validEnvelope();
+    expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    const store: FleetObservationStore = new Map();
+    const { inserted } = normalizeFleetEnvelopeToUsage(parseFleetObservationEnvelope(envelope), store);
+    expect(inserted).toBe(8);
+    // nullable fields stay nullable and valid: ttft/actualCostUsd nulls are
+    // part of the contract, not malformed data.
+    const apiCall = observationOfKind(envelope, "cost.speed.api_call");
+    apiCall.payload.ttft = null;
+    const session = observationOfKind(envelope, "cost.usage.session");
+    session.payload.endedAt = null;
+    session.payload.actualCostUsd = null;
+    const model = observationOfKind(envelope, "cost.usage.model");
+    model.payload.pricingVersion = null;
+    model.payload.firstSeen = null;
+    model.payload.lastSeen = null;
+    expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+  });
+
+  it("rejects missing, string, NaN/infinite, and negative numeric fields per payload kind", () => {
+    const session = validEnvelope();
+    delete observationOfKind(session, "cost.usage.session").payload.inputTokens;
+    expectPayloadRejection(session, /cost\.usage\.session.*inputTokens/s);
+
+    const stringTokens = validEnvelope();
+    observationOfKind(stringTokens, "cost.usage.model").payload.outputTokens = "1200";
+    expectPayloadRejection(stringTokens, /cost\.usage\.model.*outputTokens/s);
+
+    const infinite = validEnvelope();
+    observationOfKind(infinite, "cost.speed.api_call").payload.apiDuration = Number.POSITIVE_INFINITY;
+    expectPayloadRejection(infinite, /cost\.speed\.api_call.*apiDuration/s);
+
+    const nan = validEnvelope();
+    observationOfKind(nan, "cost.speed.api_call").payload.startedAt = Number.NaN;
+    expectPayloadRejection(nan, /cost\.speed\.api_call.*startedAt/s);
+
+    const negative = validEnvelope();
+    observationOfKind(negative, "cost.usage.session").payload.apiCallCount = -1;
+    expectPayloadRejection(negative, /cost\.usage\.session.*apiCallCount/s);
+
+    const nullRequired = validEnvelope();
+    observationOfKind(nullRequired, "cost.speed.api_call").payload.apiDuration = null;
+    expectPayloadRejection(nullRequired, /cost\.speed\.api_call.*apiDuration/s);
+  });
+
+  it("rejects missing or malformed identity fields per payload kind", () => {
+    const missingTurn = validEnvelope();
+    delete observationOfKind(missingTurn, "cost.speed.api_call").payload.turnId;
+    expectPayloadRejection(missingTurn, /cost\.speed\.api_call.*turnId/s);
+
+    const missingModel = validEnvelope();
+    delete observationOfKind(missingModel, "cost.usage.model").payload.model;
+    expectPayloadRejection(missingModel, /cost\.usage\.model.*model/s);
+
+    const emptySession = validEnvelope();
+    observationOfKind(emptySession, "cost.usage.session").payload.sessionId = "";
+    expectPayloadRejection(emptySession, /cost\.usage\.session.*sessionId/s);
+
+    const nullRunIdOk = validEnvelope();
+    observationOfKind(nullRunIdOk, "cost.speed.api_call").payload.paperclipRunId = null;
+    expect(() => parseFleetObservationEnvelope(nullRunIdOk)).not.toThrow();
+    const badRunId = validEnvelope();
+    observationOfKind(badRunId, "cost.speed.api_call").payload.paperclipRunId = 42;
+    expectPayloadRejection(badRunId, /cost\.speed\.api_call.*paperclipRunId/s);
+  });
+
+  it("rejects malformed observation envelopes, checkpoints, freshness, and source invariants", () => {
+    const missingObservedAt = validEnvelope();
+    delete missingObservedAt.observations[0].observedAt;
+    expectPayloadRejection(missingObservedAt, /observedAt/s);
+
+    const badCheckpoint = validEnvelope();
+    badCheckpoint.observations[0].checkpoint = { sequence: "42", cursor: null };
+    expectPayloadRejection(badCheckpoint, /checkpoint.*sequence/s);
+
+    const badFreshness = validEnvelope();
+    badFreshness.observations[0].freshness = { errors: ["ok", 7] };
+    expectPayloadRejection(badFreshness, /freshness.*errors/s);
+
+    // an observation stamped with a different box than the envelope source
+    // violates the box/source invariant and must fail loudly
+    const wrongBox = validEnvelope();
+    wrongBox.observations[0].source = { ...wrongBox.observations[0].source, boxId: "box-3-stranger" };
+    expectPayloadRejection(wrongBox, /source|boxId/s);
+  });
+});
+
 describe("cross-box fleet aggregation", () => {
   it("merges Mac and Windows boxes without collisions or double counting", () => {
     const windows = normalizeFleetEnvelopeToUsage(windowsEnvelope());
@@ -292,15 +399,49 @@ describe("cross-box fleet aggregation", () => {
       inputTokens: 2100,
       outputTokens: 1250,
       actualCostUsd: 0.52,
-      apiCalls: 6,
+      usageApiCalls: 6,
+      speedSampleApiCalls: 2,
+      speedAvailability: "available",
       compactions: 1,
+      turns: 2,
       completedTasks: 1,
       costPerCompletedTaskUsd: 0.52,
       avgLatencyMs: 2250,
       avgTtftMs: 380,
       boxes: ["box-2-windows", "mac-local"],
     });
+    expect(kimi).not.toHaveProperty("apiCalls");
     expect(kimi?.throughputOutputTokensPerSecond).toBeCloseTo(277.777778, 4);
+
+    // the second model identity in the same task reports only its own
+    // attributed turns/compactions, never the whole-task totals
+    const glm = dashboard.modelRows.find((row) => row.model === "glm-5");
+    expect(glm).toMatchObject({
+      provider: "z-ai",
+      usageApiCalls: 2,
+      speedSampleApiCalls: 1,
+      speedAvailability: "available",
+      turns: 1,
+      compactions: 0,
+      avgLatencyMs: 1500,
+      avgTtftMs: 250,
+      boxes: ["box-2-windows"],
+    });
+    expect(glm?.throughputOutputTokensPerSecond).toBeCloseTo(200, 4);
+
+    expect(dashboard.availability).toEqual({
+      modelSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      taskSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      stalls: "unavailable",
+    });
 
     // one task row spans both boxes; identical session ids on different boxes stay distinct
     expect(dashboard.taskRows).toHaveLength(1);

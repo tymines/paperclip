@@ -145,6 +145,32 @@ export interface FleetCostDashboardSource {
   detail: string | null;
 }
 
+/** Per-row speed availability: `available` = at least one observed sidecar call is uniquely attributed to this model identity; `unavailable` = no attributable observed calls; `ambiguous` = the session reports multiple billing/cost identities for the same provider/model, so observed-call ownership cannot be determined without guessing. */
+export type FleetModelSpeedAvailability = "available" | "unavailable" | "ambiguous";
+
+export interface FleetSpeedMetricAvailability {
+  avgLatencyMs: "available" | "unavailable";
+  avgTtftMs: "available" | "unavailable";
+  throughputOutputTokensPerSecond: "available" | "unavailable";
+}
+
+/**
+ * Global availability for the fleet dashboard. Derived from what rows
+ * actually render, never from raw sidecar row presence: if every model row
+ * is ambiguous or has no attributed samples, `modelSpeed` is `unavailable`
+ * even when observed sidecar calls exist. The task surface (`taskSpeed`) is
+ * computed from each task's own observed calls and is reported independently
+ * of model-row attribution ambiguity. `stalls` is reserved and currently
+ * always `unavailable`.
+ */
+export interface FleetCostDashboardAvailability {
+  /** availability of the per-model decision surface speed metrics */
+  modelSpeed: FleetSpeedMetricAvailability;
+  /** availability of the per-task speed metrics */
+  taskSpeed: FleetSpeedMetricAvailability;
+  stalls: "available" | "unavailable";
+}
+
 export interface FleetCostDashboardPayload {
   companyId: string;
   grain: FleetCostDashboardGrain;
@@ -156,7 +182,7 @@ export interface FleetCostDashboardPayload {
   };
   /** per-box collection reports; every configured source is listed, ok or not */
   sources: FleetCostDashboardSource[];
-  availability: Record<string, "available" | "unavailable">;
+  availability: FleetCostDashboardAvailability;
   trends: Array<{
     bucket: string;
     costUsd: number;
@@ -178,14 +204,38 @@ export interface FleetCostDashboardPayload {
     cacheReadTokens: number;
     cacheWriteTokens: number;
     reasoningTokens: number;
-    apiCalls: number;
+    /**
+     * API-call count from the Hermes `state.db` `session_model_usage.api_call_count`
+     * cost-usage telemetry for this exact billing/cost identity. This is the
+     * aggregate-usage source; it is NOT the count of observed sidecar speed
+     * samples and may legitimately differ from `speedSampleApiCalls`.
+     */
+    usageApiCalls: number;
+    /**
+     * Count of observed sidecar `api_calls` speed samples uniquely attributed
+     * to this exact billing/cost identity. `null` when ownership is ambiguous
+     * (split billing identities in one session); exact (possibly 0) otherwise.
+     */
+    speedSampleApiCalls: number | null;
+    /** per-row speed availability/reason; see FleetModelSpeedAvailability */
+    speedAvailability: FleetModelSpeedAvailability;
     avgLatencyMs: number | null;
     avgTtftMs: number | null;
     throughputOutputTokensPerSecond: number | null;
     completedTasks: number;
     costPerCompletedTaskUsd: number | null;
     avgTaskWallClockMs: number | null;
-    turns: number;
+    /**
+     * Distinct observed `turnId`s among sidecar calls uniquely attributed to
+     * this exact model identity. `null` when speed telemetry is ambiguous or
+     * unavailable; never copied from whole-task totals.
+     */
+    turns: number | null;
+    /**
+     * Sum of `api_call_count` over this identity's own `session_model_usage`
+     * rows whose task is `compression`. Exact per identity; never copied from
+     * another model or from whole-task totals.
+     */
     compactions: number;
     stalls: number | null;
     stallsAvailability: "available" | "unavailable";
