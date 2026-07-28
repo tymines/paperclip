@@ -1243,7 +1243,6 @@ export function jarvisRoutes(db: Db) {
     async (req, res) => {
       const { companyId } = req.params as { companyId: string };
       assertCompanyAccess(req, companyId);
-      const statusParam = typeof req.query.status === "string" ? req.query.status : undefined;
       const conversationId =
         typeof req.query.conversationId === "string" ? req.query.conversationId : undefined;
       const limit = Math.min(
@@ -1252,15 +1251,23 @@ export function jarvisRoutes(db: Db) {
       );
       // The five-state delegation status contract (queued | running |
       // completed | failed | abandoned) is shared via @paperclipai/shared.
-      // An unknown status is rejected outright — never silently drop the
-      // filter and return a misleading unfiltered list.
+      // Every non-string or unknown form — repeated keys (?status=a&status=b
+      // arrive as an array), ?status[x]=1 (object), or an unknown scalar —
+      // is rejected outright: never silently drop the filter and return a
+      // misleading unfiltered list.
+      const rawStatus = req.query.status;
+      // `status[...]` subscript keys arrive under the simple query parser as
+      // literal keys (object intent); repeated keys arrive as an array.
+      const hasStatusParam = Object.keys(req.query).some(
+        (k) => k === "status" || k.startsWith("status["),
+      );
       let status: DelegationStatus | undefined;
-      if (statusParam !== undefined) {
-        if (!isDelegationStatus(statusParam)) {
+      if (hasStatusParam) {
+        if (typeof rawStatus !== "string" || !isDelegationStatus(rawStatus)) {
           res.status(400).json({ ok: false, error: "invalid_status" });
           return;
         }
-        status = statusParam;
+        status = rawStatus;
       }
       const rows = await listDelegations(db, companyId, { status, conversationId, limit });
       res.json({ delegations: rows });

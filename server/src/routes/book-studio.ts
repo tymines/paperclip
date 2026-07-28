@@ -1252,6 +1252,21 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     } catch (laneErr) {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
       agentLaneError = laneErr.message;
+      // Fallback safety (Chronos rereview-v2 P1A): the paid model fallback
+      // may run ONLY for machine-checkably fallback-safe failures. An
+      // indeterminate outcome means the peer may already hold (or have
+      // delivered) the work — never buy a second lane. Surface honestly;
+      // the user's message is already persisted so history isn't lost.
+      if (!laneErr.fallbackSafe) {
+        res.status(502).json({
+          error: "Live Calliope lane outcome indeterminate — refusing to dual-execute a paid model fallback",
+          messageId: userMsg.id,
+          via: "none",
+          agentLane: "indeterminate",
+          agentLaneError,
+        });
+        return;
+      }
       try {
         const result = await callBrainstormChat(bibleContext, historyEntries, message);
         if (!result) throw new Error("Empty reply from LLM");

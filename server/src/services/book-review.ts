@@ -73,6 +73,8 @@ export interface BaselineReport {
   criticDegraded: boolean;
   /** Human-readable reason when verdict is NO_VERDICT. */
   noVerdictReason?: string;
+  /** Lane error when a requested live-agent critic safely degraded to the model fallback. */
+  agentLaneError?: string;
 }
 
 function extractJson(raw: string): unknown {
@@ -155,6 +157,7 @@ export async function runBaselineReview(
   // `companyId` is optional so existing tests/callers without a company
   // context keep the model-lane-only behavior.
   let critic: { text: string; provider: string; criticDegraded: boolean };
+  let agentLaneError: string | undefined;
   if (args.companyId) {
     try {
       const lane = await callAgentLane(db, {
@@ -167,7 +170,17 @@ export async function runBaselineReview(
       critic = { text: lane.text, provider: ARES_CRITIC_PROVIDER, criticDegraded: false };
     } catch (laneErr) {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
-      critic = await callCriticLLM(systemPrompt, userPrompt);
+      // Fallback safety (Chronos rereview-v2 P1A): the paid model lane may
+      // run ONLY for machine-checkably fallback-safe failures. An
+      // indeterminate outcome (peer may still hold/deliver the work)
+      // propagates — never a dual execution.
+      if (!laneErr.fallbackSafe) throw laneErr;
+      agentLaneError = laneErr.message;
+      const model = await callCriticLLM(systemPrompt, userPrompt);
+      // Honest degradation provenance: a requested-Ares review the model
+      // lane answered is ALWAYS degraded, regardless of the raw model
+      // helper's own default flag.
+      critic = { ...model, criticDegraded: true };
     }
   } else {
     critic = await callCriticLLM(systemPrompt, userPrompt);
@@ -192,6 +205,7 @@ export async function runBaselineReview(
       criticProvider: critic.provider,
       criticDegraded: critic.criticDegraded,
       noVerdictReason: "unparseable-critic-output",
+      ...(agentLaneError ? { agentLaneError } : {}),
     };
   }
 
@@ -212,6 +226,7 @@ export async function runBaselineReview(
       criticProvider: critic.provider,
       criticDegraded: critic.criticDegraded,
       noVerdictReason: "incomplete-rubric-scores",
+      ...(agentLaneError ? { agentLaneError } : {}),
     };
   }
 
@@ -238,6 +253,7 @@ export async function runBaselineReview(
     findings,
     criticProvider: critic.provider,
     criticDegraded: critic.criticDegraded,
+    ...(agentLaneError ? { agentLaneError } : {}),
   };
 }
 

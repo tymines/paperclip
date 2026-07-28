@@ -188,4 +188,61 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
     ).rejects.toThrow("db on fire");
     expect(callCriticLLM).not.toHaveBeenCalled();
   });
+
+  it("forces criticDegraded:true when Ares safely degrades to the model fallback — regardless of the model helper's own flag (parseable output)", async () => {
+    vi.mocked(callAgentLane).mockRejectedValue(
+      new AgentLaneUnavailableError("ares", "timed out — delegation marked abandoned before fallback", { fallbackSafe: true }),
+    );
+    // The raw model helper defaults to NOT degraded; the requested-Ares
+    // degradation must still be reported honestly.
+    vi.mocked(callCriticLLM).mockResolvedValue({
+      text: criticJson(),
+      provider: "deepseek",
+      criticDegraded: false,
+    });
+
+    const report = await runBaselineReview(dbForReview(), {
+      bookId: "book-1",
+      chapterNumber: 2,
+      companyId: "co-1",
+    });
+
+    expect(report.verdict).toBe("PASS");
+    expect(report.criticProvider).toBe("deepseek");
+    expect(report.criticDegraded).toBe(true);
+    expect(report.agentLaneError).toContain("ares");
+  });
+
+  it("keeps forced degraded provenance when the fallback output is UNPARSEABLE (NO_VERDICT path)", async () => {
+    vi.mocked(callAgentLane).mockRejectedValue(
+      new AgentLaneUnavailableError("ares", "peer unreachable (timeout)", { fallbackSafe: true }),
+    );
+    vi.mocked(callCriticLLM).mockResolvedValue({
+      text: "sorry, no JSON here",
+      provider: "deepseek",
+      criticDegraded: false,
+    });
+
+    const report = await runBaselineReview(dbForReview(), {
+      bookId: "book-1",
+      chapterNumber: 2,
+      companyId: "co-1",
+    });
+
+    expect(report.verdict).toBe("NO_VERDICT");
+    expect(report.noVerdictReason).toBe("unparseable-critic-output");
+    expect(report.criticProvider).toBe("deepseek");
+    expect(report.criticDegraded).toBe(true);
+  });
+
+  it("a NON-fallback-safe lane failure propagates — the paid model fallback is never invoked", async () => {
+    vi.mocked(callAgentLane).mockRejectedValue(
+      new AgentLaneUnavailableError("ares", "lane outcome indeterminate — durable state unproven", { fallbackSafe: false }),
+    );
+
+    await expect(
+      runBaselineReview(dbForReview(), { bookId: "book-1", chapterNumber: 2, companyId: "co-1" }),
+    ).rejects.toMatchObject({ name: "AgentLaneUnavailableError", fallbackSafe: false });
+    expect(callCriticLLM).not.toHaveBeenCalled();
+  });
 });

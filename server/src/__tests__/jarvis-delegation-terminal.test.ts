@@ -500,6 +500,34 @@ describeEmbeddedPostgres("delegation status contract — service and route (P1B)
     expect(resp.body.delegations).toBeUndefined();
   });
 
+  it("GET .../jarvis/delegations?status=a&status=b (repeated/array form) is rejected 400 — never silently unfiltered", async () => {
+    const company = await seedCompany(db);
+    await seedAllStatuses(db, company.id);
+    const app = buildApp(db);
+
+    const resp = await request(app)
+      .get(`/api/companies/${company.id}/jarvis/delegations?status=queued&status=running`)
+      .send();
+
+    expect(resp.status).toBe(400);
+    expect(resp.body).toMatchObject({ ok: false, error: "invalid_status" });
+    expect(resp.body.delegations).toBeUndefined();
+  });
+
+  it("GET .../jarvis/delegations?status[x]=1 (object form) is rejected 400 — never silently unfiltered", async () => {
+    const company = await seedCompany(db);
+    await seedAllStatuses(db, company.id);
+    const app = buildApp(db);
+
+    const resp = await request(app)
+      .get(`/api/companies/${company.id}/jarvis/delegations?status[x]=1`)
+      .send();
+
+    expect(resp.status).toBe(400);
+    expect(resp.body).toMatchObject({ ok: false, error: "invalid_status" });
+    expect(resp.body.delegations).toBeUndefined();
+  });
+
   it("GET .../jarvis/delegations without a status filter returns every status", async () => {
     const company = await seedCompany(db);
     await seedAllStatuses(db, company.id);

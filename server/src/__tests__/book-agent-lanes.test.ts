@@ -199,3 +199,237 @@ describe("book-agent-lanes.callAgentLane", () => {
     ).rejects.toBeInstanceOf(AgentLaneUnavailableError);
   });
 });
+
+/**
+ * Fake Db for the timeout race matrix: every poll sees `pollRow`; once the
+ * (mocked) abandonDelegation has been attempted, the NEXT select — the
+ * post-abandon classification refetch — sees `refetchRow`.
+ */
+function dbTimeoutRace(
+  pollRow: Record<string, unknown> | null,
+  refetchRow: Record<string, unknown> | null,
+) {
+  let abandonAttempted = false;
+  vi.mocked(abandonDelegation).mockImplementation(async () => {
+    abandonAttempted = true;
+    return false; // zero-row guarded update — the race was lost
+  });
+  const limit = vi.fn(async () => {
+    const row = abandonAttempted ? refetchRow : pollRow;
+    return row ? [row] : [];
+  });
+  const where = vi.fn(() => ({ limit }));
+  const from = vi.fn(() => ({ where }));
+  const select = vi.fn(() => ({ from }));
+  return { select } as unknown as Db;
+}
+
+const ACTIVE_ROW = { id: "del-1", companyId: "co-1", status: "queued" };
+
+describe("callAgentLane — timeout fallback safety (Chronos PR #30 rereview-v2 P1A)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(checkPeerReachable).mockResolvedValue({ reachable: true });
+    vi.mocked(dispatchDelegation).mockResolvedValue(DISPATCH_OK);
+  });
+
+  const call = (db: Db) =>
+    callAgentLane(db, {
+      lane: "calliope",
+      companyId: "co-1",
+      task: "t",
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+    }).catch((e) => e);
+
+  it("a CONFIRMED abandon (true) is the only timeout path that is fallback-safe", async () => {
+    vi.mocked(abandonDelegation).mockResolvedValue(true);
+    const db = dbWithRows([ACTIVE_ROW]);
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(true);
+    expect(err.reason).toContain("abandoned");
+    expect(abandonDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  it("callback wins between the final poll and the abandon (zero-row) ⇒ the PEER result is returned, never a fallback", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, {
+      id: "del-1",
+      companyId: "co-1",
+      status: "completed",
+      result: "the peer's real answer",
+    });
+
+    const out = await callAgentLane(db, {
+      lane: "calliope",
+      companyId: "co-1",
+      task: "t",
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+    });
+
+    expect(out).toEqual({
+      text: "the peer's real answer",
+      delegationId: "del-1",
+      lane: "calliope",
+    });
+    expect(abandonDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  it("zero-row abandon + completed with EMPTY result ⇒ explicit terminal error, NOT fallback-safe", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, {
+      id: "del-1",
+      companyId: "co-1",
+      status: "completed",
+      result: "   ",
+    });
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(false);
+    expect(err.reason).toContain("empty result");
+  });
+
+  it("zero-row abandon + terminal FAILED ⇒ the fallback-safe failure error", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, {
+      id: "del-1",
+      companyId: "co-1",
+      status: "failed",
+      result: "bridge exploded",
+    });
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(true);
+    expect(err.reason).toContain("bridge exploded");
+  });
+
+  it("zero-row abandon + already ABANDONED ⇒ the fallback-safe abandoned error", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, {
+      id: "del-1",
+      companyId: "co-1",
+      status: "abandoned",
+      result: "prior timeout",
+    });
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(true);
+    expect(err.reason).toContain("abandoned");
+  });
+
+  it("zero-row abandon + row STILL ACTIVE ⇒ indeterminate safety error, NOT fallback-safe", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, ACTIVE_ROW);
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(false);
+    expect(err.reason).toContain("del-1");
+    // Must NOT claim the row was abandoned — it wasn't.
+    expect(err.reason).not.toContain("marked abandoned");
+  });
+
+  it("zero-row abandon + row MISSING ⇒ indeterminate safety error, NOT fallback-safe", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, null);
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(false);
+    expect(err.reason).not.toContain("marked abandoned");
+  });
+
+  it("an abandonment DB error is NOT proof of abandonment — distinct non-fallback-safe error, never normalized into the fallback-triggering kind", async () => {
+    vi.mocked(abandonDelegation).mockRejectedValue(new Error("connection reset by peer"));
+    const db = dbWithRows([ACTIVE_ROW]);
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(false);
+    expect(err.reason).toContain("connection reset by peer");
+    expect(err.reason).not.toContain("marked abandoned");
+  });
+});
+
+describe("callAgentLane — timeout/poll input validation and deadline-bound sleeps (P2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(checkPeerReachable).mockResolvedValue({ reachable: true });
+    vi.mocked(dispatchDelegation).mockResolvedValue(DISPATCH_OK);
+    vi.mocked(abandonDelegation).mockResolvedValue(true);
+  });
+
+  it.each([0, -10, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid timeoutMs=%s BEFORE any peer work is dispatched",
+    async (timeoutMs) => {
+      const db = dbWithRows([ACTIVE_ROW]);
+
+      const err = await callAgentLane(db, {
+        lane: "calliope",
+        companyId: "co-1",
+        task: "t",
+        timeoutMs,
+        pollIntervalMs: 5,
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+      expect(err.reason).toContain("timeoutMs");
+      // Pre-dispatch validation failure: nothing was launched.
+      expect(dispatchDelegation).not.toHaveBeenCalled();
+      expect(abandonDelegation).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid pollIntervalMs=%s BEFORE any peer work is dispatched",
+    async (pollIntervalMs) => {
+      const db = dbWithRows([ACTIVE_ROW]);
+
+      const err = await callAgentLane(db, {
+        lane: "calliope",
+        companyId: "co-1",
+        task: "t",
+        timeoutMs: 100,
+        pollIntervalMs,
+      }).catch((e) => e);
+
+      expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+      expect(err.reason).toContain("pollIntervalMs");
+      expect(dispatchDelegation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("caps every poll sleep to the remaining deadline — elapsed wait never exceeds the declared timeout by a full poll interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleepSpy = vi.spyOn(globalThis, "setTimeout");
+      const db = dbWithRows([ACTIVE_ROW]);
+
+      const errPromise = callAgentLane(db, {
+        lane: "calliope",
+        companyId: "co-1",
+        task: "t",
+        timeoutMs: 100,
+        pollIntervalMs: 60,
+      }).catch((e) => e);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const err = await errPromise;
+
+      expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+      // 60ms poll, then the remainder CAPPED to 40ms — never a second full
+      // 60ms sleep that would overshoot the declared 100ms timeout.
+      const delays = sleepSpy.mock.calls.map((c) => c[1]);
+      expect(delays).toEqual([60, 40]);
+      expect(abandonDelegation).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

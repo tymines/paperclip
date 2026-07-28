@@ -308,6 +308,50 @@ describe("Book Studio Brainstorm Chat", () => {
       expect(callAgentLane).toHaveBeenCalledTimes(1);
       expect(callBrainstormChat).toHaveBeenCalledTimes(1);
     });
+
+    it("never falls back on a NON-fallback-safe lane failure — honest 502, no paid model call, no fabricated reply (P1A)", async () => {
+      const { app, db, mockQuery } = createApp();
+
+      const book = {
+        id: "book-1",
+        companyId: "company-1",
+        slug: "my-book",
+        title: "My Book",
+        metadata: {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      db.select
+        .mockReturnValueOnce(mockQuery([book]))   // book
+        .mockReturnValueOnce(mockQuery([]))         // characters
+        .mockReturnValueOnce(mockQuery([]))         // locations
+        .mockReturnValueOnce(mockQuery([]))         // styles
+        .mockReturnValueOnce(mockQuery([]))         // outlines
+        .mockReturnValueOnce(mockQuery([]));        // history
+
+      // User message persists; the assistant reply must NOT.
+      db.returning
+        .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }]);
+
+      vi.mocked(callAgentLane).mockRejectedValue(
+        new AgentLaneUnavailableError("calliope", "lane outcome indeterminate — durable state unproven", { fallbackSafe: false }),
+      );
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/chat")
+        .send({ message: "hello" })
+        .expect(502);
+
+      expect(res.body).toHaveProperty("via", "none");
+      expect(res.body).toHaveProperty("agentLane", "indeterminate");
+      expect(res.body).toHaveProperty("messageId", "msg-1");
+      expect(res.body.agentLaneError).toContain("indeterminate");
+      // The paid model fallback was NEVER bought for an unproven peer outcome.
+      expect(callBrainstormChat).not.toHaveBeenCalled();
+      // Only the user message was persisted — no fabricated assistant reply.
+      expect(db.insert).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("GET /chat", () => {

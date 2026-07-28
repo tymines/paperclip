@@ -47,6 +47,15 @@ export interface AutopilotStartOptions {
 }
 
 // --- Checkpoint Dir ---
+/**
+ * Deterministic reservation (cents) charged ONCE per chapter baseline-review
+ * action, before execution. It covers whichever critic lane answers — the
+ * live Ares agent lane OR the degraded model fallback — so a fallback never
+ * double-charges. Rough draft estimates are 5¢ (below); the critic pass is
+ * a single scoring call, reserved at 2¢.
+ */
+export const AUTOPILOT_REVIEW_RESERVATION_CENTS = 2;
+
 const CHECKPOINT_DIR =
   process.env.AUTOPILOT_CHECKPOINT_DIR ||
   path.join(process.env.HOME || os.homedir(), ".paperclip", "autopilot-checkpoints");
@@ -378,6 +387,47 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
       // the review queue. A critic failure never blocks the chain.
       state.phase = "critiquing";
       writeCheckpoint(state);
+
+      // BUDGET HARD-STOP (control-plane invariant; Chronos rereview-v2 P1B):
+      // the review action is the next paid lane dispatch (live Ares, or the
+      // degraded model fallback inside runBaselineReview). If its
+      // reservation would exceed the hard budget, pause + checkpoint +
+      // activity-log BEFORE anything is dispatched — no Ares, no fallback
+      // critic. The soft-cap pause below stays a separate, post-chapter
+      // continue-prompt mechanism.
+      if (
+        state.budgetCents !== null &&
+        state.spendCents + AUTOPILOT_REVIEW_RESERVATION_CENTS > state.budgetCents
+      ) {
+        state.status = "paused";
+        state.pausedAt = new Date().toISOString();
+        state.phase = "idle";
+        writeCheckpoint(state);
+        await logActivity(db, {
+          companyId: state.companyId,
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          agentId: actor.agentId,
+          runId: actor.runId,
+          action: "autopilot.hard_budget_stop",
+          entityType: "book",
+          entityId: state.bookId,
+          details: {
+            reason: "budget_hard_stop",
+            bookId: state.bookId,
+            chapterNumber: ch.chapterNumber,
+            spendCents: state.spendCents,
+            budgetCents: state.budgetCents,
+            reservationCents: AUTOPILOT_REVIEW_RESERVATION_CENTS,
+          },
+        }).catch(() => {});
+        return;
+      }
+      // Charge the review action exactly once, up front: the reservation
+      // covers whichever critic lane executes (live Ares OR model fallback),
+      // so one falling back to the other can never double-charge.
+      state.spendCents += AUTOPILOT_REVIEW_RESERVATION_CENTS;
+      writeCheckpoint(state);
       try {
         const { runBaselineReview } = await import("./book-review.js");
         const report = await runBaselineReview(db, {
@@ -405,6 +455,7 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
             verdict: report.verdict,
             failures: report.failures,
             criticProvider: report.criticProvider,
+            criticDegraded: report.criticDegraded,
             noVerdictReason: report.noVerdictReason,
           },
         }).catch(() => {});
