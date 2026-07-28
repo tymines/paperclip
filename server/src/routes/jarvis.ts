@@ -41,6 +41,10 @@ import {
   dispatchDelegation,
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
+import {
+  isDelegationStatus,
+  type DelegationStatus,
+} from "@paperclipai/shared";
 import { kickoffBrainstorm } from "../services/brainstorm-kickoff.js";
 import { kickoffZeusPlan, replanFromRevision } from "../services/zeus-plan.js";
 import { projectizePlan } from "../services/projectize-plan.js";
@@ -1246,10 +1250,18 @@ export function jarvisRoutes(db: Db) {
         Math.max(Number.parseInt(String(req.query.limit ?? "50"), 10) || 50, 1),
         200,
       );
-      const allowed = new Set(["queued", "running", "completed", "failed"]);
-      const status = statusParam && allowed.has(statusParam)
-        ? (statusParam as "queued" | "running" | "completed" | "failed")
-        : undefined;
+      // The five-state delegation status contract (queued | running |
+      // completed | failed | abandoned) is shared via @paperclipai/shared.
+      // An unknown status is rejected outright — never silently drop the
+      // filter and return a misleading unfiltered list.
+      let status: DelegationStatus | undefined;
+      if (statusParam !== undefined) {
+        if (!isDelegationStatus(statusParam)) {
+          res.status(400).json({ ok: false, error: "invalid_status" });
+          return;
+        }
+        status = statusParam;
+      }
       const rows = await listDelegations(db, companyId, { status, conversationId, limit });
       res.json({ delegations: rows });
     },

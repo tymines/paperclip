@@ -4,6 +4,12 @@
 // peer callback must never flip that terminal row to a successful completed
 // result. The status column is free-text (queued | running | completed |
 // failed | abandoned) — no migration required.
+//
+// NOTE (revision 2): result transitions are now ATOMIC guarded UPDATEs
+// (company + id + allowed source status, affected-row count inspected).
+// The race/regression behavior is proven against real embedded Postgres in
+// jarvis-delegation-terminal.test.ts; this file keeps payload-level unit
+// coverage of the same contract with a mocked Db.
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "@paperclipai/db";
 import {
@@ -20,16 +26,32 @@ function dbForAbandon(returningRows: Array<Record<string, unknown>>) {
   return { db: { update } as unknown as Db, set, where, returning };
 }
 
-/** Mock Db for recordDelegationResult: one select row + update().set().where(). */
-function dbForCallback(row: Record<string, unknown> | null) {
+/**
+ * Mock Db for recordDelegationResult's atomic flow:
+ *   1. select (token validation)
+ *   2. update().set().where().returning() — atomic guarded transition
+ *      (matches only company + id + ACTIVE source status)
+ *   3. on zero affected rows: select again (classify current state), then a
+ *      terminal-guarded metadata-only update issued without .returning().
+ */
+function dbForCallback(
+  row: Record<string, unknown> | null,
+  opts: { transitionRows?: Array<Record<string, unknown>> } = {},
+) {
   const limit = vi.fn(async () => (row ? [row] : []));
   const selectWhere = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where: selectWhere }));
   const select = vi.fn(() => ({ from }));
-  const updateWhere = vi.fn(async () => undefined);
+  const returning = vi.fn(async () => opts.transitionRows ?? []);
+  // The second (metadata-audit) update is awaited directly off .where(), so
+  // the where result must be awaitable AND carry .returning() for the first
+  // (transition) update.
+  const updateWhere = vi.fn(() =>
+    Object.assign(Promise.resolve(undefined), { returning }),
+  );
   const set = vi.fn((_payload: unknown) => ({ where: updateWhere }));
   const update = vi.fn(() => ({ set }));
-  return { db: { select, update } as unknown as Db, set, updateWhere };
+  return { db: { select, update } as unknown as Db, set, updateWhere, returning };
 }
 
 describe("abandonDelegation — durable terminal timeout state (P2)", () => {
@@ -67,15 +89,42 @@ describe("abandonDelegation — durable terminal timeout state (P2)", () => {
   });
 });
 
-describe("recordDelegationResult — late callback on an abandoned delegation (P2)", () => {
-  it("rejects the late callback and classifies it in metadata WITHOUT overwriting the terminal audit state", async () => {
-    const { db, set } = dbForCallback({
+describe("recordDelegationResult — atomic terminal-safe transitions (P1)", () => {
+  it("a normal timely callback still completes an active delegation (regression guard)", async () => {
+    const { db, set, returning } = dbForCallback(
+      {
+        id: "del-1",
+        companyId: "co-1",
+        status: "queued",
+        metadata: { callbackToken: "tok-1" },
+      },
+      { transitionRows: [{ id: "del-1" }] }, // atomic guard matched the active row
+    );
+
+    const out = await recordDelegationResult(db, {
+      delegationId: "del-1",
+      companyId: "co-1",
+      callbackToken: "tok-1",
+      status: "completed",
+      result: "the answer",
+    });
+
+    expect(out).toEqual({ ok: true });
+    expect(returning).toHaveBeenCalledTimes(1);
+    const payload = set.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.status).toBe("completed");
+    expect(payload.result).toBe("the answer");
+    expect(payload.completedAt).toBeInstanceOf(Date);
+  });
+
+  it("a late callback whose atomic guard matches zero rows is rejected and never overwrites status/result/completedAt", async () => {
+    const { db, set, returning } = dbForCallback({
       id: "del-1",
       companyId: "co-1",
       status: "abandoned",
       result: "timed out after 45000ms — abandoned before fallback",
       metadata: { callbackToken: "tok-1", kind: "book-studio-brainstorm" },
-    });
+    }); // transitionRows defaults to [] — the atomic guard matched nothing
 
     const out = await recordDelegationResult(db, {
       delegationId: "del-1",
@@ -86,23 +135,39 @@ describe("recordDelegationResult — late callback on an abandoned delegation (P
     });
 
     expect(out).toEqual({ ok: false, error: "delegation_abandoned" });
-    expect(set).toHaveBeenCalledTimes(1);
-    const payload = set.mock.calls[0][0] as Record<string, unknown>;
-    // Terminal audit state is never overwritten by the late callback.
-    expect(payload).not.toHaveProperty("status");
-    expect(payload).not.toHaveProperty("result");
-    expect(payload).not.toHaveProperty("completedAt");
-    // The late result is explicitly classified for audit instead.
-    const meta = payload.metadata as Record<string, unknown>;
-    expect(meta.callbackToken).toBe("tok-1"); // existing metadata preserved
-    expect(meta.lateCallback).toMatchObject({
-      status: "completed",
-      result: "sorry I'm late — here is the peer answer",
-    });
-    expect(typeof (meta.lateCallback as Record<string, unknown>).receivedAt).toBe("string");
+    // Two writes attempted: the atomic transition (whose WHERE guard matched
+    // ZERO rows — nothing was applied) and the terminal-guarded metadata
+    // audit write. The audit payload may never carry lifecycle fields.
+    expect(set).toHaveBeenCalledTimes(2);
+    expect(returning).toHaveBeenCalledTimes(1);
+    expect(await returning.mock.results[0]!.value).toEqual([]);
+    const auditPayload = set.mock.calls[1][0] as Record<string, unknown>;
+    expect(auditPayload).not.toHaveProperty("status");
+    expect(auditPayload).not.toHaveProperty("result");
+    expect(auditPayload).not.toHaveProperty("completedAt");
+    expect(auditPayload).toHaveProperty("metadata"); // jsonb merge classification
   });
 
-  it("still applies a bad-token rejection before any abandoned-state handling", async () => {
+  it("classifies a duplicate callback against a completed/failed row as delegation_terminal", async () => {
+    const { db } = dbForCallback({
+      id: "del-1",
+      companyId: "co-1",
+      status: "completed",
+      result: "first terminal result",
+      metadata: { callbackToken: "tok-1" },
+    }); // zero-row atomic transition: row is terminal
+
+    const out = await recordDelegationResult(db, {
+      delegationId: "del-1",
+      companyId: "co-1",
+      callbackToken: "tok-1",
+      status: "running",
+    });
+
+    expect(out).toEqual({ ok: false, error: "delegation_terminal" });
+  });
+
+  it("still applies a bad-token rejection before any transition or terminal handling", async () => {
     const { db, set } = dbForCallback({
       id: "del-1",
       companyId: "co-1",
@@ -120,28 +185,5 @@ describe("recordDelegationResult — late callback on an abandoned delegation (P
 
     expect(out).toEqual({ ok: false, error: "callback_token_mismatch" });
     expect(set).not.toHaveBeenCalled();
-  });
-
-  it("a normal timely callback still completes a queued delegation (regression guard)", async () => {
-    const { db, set } = dbForCallback({
-      id: "del-1",
-      companyId: "co-1",
-      status: "queued",
-      metadata: { callbackToken: "tok-1" },
-    });
-
-    const out = await recordDelegationResult(db, {
-      delegationId: "del-1",
-      companyId: "co-1",
-      callbackToken: "tok-1",
-      status: "completed",
-      result: "the answer",
-    });
-
-    expect(out).toEqual({ ok: true });
-    const payload = set.mock.calls[0][0] as Record<string, unknown>;
-    expect(payload.status).toBe("completed");
-    expect(payload.result).toBe("the answer");
-    expect(payload.completedAt).toBeInstanceOf(Date);
   });
 });

@@ -3,6 +3,7 @@
  * of real data wiring — replaced in Commit 3 (Augi-as-brain) with live
  * queries against /api/companies/{id}/cost-watcher, /agents, /issues, etc.
  */
+import type { DelegationStatus } from "@paperclipai/shared";
 
 export interface JarvisCapability {
   label: string;
@@ -32,7 +33,7 @@ export interface JarvisChatMessage {
    */
   delegationId?: string | null;
   delegationAgent?: string | null;
-  delegationStatus?: "queued" | "running" | "completed" | "failed" | null;
+  delegationStatus?: DelegationStatus | null;
 }
 
 export const MOCK_CAPABILITIES: JarvisCapability[] = [
