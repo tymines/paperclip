@@ -11,7 +11,10 @@ import {
   readHermesApiCalls,
   readHermesSessionUsage,
   type FleetObservationStore,
+  type HermesApiCall,
+  type HermesModelUsage,
   type HermesRunAttribution,
+  type HermesSessionUsage,
 } from "./fleet-cost-dashboard.js";
 
 const tempPaths: string[] = [];
@@ -204,6 +207,72 @@ function createSidecarFixture(path: string) {
   db.close();
 }
 
+function fleetSessionFixture(overrides: Partial<HermesSessionUsage> = {}): HermesSessionUsage {
+  return {
+    sessionId: "session-1",
+    startedAt: 1_785_000_000,
+    endedAt: 1_785_000_010,
+    inputTokens: 20,
+    outputTokens: 10,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    apiCallCount: 1,
+    estimatedCostUsd: 0.03,
+    actualCostUsd: null,
+    billingMode: "metered",
+    costStatus: "estimated",
+    costSource: "mixed",
+    pricingVersion: null,
+    ...overrides,
+  };
+}
+
+function fleetModelUsageFixture(overrides: Partial<HermesModelUsage> = {}): HermesModelUsage {
+  return {
+    sessionId: "session-1",
+    model: "same-model",
+    provider: "provider-a",
+    task: "",
+    apiCallCount: 1,
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    estimatedCostUsd: 0.01,
+    actualCostUsd: null,
+    billingMode: "metered",
+    costStatus: "estimated",
+    costSource: "pricing_table",
+    pricingVersion: "v1",
+    firstSeen: 1_785_000_000,
+    lastSeen: 1_785_000_010,
+    ...overrides,
+  };
+}
+
+function fleetApiCallFixture(overrides: Partial<HermesApiCall> = {}): HermesApiCall {
+  return {
+    sessionId: "session-1",
+    turnId: "turn-1",
+    apiRequestId: "request-1",
+    paperclipRunId: null,
+    model: "same-model",
+    provider: "provider-a",
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    startedAt: 1_785_000_000,
+    endedAt: 1_785_000_002,
+    apiDuration: 2,
+    ttft: 0.5,
+    ...overrides,
+  };
+}
+
 describe("fleet cost dashboard collector", () => {
   it("preserves Hermes billing semantics and nullable actual cost", async () => {
     const dir = await tempDirectory();
@@ -321,6 +390,100 @@ describe("fleet cost dashboard collector", () => {
       { costSource: "provider_estimate", pricingVersion: "v2", estimatedCostUsd: 0.02 },
       { costSource: "pricing_table", pricingVersion: "v1", estimatedCostUsd: 0.01 },
     ]);
+  });
+
+  it("never duplicates one observed API call across split model rows and fails honest on ambiguity", () => {
+    // Regression for Atlas PR #27 P1: two model rows share provider/model in
+    // one session but differ in billing/cost identity, with one underlying
+    // observed API call. The source cannot say which identity owns the call,
+    // so the documented fail-honest policy marks speed telemetry unavailable
+    // on every ambiguous split row instead of duplicating the call's
+    // latency/TTFT/throughput across all of them.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [
+          fleetModelUsageFixture({ estimatedCostUsd: 0.01, costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ estimatedCostUsd: 0.02, costSource: "provider_estimate", pricingVersion: "v2" }),
+        ],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    // The one underlying call may contribute speed telemetry to at most one
+    // compatible row; identical duplicated samples on both rows are the defect.
+    const rowsWithObservedSpeed = dashboard.modelRows.filter((row) => row.avgLatencyMs !== null);
+    expect(rowsWithObservedSpeed.length).toBeLessThanOrEqual(1);
+    for (const row of dashboard.modelRows) {
+      expect(row.avgLatencyMs).toBeNull();
+      expect(row.avgTtftMs).toBeNull();
+      expect(row.throughputOutputTokensPerSecond).toBeNull();
+    }
+  });
+
+  it("attributes an observed API call to exactly one model row when the session has a single billing identity", () => {
+    // Unsplit control: one billing identity in the session, so the observed
+    // call's speed telemetry lands on that row and nowhere else.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      provider: "provider-a",
+      model: "same-model",
+      costSource: "pricing_table",
+      pricingVersion: "v1",
+      apiCalls: 1,
+      avgLatencyMs: 2000,
+      avgTtftMs: 500,
+      throughputOutputTokensPerSecond: 2.5,
+    });
+  });
+
+  it("correlates observed API calls by box-qualified session identity, not provider/model alone", () => {
+    // Same session id on two boxes, same provider/model, different billing
+    // identities: each call must attribute only to the identity observed in
+    // its own box-qualified session.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [
+          fleetSessionFixture({ sessionId: "shared-id", boxId: "box-a" }),
+          fleetSessionFixture({ sessionId: "shared-id", boxId: "box-b" }),
+        ],
+        modelUsage: [
+          fleetModelUsageFixture({ sessionId: "shared-id", boxId: "box-a", costSource: "pricing_table", pricingVersion: "v1", estimatedCostUsd: 0.01 }),
+          fleetModelUsageFixture({ sessionId: "shared-id", boxId: "box-b", costSource: "provider_estimate", pricingVersion: "v2", estimatedCostUsd: 0.02 }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ sessionId: "shared-id", boxId: "box-a", apiRequestId: "req-a", apiDuration: 2, ttft: 0.5 }),
+        fleetApiCallFixture({ sessionId: "shared-id", boxId: "box-b", apiRequestId: "req-b", apiDuration: 4, ttft: 0.25 }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    const rowV1 = dashboard.modelRows.find((row) => row.pricingVersion === "v1");
+    const rowV2 = dashboard.modelRows.find((row) => row.pricingVersion === "v2");
+    expect(rowV1).toMatchObject({ avgLatencyMs: 2000, avgTtftMs: 500, throughputOutputTokensPerSecond: 2.5 });
+    expect(rowV2).toMatchObject({ avgLatencyMs: 4000, avgTtftMs: 250, throughputOutputTokensPerSecond: 1.25 });
   });
 
   it("builds versioned generic observations and deduplicates replay by observation id", async () => {

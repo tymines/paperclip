@@ -656,6 +656,45 @@ export function aggregateFleetCostDashboard(input: {
     sessionIds.has(fleetSessionKey(call)) && (!input.filters?.model || call.model === input.filters.model)
   );
 
+  // Index cost-usage rows by box-qualified session so observed API calls are
+  // correlated to a billing/cost identity through their own session, never by
+  // provider/model alone.
+  const modelUsageBySession = new Map<string, HermesModelUsage[]>();
+  for (const usage of modelUsage) {
+    const key = fleetSessionKey(usage);
+    const list = modelUsageBySession.get(key);
+    if (list) list.push(usage);
+    else modelUsageBySession.set(key, [usage]);
+  }
+
+  // Attribute each observed API call to at most one model-row billing/cost
+  // identity. A call is eligible only for identities present in its own
+  // box-qualified session whose provider and model both match. When one
+  // session reports multiple billing identities for the same provider/model
+  // (split rows), the source cannot disambiguate which identity owns the
+  // call; fail honest by marking speed telemetry unavailable on every
+  // candidate row instead of guessing or duplicating the call's
+  // latency/TTFT/throughput across all of them. Calls with no matching
+  // identity in their own session attribute to no row.
+  const callsByModelKey = new Map<string, HermesApiCall[]>();
+  const ambiguousSpeedModelKeys = new Set<string>();
+  for (const call of apiCalls) {
+    const sessionUsage = modelUsageBySession.get(fleetSessionKey(call)) ?? [];
+    const candidateKeys = new Set(
+      sessionUsage
+        .filter((usage) => usage.model === call.model && usage.provider === call.provider)
+        .map((usage) => modelAggregationKey(usage)),
+    );
+    if (candidateKeys.size === 1) {
+      const key = candidateKeys.values().next().value as string;
+      const list = callsByModelKey.get(key);
+      if (list) list.push(call);
+      else callsByModelKey.set(key, [call]);
+    } else if (candidateKeys.size > 1) {
+      for (const key of candidateKeys) ambiguousSpeedModelKeys.add(key);
+    }
+  }
+
   const taskMap = new Map<string, {
     issueId: string | null;
     issueIdentifier: string | null;
@@ -827,7 +866,12 @@ export function aggregateFleetCostDashboard(input: {
         && (model.pricingVersion ?? null) === (row.pricingVersion ?? null),
       ),
     );
-    const calls = apiCalls.filter((call) => call.model === row.model && call.provider === row.provider);
+    const modelKey = modelAggregationKey(row);
+    const calls = callsByModelKey.get(modelKey) ?? [];
+    // Fail-honest ambiguity policy: when one session reports multiple billing
+    // identities for this provider/model, observed calls cannot be attributed
+    // without guessing, so speed telemetry is reported as unavailable.
+    const speedUnavailable = ambiguousSpeedModelKeys.has(modelKey);
     const durationMs = calls.reduce((sum, call) => sum + call.apiDuration * 1000, 0);
     const ttftSamples = calls.map((call) => call.ttft).filter((value): value is number => value !== null);
     const completedTasks = matchingTaskRows.filter((task) => task.completionState === "succeeded" || task.completionState === "done").length;
@@ -838,9 +882,9 @@ export function aggregateFleetCostDashboard(input: {
       ...row,
       estimatedCostUsd: round(row.estimatedCostUsd),
       actualCostUsd: row.actualCostUsd === null ? null : round(row.actualCostUsd),
-      avgLatencyMs: calls.length > 0 ? round(durationMs / calls.length) : null,
-      avgTtftMs: ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
-      throughputOutputTokensPerSecond: durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
+      avgLatencyMs: !speedUnavailable && calls.length > 0 ? round(durationMs / calls.length) : null,
+      avgTtftMs: !speedUnavailable && ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
+      throughputOutputTokensPerSecond: !speedUnavailable && durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
       completedTasks,
       costPerCompletedTaskUsd: costPerCompletedTaskUsd === null ? null : round(costPerCompletedTaskUsd),
       avgTaskWallClockMs: wallClockSamples.length > 0
