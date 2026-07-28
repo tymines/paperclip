@@ -1,17 +1,17 @@
 # Cost + Gym Collection Layer v1
 
-Status: V1 local Mac reference path.
+Status: V1 Mac reference path plus the zero-footprint Windows envelope adapter (cross-box aggregation live, transport deferred).
 
 ## Topology
 
-Paperclip reads local fleet observations through a box-neutral envelope. The first source is the Mac-local Hermes collector:
+Paperclip reads fleet observations through a box-neutral envelope. Two collection sources exist:
 
-- Hermes `state.db`: read-only source for session and model aggregate usage.
-- Hermes user plugin: supported `post_api_request` hook that writes per-call speed samples to a sidecar SQLite database.
-- Paperclip server: reads both local databases and exposes `/api/companies/:companyId/costs/fleet-dashboard`.
-- Costs UI: renders combined cost, speed, freshness, and unattributed-session state.
+- **Mac-local collector (`hermes-local`)**: read-only Hermes `state.db` for session/model aggregate usage plus the user-plugin sidecar SQLite for per-call speed samples.
+- **Windows envelope adapter (`hermes-windows-envelope`)**: consumes a staged `fleet-observation/v1` JSON envelope published by the Windows box. The adapter is zero-footprint toward Windows: no probes, no SSH, no API calls, no mutation of the Windows box. Its contract boundary is the envelope file itself; it is validated and tested against fixtures only.
+- Paperclip server: collects every configured source, normalizes each into the same box-stamped snapshot shape, aggregates across boxes, and exposes `/api/companies/:companyId/costs/fleet-dashboard`.
+- Costs UI: renders combined cost, speed, per-source status, freshness, and unattributed-session state.
 
-No remote host calls are part of v1. Windows, Ares, and any future machines should publish the same envelope shape through a later transport.
+Every configured source is listed in the payload's `sources` array with status `ok`, `unavailable`, or `not-configured` and a human-readable `detail`. A failed configured source contributes prefixed entries to `freshness.errors` while healthy sources still return real data (graceful partial-source behavior). If no source produces data, the endpoint fails closed with HTTP 503 rather than presenting an empty dashboard as success.
 
 ## Envelope
 
@@ -30,9 +30,13 @@ Consumers must fail loudly on unsupported schema versions. They must not turn in
 
 ## Idempotency And Checkpoints
 
-The Hermes plugin sidecar uses `(session_id, api_request_id)` as its primary key and inserts with first-writer-wins semantics. Paperclip’s generic ingest helper also deduplicates by `observationId`.
+The Hermes plugin sidecar uses `(session_id, api_request_id)` as its primary key and inserts with first-writer-wins semantics. Paperclip’s generic ingest helper also deduplicates by `observationId`; envelope normalization only yields observations that were not already present in the ingest store, so replaying a staged envelope never double-counts usage.
 
-Checkpoints are source-owned. The Mac collector currently uses a timestamp-backed sequence and state-db path cursor for the server response. A future cross-box sender should persist stronger cursors per source and replay from the last acknowledged checkpoint.
+Checkpoints are source-owned. The Mac collector currently uses a timestamp-backed sequence and state-db path cursor for the server response. The Windows adapter echoes the checkpoint published inside the staged envelope. A future cross-box sender should persist stronger cursors per source and replay from the last acknowledged checkpoint.
+
+## Cross-Box Identity
+
+Normalized observations are stamped with their source `boxId`. Aggregation keys sessions by `(boxId, sessionId)` so identical session ids reported by two boxes never merge or dedupe against each other; when a task row contains the same session id from multiple boxes, the id is displayed box-qualified (`boxId:sessionId`). Model and task rows carry the sorted list of contributing `boxes`, and `unattributedSessions` carry their `boxId`. Hermes session ids are globally unique in practice, so the Paperclip run attribution join remains keyed on the bare full session id.
 
 ## Billing Semantics
 
@@ -83,6 +87,8 @@ HERMES_HOME=~/.hermes
 HERMES_STATE_DB_PATH=~/.hermes/state.db
 HERMES_COST_TELEMETRY_DB_PATH=~/.hermes/cost-dashboard/telemetry.sqlite3
 HERMES_COST_COMPANY_ID=<paperclip-company-id>
+HERMES_COST_BOX_ID=mac-local
+HERMES_COST_WINDOWS_ENVELOPE_PATH=<path to staged fleet-observation/v1 JSON from the Windows box>
 ```
 
 `HERMES_COST_TELEMETRY_DB_PATH` is shared by the server and the Hermes user plugin; set it in both environments when using a custom sidecar location. `HERMES_COST_COMPANY_ID` is required for the local endpoint because Hermes `state.db` is global to the local profile. Paperclip fails closed with HTTP 503 when the binding is missing or does not match the requested company.
@@ -103,4 +109,4 @@ The Paperclip endpoint remains company-scoped and supports `from`, `to`, `projec
 
 ## Deferred Cross-Box Transport
 
-Cross-box transport, authentication between boxes, durable sender queues, and Windows/Ares probes are deferred. Future transports should submit the same `fleet-observation/v1` envelope and preserve the same idempotency, freshness, and fail-loud compatibility rules.
+Cross-box transport, authentication between boxes, and durable sender queues remain deferred. The Windows side of the contract is implemented as a zero-footprint adapter: the server reads a staged `fleet-observation/v1` envelope file and never contacts the Windows box. A later transport (agent push, authenticated polling, or file sync) only needs to deliver the same envelope shape; the normalization, idempotency, fail-loud compatibility, and cross-box aggregation rules are already enforced server-side and tested against fixtures (`server/src/services/__fixtures__/fleet-observation-windows-box.json`, `server/src/services/fleet-cross-box.test.ts`).

@@ -129,6 +129,22 @@ export interface CostByProject {
 
 export type FleetCostDashboardGrain = "day" | "week" | "month";
 
+export type FleetCostDashboardSourceStatus = "ok" | "unavailable" | "not-configured";
+
+export interface FleetCostDashboardSource {
+  boxId: string;
+  collectorId: string;
+  profileId: string | null;
+  /** collection mechanism: local Hermes DBs or a staged cross-box envelope file */
+  kind: "hermes-local" | "envelope-file";
+  status: FleetCostDashboardSourceStatus;
+  observedAt: string | null;
+  checkpoint: { sequence: number; cursor?: string | null } | null;
+  errors: string[];
+  /** human-readable explanation for non-ok statuses; never silently omitted */
+  detail: string | null;
+}
+
 export interface FleetCostDashboardPayload {
   companyId: string;
   grain: FleetCostDashboardGrain;
@@ -138,6 +154,8 @@ export interface FleetCostDashboardPayload {
     checkpoint: { sequence: number; cursor?: string | null } | null;
     errors: string[];
   };
+  /** per-box collection reports; every configured source is listed, ok or not */
+  sources: FleetCostDashboardSource[];
   availability: Record<string, "available" | "unavailable">;
   trends: Array<{
     bucket: string;
@@ -171,6 +189,8 @@ export interface FleetCostDashboardPayload {
     compactions: number;
     stalls: number | null;
     stallsAvailability: "available" | "unavailable";
+    /** fleet boxes that contributed usage to this merged model row */
+    boxes: string[];
   }>;
   taskRows: Array<{
     issueId: string | null;
@@ -194,6 +214,8 @@ export interface FleetCostDashboardPayload {
     avgTtftMs: number | null;
     compactions: number;
     stalls: number | null;
+    /** fleet boxes that contributed usage to this task row */
+    boxes: string[];
     models: Array<{
       provider: string;
       model: string;
@@ -213,6 +235,7 @@ export interface FleetCostDashboardPayload {
   }>;
   unattributedSessions: Array<{
     sessionId: string;
+    boxId: string;
     startedAt: string | null;
     billingMode: string;
     costStatus: string;

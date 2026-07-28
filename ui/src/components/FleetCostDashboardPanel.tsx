@@ -31,6 +31,12 @@ function costLabel(row: { actualCostUsd: number | null; estimatedCostUsd?: numbe
   return "unknown";
 }
 
+function sourceStatusClass(status: string): string {
+  if (status === "ok") return "bg-emerald-500/15 text-emerald-200";
+  if (status === "unavailable") return "bg-red-500/15 text-red-200";
+  return "bg-amber-500/15 text-amber-200";
+}
+
 export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboardPayload }) {
   const totalCost = payload.modelRows.reduce((sum, row) => sum + (row.actualCostUsd ?? row.estimatedCostUsd ?? 0), 0);
   const totalOutput = payload.modelRows.reduce((sum, row) => sum + row.outputTokens, 0);
@@ -45,6 +51,17 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
           <h2 className="text-lg font-semibold">Cost and speed by task, agent, and model</h2>
           <div className="mt-1 text-sm text-muted-foreground">
             Grain {payload.grain} · observed {payload.freshness.observedAt ? new Date(payload.freshness.observedAt).toLocaleString() : "not yet"}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-2" data-testid="fleet-sources">
+            {payload.sources.map((source) => (
+              <span
+                key={`${source.boxId}:${source.collectorId}`}
+                title={source.detail ?? source.errors.join("; ") ?? undefined}
+                className={cn("rounded px-2 py-1 text-xs font-medium", sourceStatusClass(source.status))}
+              >
+                {source.boxId} · {source.status}
+              </span>
+            ))}
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
@@ -92,7 +109,10 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                     <div className="font-medium">{row.issueIdentifier ?? "Unattributed"}</div>
                     <div className="max-w-[260px] truncate text-xs text-muted-foreground">{row.issueTitle ?? row.sessionIds[0]}</div>
                   </td>
-                  <td className="py-2 pr-3">{row.agentName ?? "unknown"}</td>
+                  <td className="py-2 pr-3">
+                    <div>{row.agentName ?? "unknown"}</div>
+                    <div className="text-xs text-muted-foreground">{row.boxes.join(", ")}</div>
+                  </td>
                   <td className="py-2 pr-3">
                     <div>{usd(row.costUsd)}</div>
                     <div className="text-xs text-muted-foreground">per done {usd(row.costPerCompletedTaskUsd)}</div>
@@ -114,6 +134,9 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
               ))}
             </tbody>
           </table>
+          {payload.taskRows.length > 6 ? (
+            <div className="mt-2 text-xs text-muted-foreground">+{payload.taskRows.length - 6} more tasks not shown</div>
+          ) : null}
         </div>
 
         <div className="space-y-3">
@@ -125,6 +148,7 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{row.model}</div>
                     <div className="text-xs text-muted-foreground">{row.provider} · {row.pricingVersion ?? "pricing unknown"}</div>
+                    <div className="text-xs text-muted-foreground">{row.boxes.join(", ")}</div>
                   </div>
                   <span
                     className={cn(
@@ -149,6 +173,9 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                 </div>
               </div>
             ))}
+            {payload.modelRows.length > 5 ? (
+              <div className="text-xs text-muted-foreground">+{payload.modelRows.length - 5} more models not shown</div>
+            ) : null}
             {!topModel ? <div className="text-sm text-muted-foreground">No model usage collected yet.</div> : null}
           </div>
 
@@ -156,7 +183,7 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
             <div className="text-sm font-medium">Unattributed sessions</div>
             <div className="mt-1 text-xs text-muted-foreground">
               {payload.unattributedSessions.length > 0
-                ? payload.unattributedSessions.slice(0, 3).map((row) => row.sessionId).join(", ")
+                ? payload.unattributedSessions.slice(0, 3).map((row) => `${row.boxId}:${row.sessionId}`).join(", ")
                 : "None"}
             </div>
           </div>

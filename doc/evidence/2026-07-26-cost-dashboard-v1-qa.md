@@ -18,7 +18,7 @@
 
 The prior implementation was not modified:
 
-- worktree: `/Users/augi/paperclip-worktrees/cost-dashboard-phase12`
+- worktree: local preserved worktree; identify by branch and HEAD below
 - branch: `feat/cost-dashboard-phase12-hermes-local`
 - HEAD: `ccf86248535dc354824d136869656c8ff4cf5c75`
 - status: clean

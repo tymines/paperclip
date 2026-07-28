@@ -519,6 +519,8 @@ export type {
   CostByProject,
   FleetCostDashboardGrain,
   FleetCostDashboardPayload,
+  FleetCostDashboardSource,
+  FleetCostDashboardSourceStatus,
   CostWatcherTotals,
   CostWatcherProviderCard,
   CostWatcherTimelineSeries,

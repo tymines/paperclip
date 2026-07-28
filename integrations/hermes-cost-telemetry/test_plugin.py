@@ -144,6 +144,23 @@ class HermesCostTelemetryPluginTest(unittest.TestCase):
 
         self.assertEqual(context.hooks, [("post_api_request", plugin.on_post_api_request)])
 
+    def test_sidecar_failures_never_propagate_into_the_agent_run(self):
+        plugin = load_plugin()
+
+        with patch.object(plugin.sqlite3, "connect", side_effect=sqlite3.OperationalError("database is locked")):
+            # must not raise even when the sidecar is unusable
+            plugin.on_post_api_request(
+                session_id="session-1",
+                turn_id="turn-1",
+                api_request_id="request-1",
+                model="model",
+                provider="provider",
+                started_at=1,
+                ended_at=2,
+                api_duration=1,
+                usage={},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

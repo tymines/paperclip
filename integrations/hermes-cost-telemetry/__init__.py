@@ -100,8 +100,20 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 
 def on_post_api_request(**kwargs: Any) -> None:
-    """Persist one successful API-call observation without touching state.db."""
+    """Persist one successful API-call observation without touching state.db.
 
+    Telemetry is auxiliary observability: any sidecar failure (locked db, full
+    disk, read-only FS) must never propagate into the agent run, so the whole
+    hook is failure-isolated.
+    """
+
+    try:
+        _record_api_call(**kwargs)
+    except Exception:  # noqa: BLE001 - observability must not break the run
+        return
+
+
+def _record_api_call(**kwargs: Any) -> None:
     session_id = str(kwargs.get("session_id") or "").strip()
     turn_id = str(kwargs.get("turn_id") or "").strip()
     api_request_id = str(kwargs.get("api_request_id") or "").strip()

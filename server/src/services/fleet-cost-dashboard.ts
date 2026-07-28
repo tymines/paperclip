@@ -1,9 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
-import { and, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNotNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { activityLog, agents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { serviceUnavailable } from "../errors.js";
@@ -12,6 +12,8 @@ export type FleetDashboardGrain = "day" | "week" | "month";
 
 export interface HermesSessionUsage {
   sessionId: string;
+  /** fleet box that produced this observation; undefined means the local default box */
+  boxId?: string;
   startedAt: number;
   endedAt: number | null;
   inputTokens: number;
@@ -43,6 +45,8 @@ export interface HermesUsageSnapshot {
 
 export interface HermesApiCall {
   sessionId: string;
+  /** fleet box that produced this observation; undefined means the local default box */
+  boxId?: string;
   turnId: string;
   apiRequestId: string;
   paperclipRunId: string | null;
@@ -118,6 +122,40 @@ export interface FleetDashboardQuery {
 
 export class HermesUsageReadError extends Error {
   override name = "HermesUsageReadError";
+}
+
+export class FleetObservationEnvelopeError extends Error {
+  override name = "FleetObservationEnvelopeError";
+}
+
+export const DEFAULT_FLEET_BOX_ID = "mac-local";
+
+export function fleetItemBoxId(item: { boxId?: string }): string {
+  return item.boxId ?? DEFAULT_FLEET_BOX_ID;
+}
+
+/** composite key that keeps same-id sessions from different boxes distinct */
+function fleetSessionKey(item: { boxId?: string; sessionId: string }): string {
+  return `${fleetItemBoxId(item)}\0${item.sessionId}`;
+}
+
+export interface FleetSourceReport {
+  boxId: string;
+  collectorId: string;
+  profileId: string | null;
+  kind: "hermes-local" | "envelope-file";
+  status: "ok" | "unavailable" | "not-configured";
+  observedAt: string | null;
+  checkpoint: FleetObservation["checkpoint"] | null;
+  errors: string[];
+  /** human-readable explanation for non-ok statuses; never silently omitted */
+  detail: string | null;
+}
+
+export interface FleetBoxCollection {
+  report: FleetSourceReport;
+  usage: HermesUsageSnapshot;
+  apiCalls: HermesApiCall[];
 }
 
 const require = createRequire(import.meta.url);
@@ -363,6 +401,156 @@ export function extractFullHermesSessionId(run: {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+const FLEET_PAYLOAD_KINDS = new Set(["cost.usage.session", "cost.usage.model", "cost.speed.api_call"]);
+
+/**
+ * Structural validation of a staged cross-box envelope. Fails loudly on any
+ * incompatibility; callers must never turn a bad envelope into an empty
+ * successful collection.
+ */
+export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnvelope {
+  if (!isRecord(raw)) {
+    throw new FleetObservationEnvelopeError("Fleet observation envelope is not an object");
+  }
+  if (raw.schemaVersion !== "fleet-observation/v1") {
+    throw new FleetObservationEnvelopeError(
+      `Unsupported fleet observation schema: ${typeof raw.schemaVersion === "string" ? raw.schemaVersion : "missing"}`,
+    );
+  }
+  const source = raw.source;
+  if (
+    !isRecord(source)
+    || typeof source.boxId !== "string"
+    || source.boxId.length === 0
+    || typeof source.collectorId !== "string"
+    || source.collectorId.length === 0
+  ) {
+    throw new FleetObservationEnvelopeError("Fleet observation envelope is missing source identity (boxId/collectorId)");
+  }
+  if (!Array.isArray(raw.observations)) {
+    throw new FleetObservationEnvelopeError("Fleet observation envelope is missing an observations array");
+  }
+  for (const observation of raw.observations) {
+    if (!isRecord(observation)) {
+      throw new FleetObservationEnvelopeError("Fleet observation is not an object");
+    }
+    if (observation.schemaVersion !== "fleet-observation/v1") {
+      throw new FleetObservationEnvelopeError(
+        `Unsupported fleet observation schema: ${typeof observation.schemaVersion === "string" ? observation.schemaVersion : "missing"}`,
+      );
+    }
+    if (typeof observation.observationId !== "string" || observation.observationId.length === 0) {
+      throw new FleetObservationEnvelopeError("Fleet observation is missing a stable observationId");
+    }
+    if (typeof observation.payloadKind !== "string" || !FLEET_PAYLOAD_KINDS.has(observation.payloadKind)) {
+      throw new FleetObservationEnvelopeError(`Unsupported fleet observation payloadKind: ${String(observation.payloadKind)}`);
+    }
+    if (!isRecord(observation.payload)) {
+      throw new FleetObservationEnvelopeError(`Fleet observation ${observation.observationId} has a non-object payload`);
+    }
+  }
+  return raw as unknown as FleetObservationEnvelope;
+}
+
+/**
+ * Rebuild a usage snapshot + API-call list from a validated envelope.
+ * Observations are deduplicated through the ingest store first: replays of an
+ * already-ingested envelope contribute nothing, so cross-box data cannot be
+ * double counted. Every item is stamped with the envelope's source boxId.
+ */
+export function normalizeFleetEnvelopeToUsage(
+  envelope: FleetObservationEnvelope,
+  store: FleetObservationStore = new Map(),
+): { usage: HermesUsageSnapshot; apiCalls: HermesApiCall[]; inserted: number; skipped: number } {
+  const seenBefore = new Set(store.keys());
+  const { inserted, skipped } = ingestFleetObservations(store, envelope);
+  const boxId = envelope.source.boxId;
+  const usage: HermesUsageSnapshot = { sessions: [], modelUsage: [] };
+  const apiCalls: HermesApiCall[] = [];
+  for (const observation of envelope.observations) {
+    if (seenBefore.has(observation.observationId)) continue;
+    if (observation.payloadKind === "cost.usage.session") {
+      usage.sessions.push({ ...(observation.payload as HermesSessionUsage), boxId });
+    } else if (observation.payloadKind === "cost.usage.model") {
+      usage.modelUsage.push({ ...(observation.payload as HermesModelUsage), boxId });
+    } else {
+      apiCalls.push({ ...(observation.payload as HermesApiCall), boxId });
+    }
+  }
+  return { usage, apiCalls, inserted, skipped };
+}
+
+/**
+ * Windows collection adapter. The Windows box is zero-footprint from this
+ * repository: no probes, no SSH, no API calls, no mutation. The box publishes
+ * a `fleet-observation/v1` envelope through a future transport; the adapter's
+ * contract boundary is a staged envelope JSON file. Until a path is
+ * configured the source reports `not-configured` explicitly; a configured but
+ * unreadable or incompatible file reports `unavailable` with the real error.
+ */
+export function collectWindowsEnvelopeBox(envelopePath: string | null | undefined): FleetBoxCollection {
+  const fallbackBoxId = "windows-box";
+  const collectorId = "hermes-windows-envelope";
+  if (!envelopePath) {
+    return {
+      report: {
+        boxId: fallbackBoxId,
+        collectorId,
+        profileId: null,
+        kind: "envelope-file",
+        status: "not-configured",
+        observedAt: null,
+        checkpoint: null,
+        errors: [],
+        detail: "HERMES_COST_WINDOWS_ENVELOPE_PATH is not set: no staged Windows envelope is configured. The Windows box is never probed; it must publish a fleet-observation/v1 envelope through the deferred cross-box transport.",
+      },
+      usage: { sessions: [], modelUsage: [] },
+      apiCalls: [],
+    };
+  }
+  try {
+    const raw: unknown = JSON.parse(readFileSync(envelopePath, "utf8"));
+    const envelope = parseFleetObservationEnvelope(raw);
+    const { usage, apiCalls } = normalizeFleetEnvelopeToUsage(envelope);
+    return {
+      report: {
+        boxId: envelope.source.boxId,
+        collectorId: envelope.source.collectorId,
+        profileId: envelope.source.profileId ?? null,
+        kind: "envelope-file",
+        status: "ok",
+        observedAt: typeof envelope.observedAt === "string" ? envelope.observedAt : null,
+        checkpoint: envelope.checkpoint ?? null,
+        errors: [...(envelope.freshness?.errors ?? [])],
+        detail: null,
+      },
+      usage,
+      apiCalls,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      report: {
+        boxId: fallbackBoxId,
+        collectorId,
+        profileId: null,
+        kind: "envelope-file",
+        status: "unavailable",
+        observedAt: null,
+        checkpoint: null,
+        errors: [`Windows envelope collector failed: ${detail}`],
+        detail,
+      },
+      usage: { sessions: [], modelUsage: [] },
+      apiCalls: [],
+    };
+  }
+}
+
 function bucketDate(date: Date, grain: FleetDashboardGrain): string {
   const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   if (grain === "month") return utc.toISOString().slice(0, 7);
@@ -409,6 +597,25 @@ function matchesRange(session: HermesSessionUsage, range?: FleetDashboardQuery["
   return true;
 }
 
+/**
+ * Bare session ids for display; when two boxes report the same session id,
+ * qualify each with its box so distinct sessions are never conflated.
+ */
+function serializeTaskSessionIds(
+  task: { sessionIds: Set<string> },
+  sessionById: Map<string, HermesSessionUsage>,
+): string[] {
+  const sessions = [...task.sessionIds].map((key) => ({
+    sessionId: sessionById.get(key)?.sessionId ?? key,
+    boxId: fleetItemBoxId(sessionById.get(key) ?? {}),
+  }));
+  const counts = new Map<string, number>();
+  for (const { sessionId } of sessions) counts.set(sessionId, (counts.get(sessionId) ?? 0) + 1);
+  return sessions
+    .map(({ sessionId, boxId }) => ((counts.get(sessionId) ?? 0) > 1 ? `${boxId}:${sessionId}` : sessionId))
+    .sort();
+}
+
 export function aggregateFleetCostDashboard(input: {
   companyId: string;
   range?: FleetDashboardQuery["range"];
@@ -417,6 +624,8 @@ export function aggregateFleetCostDashboard(input: {
   usage: HermesUsageSnapshot;
   apiCalls: HermesApiCall[];
   attributions: HermesRunAttribution[];
+  /** per-box collection reports; echoed to the payload for source transparency */
+  sources?: FleetSourceReport[];
   freshness: {
     observedAt: string | null;
     checkpoint: FleetObservation["checkpoint"] | null;
@@ -424,7 +633,7 @@ export function aggregateFleetCostDashboard(input: {
   };
 }) {
   const attributionBySession = new Map(input.attributions.map((row) => [row.sessionId, row]));
-  const sessionById = new Map(input.usage.sessions.map((session) => [session.sessionId, session]));
+  const sessionById = new Map(input.usage.sessions.map((session) => [fleetSessionKey(session), session]));
   const sessionIds = new Set(
     input.usage.sessions
       .filter((session) => matchesRange(session, input.range))
@@ -434,17 +643,17 @@ export function aggregateFleetCostDashboard(input: {
         if (input.filters?.issueId && attr?.issueId !== input.filters.issueId) return false;
         if (input.filters?.projectId && attr?.projectId !== input.filters.projectId) return false;
         if (input.filters?.model) {
-          return input.usage.modelUsage.some((usage) => usage.sessionId === session.sessionId && usage.model === input.filters?.model);
+          return input.usage.modelUsage.some((usage) => fleetSessionKey(usage) === fleetSessionKey(session) && usage.model === input.filters?.model);
         }
         return true;
       })
-      .map((session) => session.sessionId),
+      .map((session) => fleetSessionKey(session)),
   );
   const modelUsage = input.usage.modelUsage.filter((usage) =>
-    sessionIds.has(usage.sessionId) && (!input.filters?.model || usage.model === input.filters.model)
+    sessionIds.has(fleetSessionKey(usage)) && (!input.filters?.model || usage.model === input.filters.model)
   );
   const apiCalls = input.apiCalls.filter((call) =>
-    sessionIds.has(call.sessionId) && (!input.filters?.model || call.model === input.filters.model)
+    sessionIds.has(fleetSessionKey(call)) && (!input.filters?.model || call.model === input.filters.model)
   );
 
   const taskMap = new Map<string, {
@@ -459,9 +668,10 @@ export function aggregateFleetCostDashboard(input: {
     sessionIds: Set<string>;
     runIds: Set<string>;
   }>();
-  for (const sessionId of sessionIds) {
-    const attr = attributionBySession.get(sessionId);
-    const key = attr?.issueId ?? `unattributed:${sessionId}`;
+  for (const sessionKey of sessionIds) {
+    const session = sessionById.get(sessionKey);
+    const attr = session ? attributionBySession.get(session.sessionId) : undefined;
+    const key = attr?.issueId ?? `unattributed:${sessionKey}`;
     const row = taskMap.get(key) ?? {
       issueId: attr?.issueId ?? null,
       issueIdentifier: attr?.issueIdentifier ?? null,
@@ -474,7 +684,7 @@ export function aggregateFleetCostDashboard(input: {
       sessionIds: new Set<string>(),
       runIds: new Set<string>(),
     };
-    row.sessionIds.add(sessionId);
+    row.sessionIds.add(sessionKey);
     if (attr) row.runIds.add(attr.runId);
     taskMap.set(key, row);
   }
@@ -482,10 +692,13 @@ export function aggregateFleetCostDashboard(input: {
   const modelRowsByKey = new Map<string, any>();
   const taskRows = [...taskMap.values()].map((task) => {
     const taskSessionIds = task.sessionIds;
-    const taskUsage = modelUsage.filter((usage) => taskSessionIds.has(usage.sessionId));
-    const taskCalls = apiCalls.filter((call) => taskSessionIds.has(call.sessionId));
+    const taskUsage = modelUsage.filter((usage) => taskSessionIds.has(fleetSessionKey(usage)));
+    const taskCalls = apiCalls.filter((call) => taskSessionIds.has(fleetSessionKey(call)));
     const attrTimes = [...taskSessionIds]
-      .map((sessionId) => attributionBySession.get(sessionId))
+      .map((sessionKey) => {
+        const session = sessionById.get(sessionKey);
+        return session ? attributionBySession.get(session.sessionId) : undefined;
+      })
       .filter((attr): attr is HermesRunAttribution => Boolean(attr));
     const starts = attrTimes.map((attr) => attr.runStartedAt?.getTime()).filter((value): value is number => value !== undefined);
     const finishes = attrTimes.map((attr) => attr.runFinishedAt?.getTime()).filter((value): value is number => value !== undefined);
@@ -522,7 +735,9 @@ export function aggregateFleetCostDashboard(input: {
         compactions: 0,
         stalls: null,
         stallsAvailability: "unavailable",
+        boxes: new Set<string>(),
       };
+      modelRow.boxes.add(fleetItemBoxId(usage));
       modelRow.estimatedCostUsd += usage.estimatedCostUsd ?? 0;
       modelRow.actualCostUsd = usage.actualCostUsd === null ? modelRow.actualCostUsd : (modelRow.actualCostUsd ?? 0) + usage.actualCostUsd;
       modelRow.inputTokens += usage.inputTokens;
@@ -558,7 +773,8 @@ export function aggregateFleetCostDashboard(input: {
       agentId: task.agentId,
       agentName: task.agentName,
       runIds: [...task.runIds].sort(),
-      sessionIds: [...task.sessionIds].sort(),
+      sessionIds: serializeTaskSessionIds(task, sessionById),
+      boxes: [...new Set([...task.sessionIds].map((key) => fleetItemBoxId(sessionById.get(key) ?? {})))].sort(),
       completionState: task.completionState,
       costUsd: round(costUsd),
       costPerCompletedTaskUsd: task.completionState === "succeeded" || task.completionState === "done" ? round(costUsd) : null,
@@ -577,7 +793,7 @@ export function aggregateFleetCostDashboard(input: {
 
   const trends = new Map<string, { bucket: string; costUsd: number; inputTokens: number; outputTokens: number; completedTasks: number }>();
   for (const usage of modelUsage) {
-    const session = sessionById.get(usage.sessionId);
+    const session = sessionById.get(fleetSessionKey(usage));
     if (!session) continue;
     const bucket = bucketDate(new Date(session.startedAt * 1000), input.grain);
     const row = trends.get(bucket) ?? { bucket, costUsd: 0, inputTokens: 0, outputTokens: 0, completedTasks: 0 };
@@ -586,11 +802,16 @@ export function aggregateFleetCostDashboard(input: {
     row.outputTokens += usage.outputTokens;
     trends.set(bucket, row);
   }
-  for (const task of taskRows) {
-    if (task.costPerCompletedTaskUsd === null) continue;
-    const session = sessionById.get(task.sessionIds[0] ?? "");
-    if (!session) continue;
-    const bucket = bucketDate(new Date(session.startedAt * 1000), input.grain);
+  for (const task of taskMap.values()) {
+    if (task.completionState !== "succeeded" && task.completionState !== "done") continue;
+    // Bucket by the task's earliest session, not an arbitrary (sorted-first) id.
+    let earliest: HermesSessionUsage | undefined;
+    for (const key of task.sessionIds) {
+      const session = sessionById.get(key);
+      if (session && (!earliest || session.startedAt < earliest.startedAt)) earliest = session;
+    }
+    if (!earliest) continue;
+    const bucket = bucketDate(new Date(earliest.startedAt * 1000), input.grain);
     const row = trends.get(bucket);
     if (row) row.completedTasks += 1;
   }
@@ -629,6 +850,7 @@ export function aggregateFleetCostDashboard(input: {
       compactions: matchingTaskRows.reduce((sum, task) => sum + task.compactions, 0),
       stalls: null,
       stallsAvailability: "unavailable" as const,
+      boxes: [...(row.boxes as Set<string>)].sort(),
     };
   });
 
@@ -637,6 +859,7 @@ export function aggregateFleetCostDashboard(input: {
     grain: input.grain,
     filters: input.filters ?? {},
     freshness: input.freshness,
+    sources: input.sources ?? [],
     availability: {
       avgLatencyMs: apiCalls.length > 0 ? "available" : "unavailable",
       avgTtftMs: apiCalls.some((call) => call.ttft !== null) ? "available" : "unavailable",
@@ -650,6 +873,7 @@ export function aggregateFleetCostDashboard(input: {
         .filter((session) => !attributionBySession.has(session.sessionId))
         .map((session) => ({
           sessionId: session.sessionId,
+          boxId: fleetItemBoxId(session),
           startedAt: session.startedAt >= 1_000_000_000 ? new Date(session.startedAt * 1000).toISOString() : null,
           billingMode: session.billingMode,
           costStatus: session.costStatus,
@@ -657,9 +881,10 @@ export function aggregateFleetCostDashboard(input: {
           actualCostUsd: session.actualCostUsd,
         })),
       ...input.usage.modelUsage
-        .filter((usage) => !sessionById.has(usage.sessionId) && !attributionBySession.has(usage.sessionId))
+        .filter((usage) => !sessionById.has(fleetSessionKey(usage)) && !attributionBySession.has(usage.sessionId))
         .map((usage) => ({
           sessionId: usage.sessionId,
+          boxId: fleetItemBoxId(usage),
           startedAt: usage.firstSeen && usage.firstSeen >= 1_000_000_000 ? new Date(usage.firstSeen * 1000).toISOString() : null,
           billingMode: usage.billingMode,
           costStatus: usage.costStatus,
@@ -671,6 +896,23 @@ export function aggregateFleetCostDashboard(input: {
 }
 
 export async function loadHermesRunAttributions(db: Db, companyId: string): Promise<HermesRunAttribution[]> {
+  // One issue activity per run; joining raw activity_log fans out to every
+  // issue activity row for the run and makes attribution non-deterministic.
+  const runIssueLinks = db
+    .selectDistinctOn([activityLog.runId], {
+      runId: activityLog.runId,
+      entityId: activityLog.entityId,
+    })
+    .from(activityLog)
+    .where(and(eq(activityLog.companyId, companyId), eq(activityLog.entityType, "issue"), isNotNull(activityLog.runId)))
+    .orderBy(activityLog.runId, desc(activityLog.createdAt))
+    .as("run_issue_links");
+
+  // context.issueId may be a non-UUID string (e.g. an external identifier); a
+  // raw ::uuid cast would hard-fail the whole query, so guard it.
+  const issueRef = sql`coalesce(${heartbeatRuns.contextSnapshot} ->> 'issueId', ${runIssueLinks.entityId})`;
+  const issueRefAsUuid = sql<string>`case when ${issueRef} ~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' then ${issueRef}::uuid else null end`;
+
   const rows = await db
     .select({
       runId: heartbeatRuns.id,
@@ -682,7 +924,7 @@ export async function loadHermesRunAttributions(db: Db, companyId: string): Prom
       runStartedAt: heartbeatRuns.startedAt,
       runFinishedAt: heartbeatRuns.finishedAt,
       contextIssueId: sql<string | null>`${heartbeatRuns.contextSnapshot} ->> 'issueId'`,
-      activityIssueId: activityLog.entityId,
+      activityIssueId: runIssueLinks.entityId,
       issueId: issues.id,
       issueIdentifier: issues.identifier,
       issueTitle: issues.title,
@@ -691,19 +933,12 @@ export async function loadHermesRunAttributions(db: Db, companyId: string): Prom
     })
     .from(heartbeatRuns)
     .leftJoin(agents, and(eq(agents.companyId, companyId), eq(agents.id, heartbeatRuns.agentId)))
-    .leftJoin(
-      activityLog,
-      and(
-        eq(activityLog.companyId, companyId),
-        eq(activityLog.runId, heartbeatRuns.id),
-        eq(activityLog.entityType, "issue"),
-      ),
-    )
+    .leftJoin(runIssueLinks, eq(runIssueLinks.runId, heartbeatRuns.id))
     .leftJoin(
       issues,
       and(
         eq(issues.companyId, companyId),
-        eq(issues.id, sql<string>`coalesce(${heartbeatRuns.contextSnapshot} ->> 'issueId', ${activityLog.entityId})::uuid`),
+        eq(issues.id, issueRefAsUuid),
       ),
     )
     .leftJoin(projects, and(eq(projects.companyId, companyId), eq(projects.id, issues.projectId)))
@@ -737,7 +972,79 @@ function defaultHermesSidecarPath(): string {
   return process.env.HERMES_COST_TELEMETRY_DB_PATH ?? join(homedir(), ".hermes", "cost-dashboard", "telemetry.sqlite3");
 }
 
-export async function buildLocalFleetCostDashboard(db: Db, companyId: string, query: FleetDashboardQuery = {}) {
+function stampBoxIdOnSnapshot(snapshot: HermesUsageSnapshot, boxId: string): HermesUsageSnapshot {
+  return {
+    sessions: snapshot.sessions.map((session) => ({ ...session, boxId })),
+    modelUsage: snapshot.modelUsage.map((usage) => ({ ...usage, boxId })),
+  };
+}
+
+function stampBoxIdOnCalls(calls: HermesApiCall[], boxId: string): HermesApiCall[] {
+  return calls.map((call) => ({ ...call, boxId }));
+}
+
+function collectLocalHermesBox(boxId: string): FleetBoxCollection {
+  const stateDbPath = defaultHermesStateDbPath();
+  const sidecarDbPath = defaultHermesSidecarPath();
+  const observedAt = new Date().toISOString();
+  const base = { boxId, collectorId: "hermes-local", profileId: null, kind: "hermes-local" as const };
+  if (!existsSync(stateDbPath)) {
+    const detail = `Hermes state database not configured or missing: ${stateDbPath}`;
+    return {
+      report: { ...base, status: "unavailable", observedAt: null, checkpoint: null, errors: [detail], detail },
+      usage: { sessions: [], modelUsage: [] },
+      apiCalls: [],
+    };
+  }
+  try {
+    const usage = stampBoxIdOnSnapshot(readHermesSessionUsage(stateDbPath), boxId);
+    // Per-call speed telemetry degrades to empty + an explicit error instead of
+    // taking the whole local source down: aggregate usage still returns.
+    const errors: string[] = [];
+    let apiCalls: HermesApiCall[] = [];
+    try {
+      apiCalls = stampBoxIdOnCalls(readHermesApiCalls(sidecarDbPath), boxId);
+    } catch (error) {
+      errors.push(`Hermes telemetry sidecar unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return {
+      report: {
+        ...base,
+        status: "ok",
+        observedAt,
+        checkpoint: { sequence: Date.now(), cursor: stateDbPath },
+        errors,
+        detail: null,
+      },
+      usage,
+      apiCalls,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      report: { ...base, status: "unavailable", observedAt: null, checkpoint: null, errors: [detail], detail },
+      usage: { sessions: [], modelUsage: [] },
+      apiCalls: [],
+    };
+  }
+}
+
+/**
+ * Cross-box fleet dashboard: collects every configured source (Mac-local
+ * Hermes DBs plus the Windows staged-envelope adapter), normalizes each into
+ * the same box-stamped snapshot shape, and aggregates them together.
+ * Partial-source behavior is explicit: a failed or unconfigured source is
+ * listed in `sources` (and, when a configured source failed, in
+ * `freshness.errors`) while healthy sources still return real data. If no
+ * source produced data at all, the endpoint fails closed with 503 rather than
+ * presenting an empty dashboard as success.
+ */
+export async function buildFleetCostDashboard(
+  db: Db,
+  companyId: string,
+  query: FleetDashboardQuery = {},
+  options: { includeCrossBox?: boolean } = {},
+) {
   const collectorCompanyId = process.env.HERMES_COST_COMPANY_ID;
   if (!collectorCompanyId) {
     throw serviceUnavailable("HERMES_COST_COMPANY_ID is required for local Hermes cost collection");
@@ -745,33 +1052,57 @@ export async function buildLocalFleetCostDashboard(db: Db, companyId: string, qu
   if (collectorCompanyId !== companyId) {
     throw serviceUnavailable("Local Hermes collector company binding does not match requested company");
   }
-  const stateDbPath = defaultHermesStateDbPath();
-  const sidecarDbPath = defaultHermesSidecarPath();
-  let usage: HermesUsageSnapshot = { sessions: [], modelUsage: [] };
-  let apiCalls: HermesApiCall[] = [];
-  if (!existsSync(stateDbPath)) {
-    throw serviceUnavailable(`Hermes state database not configured or missing: ${stateDbPath}`);
+  const includeCrossBox = options.includeCrossBox ?? true;
+  const localBoxId = process.env.HERMES_COST_BOX_ID ?? DEFAULT_FLEET_BOX_ID;
+
+  const sources: FleetSourceReport[] = [];
+  const freshnessErrors: string[] = [];
+  const boxes: FleetBoxCollection[] = [];
+
+  const local = collectLocalHermesBox(localBoxId);
+  sources.push(local.report);
+  if (local.report.status === "ok") boxes.push(local);
+  freshnessErrors.push(...local.report.errors.map((error) => `[${local.report.boxId}] ${error}`));
+
+  if (includeCrossBox) {
+    const windows = collectWindowsEnvelopeBox(process.env.HERMES_COST_WINDOWS_ENVELOPE_PATH ?? null);
+    sources.push(windows.report);
+    if (windows.report.status === "ok") boxes.push(windows);
+    if (windows.report.status !== "not-configured") {
+      freshnessErrors.push(...windows.report.errors.map((error) => `[${windows.report.boxId}] ${error}`));
+    }
   }
-  try {
-    usage = readHermesSessionUsage(stateDbPath);
-  } catch (error) {
-    throw serviceUnavailable(error instanceof Error ? error.message : String(error));
+
+  if (boxes.length === 0) {
+    const detail = freshnessErrors.length > 0
+      ? freshnessErrors.join("; ")
+      : "No fleet observation sources produced data";
+    throw serviceUnavailable(detail);
   }
-  apiCalls = readHermesApiCalls(sidecarDbPath);
+
   const attributions = await loadHermesRunAttributions(db, companyId);
   const observedAt = new Date().toISOString();
+  const singleSourceCheckpoint = boxes.length === 1 ? boxes[0].report.checkpoint : null;
   return aggregateFleetCostDashboard({
     companyId,
     range: query.range,
     filters: query.filters,
     grain: query.grain ?? "day",
-    usage,
-    apiCalls,
+    usage: {
+      sessions: boxes.flatMap((box) => box.usage.sessions),
+      modelUsage: boxes.flatMap((box) => box.usage.modelUsage),
+    },
+    apiCalls: boxes.flatMap((box) => box.apiCalls),
     attributions,
+    sources,
     freshness: {
       observedAt,
-      checkpoint: { sequence: Date.now(), cursor: stateDbPath },
-      errors: [],
+      checkpoint: singleSourceCheckpoint,
+      errors: freshnessErrors,
     },
   });
+}
+
+export async function buildLocalFleetCostDashboard(db: Db, companyId: string, query: FleetDashboardQuery = {}) {
+  return buildFleetCostDashboard(db, companyId, query, { includeCrossBox: false });
 }

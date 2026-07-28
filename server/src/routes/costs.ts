@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
-import type { FleetDashboardGrain } from "../services/fleet-cost-dashboard.js";
+import type { FleetCostDashboardGrain as FleetDashboardGrain } from "@paperclipai/shared";
+import { HermesUsageReadError } from "../services/fleet-cost-dashboard.js";
 import {
   createCostEventSchema,
   createFinanceEventSchema,
@@ -200,9 +201,15 @@ export function costRoutes(
       res.json(payload);
     } catch (error) {
       if (error instanceof HttpError) throw error;
-      const status = typeof (error as { status?: unknown })?.status === "number" ? (error as { status: number }).status : 503;
-      if (status === 503) {
-        throw serviceUnavailable(error instanceof Error ? error.message : "Fleet dashboard collector unavailable");
+      // Hermes collector failures map to 503; errors that already carry an
+      // explicit status keep it; anything else propagates to the global
+      // handler instead of being mislabeled service-unavailable.
+      if (error instanceof HermesUsageReadError) {
+        throw serviceUnavailable(error.message);
+      }
+      const status = (error as { status?: unknown })?.status;
+      if (typeof status === "number") {
+        throw new HttpError(status, error instanceof Error ? error.message : "Fleet dashboard request failed");
       }
       throw error;
     }

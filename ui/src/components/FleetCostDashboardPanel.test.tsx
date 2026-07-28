@@ -39,6 +39,30 @@ function payload(): FleetCostDashboardPayload {
       errors: ["Hermes sidecar missing"],
     },
     availability: { avgLatencyMs: "available", avgTtftMs: "available", stalls: "unavailable" },
+    sources: [
+      {
+        boxId: "mac-local",
+        collectorId: "hermes-local",
+        profileId: null,
+        kind: "hermes-local",
+        status: "ok",
+        observedAt: "2026-07-24T01:02:10.000Z",
+        checkpoint: { sequence: 7, cursor: "state.db:7" },
+        errors: [],
+        detail: null,
+      },
+      {
+        boxId: "box-2-windows",
+        collectorId: "hermes-windows-envelope",
+        profileId: "ares",
+        kind: "envelope-file",
+        status: "unavailable",
+        observedAt: null,
+        checkpoint: null,
+        errors: ["Windows envelope collector failed: ENOENT"],
+        detail: "ENOENT",
+      },
+    ],
     trends: [{ bucket: "2026-07-24", costUsd: 0, inputTokens: 900, outputTokens: 600, completedTasks: 1 }],
     modelRows: [
       {
@@ -66,6 +90,7 @@ function payload(): FleetCostDashboardPayload {
         compactions: 2,
         stalls: null,
         stallsAvailability: "unavailable",
+        boxes: ["box-2-windows", "mac-local"],
       },
       {
         provider: "provider-b",
@@ -92,6 +117,7 @@ function payload(): FleetCostDashboardPayload {
         compactions: 0,
         stalls: null,
         stallsAvailability: "unavailable",
+        boxes: ["mac-local"],
       },
     ],
     taskRows: [
@@ -117,12 +143,14 @@ function payload(): FleetCostDashboardPayload {
         avgTtftMs: 420,
         compactions: 2,
         stalls: null,
+        boxes: ["box-2-windows", "mac-local"],
         models: [],
       },
     ],
     unattributedSessions: [
       {
         sessionId: "20260724_010203_bbbbbbbb",
+        boxId: "box-2-windows",
         startedAt: null,
         billingMode: "metered",
         costStatus: "actual",
@@ -157,5 +185,9 @@ describe("FleetCostDashboardPanel", () => {
     expect(node.textContent).toContain("Stalls unavailable");
     expect(node.textContent).toContain("Unattributed sessions");
     expect(node.textContent).toContain("Hermes sidecar missing");
+    expect(node.textContent).toContain("mac-local · ok");
+    expect(node.textContent).toContain("box-2-windows · unavailable");
+    expect(node.textContent).toContain("box-2-windows, mac-local");
+    expect(node.textContent).toContain("box-2-windows:20260724_010203_bbbbbbbb");
   });
 });

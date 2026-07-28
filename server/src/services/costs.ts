@@ -4,7 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
-import { buildLocalFleetCostDashboard, type FleetDashboardQuery } from "./fleet-cost-dashboard.js";
+import { buildFleetCostDashboard, type FleetDashboardQuery } from "./fleet-cost-dashboard.js";
 
 export interface CostDateRange {
   from?: Date;
@@ -549,7 +549,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(eq(companies.id, companyId))
         .then((rows) => rows[0] ?? null);
       if (!company) throw notFound("Company not found");
-      return buildLocalFleetCostDashboard(db, companyId, query);
+      return buildFleetCostDashboard(db, companyId, query);
     },
   };
 }

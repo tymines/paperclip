@@ -75,8 +75,8 @@ function createHermesStateFixture(path: string) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     "20260724_010203_aaaaaaaa",
-    100,
-    110,
+    1784854923,
+    1784854933,
     1000,
     600,
     200,
@@ -115,8 +115,8 @@ function createHermesStateFixture(path: string) {
     "included",
     "none",
     "hermes-2026-07",
-    100,
-    109,
+    1784854923,
+    1784854932,
   );
   insertUsage.run(
     "20260724_010203_aaaaaaaa",
@@ -135,8 +135,8 @@ function createHermesStateFixture(path: string) {
     "estimated",
     "pricing_table",
     "hermes-2026-07",
-    105,
-    108,
+    1784854927,
+    1784854930,
   );
   insertUsage.run(
     "20260724_010203_bbbbbbbb",
@@ -155,8 +155,8 @@ function createHermesStateFixture(path: string) {
     "actual",
     "provider",
     "hermes-2026-07",
-    100,
-    109,
+    1784854923,
+    1784854932,
   );
   db.close();
 }

@@ -533,7 +533,7 @@ export function Costs() {
     [spendData?.byAgentModel],
   );
 
-  const { data: fleetCostDashboard } = useQuery({
+  const { data: fleetCostDashboard, error: fleetCostDashboardError } = useQuery({
     queryKey: ["costs", "fleet-dashboard", companyId, from || undefined, to || undefined, fleetProjectId, fleetIssueId, fleetAgentId, fleetModel, fleetGrain],
     queryFn: () => costsApi.fleetDashboard(companyId, {
       from: from || undefined,
@@ -1268,7 +1268,7 @@ export function Costs() {
                   <div>
                     <SectionLabel>Fleet collector</SectionLabel>
                     <div className="mt-1 text-[13px]" style={{ color: DS.textMuted }}>
-                      Combined cost and speed filters from the local Hermes observation source.
+                      Combined cost and speed filters across fleet observation sources (Mac-local collector plus staged cross-box envelopes).
                     </div>
                   </div>
                   <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -1331,6 +1331,10 @@ export function Costs() {
                 </div>
                 {fleetCostDashboard ? (
                   <FleetCostDashboardPanel payload={fleetCostDashboard} />
+                ) : fleetCostDashboardError ? (
+                  <div className="rounded-lg border border-dashed p-4 text-sm" style={{ borderColor: DS.border2, color: DS.textMuted }}>
+                    Fleet dashboard unavailable: {fleetCostDashboardError instanceof Error ? fleetCostDashboardError.message : "collector error"}
+                  </div>
                 ) : (
                   <div className="rounded-lg border border-dashed p-4 text-sm" style={{ borderColor: DS.border2, color: DS.textMuted }}>
                     Fleet dashboard data is loading.
