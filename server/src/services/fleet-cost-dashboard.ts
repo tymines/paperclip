@@ -129,6 +129,15 @@ export class FleetObservationEnvelopeError extends Error {
   override name = "FleetObservationEnvelopeError";
 }
 
+/**
+ * Same-ID/different-content collision. Raised before any store mutation or
+ * normalized output when two observations share an observationId but carry
+ * semantically different wrapper/payload/source content.
+ */
+export class FleetObservationCollisionError extends FleetObservationEnvelopeError {
+  override name = "FleetObservationCollisionError";
+}
+
 export const DEFAULT_FLEET_BOX_ID = "mac-local";
 
 export function fleetItemBoxId(item: { boxId?: string }): string {
@@ -378,6 +387,10 @@ export function ingestFleetObservations(store: FleetObservationStore, envelope: 
   if (envelope.schemaVersion !== "fleet-observation/v1") {
     throw new Error(`Unsupported fleet observation schema: ${(envelope as { schemaVersion?: string }).schemaVersion ?? "missing"}`);
   }
+  // Top-level trusted metadata is validated before the store is touched, even
+  // for programmatically supplied typed envelopes that bypass the parser.
+  validateFleetEnvelopeSource(envelope.source);
+  validateFleetEnvelopeTopLevel(envelope as unknown as Record<string, unknown>);
   // Fail loud before any insertion: validate every observation's wrapper and
   // per-kind payload completely so a malformed observation can never enter
   // the dedupe store and a replay can never partially normalize.
@@ -387,6 +400,30 @@ export function ingestFleetObservations(store: FleetObservationStore, envelope: 
     }
     validateFleetObservationWrapper(observation as unknown as Record<string, unknown>, envelope.source);
     validateFleetObservationPayload(observation.observationId, observation.payloadKind, observation.payload);
+  }
+  // AUTONOMOUS GAP-FILL A — duplicate-ID collision policy (flagged in the PR
+  // body and revision-3 artifact): exact same-ID/same-content observations
+  // are an idempotent skip; same-ID/different-content collisions throw a
+  // FleetObservationCollisionError before any store mutation. The complete
+  // batch is collision-checked against itself and the existing store before
+  // anything is inserted, so ingestion is atomic per envelope: a colliding
+  // later entry can never leave earlier entries in the store.
+  const batchContentById = new Map<string, string>();
+  for (const observation of envelope.observations) {
+    const content = canonicalObservationContent(observation);
+    const seen = batchContentById.get(observation.observationId);
+    if (seen !== undefined && seen !== content) {
+      throw new FleetObservationCollisionError(
+        `Fleet observation collision for ${observation.observationId} within one envelope: same id, different content`,
+      );
+    }
+    batchContentById.set(observation.observationId, content);
+    const stored = store.get(observation.observationId);
+    if (stored && canonicalObservationContent(stored) !== content) {
+      throw new FleetObservationCollisionError(
+        `Fleet observation collision for ${observation.observationId}: conflicts with an already-ingested observation (same id, different content)`,
+      );
+    }
   }
   let inserted = 0;
   let skipped = 0;
@@ -544,10 +581,69 @@ export function validateFleetObservationPayload(
   requireNullableMeasure(payload, observationId, payloadKind, "ttft");
 }
 
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (isRecord(value)) {
+    const sorted: Record<string, unknown> = {};
+    for (const key of Object.keys(value).sort()) sorted[key] = sortKeysDeep(value[key]);
+    return sorted;
+  }
+  return value;
+}
+
+/** deterministic content fingerprint for duplicate-ID collision checks */
+function canonicalObservationContent(observation: FleetObservation): string {
+  return JSON.stringify(sortKeysDeep(observation));
+}
+
+/**
+ * Envelope source identity validation. boxId/collectorId must be nonempty
+ * strings and profileId must be present as a nullable string — the profile
+ * identity is part of the source invariant (AUTONOMOUS GAP-FILL B).
+ */
+function validateFleetEnvelopeSource(source: unknown): asserts source is FleetObservation["source"] {
+  if (
+    !isRecord(source)
+    || !isNonEmptyString(source.boxId)
+    || !isNonEmptyString(source.collectorId)
+    || !isNullableString(source.profileId)
+  ) {
+    throw new FleetObservationEnvelopeError(
+      "Fleet observation envelope is missing source identity (boxId/collectorId/profileId)",
+    );
+  }
+}
+
+/**
+ * Complete top-level envelope validation. The envelope's own observedAt,
+ * checkpoint, and freshness are trusted by collectors and must be validated
+ * before the typed envelope is returned or the store is touched — no
+ * unchecked cast may return malformed top-level trusted metadata.
+ */
+function validateFleetEnvelopeTopLevel(raw: Record<string, unknown>): void {
+  if (!isNonEmptyString(raw.observedAt) || Number.isNaN(Date.parse(raw.observedAt))) {
+    throw new FleetObservationEnvelopeError(
+      "Fleet observation envelope has an invalid observedAt: expected an ISO timestamp string",
+    );
+  }
+  const checkpoint = raw.checkpoint;
+  if (!isRecord(checkpoint) || !isNonNegativeInteger(checkpoint.sequence) || !isNullableString(checkpoint.cursor)) {
+    throw new FleetObservationEnvelopeError(
+      "Fleet observation envelope has an invalid checkpoint: expected { sequence: nonnegative integer, cursor: string | null }",
+    );
+  }
+  const freshness = raw.freshness;
+  if (!isRecord(freshness) || !Array.isArray(freshness.errors) || !freshness.errors.every((error) => typeof error === "string")) {
+    throw new FleetObservationEnvelopeError(
+      "Fleet observation envelope has an invalid freshness: expected { errors: string[] }",
+    );
+  }
+}
+
 /** envelope/observation wrapper fields shared by every observation */
 function validateFleetObservationWrapper(
   observation: Record<string, unknown>,
-  envelopeSource: { boxId: string; collectorId: string },
+  envelopeSource: FleetObservation["source"],
 ): void {
   const observationId = typeof observation.observationId === "string" ? observation.observationId : "(unknown)";
   const kind = typeof observation.payloadKind === "string" ? observation.payloadKind : "(unknown)";
@@ -562,21 +658,29 @@ function validateFleetObservationWrapper(
   if (!isRecord(freshness) || !Array.isArray(freshness.errors) || !freshness.errors.every((error) => typeof error === "string")) {
     throw invalidPayload(observationId, kind, "freshness.errors", "expected { errors: string[] }");
   }
+  // AUTONOMOUS GAP-FILL B — top-level profile invariant (flagged in the PR
+  // body and revision-3 artifact): every observation source must match the
+  // envelope box, collector, AND profile identity exactly under nullable
+  // semantics, just like box/collector identity.
   const source = observation.source;
   if (
     !isRecord(source)
     || source.boxId !== envelopeSource.boxId
     || source.collectorId !== envelopeSource.collectorId
     || !isNullableString(source.profileId)
+    || source.profileId !== envelopeSource.profileId
   ) {
-    throw invalidPayload(observationId, kind, "source", "observation source must match the envelope source boxId/collectorId");
+    throw invalidPayload(observationId, kind, "source", "observation source must match the envelope source boxId/collectorId/profileId");
   }
 }
 
 /**
  * Structural validation of a staged cross-box envelope. Fails loudly on any
  * incompatibility; callers must never turn a bad envelope into an empty
- * successful collection.
+ * successful collection. The envelope's own observedAt/checkpoint/freshness/
+ * source (including profileId) are validated completely before the typed
+ * envelope is returned, so no unchecked cast can return malformed top-level
+ * trusted metadata.
  */
 export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnvelope {
   if (!isRecord(raw)) {
@@ -587,20 +691,12 @@ export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnv
       `Unsupported fleet observation schema: ${typeof raw.schemaVersion === "string" ? raw.schemaVersion : "missing"}`,
     );
   }
-  const source = raw.source;
-  if (
-    !isRecord(source)
-    || typeof source.boxId !== "string"
-    || source.boxId.length === 0
-    || typeof source.collectorId !== "string"
-    || source.collectorId.length === 0
-  ) {
-    throw new FleetObservationEnvelopeError("Fleet observation envelope is missing source identity (boxId/collectorId)");
-  }
+  validateFleetEnvelopeSource(raw.source);
+  validateFleetEnvelopeTopLevel(raw);
   if (!Array.isArray(raw.observations)) {
     throw new FleetObservationEnvelopeError("Fleet observation envelope is missing an observations array");
   }
-  const envelopeSource = { boxId: source.boxId, collectorId: source.collectorId };
+  const envelopeSource = raw.source;
   for (const observation of raw.observations) {
     if (!isRecord(observation)) {
       throw new FleetObservationEnvelopeError("Fleet observation is not an object");
@@ -634,6 +730,9 @@ export function parseFleetObservationEnvelope(raw: unknown): FleetObservationEnv
  * Observations are deduplicated through the ingest store first: replays of an
  * already-ingested envelope contribute nothing, so cross-box data cannot be
  * double counted. Every item is stamped with the envelope's source boxId.
+ * Normalization consumes precisely the observations inserted by this call:
+ * an observation ID contributes at most once, including duplicates inside one
+ * envelope (AUTONOMOUS GAP-FILL A) and replays against an existing store.
  */
 export function normalizeFleetEnvelopeToUsage(
   envelope: FleetObservationEnvelope,
@@ -644,8 +743,10 @@ export function normalizeFleetEnvelopeToUsage(
   const boxId = envelope.source.boxId;
   const usage: HermesUsageSnapshot = { sessions: [], modelUsage: [] };
   const apiCalls: HermesApiCall[] = [];
+  const consumed = new Set<string>();
   for (const observation of envelope.observations) {
-    if (seenBefore.has(observation.observationId)) continue;
+    if (seenBefore.has(observation.observationId) || consumed.has(observation.observationId)) continue;
+    consumed.add(observation.observationId);
     if (observation.payloadKind === "cost.usage.session") {
       usage.sessions.push({ ...(observation.payload as HermesSessionUsage), boxId });
     } else if (observation.payloadKind === "cost.usage.model") {
@@ -857,12 +958,16 @@ export function aggregateFleetCostDashboard(input: {
   // box-qualified session whose provider and model both match. When one
   // session reports multiple billing identities for the same provider/model
   // (split rows), the source cannot disambiguate which identity owns the
-  // call; fail honest by marking speed telemetry unavailable on every
+  // call; the call is counted as an ambiguous omitted sample on every
   // candidate row instead of guessing or duplicating the call's
   // latency/TTFT/throughput across all of them. Calls with no matching
   // identity in their own session attribute to no row.
+  // AUTONOMOUS GAP-FILL C — mixed coverage contract (flagged in the PR body
+  // and revision-3 artifact): ambiguity is tracked per model identity as an
+  // omitted-sample count, never as a global boolean that discards valid
+  // unique samples from other sessions.
   const callsByModelKey = new Map<string, HermesApiCall[]>();
-  const ambiguousSpeedModelKeys = new Set<string>();
+  const ambiguousOmittedCallsByModelKey = new Map<string, number>();
   for (const call of apiCalls) {
     const sessionUsage = modelUsageBySession.get(fleetSessionKey(call)) ?? [];
     const candidateKeys = new Set(
@@ -876,7 +981,9 @@ export function aggregateFleetCostDashboard(input: {
       if (list) list.push(call);
       else callsByModelKey.set(key, [call]);
     } else if (candidateKeys.size > 1) {
-      for (const key of candidateKeys) ambiguousSpeedModelKeys.add(key);
+      for (const key of candidateKeys) {
+        ambiguousOmittedCallsByModelKey.set(key, (ambiguousOmittedCallsByModelKey.get(key) ?? 0) + 1);
+      }
     }
   }
 
@@ -930,6 +1037,11 @@ export function aggregateFleetCostDashboard(input: {
     const costUsd = taskUsage.reduce((sum, row) => sum + (usdToDashboardCost(row) ?? 0), 0);
     const outputTokens = taskUsage.reduce((sum, row) => sum + row.outputTokens, 0);
     const apiDurationMs = taskCalls.reduce((sum, row) => sum + row.apiDuration * 1000, 0);
+    // Same-population throughput: the numerator is the sum of outputTokens
+    // from the exact observed taskCalls and the denominator is those same
+    // calls' duration. State-db usage output tokens stay separately labeled
+    // usage totals and never enter sampled throughput.
+    const sampledOutputTokens = taskCalls.reduce((sum, row) => sum + row.outputTokens, 0);
     const ttftSamples = taskCalls.map((row) => row.ttft).filter((value): value is number => value !== null);
     const models = taskUsage.map((usage) => {
       const cost = usdToDashboardCost(usage);
@@ -950,6 +1062,7 @@ export function aggregateFleetCostDashboard(input: {
         reasoningTokens: 0,
         usageApiCalls: 0,
         speedSampleApiCalls: null,
+        speedAmbiguousOmittedApiCalls: 0,
         speedAvailability: "unavailable" as const,
         avgLatencyMs: null,
         avgTtftMs: null,
@@ -1012,7 +1125,7 @@ export function aggregateFleetCostDashboard(input: {
       outputTokens,
       wallClockMs,
       turns: new Set(taskCalls.map((row) => row.turnId)).size,
-      throughputOutputTokensPerSecond: apiDurationMs > 0 ? round(outputTokens / (apiDurationMs / 1000)) : null,
+      throughputOutputTokensPerSecond: apiDurationMs > 0 ? round(sampledOutputTokens / (apiDurationMs / 1000)) : null,
       avgLatencyMs: taskCalls.length > 0 ? round(apiDurationMs / taskCalls.length) : null,
       avgTtftMs: ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
       compactions: taskUsage.filter((row) => row.task === "compression").reduce((sum, row) => sum + row.apiCallCount, 0),
@@ -1059,15 +1172,30 @@ export function aggregateFleetCostDashboard(input: {
     );
     const modelKey = modelAggregationKey(row);
     const calls = callsByModelKey.get(modelKey) ?? [];
-    // Fail-honest ambiguity policy: when one session reports multiple billing
-    // identities for this provider/model, observed calls cannot be attributed
-    // without guessing. Speed values, the observed-sample count, and observed
-    // turns become null/ambiguous — never zero and never duplicated across
-    // split rows. Unsplit rows report the exact attributed sample count (0 is
-    // exact when no calls were attributed).
-    const ambiguous = ambiguousSpeedModelKeys.has(modelKey);
-    const speedAvailability = ambiguous ? "ambiguous" as const : calls.length > 0 ? "available" as const : "unavailable" as const;
+    // AUTONOMOUS GAP-FILL C — mixed coverage contract (flagged in the PR body
+    // and revision-3 artifact). Ambiguous omitted calls are counted per model
+    // identity; they never discard this identity's uniquely attributable
+    // samples from other sessions:
+    //   available:   one or more unique samples, zero ambiguous omitted calls
+    //   partial:     one or more unique samples and one or more ambiguous
+    //                omitted calls — latency/TTFT/throughput/turns are computed
+    //                from unique samples only and visibly labeled partial
+    //   ambiguous:   zero unique samples and one or more ambiguous candidate
+    //                calls — speed values, sample count, and turns stay null,
+    //                never zero and never duplicated across split rows
+    //   unavailable: neither unique nor ambiguous samples
+    const ambiguousOmitted = ambiguousOmittedCallsByModelKey.get(modelKey) ?? 0;
+    const speedAvailability =
+      calls.length > 0 && ambiguousOmitted === 0 ? "available" as const
+      : calls.length > 0 ? "partial" as const
+      : ambiguousOmitted > 0 ? "ambiguous" as const
+      : "unavailable" as const;
     const durationMs = calls.reduce((sum, call) => sum + call.apiDuration * 1000, 0);
+    // Same-population throughput: numerator is the sum of outputTokens from
+    // the exact uniquely attributed calls; denominator is those same calls'
+    // duration. The row's state.db usage output tokens never enter sampled
+    // throughput.
+    const sampledOutputTokens = calls.reduce((sum, call) => sum + call.outputTokens, 0);
     const ttftSamples = calls.map((call) => call.ttft).filter((value): value is number => value !== null);
     const completedTasks = matchingTaskRows.filter((task) => task.completionState === "succeeded" || task.completionState === "done").length;
     const wallClockSamples = matchingTaskRows.map((task) => task.wallClockMs).filter((value): value is number => value !== null);
@@ -1077,11 +1205,12 @@ export function aggregateFleetCostDashboard(input: {
       ...row,
       estimatedCostUsd: round(row.estimatedCostUsd),
       actualCostUsd: row.actualCostUsd === null ? null : round(row.actualCostUsd),
-      speedSampleApiCalls: ambiguous ? null : calls.length,
+      speedSampleApiCalls: speedAvailability === "ambiguous" ? null : calls.length,
+      speedAmbiguousOmittedApiCalls: ambiguousOmitted,
       speedAvailability,
-      avgLatencyMs: !ambiguous && calls.length > 0 ? round(durationMs / calls.length) : null,
-      avgTtftMs: !ambiguous && ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
-      throughputOutputTokensPerSecond: !ambiguous && durationMs > 0 ? round(row.outputTokens / (durationMs / 1000)) : null,
+      avgLatencyMs: calls.length > 0 ? round(durationMs / calls.length) : null,
+      avgTtftMs: ttftSamples.length > 0 ? round((ttftSamples.reduce((sum, value) => sum + value, 0) / ttftSamples.length) * 1000) : null,
+      throughputOutputTokensPerSecond: durationMs > 0 ? round(sampledOutputTokens / (durationMs / 1000)) : null,
       completedTasks,
       costPerCompletedTaskUsd: costPerCompletedTaskUsd === null ? null : round(costPerCompletedTaskUsd),
       avgTaskWallClockMs: wallClockSamples.length > 0
@@ -1090,7 +1219,7 @@ export function aggregateFleetCostDashboard(input: {
       // Turns come only from calls uniquely attributed to this identity; the
       // identity's own compactions were folded from its compression usage
       // rows during accumulation. Whole-task totals are never copied here.
-      turns: !ambiguous && calls.length > 0 ? new Set(calls.map((call) => call.turnId)).size : null,
+      turns: calls.length > 0 ? new Set(calls.map((call) => call.turnId)).size : null,
       compactions: row.compactions,
       stalls: null,
       stallsAvailability: "unavailable" as const,

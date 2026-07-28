@@ -30,7 +30,7 @@ Consumers must fail loudly on unsupported schema versions. They must not turn in
 
 ## Idempotency And Checkpoints
 
-The Hermes plugin sidecar uses `(session_id, api_request_id)` as its primary key and inserts with first-writer-wins semantics. Paperclip’s generic ingest helper also deduplicates by `observationId`; envelope normalization only yields observations that were not already present in the ingest store, so replaying a staged envelope never double-counts usage.
+The Hermes plugin sidecar uses `(session_id, api_request_id)` as its primary key and inserts with first-writer-wins semantics. Paperclip's generic ingest helper also deduplicates by `observationId`; envelope normalization only yields observations that were not already present in the ingest store, so replaying a staged envelope never double-counts usage. Duplicate-ID collision policy (AUTONOMOUS GAP-FILL A, PR #27 revision 3): an exact same-ID/same-content observation — inside one envelope or replayed against the store — is an idempotent skip and is normalized at most once; a same-ID/different-content collision throws `FleetObservationCollisionError` before any store mutation, and the whole envelope is validated and collision-checked before anything is inserted, so ingestion is atomic per envelope.
 
 Checkpoints are source-owned. The Mac collector currently uses a timestamp-backed sequence and state-db path cursor for the server response. The Windows adapter echoes the checkpoint published inside the staged envelope. A future cross-box sender should persist stronger cursors per source and replay from the last acknowledged checkpoint.
 
@@ -85,11 +85,12 @@ The two may legitimately differ: they are different sources. UI and docs must ne
 
 Each model row carries `speedAvailability`:
 
-- `available` — at least one observed sidecar call is uniquely attributed to this identity; speed values, `speedSampleApiCalls`, and `turns` are exact.
-- `unavailable` — no attributable observed calls; `speedSampleApiCalls` is `0` (exact), speed values and `turns` are `null`.
-- `ambiguous` — one session reports multiple billing/cost identities for the same provider/model, so observed-call ownership cannot be determined without guessing. `speedSampleApiCalls`, speed values, and `turns` are `null`; nothing is fabricated or duplicated across the split rows.
+- `available` — one or more observed sidecar calls uniquely attribute to this identity and zero observed candidate calls were omitted as ambiguous; speed values, `speedSampleApiCalls`, and `turns` are exact.
+- `partial` (AUTONOMOUS GAP-FILL C, PR #27 revision 3) — one or more unique samples coexist with one or more ambiguous omitted candidate calls from unrelated ambiguous sessions. Speed values and `turns` are computed from the unique samples only; `speedSampleApiCalls` counts the included unique samples and `speedAmbiguousOmittedApiCalls` counts the omitted ambiguous candidates; the UI labels the row "partial coverage".
+- `unavailable` — neither unique nor ambiguous samples; `speedSampleApiCalls` is `0` (exact), `speedAmbiguousOmittedApiCalls` is `0`, speed values and `turns` are `null`.
+- `ambiguous` — no unique samples and one or more ambiguous candidate calls (one session reports multiple billing/cost identities for the same provider/model, so observed-call ownership cannot be determined without guessing). `speedSampleApiCalls`, speed values, and `turns` are `null`; `speedAmbiguousOmittedApiCalls` is exact; nothing is fabricated or duplicated across the split rows.
 
-Per-model `turns` is the count of distinct observed `turnId`s among calls uniquely attributed to that exact model identity — never the whole-task turn count. Per-model `compactions` is the sum of `api_call_count` over that identity's own `session_model_usage` rows with `task = "compression"` — exact per identity and never copied from another model or from task totals.
+Per-model `turns` is the count of distinct observed `turnId`s among calls uniquely attributed to that exact model identity — never the whole-task turn count. Per-model `compactions` is the sum of `api_call_count` over that identity's own `session_model_usage` rows with `task = "compression"` — exact per identity and never copied from another model or from task totals. Throughput (`throughputOutputTokensPerSecond`, on both task and model rows) is a same-population rate: the numerator is the sum of `outputTokens` from the exact observed calls whose durations form the denominator, so state.db usage token totals never enter sampled throughput.
 
 Global `availability` is derived from what rows actually render, never from raw sidecar presence:
 
@@ -99,7 +100,7 @@ Global `availability` is derived from what rows actually render, never from raw 
 
 ### Envelope payload validation
 
-`fleet-observation/v1` observations are validated completely per discriminated `payloadKind` (`cost.usage.session`, `cost.usage.model`, `cost.speed.api_call`) before ingest or dedupe: required ids/strings, timestamps, billing enum fields, nullable fields, finite numeric types, and nonnegative counts/durations/tokens, plus the observation wrapper (`observedAt`, `checkpoint`, `freshness`) and the box/source invariant (observation source must match the envelope source). Any missing, string, `NaN`/`Infinity`, negative, malformed, or wrong-kind field rejects the whole envelope with `FleetObservationEnvelopeError` identifying the observation, kind, and field. Nothing invalid enters the dedupe store and there is no partial normalization.
+`fleet-observation/v1` observations are validated completely per discriminated `payloadKind` (`cost.usage.session`, `cost.usage.model`, `cost.speed.api_call`) before ingest or dedupe: required ids/strings, timestamps, billing enum fields, nullable fields, finite numeric types, and nonnegative counts/durations/tokens, plus the observation wrapper (`observedAt`, `checkpoint`, `freshness`) and the box/source invariant (observation source must match the envelope source box/collector AND profile identity exactly under nullable semantics — AUTONOMOUS GAP-FILL B, PR #27 revision 3). The envelope's own top-level trusted metadata is validated completely before the typed envelope is returned or the store is touched: `observedAt` must be an ISO timestamp string, `checkpoint` must be `{ sequence: nonnegative integer, cursor: string | null }`, and `freshness` must be `{ errors: string[] }`. Any missing, string, `NaN`/`Infinity`, negative, malformed, or wrong-kind field rejects the whole envelope with `FleetObservationEnvelopeError` identifying the observation, kind, and field. Nothing invalid enters the dedupe store and there is no partial normalization.
 
 ## Security
 

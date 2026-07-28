@@ -424,9 +424,11 @@ describe("fleet cost dashboard collector", () => {
       expect(row.avgTtftMs).toBeNull();
       expect(row.throughputOutputTokensPerSecond).toBeNull();
       // Ambiguous ownership: the observed-sample count, per-row availability,
-      // and observed turns must be null/ambiguous, never zero or guessed.
+      // and observed turns must be null/ambiguous, never zero or guessed; the
+      // omitted ambiguous candidate count stays exact.
       expect(row.speedSampleApiCalls).toBeNull();
       expect(row.speedAvailability).toBe("ambiguous");
+      expect(row.speedAmbiguousOmittedApiCalls).toBe(1);
       expect(row.turns).toBeNull();
       // The Hermes state.db per-identity usage count stays exact and is
       // contracted under its own source-explicit name.
@@ -510,6 +512,7 @@ describe("fleet cost dashboard collector", () => {
     expect(dashboard.modelRows[0]).toMatchObject({
       usageApiCalls: 1,
       speedSampleApiCalls: 0,
+      speedAmbiguousOmittedApiCalls: 0,
       speedAvailability: "unavailable",
       avgLatencyMs: null,
       avgTtftMs: null,
@@ -771,6 +774,207 @@ describe("fleet cost dashboard collector", () => {
       estimatedCostUsd: 0.1,
       completedTasks: 1,
       costPerCompletedTaskUsd: 0.25,
+    });
+  });
+
+  it("computes task and model throughput from the same observed sample population", () => {
+    // Atlas PR #27 rereview-v2 P1 reproduction: 1000 aggregate state.db usage
+    // output tokens over 2 usage calls, but only one observed sidecar call
+    // with 10 output tokens over 2 seconds. The observed rate is 5 tok/s;
+    // dividing the usage total by the sampled duration reported 500 tok/s.
+    // Throughput numerator and denominator must come from the exact same
+    // observed calls; state.db usage output tokens stay separately labeled
+    // usage totals and never enter sampled throughput.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 2 })],
+        modelUsage: [fleetModelUsageFixture({ outputTokens: 1000, apiCallCount: 2 })],
+      },
+      apiCalls: [fleetApiCallFixture({ outputTokens: 10, apiDuration: 2 })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows).toHaveLength(1);
+    expect(dashboard.taskRows[0].throughputOutputTokensPerSecond).toBe(5);
+    // usage totals stay intact and separately labeled on the task row
+    expect(dashboard.taskRows[0].outputTokens).toBe(1000);
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      outputTokens: 1000,
+      usageApiCalls: 2,
+      speedSampleApiCalls: 1,
+      speedAvailability: "available",
+      throughputOutputTokensPerSecond: 5,
+    });
+  });
+
+  it("computes throughput from summed sample tokens over summed sample duration for heterogeneous calls", () => {
+    // Multi-call control: the rate is total observed output tokens divided by
+    // total observed duration, not an average of per-call rates and never the
+    // usage-row token total.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 2 })],
+        modelUsage: [fleetModelUsageFixture({ outputTokens: 1000, apiCallCount: 2 })],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ apiRequestId: "req-1", outputTokens: 10, apiDuration: 2 }),
+        fleetApiCallFixture({ apiRequestId: "req-2", turnId: "turn-2", outputTokens: 30, apiDuration: 4, ttft: 0.25 }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows[0].throughputOutputTokensPerSecond).toBeCloseTo(40 / 6, 6);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      speedSampleApiCalls: 2,
+      avgLatencyMs: 3000,
+      avgTtftMs: 375,
+      turns: 2,
+    });
+    expect(dashboard.modelRows[0].throughputOutputTokensPerSecond).toBeCloseTo(40 / 6, 6);
+  });
+
+  it("reports null throughput when there are no usable observed samples or nonpositive duration", () => {
+    const noCalls = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(noCalls.taskRows[0].throughputOutputTokensPerSecond).toBeNull();
+    expect(noCalls.modelRows[0].throughputOutputTokensPerSecond).toBeNull();
+
+    const zeroDuration = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture({ apiDuration: 0 })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(zeroDuration.taskRows[0].throughputOutputTokensPerSecond).toBeNull();
+    expect(zeroDuration.modelRows[0].throughputOutputTokensPerSecond).toBeNull();
+  });
+
+  it("preserves uniquely attributable samples under mixed ambiguity with an explicit partial state", () => {
+    // Atlas PR #27 rereview-v2 P2 reproduction: one session with a uniquely
+    // attributable call for identity K plus one unrelated ambiguous session
+    // that also candidated K. The old global ambiguity boolean discarded K's
+    // valid unique sample.
+    // AUTONOMOUS GAP-FILL C (flagged in PR body + revision-3 artifact):
+    // model speed availability gains an explicit `partial` state when valid
+    // unique samples coexist with ambiguous omitted samples; metrics use only
+    // unique observed samples and disclose both included and omitted counts.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [
+          fleetSessionFixture({ sessionId: "unique-session" }),
+          fleetSessionFixture({ sessionId: "ambiguous-session" }),
+        ],
+        modelUsage: [
+          fleetModelUsageFixture({ sessionId: "unique-session", costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ sessionId: "ambiguous-session", costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ sessionId: "ambiguous-session", costSource: "provider_estimate", pricingVersion: "v2" }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ sessionId: "unique-session", apiRequestId: "req-unique" }),
+        fleetApiCallFixture({ sessionId: "ambiguous-session", apiRequestId: "req-ambiguous" }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    const rowK = dashboard.modelRows.find((row) => row.costSource === "pricing_table");
+    const rowL = dashboard.modelRows.find((row) => row.costSource === "provider_estimate");
+
+    // K keeps its uniquely attributable sample under an explicit partial
+    // state; metrics are computed from unique samples only.
+    expect(rowK).toMatchObject({
+      speedAvailability: "partial",
+      speedSampleApiCalls: 1,
+      speedAmbiguousOmittedApiCalls: 1,
+      avgLatencyMs: 2000,
+      avgTtftMs: 500,
+      throughputOutputTokensPerSecond: 2.5,
+      turns: 1,
+    });
+    // L has no unique samples and one ambiguous candidate: fully ambiguous.
+    expect(rowL).toMatchObject({
+      speedAvailability: "ambiguous",
+      speedSampleApiCalls: null,
+      speedAmbiguousOmittedApiCalls: 1,
+      avgLatencyMs: null,
+      avgTtftMs: null,
+      throughputOutputTokensPerSecond: null,
+      turns: null,
+    });
+    // Global availability reflects what rows render: K renders real metrics.
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "available",
+      avgTtftMs: "available",
+      throughputOutputTokensPerSecond: "available",
+    });
+  });
+
+  it("reports zero ambiguous omitted samples for fully available and unavailable identities", () => {
+    // AUTONOMOUS GAP-FILL C contract states:
+    //   available:   unique > 0, ambiguous omitted = 0
+    //   partial:     unique > 0, ambiguous omitted > 0
+    //   ambiguous:   unique = 0, ambiguous omitted > 0
+    //   unavailable: unique = 0, ambiguous omitted = 0
+    const available = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(available.modelRows[0]).toMatchObject({
+      speedAvailability: "available",
+      speedSampleApiCalls: 1,
+      speedAmbiguousOmittedApiCalls: 0,
+    });
+
+    const unavailable = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(unavailable.modelRows[0]).toMatchObject({
+      speedAvailability: "unavailable",
+      speedSampleApiCalls: 0,
+      speedAmbiguousOmittedApiCalls: 0,
+      avgLatencyMs: null,
+      turns: null,
     });
   });
 });

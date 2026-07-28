@@ -93,6 +93,7 @@ function payload(): FleetCostDashboardPayload {
         reasoningTokens: 25,
         usageApiCalls: 3,
         speedSampleApiCalls: 2,
+        speedAmbiguousOmittedApiCalls: 0,
         speedAvailability: "available",
         avgLatencyMs: 2000,
         avgTtftMs: 420,
@@ -122,6 +123,7 @@ function payload(): FleetCostDashboardPayload {
         reasoningTokens: 0,
         usageApiCalls: 1,
         speedSampleApiCalls: null,
+        speedAmbiguousOmittedApiCalls: 1,
         speedAvailability: "ambiguous",
         avgLatencyMs: null,
         avgTtftMs: null,
@@ -220,5 +222,29 @@ describe("FleetCostDashboardPanel", () => {
     expect(node.textContent).toContain("speed ambiguous");
     expect(node.textContent).toContain("turns unavailable");
     expect(node.textContent).not.toContain("apiCalls");
+  });
+
+  it("renders partial speed coverage with included and omitted sample counts and unique-sample metrics", () => {
+    // AUTONOMOUS GAP-FILL C: partial = unique samples coexist with ambiguous
+    // omitted samples. The UI must visibly label the partial state and
+    // disclose both counts while still rendering the unique-sample metrics.
+    const mixed = payload();
+    mixed.modelRows[0] = {
+      ...mixed.modelRows[0],
+      speedAvailability: "partial",
+      speedSampleApiCalls: 2,
+      speedAmbiguousOmittedApiCalls: 1,
+    } as FleetCostDashboardPayload["modelRows"][number];
+    const node = render(mixed);
+
+    expect(node.textContent).toContain("2 observed speed samples");
+    expect(node.textContent).toContain("partial coverage");
+    expect(node.textContent).toContain("1 ambiguous omitted");
+    // unique-sample metrics still render for partial rows
+    expect(node.textContent).toContain("300.00 tok/s");
+    expect(node.textContent).toContain("2.0s latency");
+    expect(node.textContent).toContain("420ms TTFT");
+    // the ambiguous row keeps its explicit non-partial label
+    expect(node.textContent).toContain("speed ambiguous");
   });
 });

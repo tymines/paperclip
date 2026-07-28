@@ -166,9 +166,14 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                   <span>{usd(row.costPerCompletedTaskUsd)} Cost / completed</span>
                   <span>{ms(row.avgTaskWallClockMs)} Task wall</span>
                   <span>{row.turns === null ? "turns unavailable" : `${row.turns} turns`}</span>
-                  {row.speedAvailability === "available" ? (
+                  {row.speedAvailability === "available" || row.speedAvailability === "partial" ? (
                     <>
-                      <span>{row.speedSampleApiCalls} observed speed samples</span>
+                      <span>
+                        {row.speedSampleApiCalls} observed speed samples
+                        {row.speedAvailability === "partial"
+                          ? ` (partial coverage; ${row.speedAmbiguousOmittedApiCalls} ambiguous omitted)`
+                          : ""}
+                      </span>
                       <span>{rate(row.throughputOutputTokensPerSecond)}</span>
                       <span>{ms(row.avgLatencyMs)} latency</span>
                       <span>{ms(row.avgTtftMs)} TTFT</span>
@@ -176,7 +181,7 @@ export function FleetCostDashboardPanel({ payload }: { payload: FleetCostDashboa
                   ) : (
                     <span className="col-span-2">
                       {row.speedAvailability === "ambiguous"
-                        ? "speed ambiguous (split billing identity; observed calls not attributed)"
+                        ? `speed ambiguous (split billing identity; ${row.speedAmbiguousOmittedApiCalls} observed call${row.speedAmbiguousOmittedApiCalls === 1 ? "" : "s"} not attributed)`
                         : "speed unavailable (no attributed observed calls)"}
                     </span>
                   )}

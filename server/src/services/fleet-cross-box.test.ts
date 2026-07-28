@@ -12,6 +12,7 @@ import {
   buildFleetCostDashboard,
   collectWindowsEnvelopeBox,
   FleetObservationEnvelopeError,
+  ingestFleetObservations,
   normalizeFleetEnvelopeToUsage,
   parseFleetObservationEnvelope,
   type FleetObservationStore,
@@ -376,6 +377,191 @@ describe("envelope payload validation (fail-loud contract)", () => {
   });
 });
 
+describe("top-level envelope validation (fail-loud trusted metadata)", () => {
+  // Atlas PR #27 rereview-v2 P1: the parser validated observations but trusted
+  // the envelope's own observedAt/checkpoint/freshness/source.profileId, so a
+  // typed envelope could carry malformed trusted metadata into the collector.
+  // AUTONOMOUS GAP-FILL B (flagged in PR body + revision-3 artifact): the
+  // top-level profile invariant requires envelope source profileId and every
+  // observation source profileId to match exactly under nullable semantics,
+  // just like box/collector identity.
+  function validEnvelope() {
+    return JSON.parse(readFileSync(WINDOWS_FIXTURE_PATH, "utf8"));
+  }
+
+  function expectTopLevelRejection(envelope: unknown, fieldPattern: RegExp) {
+    expect(() => parseFleetObservationEnvelope(envelope)).toThrowError(FleetObservationEnvelopeError);
+    expect(() => parseFleetObservationEnvelope(envelope)).toThrowError(fieldPattern);
+    // A malformed top-level envelope must never touch the store, even when
+    // supplied programmatically as an already-typed envelope.
+    const store: FleetObservationStore = new Map();
+    expect(() => normalizeFleetEnvelopeToUsage(envelope as never, store)).toThrowError(FleetObservationEnvelopeError);
+    expect(store.size).toBe(0);
+  }
+
+  it("rejects numeric, missing, and non-ISO envelope observedAt", () => {
+    const numeric = validEnvelope();
+    numeric.observedAt = 123;
+    expectTopLevelRejection(numeric, /observedAt/s);
+
+    const missing = validEnvelope();
+    delete missing.observedAt;
+    expectTopLevelRejection(missing, /observedAt/s);
+
+    const nonIso = validEnvelope();
+    nonIso.observedAt = "not-a-timestamp";
+    expectTopLevelRejection(nonIso, /observedAt/s);
+  });
+
+  it("rejects malformed envelope checkpoint shape, sequence, and cursor", () => {
+    const stringSequence = validEnvelope();
+    stringSequence.checkpoint = { sequence: "42", cursor: null };
+    expectTopLevelRejection(stringSequence, /checkpoint/s);
+
+    const fractionalSequence = validEnvelope();
+    fractionalSequence.checkpoint = { sequence: 4.2, cursor: null };
+    expectTopLevelRejection(fractionalSequence, /checkpoint/s);
+
+    const negativeSequence = validEnvelope();
+    negativeSequence.checkpoint = { sequence: -1, cursor: null };
+    expectTopLevelRejection(negativeSequence, /checkpoint/s);
+
+    const missing = validEnvelope();
+    delete missing.checkpoint;
+    expectTopLevelRejection(missing, /checkpoint/s);
+
+    const badCursor = validEnvelope();
+    badCursor.checkpoint = { sequence: 42, cursor: 7 };
+    expectTopLevelRejection(badCursor, /checkpoint/s);
+  });
+
+  it("rejects missing or malformed envelope freshness", () => {
+    const nonArrayErrors = validEnvelope();
+    nonArrayErrors.freshness = { errors: "boom" };
+    expectTopLevelRejection(nonArrayErrors, /freshness/s);
+
+    const nonStringErrors = validEnvelope();
+    nonStringErrors.freshness = { errors: [7] };
+    expectTopLevelRejection(nonStringErrors, /freshness/s);
+
+    const missing = validEnvelope();
+    delete missing.freshness;
+    expectTopLevelRejection(missing, /freshness/s);
+  });
+
+  it("rejects envelope/observation profileId mismatch and non-nullable-string profileId", () => {
+    // AUTONOMOUS GAP-FILL B: profile identity is part of the source invariant.
+    const mismatch = validEnvelope();
+    mismatch.source = { ...mismatch.source, profileId: "envelope-profile" };
+    mismatch.observations = mismatch.observations.map((observation: any) => ({
+      ...observation,
+      source: { ...observation.source, profileId: "different-profile" },
+    }));
+    expectTopLevelRejection(mismatch, /source|profileId/s);
+
+    const nullVsString = validEnvelope();
+    nullVsString.source = { ...nullVsString.source, profileId: null };
+    expectTopLevelRejection(nullVsString, /source|profileId/s);
+
+    const numericProfile = validEnvelope();
+    numericProfile.source = { ...numericProfile.source, profileId: 7 };
+    expectTopLevelRejection(numericProfile, /source|profileId/s);
+
+    const missingProfile = validEnvelope();
+    delete missingProfile.source.profileId;
+    expectTopLevelRejection(missingProfile, /source|profileId/s);
+  });
+
+  it("reports malformed top-level envelope metadata as an unavailable source with no data", async () => {
+    const dir = await tempDirectory();
+    const raw = validEnvelope();
+    raw.observedAt = 123;
+    const badPath = join(dir, "bad-top-level.json");
+    await writeFile(badPath, JSON.stringify(raw));
+
+    const collection = collectWindowsEnvelopeBox(badPath);
+    expect(collection.report.status).toBe("unavailable");
+    expect(collection.report.errors[0]).toMatch(/observedAt/i);
+    expect(collection.usage.sessions).toHaveLength(0);
+    expect(collection.usage.modelUsage).toHaveLength(0);
+    expect(collection.apiCalls).toHaveLength(0);
+  });
+});
+
+describe("duplicate observation id collision policy (atomic ingest)", () => {
+  // Atlas PR #27 rereview-v2 P1: duplicate observation IDs inside one
+  // accepted envelope were normalized twice, and same-ID/different-content
+  // collisions were silently accepted.
+  // AUTONOMOUS GAP-FILL A (flagged in PR body + revision-3 artifact):
+  // exact same-ID/same-content observations are an idempotent skip; same-ID/
+  // different-content collisions fail loudly before any store mutation or
+  // normalized output, and ingestion is atomic per envelope.
+  function envelopeWithDuplicate(mutate: boolean) {
+    const raw = JSON.parse(readFileSync(WINDOWS_FIXTURE_PATH, "utf8"));
+    const first = raw.observations[0];
+    const second = structuredClone(first);
+    if (mutate) second.payload.inputTokens += 999;
+    raw.observations = [first, second];
+    return raw;
+  }
+
+  it("treats an exact duplicate inside one envelope as an idempotent skip and normalizes it once", () => {
+    const parsed = parseFleetObservationEnvelope(envelopeWithDuplicate(false));
+    const store: FleetObservationStore = new Map();
+    const result = normalizeFleetEnvelopeToUsage(parsed, store);
+
+    expect(result).toMatchObject({ inserted: 1, skipped: 1 });
+    expect(store.size).toBe(1);
+    expect(result.usage.sessions).toHaveLength(1);
+    expect(result.usage.modelUsage).toHaveLength(0);
+    expect(result.apiCalls).toHaveLength(0);
+    // token totals come from the single inserted observation, never doubled
+    expect(result.usage.sessions[0].inputTokens).toBe(2000);
+    expect(result.usage.sessions[0].outputTokens).toBe(1200);
+  });
+
+  it("rejects a conflicting duplicate inside one envelope before any store mutation", () => {
+    const parsed = parseFleetObservationEnvelope(envelopeWithDuplicate(true));
+    const store: FleetObservationStore = new Map();
+
+    expect(() => normalizeFleetEnvelopeToUsage(parsed, store)).toThrowError(FleetObservationEnvelopeError);
+    expect(() => normalizeFleetEnvelopeToUsage(parsed, store)).toThrowError(/collision|conflict/i);
+    // atomicity: the valid earlier entry must not remain in the store
+    expect(store.size).toBe(0);
+  });
+
+  it("skips an exact replay and rejects a conflicting replay without partial mutation", () => {
+    const store: FleetObservationStore = new Map();
+    const first = normalizeFleetEnvelopeToUsage(windowsEnvelope(), store);
+    expect(first).toMatchObject({ inserted: 8, skipped: 0 });
+
+    const replay = normalizeFleetEnvelopeToUsage(windowsEnvelope(), store);
+    expect(replay).toMatchObject({ inserted: 0, skipped: 8 });
+    expect(replay.usage.sessions).toHaveLength(0);
+    expect(replay.usage.modelUsage).toHaveLength(0);
+    expect(replay.apiCalls).toHaveLength(0);
+    expect(store.size).toBe(8);
+
+    // same IDs, mutated payload: a conflicting replay fails loudly and the
+    // previously ingested content stays intact
+    const raw = JSON.parse(readFileSync(WINDOWS_FIXTURE_PATH, "utf8"));
+    raw.observations[0].payload.outputTokens += 1;
+    const conflicting = parseFleetObservationEnvelope(raw);
+    expect(() => normalizeFleetEnvelopeToUsage(conflicting, store)).toThrowError(FleetObservationEnvelopeError);
+    expect(store.size).toBe(8);
+    const stored = store.get(raw.observations[0].observationId);
+    expect((stored?.payload as { outputTokens: number }).outputTokens).toBe(1200);
+  });
+
+  it("validates top-level metadata of programmatically supplied typed envelopes before touching the store", () => {
+    const parsed = windowsEnvelope();
+    const store: FleetObservationStore = new Map();
+    const malformed = { ...parsed, observedAt: 123 } as never;
+    expect(() => ingestFleetObservations(store, malformed)).toThrowError(FleetObservationEnvelopeError);
+    expect(store.size).toBe(0);
+  });
+});
+
 describe("cross-box fleet aggregation", () => {
   it("merges Mac and Windows boxes without collisions or double counting", () => {
     const windows = normalizeFleetEnvelopeToUsage(windowsEnvelope());
@@ -401,6 +587,7 @@ describe("cross-box fleet aggregation", () => {
       actualCostUsd: 0.52,
       usageApiCalls: 6,
       speedSampleApiCalls: 2,
+      speedAmbiguousOmittedApiCalls: 0,
       speedAvailability: "available",
       compactions: 1,
       turns: 2,
@@ -411,7 +598,9 @@ describe("cross-box fleet aggregation", () => {
       boxes: ["box-2-windows", "mac-local"],
     });
     expect(kimi).not.toHaveProperty("apiCalls");
-    expect(kimi?.throughputOutputTokensPerSecond).toBeCloseTo(277.777778, 4);
+    // same-population throughput: 600+500 observed sample output tokens over
+    // the same calls' 4.5s duration — never the 1250 usage-row token total
+    expect(kimi?.throughputOutputTokensPerSecond).toBeCloseTo(1100 / 4.5, 4);
 
     // the second model identity in the same task reports only its own
     // attributed turns/compactions, never the whole-task totals
@@ -420,6 +609,7 @@ describe("cross-box fleet aggregation", () => {
       provider: "z-ai",
       usageApiCalls: 2,
       speedSampleApiCalls: 1,
+      speedAmbiguousOmittedApiCalls: 0,
       speedAvailability: "available",
       turns: 1,
       compactions: 0,

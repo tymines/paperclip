@@ -145,8 +145,18 @@ export interface FleetCostDashboardSource {
   detail: string | null;
 }
 
-/** Per-row speed availability: `available` = at least one observed sidecar call is uniquely attributed to this model identity; `unavailable` = no attributable observed calls; `ambiguous` = the session reports multiple billing/cost identities for the same provider/model, so observed-call ownership cannot be determined without guessing. */
-export type FleetModelSpeedAvailability = "available" | "unavailable" | "ambiguous";
+/**
+ * Per-row speed availability (AUTONOMOUS GAP-FILL C mixed coverage contract):
+ * `available` = one or more observed sidecar calls uniquely attributed to this
+ * model identity and zero ambiguous omitted candidate calls; `partial` = one
+ * or more unique samples coexist with one or more ambiguous omitted candidate
+ * calls (speed metrics are computed from the unique samples only and visibly
+ * labeled partial); `ambiguous` = zero unique samples and one or more
+ * ambiguous candidate calls (ownership cannot be determined without guessing,
+ * so all speed fields are null); `unavailable` = neither unique nor ambiguous
+ * samples.
+ */
+export type FleetModelSpeedAvailability = "available" | "partial" | "unavailable" | "ambiguous";
 
 export interface FleetSpeedMetricAvailability {
   avgLatencyMs: "available" | "unavailable";
@@ -215,8 +225,18 @@ export interface FleetCostDashboardPayload {
      * Count of observed sidecar `api_calls` speed samples uniquely attributed
      * to this exact billing/cost identity. `null` when ownership is ambiguous
      * (split billing identities in one session); exact (possibly 0) otherwise.
+     * In the `partial` state this counts only the unique samples that back the
+     * rendered speed metrics.
      */
     speedSampleApiCalls: number | null;
+    /**
+     * Count of observed candidate speed samples omitted from this identity's
+     * metrics because their attribution was ambiguous (split billing
+     * identities in one session). Exact in every state (0 when none); the
+     * included (`speedSampleApiCalls`) and omitted counts are always
+     * disclosed together (AUTONOMOUS GAP-FILL C).
+     */
+    speedAmbiguousOmittedApiCalls: number;
     /** per-row speed availability/reason; see FleetModelSpeedAvailability */
     speedAvailability: FleetModelSpeedAvailability;
     avgLatencyMs: number | null;
