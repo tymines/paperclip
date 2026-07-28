@@ -13,6 +13,10 @@ import { jarvisConversations } from "./jarvis_conversations.js";
  *   running   — peer reported it picked up the work (optional, some peers skip)
  *   completed — result row populated, conversation gets an auto-follow-up
  *   failed    — bridge unreachable, peer threw, or timed out (24h wallclock)
+ *   abandoned — TERMINAL: the caller timed out awaiting the result callback
+ *               and fell back to another lane; late callbacks are classified
+ *               in metadata.lateCallback and can never flip the row back
+ *               (status is free-text — no migration required)
  */
 export const jarvisDelegations = pgTable(
   "jarvis_delegations",
@@ -30,7 +34,7 @@ export const jarvisDelegations = pgTable(
     agent: text("agent").notNull(),
     /** The actual task text Jarvis dispatched. */
     task: text("task").notNull(),
-    /** queued | running | completed | failed */
+    /** queued | running | completed | failed | abandoned (terminal timeout) */
     status: text("status").notNull().default("queued"),
     /** Final result text (peer's reply). Populated when status flips to completed. */
     result: text("result"),

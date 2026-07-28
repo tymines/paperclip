@@ -21,6 +21,7 @@ import { jarvisDelegations } from "@paperclipai/db";
 import {
   checkPeerReachable,
   dispatchDelegation,
+  abandonDelegation,
   type PeerAgentId,
 } from "./jarvis-delegation.js";
 
@@ -120,7 +121,9 @@ export async function callAgentLane(
 
     // Await the peer's result callback (POST /jarvis/delegations/:id/result),
     // which flips this row to completed/failed. The delegation row is the
-    // audit trail either way — a timeout leaves it queued, never faked.
+    // audit trail either way. On local timeout the row is terminally
+    // ABANDONED (see below) before the caller falls back — never faked, and
+    // a late callback can no longer flip it to completed.
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const [row] = await db
@@ -144,10 +147,29 @@ export async function callAgentLane(
           `delegation failed: ${(row.result ?? "").slice(0, 200) || "unknown error"}`,
         );
       }
-      if (Date.now() >= deadline) {
+      if (row?.status === "abandoned") {
+        // Already terminally abandoned (e.g. by a prior timeout) — never
+        // present a late/arrested row as a live-agent result.
         throw new AgentLaneUnavailableError(
           lane,
-          `timed out after ${timeoutMs}ms awaiting the result callback (delegation ${dispatch.id} remains queued)`,
+          `delegation ${dispatch.id} was abandoned (timed out) — its result was given up on before fallback`,
+        );
+      }
+      if (Date.now() >= deadline) {
+        // Terminal timeout semantics: atomically abandon ONLY the
+        // still-active, matching-company delegation BEFORE throwing, so the
+        // caller's model-lane fallback can never dual-execute with the peer
+        // and a late callback cannot flip the row to completed
+        // (recordDelegationResult rejects/classifies callbacks on abandoned
+        // rows). A failed abandon (DB hiccup) must not mask the timeout.
+        await abandonDelegation(db, {
+          delegationId: dispatch.id,
+          companyId,
+          reason: `timed out after ${timeoutMs}ms awaiting the result callback — abandoned before model-lane fallback`,
+        }).catch(() => false);
+        throw new AgentLaneUnavailableError(
+          lane,
+          `timed out after ${timeoutMs}ms awaiting the result callback — delegation ${dispatch.id} marked abandoned before fallback`,
         );
       }
       await sleep(everyMs);

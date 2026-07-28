@@ -1,4 +1,4 @@
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, gte, inArray } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { jarvisDelegations } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
@@ -344,6 +344,46 @@ async function markFailed(db: Db, id: string, error: string): Promise<void> {
 }
 
 // ============================================================================
+// Terminal timeout state (abandoned)
+// ============================================================================
+
+/**
+ * Atomically transition a still-active delegation to the terminal
+ * "abandoned" state — used by callers that gave up awaiting the result
+ * callback (local timeout) BEFORE falling back to another lane, so one user
+ * action can never execute in two lanes and the audit row explains that its
+ * eventual peer result was abandoned.
+ *
+ * The guard lives in the WHERE clause: only the row matching BOTH the
+ * delegation id and the company id AND still in a non-terminal state
+ * (queued/running) is flipped. A row that already completed/failed/abandoned
+ * is untouched. Returns true when this call performed the transition.
+ *
+ * The status column is free-text, so "abandoned" needs no migration.
+ */
+export async function abandonDelegation(
+  db: Db,
+  input: { delegationId: string; companyId: string; reason: string },
+): Promise<boolean> {
+  const updated = await db
+    .update(jarvisDelegations)
+    .set({
+      status: "abandoned",
+      result: input.reason,
+      completedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(jarvisDelegations.id, input.delegationId),
+        eq(jarvisDelegations.companyId, input.companyId),
+        inArray(jarvisDelegations.status, ["queued", "running"]),
+      ),
+    )
+    .returning({ id: jarvisDelegations.id });
+  return updated.length > 0;
+}
+
+// ============================================================================
 // Result callback (called by peer when it finishes)
 // ============================================================================
 
@@ -375,6 +415,27 @@ export async function recordDelegationResult(
   const meta = (row.metadata ?? {}) as Record<string, unknown>;
   if (typeof meta.callbackToken !== "string" || meta.callbackToken !== input.callbackToken) {
     return { ok: false, error: "callback_token_mismatch" };
+  }
+
+  // Late callback for a timed-out delegation: the caller already fell back
+  // to another lane and the row was terminally abandoned. NEVER overwrite
+  // the terminal audit state (status/result/completedAt) — classify the
+  // late arrival in metadata for audit and reject it instead.
+  if (row.status === "abandoned") {
+    await db
+      .update(jarvisDelegations)
+      .set({
+        metadata: {
+          ...meta,
+          lateCallback: {
+            status: input.status,
+            result: input.result ?? input.error ?? null,
+            receivedAt: new Date().toISOString(),
+          },
+        },
+      })
+      .where(eq(jarvisDelegations.id, input.delegationId));
+    return { ok: false, error: "delegation_abandoned" };
   }
 
   const update: Partial<typeof jarvisDelegations.$inferInsert> = {

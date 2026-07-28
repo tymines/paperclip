@@ -167,6 +167,19 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
     expect(report.criticProvider).toBe(ARES_CRITIC_PROVIDER);
   });
 
+  it("rejects a companyId that does not match the book's company BEFORE loading content or invoking any lane (P1)", async () => {
+    const db = dbForReview();
+
+    await expect(
+      runBaselineReview(db, { bookId: "book-1", chapterNumber: 2, companyId: "co-OTHER" }),
+    ).rejects.toThrow("Book not found");
+
+    expect(callAgentLane).not.toHaveBeenCalled();
+    expect(callCriticLLM).not.toHaveBeenCalled();
+    // Only the book lookup ran — no chapter or bible content was read.
+    expect((db as unknown as { select: ReturnType<typeof vi.fn> }).select).toHaveBeenCalledTimes(1);
+  });
+
   it("rethrows unexpected lane errors (only AgentLaneUnavailableError triggers fallback)", async () => {
     vi.mocked(callAgentLane).mockRejectedValue(new TypeError("db on fire"));
 

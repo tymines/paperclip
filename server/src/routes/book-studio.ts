@@ -1185,9 +1185,12 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     if (!parsed.success) throw badRequest(parsed.error.message);
     const { message } = parsed.data;
 
-    // Load full bible
+    // Load full bible — bound to BOTH the URL company and the book id: a
+    // book that belongs to another company is not-found here, before any
+    // dependent content is read, persisted, or delegated (company-boundary
+    // rule; Chronos PR #30 finding 1).
     const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-    if (!book) throw notFound("Book not found");
+    if (!book || book.companyId !== companyId) throw notFound("Book not found");
 
     const characters = await db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId));
     const locations = await db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId));

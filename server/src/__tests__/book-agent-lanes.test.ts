@@ -10,6 +10,7 @@ import type { Db } from "@paperclipai/db";
 vi.mock("../services/jarvis-delegation.js", () => ({
   checkPeerReachable: vi.fn(),
   dispatchDelegation: vi.fn(),
+  abandonDelegation: vi.fn(),
 }));
 
 import {
@@ -19,6 +20,7 @@ import {
 import {
   checkPeerReachable,
   dispatchDelegation,
+  abandonDelegation,
 } from "../services/jarvis-delegation.js";
 
 /** Fake Db whose delegation-row polls return the given sequence (last row repeats). */
@@ -47,6 +49,7 @@ describe("book-agent-lanes.callAgentLane", () => {
     vi.clearAllMocks();
     vi.mocked(checkPeerReachable).mockResolvedValue({ reachable: true });
     vi.mocked(dispatchDelegation).mockResolvedValue(DISPATCH_OK);
+    vi.mocked(abandonDelegation).mockResolvedValue(true);
   });
 
   it("dispatches to the calliope peer through the delegation contract and returns her reply", async () => {
@@ -138,12 +141,43 @@ describe("book-agent-lanes.callAgentLane", () => {
     ).rejects.toMatchObject({ reason: expect.stringContaining("bridge_500") });
   });
 
-  it("throws on timeout and names the still-queued delegation (no fabricated reply)", async () => {
+  it("timeout atomically marks the delegation terminally abandoned BEFORE the caller can fall back (P2)", async () => {
     const db = dbWithRows([{ id: "del-1", companyId: "co-1", status: "queued" }]);
 
-    await expect(
-      callAgentLane(db, { lane: "calliope", companyId: "co-1", task: "t", timeoutMs: 25, pollIntervalMs: 5 }),
-    ).rejects.toMatchObject({ reason: expect.stringContaining("del-1") });
+    const err = await callAgentLane(db, {
+      lane: "calliope",
+      companyId: "co-1",
+      task: "t",
+      timeoutMs: 25,
+      pollIntervalMs: 5,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.reason).toContain("del-1");
+    expect(err.reason).toContain("abandoned");
+    // The durable terminal transition happens for exactly the still-active,
+    // matching-company delegation — before the error propagates to the caller.
+    expect(abandonDelegation).toHaveBeenCalledTimes(1);
+    const abandonArgs = vi.mocked(abandonDelegation).mock.calls[0][1];
+    expect(abandonArgs).toMatchObject({ delegationId: "del-1", companyId: "co-1" });
+    expect(abandonArgs.reason).toContain("timed out");
+  });
+
+  it("treats an already-abandoned delegation row as terminal — never a fabricated reply (P2)", async () => {
+    const db = dbWithRows([
+      { id: "del-1", companyId: "co-1", status: "abandoned", result: "timed out — abandoned before fallback" },
+    ]);
+
+    const err = await callAgentLane(db, {
+      lane: "ares",
+      companyId: "co-1",
+      task: "t",
+      timeoutMs: 500,
+      pollIntervalMs: 1,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.reason).toContain("abandoned");
   });
 
   it("throws on an empty completed result rather than passing silence upstream", async () => {

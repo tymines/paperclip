@@ -192,6 +192,34 @@ describe("Book Studio Brainstorm Chat", () => {
       expect(res.body).toHaveProperty("agentLane", "unavailable");
     });
 
+    it("returns 404 for a book outside the authorized company — no delegation, no fallback call, no persistence (P1)", async () => {
+      const { app, db, mockQuery } = createApp();
+
+      // The book exists but belongs to company-2; the URL is authorized for
+      // company-1. The route must treat the pair as not-found BEFORE reading
+      // the bible/history, persisting anything, or invoking any lane.
+      const foreignBook = {
+        id: "book-1",
+        companyId: "company-2",
+        slug: "my-book",
+        title: "My Book",
+        metadata: {},
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      db.select.mockReturnValueOnce(mockQuery([foreignBook])); // book lookup
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/chat")
+        .send({ message: "hello" })
+        .expect(404);
+
+      expect(res.body).toHaveProperty("error");
+      expect(callAgentLane).not.toHaveBeenCalled();
+      expect(callBrainstormChat).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
     it("answers via the live Calliope agent lane when she is reachable (Spec v1.4)", async () => {
       const { app, db, mockQuery } = createApp();
 

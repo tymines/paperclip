@@ -98,6 +98,12 @@ export async function runBaselineReview(
 
   const [book] = await db.select().from(books).where(eq(books.id, bookId));
   if (!book) throw new Error("Book not found");
+  // Company-boundary rule (Chronos PR #30 finding 1): a supplied companyId
+  // that does not match the book's company is rejected BEFORE any dependent
+  // content (chapter/bible) is loaded or any critic lane (Ares/model) runs.
+  if (args.companyId && book.companyId !== args.companyId) {
+    throw new Error("Book not found");
+  }
   const [chapter] = await db
     .select()
     .from(manuscriptChapters)
