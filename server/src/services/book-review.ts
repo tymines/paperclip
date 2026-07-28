@@ -1,8 +1,17 @@
 // Book Studio — baseline review pass (Spec v1 §5.B).
 // One automatic pass on every landed draft, pre-human: quality rubric +
 // story-bible fact-check with cited entities. ANNOTATES AND SCORES ONLY — the
-// critic never rewrites and never commits. Run by the critic lane (a different
-// model than the writer — see callCriticLLM in chapter-generator.ts).
+// critic never rewrites and never commits.
+//
+// Critic lane (Spec v1 amendment v1.4): the review function routes to ARES —
+// a live agent (reviewer under Ares, Kimi K3), reached through the existing
+// peer-delegation contract (book-agent-lanes.ts → dispatchDelegation →
+// result callback). Writer ≠ critic is preserved at the AGENT level, not
+// just the model level. While cross-box co-location is pending, an
+// unreachable/slow/failed Ares falls back to the configured model lanes
+// (callCriticLLM in chapter-generator.ts) and the report says which lane
+// actually answered (criticProvider + criticDegraded) — never silently
+// same-model, never a fabricated agent verdict.
 //
 // Verdicts (Spec v1 §4): PASS → the chapter queues silently · FAIL → exception
 // in the review queue · NO_VERDICT → missing/stale evidence — halts, surfaces,
@@ -21,6 +30,10 @@ import {
 import { and } from "drizzle-orm";
 import { callCriticLLM } from "./chapter-generator.js";
 import { chapterContentHash } from "./book-prose-writer.js";
+import { callAgentLane, AgentLaneUnavailableError } from "./book-agent-lanes.js";
+
+/** Provenance string stamped on reports + review runs when the live Ares agent lane answered. */
+export const ARES_CRITIC_PROVIDER = "ares (agent lane)";
 
 // The 8 rubric dimensions (Spec v1 §4 — 8-dim rubric scorecards). Score 1–10.
 export const RUBRIC_DIMENSIONS = [
@@ -79,7 +92,7 @@ function extractJson(raw: string): unknown {
  */
 export async function runBaselineReview(
   db: Db,
-  args: { bookId: string; chapterNumber: number },
+  args: { bookId: string; chapterNumber: number; companyId?: string; requestedByActorId?: string | null },
 ): Promise<BaselineReport> {
   const { bookId, chapterNumber } = args;
 
@@ -131,7 +144,28 @@ export async function runBaselineReview(
     `STORY BIBLE (fact-check evidence):\n${bibleParts.length ? bibleParts.join("\n\n") : "(no bible entries yet — score craft only, note the missing evidence in summary)"}\n\n` +
     "Respond with the JSON object only.";
 
-  const critic = await callCriticLLM(systemPrompt, userPrompt);
+  // Spec v1.4: Ares first (live agent, via the peer-delegation contract);
+  // the configured model lanes are the documented pre-co-location fallback.
+  // `companyId` is optional so existing tests/callers without a company
+  // context keep the model-lane-only behavior.
+  let critic: { text: string; provider: string; criticDegraded: boolean };
+  if (args.companyId) {
+    try {
+      const lane = await callAgentLane(db, {
+        lane: "ares",
+        companyId: args.companyId,
+        task: `${systemPrompt}\n\n${userPrompt}`,
+        metadata: { bookId, chapterNumber },
+        requestedByActorId: args.requestedByActorId ?? null,
+      });
+      critic = { text: lane.text, provider: ARES_CRITIC_PROVIDER, criticDegraded: false };
+    } catch (laneErr) {
+      if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
+      critic = await callCriticLLM(systemPrompt, userPrompt);
+    }
+  } else {
+    critic = await callCriticLLM(systemPrompt, userPrompt);
+  }
 
   let parsed: {
     scores?: Record<string, unknown>;

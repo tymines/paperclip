@@ -30,6 +30,9 @@ interface ChatMessage {
   messageId: string;
   userMessageId: string;
   createdAt: string;
+  /** Which lane answered (Spec v1.4): the live Calliope agent, or the model fallback. */
+  via?: "calliope" | "model";
+  agentLaneError?: string;
 }
 
 export interface ChatDrawerProps {
@@ -133,7 +136,7 @@ export function ChatDrawer({
     abortRef.current = controller;
 
     try {
-      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string }>(
+      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string; via?: "calliope" | "model"; agentLaneError?: string }>(
         `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
         { method: "POST", body: JSON.stringify({ message: text }), signal: controller.signal },
       );
@@ -148,6 +151,8 @@ export function ChatDrawer({
             reply: res.reply,
             messageId: res.messageId,
             userMessageId: res.userMessageId,
+            via: res.via,
+            agentLaneError: res.agentLaneError,
           };
         }
         return updated;
@@ -205,7 +210,7 @@ export function ChatDrawer({
           <div>
             <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
               <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-              Brainstorm Chat
+              Calliope — Brainstorm
             </h3>
             {activeBookTitle && (
               <p className="text-[10px] text-gray-500 mt-0.5">{activeBookTitle}</p>
@@ -244,6 +249,15 @@ export function ChatDrawer({
                 <div className="flex justify-start">
                   <div className="max-w-[85%] rounded-lg bg-gray-800 border border-gray-700 px-3 py-2">
                     <p className="text-xs text-gray-300 whitespace-pre-wrap">{msg.reply}</p>
+                    {/* Lane provenance (Spec v1.4 — honest, never faked) */}
+                    {msg.via === "calliope" && (
+                      <p className="text-[9px] text-purple-400/80 mt-1.5">via Calliope ✦ live agent</p>
+                    )}
+                    {msg.via === "model" && msg.agentLaneError && (
+                      <p className="text-[9px] text-amber-400/90 mt-1.5" title={msg.agentLaneError}>
+                        Calliope unreachable — answered by the model fallback
+                      </p>
+                    )}
                     {/* Send to Draft buttons */}
                     <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-gray-700/50">
                       {(["character", "location", "style", "outline"] as const).map((et) => (

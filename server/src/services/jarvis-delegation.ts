@@ -31,6 +31,9 @@ export type PeerAgentId =
   // routes here; Ares fans the plan out to the fleet. Additive: the `agent`
   // column is plain text, so no migration is required.
   | "ares"
+  // Calliope — the creative-Muse agent (Spec v1.4): Book Studio's
+  // brainstorm/write chat window IS Calliope. Same additive plain-text path.
+  | "calliope"
   | "august"
   | "codex"
   | "content"
@@ -446,6 +449,7 @@ export async function countRecentDelegations(
 const PEER_LABEL: Record<PeerAgentId, string> = {
   hermes: "Hermes",
   ares: "Ares (COO)",
+  calliope: "Calliope",
   august: "August",
   codex: "Codex",
   content: "the content desk",
@@ -457,6 +461,7 @@ const PEER_LABEL: Record<PeerAgentId, string> = {
 const PEER_ETA: Record<PeerAgentId, string> = {
   hermes: "about ten minutes",
   ares: "a few minutes — Ares fans it out to the fleet",
+  calliope: "a minute or two",
   august: "a few minutes — assuming the Mac mini's reachable",
   codex: "a couple of minutes",
   content: "fifteen or twenty minutes",

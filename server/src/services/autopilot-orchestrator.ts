@@ -380,7 +380,10 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
       writeCheckpoint(state);
       try {
         const { runBaselineReview } = await import("./book-review.js");
-        const report = await runBaselineReview(db, { bookId: state.bookId, chapterNumber: ch.chapterNumber });
+        const report = await runBaselineReview(db, {
+          bookId: state.bookId, chapterNumber: ch.chapterNumber,
+          companyId: state.companyId, requestedByActorId: actor.actorId,
+        });
         const [bookRow] = await db.select().from(books).where(eq(books.id, state.bookId));
         const meta = (bookRow?.metadata ?? {}) as Record<string, unknown>;
         const chapterStatus = { ...((meta.chapterStatus as Record<string, string>) ?? {}) };

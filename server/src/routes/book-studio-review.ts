@@ -155,7 +155,10 @@ export function bookStudioReviewRoutes(db: Db) {
 
       const reports = [];
       for (const ch of targets) {
-        const report = await runBaselineReview(db, { bookId, chapterNumber: ch.chapterNumber });
+        const report = await runBaselineReview(db, {
+          bookId, chapterNumber: ch.chapterNumber, companyId,
+          requestedByActorId: getActorInfo(req).actorId,
+        });
         const { stored } = await persistReport({
           bookId, companyId, bookSlug: book.slug,
           report, chapterId: ch.id, content: ch.content ?? "",

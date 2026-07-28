@@ -32,7 +32,8 @@ import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { callBrainstormChat } from "../services/brainstorm-chat.js";
+import { callBrainstormChat, buildSystemPrompt } from "../services/brainstorm-chat.js";
+import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
 import {
@@ -1216,15 +1217,53 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
     historyEntries.push({ role: "user", content: message });
 
+    // Spec v1.4: this window IS Calliope — the live creative-Muse agent,
+    // reached through the existing peer-delegation contract (delegation row +
+    // bridge dispatch + result callback; the row is the audit trail). While
+    // cross-box co-location is pending, an unreachable/slow/failed Calliope
+    // falls back to the configured model lane and the response says so
+    // honestly (`via` + `agentLaneError`) — never a fabricated agent reply.
+    const actor = getActorInfo(req);
     let reply: string;
+    let via: "calliope" | "model" = "model";
+    let agentLaneError: string | undefined;
+    let delegationId: string | undefined;
     try {
-      const result = await callBrainstormChat(bibleContext, historyEntries, message);
-      if (!result) throw new Error("Empty reply from LLM");
-      reply = result;
-    } catch (err) {
-      // Still persist user message so history isn't lost
-      res.status(503).json({ error: "AI service temporarily unavailable", messageId: userMsg.id });
-      return;
+      const lane = await callAgentLane(db, {
+        lane: "calliope",
+        companyId,
+        task: [
+          buildSystemPrompt(bibleContext),
+          "",
+          "--- CONVERSATION (oldest first) ---",
+          ...historyEntries.map((h) => `${h.role.toUpperCase()}: ${h.content}`),
+          "",
+          "Reply as Calliope to Baily's latest message.",
+        ].join("\n"),
+        metadata: { bookId },
+        requestedByActorId: actor.actorId,
+      });
+      reply = lane.text;
+      via = "calliope";
+      delegationId = lane.delegationId;
+    } catch (laneErr) {
+      if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
+      agentLaneError = laneErr.message;
+      try {
+        const result = await callBrainstormChat(bibleContext, historyEntries, message);
+        if (!result) throw new Error("Empty reply from LLM");
+        reply = result;
+      } catch (err) {
+        // Still persist user message so history isn't lost
+        res.status(503).json({
+          error: "AI service temporarily unavailable",
+          messageId: userMsg.id,
+          via: "none",
+          agentLane: "unavailable",
+          agentLaneError,
+        });
+        return;
+      }
     }
 
     // Persist assistant reply
@@ -1236,6 +1275,9 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       reply,
       messageId: assistantMsg.id,
       userMessageId: userMsg.id,
+      via,
+      ...(delegationId ? { delegationId } : {}),
+      ...(agentLaneError ? { agentLane: "unavailable", agentLaneError } : {}),
     });
   });
 

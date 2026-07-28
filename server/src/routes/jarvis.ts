@@ -1310,6 +1310,8 @@ export function jarvisRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const allowed: PeerAgentId[] = [
         "hermes",
+        "ares",
+        "calliope",
         "august",
         "codex",
         "content",

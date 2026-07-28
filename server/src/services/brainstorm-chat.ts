@@ -44,7 +44,9 @@ export interface HistoryEntry {
 
 // ── System Prompt Builder ────────────────────────────────────────────────────
 
-function buildSystemPrompt(context: BibleContext): string {
+// Exported so the Calliope agent lane (book-agent-lanes.ts) can hand the live
+// agent the exact same bible brief the model fallback receives.
+export function buildSystemPrompt(context: BibleContext): string {
   const parts: string[] = [
     `You are a creative brainstorming partner for a book titled "${context.bookTitle}".`,
     "You help the author develop characters, world-building, writing style, and plot structure.",

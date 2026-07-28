@@ -176,7 +176,9 @@ describe("POST /review — baseline pass", () => {
     expect(res.body.reports).toHaveLength(1);
     expect(res.body.reports[0].verdict).toBe("PASS");
     expect(res.body.exceptions).toEqual([]);
-    expect(runBaselineReview).toHaveBeenCalledWith(db, { bookId: "book-1", chapterNumber: 1 });
+    expect(runBaselineReview).toHaveBeenCalledWith(db, {
+      bookId: "book-1", chapterNumber: 1, companyId: "co-1", requestedByActorId: "board",
+    });
     expect(persistBaselineReport).toHaveBeenCalled();
     // PASS → chapter queues silently (§5.B)
     expect(db.__state.book.metadata.chapterStatus["1"]).toBe("queued");
