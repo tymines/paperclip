@@ -375,6 +375,21 @@ describe("envelope payload validation (fail-loud contract)", () => {
     wrongBox.observations[0].source = { ...wrongBox.observations[0].source, boxId: "box-3-stranger" };
     expectPayloadRejection(wrongBox, /source|boxId/s);
   });
+
+  it("rejects parseable-but-non-ISO observation observedAt and accepts canonical ISO variants", () => {
+    // Atlas PR #27 rereview-v4 P1: the observation wrapper boundary must be
+    // the same strict ISO grammar as the top-level envelope boundary.
+    for (const form of ["July 28, 2026", "2026/07/28", "Tue, 28 Jul 2026 00:00:00 GMT", "2026-07-28", "2026-07-28 01:02:10Z", "2026-02-30T00:00:00.000Z"]) {
+      const envelope = validEnvelope();
+      envelope.observations[0].observedAt = form;
+      expectPayloadRejection(envelope, /observedAt/s);
+    }
+    for (const form of ["2026-07-28T01:02:10.000Z", "2026-07-28T01:02:10Z", "2026-07-28T01:02:10-05:00"]) {
+      const envelope = validEnvelope();
+      for (const observation of envelope.observations) observation.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
+  });
 });
 
 describe("top-level envelope validation (fail-loud trusted metadata)", () => {
@@ -411,6 +426,46 @@ describe("top-level envelope validation (fail-loud trusted metadata)", () => {
     const nonIso = validEnvelope();
     nonIso.observedAt = "not-a-timestamp";
     expectTopLevelRejection(nonIso, /observedAt/s);
+  });
+
+  it("rejects parseable-but-non-ISO envelope observedAt forms and impossible calendar dates", () => {
+    // Atlas PR #27 rereview-v4 P1: Date.parse is permissive, so the claimed
+    // ISO-only boundary must reject every form Date.parse accepts that is
+    // not the documented ISO 8601 / RFC 3339 date-time grammar
+    // (AUTONOMOUS GAP-FILL E — YYYY-MM-DDTHH:mm:ss[.fraction](Z|±HH:mm)).
+    const nonIsoForms = [
+      "July 28, 2026",                        // Atlas rereview-v4 repro
+      "2026/07/28",                           // Atlas rereview-v4 repro
+      "Tue, 28 Jul 2026 00:00:00 GMT",        // Atlas rereview-v4 repro (RFC-822)
+      "2026-07-28",                           // date-only, no time/offset
+      "2026-07-28T01:02Z",                    // missing seconds
+      "2026-07-28 01:02:10Z",                 // space separator
+      "2026-07-28T01:02:10+0200",             // colon-less offset
+      "2026-02-30T00:00:00.000Z",             // impossible calendar date (V8 normalizes)
+      "2026-13-01T00:00:00.000Z",             // impossible month
+      "2026-07-28T25:00:00.000Z",             // impossible hour
+      "2026-07-28T01:02:10+24:00",            // impossible offset
+    ];
+    for (const form of nonIsoForms) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expectTopLevelRejection(envelope, /observedAt/s);
+    }
+  });
+
+  it("accepts canonical ISO 8601 envelope observedAt variants", () => {
+    const isoForms = [
+      "2026-07-28T01:02:10.000Z",             // canonical toISOString()
+      "2026-07-28T01:02:10Z",                 // no fractional seconds
+      "2026-07-28T01:02:10.123456Z",          // arbitrary fraction precision
+      "2026-07-28T01:02:10+02:00",            // numeric offset
+      "2024-02-29T23:59:59Z",                 // leap day
+    ];
+    for (const form of isoForms) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
   });
 
   it("rejects malformed envelope checkpoint shape, sequence, and cursor", () => {

@@ -470,6 +470,41 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Strict ISO 8601 / RFC 3339 date-time validation for trusted envelope
+ * timestamps. `Date.parse` alone is permissive — it accepts non-ISO forms
+ * such as "July 28, 2026", "2026/07/28", and RFC-822 dates — so the claimed
+ * ISO-only boundary requires an explicit shape check plus a calendar check.
+ *
+ * Accepted grammar (AUTONOMOUS GAP-FILL E — the existing spec/design only
+ * says "ISO timestamp string" without naming exact variants; this grammar is
+ * flagged in the PR body and result artifact):
+ *
+ *   YYYY-MM-DDTHH:mm:ss[.fraction](Z | ±HH:mm)
+ *
+ * Rejected: date-only forms, missing seconds, space separators, colon-less
+ * offsets, week/ordinal dates, and impossible calendar dates such as
+ * 2026-02-30 (which V8 `Date.parse` normalizes instead of rejecting).
+ */
+function isIsoTimestampString(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = ISO_TIMESTAMP_PATTERN.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (month < 1 || month > 12) return false;
+  // Day 0 of the next month is the last day of this month; leap years are
+  // handled by Date.UTC. This rejects 2026-02-30 even though V8 parses it.
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > daysInMonth) return false;
+  // Remaining range checks (hour/minute/second/offset) are reliable in
+  // Date.parse once the shape is pinned to the ISO grammar above.
+  return !Number.isNaN(Date.parse(value));
+}
+
 function isNullableFiniteNonNegative(value: unknown): value is number | null {
   return value === null || isFiniteNonNegative(value);
 }
@@ -621,9 +656,9 @@ function validateFleetEnvelopeSource(source: unknown): asserts source is FleetOb
  * unchecked cast may return malformed top-level trusted metadata.
  */
 function validateFleetEnvelopeTopLevel(raw: Record<string, unknown>): void {
-  if (!isNonEmptyString(raw.observedAt) || Number.isNaN(Date.parse(raw.observedAt))) {
+  if (!isIsoTimestampString(raw.observedAt)) {
     throw new FleetObservationEnvelopeError(
-      "Fleet observation envelope has an invalid observedAt: expected an ISO timestamp string",
+      "Fleet observation envelope has an invalid observedAt: expected an ISO 8601 timestamp string (YYYY-MM-DDTHH:mm:ss[.fraction] with Z or ±HH:mm offset)",
     );
   }
   const checkpoint = raw.checkpoint;
@@ -647,8 +682,8 @@ function validateFleetObservationWrapper(
 ): void {
   const observationId = typeof observation.observationId === "string" ? observation.observationId : "(unknown)";
   const kind = typeof observation.payloadKind === "string" ? observation.payloadKind : "(unknown)";
-  if (!isNonEmptyString(observation.observedAt) || Number.isNaN(Date.parse(observation.observedAt))) {
-    throw invalidPayload(observationId, kind, "observedAt", "expected an ISO timestamp string");
+  if (!isIsoTimestampString(observation.observedAt)) {
+    throw invalidPayload(observationId, kind, "observedAt", "expected an ISO 8601 timestamp string (YYYY-MM-DDTHH:mm:ss[.fraction] with Z or ±HH:mm offset)");
   }
   const checkpoint = observation.checkpoint;
   if (!isRecord(checkpoint) || !isFiniteNonNegative(checkpoint.sequence) || !isNullableString(checkpoint.cursor)) {
