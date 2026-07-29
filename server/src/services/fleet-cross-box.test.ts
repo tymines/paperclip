@@ -49,6 +49,29 @@ const RFC3339_TIME_BOUNDARY_CASES = {
   ],
 } as const;
 
+// Chronos PR #27 round-6 P1 (AUTONOMOUS GAP-FILL E follow-up): the calendar
+// check must apply the proleptic Gregorian rule to the stated four-digit
+// year (RFC 3339 sec 1 range 0000AD-9999AD; Appendix C: leap iff
+// year % 4 == 0 && (year % 100 != 0 || year % 400 == 0), so year 0000 is
+// leap). Computing days-in-month via `Date.UTC` remaps years 0-99 to
+// 1900-1999, wrongly rejecting "0000-02-29T00:00:00Z" at both the top-level
+// envelope and the observation wrapper. Shared table: both validation paths
+// below MUST agree.
+const RFC3339_CALENDAR_BOUNDARY_CASES = {
+  invalid: [
+    "0100-02-29T00:00:00Z", // non-leap century (divisible by 100, not 400)
+    "1900-02-29T00:00:00Z", // non-leap century control
+    "0000-02-30T00:00:00Z", // impossible day even in a leap year
+  ],
+  valid: [
+    "0000-02-29T00:00:00Z", // Chronos r6 exact-head repro: year 0000 is leap under proleptic Gregorian
+    "0004-02-29T00:00:00Z", // lower-century leap control (divisible by 4)
+    "0096-02-29T00:00:00Z", // lower-century leap control (divisible by 4)
+    "0400-02-29T00:00:00Z", // leap century (divisible by 400)
+    "2000-02-29T00:00:00Z", // leap century control (divisible by 400)
+  ],
+} as const;
+
 const tempPaths: string[] = [];
 
 async function tempDirectory() {
@@ -431,6 +454,22 @@ describe("envelope payload validation (fail-loud contract)", () => {
       expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
     }
   });
+
+  it("applies the proleptic Gregorian calendar to four-digit years 0000-9999 at observation observedAt", () => {
+    // Chronos PR #27 round-6 P1 (AUTONOMOUS GAP-FILL E): "0000-02-29" must
+    // accept while "1900-02-29" rejects; shared RFC3339_CALENDAR_BOUNDARY_CASES
+    // table keeps the observation path in lockstep with the top-level path.
+    for (const form of RFC3339_CALENDAR_BOUNDARY_CASES.invalid) {
+      const envelope = validEnvelope();
+      envelope.observations[0].observedAt = form;
+      expectPayloadRejection(envelope, /observedAt/s);
+    }
+    for (const form of RFC3339_CALENDAR_BOUNDARY_CASES.valid) {
+      const envelope = validEnvelope();
+      for (const observation of envelope.observations) observation.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
+  });
 });
 
 describe("top-level envelope validation (fail-loud trusted metadata)", () => {
@@ -519,6 +558,23 @@ describe("top-level envelope validation (fail-loud trusted metadata)", () => {
       expectTopLevelRejection(envelope, /observedAt/s);
     }
     for (const form of RFC3339_TIME_BOUNDARY_CASES.valid) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
+  });
+
+  it("applies the proleptic Gregorian calendar to four-digit years 0000-9999 at envelope observedAt", () => {
+    // Chronos PR #27 round-6 P1 (AUTONOMOUS GAP-FILL E): the exact-head repro
+    // rejected "0000-02-29T00:00:00Z" here because Date.UTC remaps years 0-99
+    // to 1900-1999; shared RFC3339_CALENDAR_BOUNDARY_CASES table keeps the
+    // top-level path in lockstep with the observation path.
+    for (const form of RFC3339_CALENDAR_BOUNDARY_CASES.invalid) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expectTopLevelRejection(envelope, /observedAt/s);
+    }
+    for (const form of RFC3339_CALENDAR_BOUNDARY_CASES.valid) {
       const envelope = validEnvelope();
       envelope.observedAt = form;
       expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();

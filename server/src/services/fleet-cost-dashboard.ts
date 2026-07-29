@@ -491,6 +491,19 @@ const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(
  * normalizes into the next day instead of rejecting — Chronos PR #27
  * round-5 P1, AUTONOMOUS GAP-FILL E follow-up).
  */
+
+// Proleptic Gregorian month lengths for the RFC 3339 four-digit year range
+// 0000-9999. Computed arithmetically, never via `Date`/`Date.UTC`: JavaScript
+// remaps years 0-99 to 1900-1999, so a Date-based days-in-month check wrongly
+// rejected the valid leap day "0000-02-29" (Chronos PR #27 round-6 P1,
+// AUTONOMOUS GAP-FILL E follow-up).
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+
+/** RFC 3339 Appendix C proleptic Gregorian leap rule; year 0000 is leap. */
+function isProlepticGregorianLeapYear(year: number): boolean {
+  return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
 function isIsoTimestampString(value: unknown): value is string {
   if (typeof value !== "string") return false;
   const match = ISO_TIMESTAMP_PATTERN.exec(value);
@@ -502,9 +515,10 @@ function isIsoTimestampString(value: unknown): value is string {
   const minute = Number(match[5]);
   const second = Number(match[6]);
   if (month < 1 || month > 12) return false;
-  // Day 0 of the next month is the last day of this month; leap years are
-  // handled by Date.UTC. This rejects 2026-02-30 even though V8 parses it.
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  // The regex captures exactly four digits, so year is 0-9999 as stated in
+  // the string; the leap rule below applies to that actual Gregorian year.
+  const daysInMonth =
+    month === 2 && isProlepticGregorianLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
   if (day < 1 || day > daysInMonth) return false;
   // RFC 3339 section 5.6 time ranges are checked explicitly, never via
   // Date.parse: V8 accepts 24:00:00 and normalizes it to the next day, so
