@@ -1845,13 +1845,9 @@ span.paperclip-project-mention-chip {
 }
 :root[data-ui-v2="true"] [data-pp-new-issue="true"] svg { color: #ffffff; }
 
-/* ── World View (TYL-131) — alerts ticker marquee ─────────────────────────── */
-@keyframes wv-marquee-kf {
-  from { transform: translateX(0); }
-  to { transform: translateX(-50%); }
-}
-.wv-marquee { animation: wv-marquee-kf 40s linear infinite; will-change: transform; }
-.wv-marquee:hover { animation-play-state: paused; }
-@media (prefers-reduced-motion: reduce) { .wv-marquee { animation: none; } }
-[data-pp-page-v4="world-view"] .maplibregl-ctrl-attrib { background: rgba(5,7,10,0.7); color: #5A626D; }
-[data-pp-page-v4="world-view"] .maplibregl-ctrl-attrib a { color: #9AA2AD; }
+/* Quiet Globe: restrained MapLibre attribution and provenance tooltip. */
+[data-pp-page-v4="world-view-quiet-globe"] .maplibregl-ctrl-attrib { background: rgba(2,5,9,0.52); color: #5A626D; font-size: 8px; }
+[data-pp-page-v4="world-view-quiet-globe"] .maplibregl-ctrl-attrib a { color: #7d8996; }
+[data-pp-page-v4="world-view-quiet-globe"] .maplibregl-popup-content { background: rgba(3,7,12,.94); border: 1px solid #26303a; border-radius: 2px; box-shadow: 0 12px 35px rgba(0,0,0,.45); padding: 8px 10px; }
+[data-pp-page-v4="world-view-quiet-globe"] .maplibregl-popup-tip { border-top-color: rgba(3,7,12,.94); }
+[data-pp-page-v4="world-view-quiet-globe"] .maplibregl-canvas { outline: none; }

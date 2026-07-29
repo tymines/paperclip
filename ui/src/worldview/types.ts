@@ -52,6 +52,8 @@ export interface FireItem {
   frp: number | null;
   satellite: string;
   instrument: string;
+  acq_date?: string;
+  acq_time?: string;
 }
 
 export interface Flight {
@@ -87,6 +89,13 @@ export interface EonetEvent {
   url: string;
   magnitude?: number | null;
   magnitudeUnit?: string | null;
+  track?: { lon: number; lat: number; date: string | null }[];
+}
+
+export interface HistoryFrame {
+  at: string;
+  gaps: string[];
+  feeds: Record<string, FeedResp<unknown> & { snapshotAt?: string }>;
 }
 
 export interface Cve {

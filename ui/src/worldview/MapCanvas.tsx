@@ -1,33 +1,28 @@
-/**
- * World View  MapCanvas (TYL-131). The MapLibre engine.
- *
- * Owns one Map instance. 3D globe is the DEFAULT projection (Tyler's ruling);
- * `mercator` is the fallback toggle. Every registry layer is a GeoJSON source +
- * its declared MapLibre layers; data updates flow through source.setData() so all
- * entities render on the GPU, never as DOM markers. Clicks surface entity props to
- * the parent for the popover.
- */
 import { useEffect, useRef } from "react";
 import maplibregl, { type Map as MLMap, type StyleSpecification } from "maplibre-gl";
-import type { FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection, Point } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { LAYERS, type LayerId, type LayerDef } from "./layerRegistry";
-import { buildStyle, buildSatStyle } from "./mapStyle";
+import { LAYERS, type LayerDef, type LayerId } from "./layerRegistry";
+import { buildStyle } from "./mapStyle";
+import { MODES, type ModeId } from "./modes";
+import { ageLabel } from "./time";
 import { C } from "./theme";
 
 export type Projection = "globe" | "mercator";
-export type Basemap = "map" | "sat";
 export type BasemapStatus = "loading" | "ok" | "failed";
 export type EntityProps = Record<string, unknown> & { kind?: string };
 
 interface Props {
   geojsonByLayer: Partial<Record<LayerId, FeatureCollection>>;
-  enabled: Set<LayerId>;
+  enabled: ReadonlySet<LayerId>;
   projection: Projection;
-  basemap: Basemap;
+  mode: ModeId;
+  autoRotate: boolean;
+  historical: boolean;
   onSelect: (props: EntityProps) => void;
+  onInteraction: () => void;
   onReady?: (api: MapApi) => void;
-  onBasemapStatus?: (s: BasemapStatus) => void;
+  onBasemapStatus?: (status: BasemapStatus) => void;
 }
 
 export interface MapApi {
@@ -36,177 +31,153 @@ export interface MapApi {
 }
 
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
+const RENDER_ORDER = [...LAYERS].sort((a, b) => Number(b.id === "terminator") - Number(a.id === "terminator"));
 
-/** A tiny GPU-friendly plane glyph for the flights symbol layer. */
 function planeImage(): { width: number; height: number; data: Uint8ClampedArray } {
-  const s = 24;
-  const cv = document.createElement("canvas");
-  cv.width = s; cv.height = s;
-  const ctx = cv.getContext("2d")!;
-  ctx.translate(s / 2, s / 2);
-  ctx.fillStyle = C.green;
-  ctx.beginPath();
-  // simple upward-pointing triangle "aircraft"
-  ctx.moveTo(0, -9);
-  ctx.lineTo(6, 8);
-  ctx.lineTo(0, 4);
-  ctx.lineTo(-6, 8);
-  ctx.closePath();
-  ctx.fill();
-  const img = ctx.getImageData(0, 0, s, s);
-  return { width: s, height: s, data: img.data };
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const context = canvas.getContext("2d")!;
+  context.translate(size / 2, size / 2);
+  context.fillStyle = C.amber;
+  context.shadowColor = C.amber;
+  context.shadowBlur = 5;
+  context.beginPath();
+  context.moveTo(0, -12); context.lineTo(3, -2); context.lineTo(11, 3); context.lineTo(10, 6); context.lineTo(2, 4); context.lineTo(2, 10); context.lineTo(5, 12); context.lineTo(0, 11); context.lineTo(-5, 12); context.lineTo(-2, 10); context.lineTo(-2, 4); context.lineTo(-10, 6); context.lineTo(-11, 3); context.lineTo(-3, -2); context.closePath();
+  context.fill();
+  const image = context.getImageData(0, 0, size, size);
+  return { width: size, height: size, data: image.data };
 }
 
-function styleFor(basemap: Basemap): StyleSpecification {
-  return basemap === "sat" ? buildSatStyle() : buildStyle();
-}
-
-/** Add every registry layer's source + layers to the map (idempotent). */
-function installLayers(map: MLMap, geojsonByLayer: Props["geojsonByLayer"], enabled: Set<LayerId>) {
-  for (const layer of LAYERS as LayerDef[]) {
-    const src = `wv-${layer.id}`;
-    if (!map.getSource(src)) {
-      map.addSource(src, { type: "geojson", data: geojsonByLayer[layer.id] || EMPTY });
-    }
-    for (const spec of layer.mapLayers(src)) {
+function installLayers(map: MLMap, data: Props["geojsonByLayer"], enabled: ReadonlySet<LayerId>) {
+  for (const layer of RENDER_ORDER as LayerDef[]) {
+    const sourceId = `wv-${layer.id}`;
+    if (!map.getSource(sourceId)) map.addSource(sourceId, { type: "geojson", data: data[layer.id] || EMPTY });
+    for (const spec of layer.mapLayers(sourceId)) {
       if (!map.getLayer(spec.id)) map.addLayer(spec);
       map.setLayoutProperty(spec.id, "visibility", enabled.has(layer.id) ? "visible" : "none");
     }
   }
 }
 
-export function MapCanvas({ geojsonByLayer, enabled, projection, basemap, onSelect, onReady, onBasemapStatus }: Props) {
+function interactiveLayerIds(map: MLMap): string[] {
+  return RENDER_ORDER.flatMap((layer) => layer.mapLayers(`wv-${layer.id}`)).filter((spec) => (spec.type === "circle" || spec.type === "symbol") && map.getLayer(spec.id)).map((spec) => spec.id);
+}
+
+export function MapCanvas({ geojsonByLayer, enabled, projection, mode, autoRotate, historical, onSelect, onInteraction, onReady, onBasemapStatus }: Props) {
   const holder = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MLMap | null>(null);
-  const styledRef = useRef(false);
+  const ready = useRef(false);
+  const latestData = useRef(geojsonByLayer);
+  const latestEnabled = useRef(enabled);
+  const callbacks = useRef({ onSelect, onInteraction, onBasemapStatus });
+  latestData.current = geojsonByLayer;
+  latestEnabled.current = enabled;
+  callbacks.current = { onSelect, onInteraction, onBasemapStatus };
 
-  // init once
   useEffect(() => {
     if (!holder.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: holder.current,
-      style: styleFor(basemap),
-      center: [10, 25],
-      zoom: 1.6,
-      attributionControl: { compact: true },
-      maplibreLogo: false,
-    });
+    const map = new maplibregl.Map({ container: holder.current, style: buildStyle() as StyleSpecification, center: MODES.pulse.camera.center, zoom: MODES.pulse.camera.zoom, attributionControl: { compact: true }, maplibreLogo: false, fadeDuration: 600 });
     mapRef.current = map;
-
-    // Basemap reachability watchdog (TYL-131 fix): a black map is not a
-    // data-honest failure state, so we surface tile success/failure to the HUD.
-    let basemapOk = false;
+    callbacks.current.onBasemapStatus?.("loading");
+    let tileLoaded = false;
     let tileErrors = 0;
-    const srcId = () => (basemap === "sat" ? "esri" : "carto");
-    onBasemapStatus?.("loading");
-    map.on("data", (e: maplibregl.MapSourceDataEvent) => {
-      if (e.sourceId === srcId() && (e as { tile?: unknown }).tile) {
-        if (!basemapOk) { basemapOk = true; onBasemapStatus?.("ok"); }
+    let tooltip: maplibregl.Popup | null = null;
+
+    map.on("data", (event: maplibregl.MapSourceDataEvent) => {
+      if (event.sourceId === "carto" && (event as { tile?: unknown }).tile) {
+        tileLoaded = true;
+        callbacks.current.onBasemapStatus?.("ok");
       }
     });
-    map.on("error", (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
-      const src = (e as { sourceId?: string }).sourceId;
-      const msg = String(e?.error?.message || "");
-      if (src === srcId() || /tile|cartocdn|arcgis/i.test(msg)) {
+    map.on("error", (event: maplibregl.ErrorEvent & { sourceId?: string }) => {
+      if (event.sourceId === "carto" || /tile|cartocdn/i.test(String(event.error?.message || ""))) {
         tileErrors += 1;
-        if (!basemapOk && tileErrors >= 4) onBasemapStatus?.("failed");
+        if (!tileLoaded && tileErrors >= 4) callbacks.current.onBasemapStatus?.("failed");
       }
     });
-    window.setTimeout(() => { if (!basemapOk) onBasemapStatus?.("failed"); }, 9000);
+    const watchdog = window.setTimeout(() => { if (!tileLoaded) callbacks.current.onBasemapStatus?.("failed"); }, 9000);
 
     map.on("style.load", () => {
       try {
-        map.setProjection({ type: projection });
-        if (projection === "globe") {
-          map.setSky?.({
-            "sky-color": "#04070B", "horizon-color": "#0A1420",
-            "fog-color": "#05080d", "sky-horizon-blend": 0.5, "horizon-fog-blend": 0.5,
-            "fog-ground-blend": 0.7, "atmosphere-blend": 0.9,
-          });
-        }
-      } catch { /* projection/sky unsupported  mercator fallback still renders */ }
-      try {
-        if (!map.hasImage("wv-plane")) map.addImage("wv-plane", planeImage(), { pixelRatio: 2 });
-      } catch { /* noop */ }
-      installLayers(map, geojsonByLayer, enabled);
-      styledRef.current = true;
+        map.setProjection({ type: "globe" });
+        map.setSky({ "sky-color": "#02060c", "horizon-color": "#101d2b", "fog-color": "#050a10", "sky-horizon-blend": 0.35, "horizon-fog-blend": 0.55, "fog-ground-blend": 0.65, "atmosphere-blend": 0.95 });
+      } catch { /* mercator remains a designed fallback */ }
+      if (!map.hasImage("wv-plane")) map.addImage("wv-plane", planeImage(), { pixelRatio: 2 });
+      installLayers(map, latestData.current, latestEnabled.current);
+      ready.current = true;
+
+      const onPointer = (event: maplibregl.MapMouseEvent) => {
+        const features = map.queryRenderedFeatures(event.point, { layers: interactiveLayerIds(map) });
+        map.getCanvas().style.cursor = features.length ? "pointer" : "grab";
+        const feature = features[0];
+        if (!feature) { tooltip?.remove(); tooltip = null; return; }
+        const properties = feature.properties as EntityProps;
+        const source = String(properties.source || "source unknown");
+        const label = String(properties.callsign || properties.title || properties.place || properties.name || properties.kind || "entity");
+        const html = `<div style="font:10px ui-monospace;color:#d9e1ea"><b>${label.replace(/[<>]/g, "")}</b><br><span style="color:#7f8b98">${source.replace(/[<>]/g, "")} · ${ageLabel(properties.observedAt)}</span></div>`;
+        if (!tooltip) tooltip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "wv-tooltip" });
+        tooltip.setLngLat(event.lngLat).setHTML(html).addTo(map);
+      };
+      map.on("mousemove", onPointer);
+      map.on("click", (event) => {
+        const feature = map.queryRenderedFeatures(event.point, { layers: interactiveLayerIds(map) })[0];
+        if (feature) callbacks.current.onSelect(feature.properties as EntityProps);
+      });
     });
 
-    map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
-
-    // one delegated click handler per registry layer's interactive layers
-    const clickLayerIds: string[] = [];
-    for (const layer of LAYERS as LayerDef[]) {
-      for (const spec of layer.mapLayers(`wv-${layer.id}`)) {
-        if (spec.type === "circle" || spec.type === "symbol") clickLayerIds.push(spec.id);
-      }
-    }
-    const onClick = (e: maplibregl.MapMouseEvent) => {
-      const feats = map.queryRenderedFeatures(e.point, { layers: clickLayerIds.filter((id) => map.getLayer(id)) });
-      if (feats.length) onSelect(feats[0].properties as EntityProps);
-    };
-    map.on("click", onClick);
-    map.on("mousemove", (e) => {
-      const feats = map.queryRenderedFeatures(e.point, { layers: clickLayerIds.filter((id) => map.getLayer(id)) });
-      map.getCanvas().style.cursor = feats.length ? "pointer" : "";
-    });
-
-    onReady?.({
-      resetView: () => map.flyTo({ center: [10, 25], zoom: 1.6, pitch: 0, bearing: 0 }),
-      flyTo: (lon, lat, zoom = 4) => map.flyTo({ center: [lon, lat], zoom }),
-    });
-
-    return () => { map.remove(); mapRef.current = null; styledRef.current = false; };
+    const interaction = () => callbacks.current.onInteraction();
+    map.on("dragstart", interaction); map.on("zoomstart", interaction); map.on("rotatestart", interaction); map.on("pitchstart", interaction);
+    onReady?.({ resetView: () => map.easeTo({ ...MODES.pulse.camera, duration: 1200 }), flyTo: (lon, lat, zoom = 4) => map.easeTo({ center: [lon, lat], zoom, duration: 1200 }) });
+    return () => { window.clearTimeout(watchdog); tooltip?.remove(); map.remove(); mapRef.current = null; ready.current = false; };
+    // MapLibre owns one map for this component lifetime; callbacks are held in refs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // data updates
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styledRef.current) return;
-    for (const layer of LAYERS as LayerDef[]) {
-      const src = map.getSource(`wv-${layer.id}`) as maplibregl.GeoJSONSource | undefined;
-      if (src) src.setData(geojsonByLayer[layer.id] || EMPTY);
+    if (!map || !ready.current) return;
+    for (const layer of LAYERS) {
+      const source = map.getSource(`wv-${layer.id}`) as maplibregl.GeoJSONSource | undefined;
+      source?.setData(geojsonByLayer[layer.id] || EMPTY);
     }
   }, [geojsonByLayer]);
 
-  // enabled toggles
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styledRef.current) return;
-    for (const layer of LAYERS as LayerDef[]) {
-      for (const spec of layer.mapLayers(`wv-${layer.id}`)) {
-        if (map.getLayer(spec.id)) {
-          map.setLayoutProperty(spec.id, "visibility", enabled.has(layer.id) ? "visible" : "none");
-        }
-      }
+    if (!map || !ready.current) return;
+    for (const layer of LAYERS) {
+      for (const spec of layer.mapLayers(`wv-${layer.id}`)) if (map.getLayer(spec.id)) map.setLayoutProperty(spec.id, "visibility", enabled.has(layer.id) ? "visible" : "none");
     }
   }, [enabled]);
 
-  // projection toggle
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styledRef.current) return;
-    try { map.setProjection({ type: projection }); } catch { /* noop */ }
+    if (!map || !ready.current) return;
+    try { map.setProjection({ type: projection }); } catch { /* fallback already visible */ }
   }, [projection]);
 
-  // basemap toggle  full restyle, then reinstall layers on style.load
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styledRef.current) return;
-    styledRef.current = false;
-    onBasemapStatus?.("loading");
-    map.setStyle(styleFor(basemap));
-    map.once("style.load", () => {
-      try { map.setProjection({ type: projection }); } catch { /* noop */ }
-      try { if (!map.hasImage("wv-plane")) map.addImage("wv-plane", planeImage(), { pixelRatio: 2 }); } catch { /* noop */ }
-      installLayers(map, geojsonByLayer, enabled);
-      styledRef.current = true;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [basemap]);
+    if (!map || !ready.current) return;
+    map.easeTo({ ...MODES[mode].camera, duration: 1200, easing: (t) => t * t * (3 - 2 * t) });
+    try { map.setSky({ "sky-color": mode === "space" ? "#00030a" : "#02060c", "horizon-color": mode === "space" ? "#111329" : "#101d2b", "fog-color": "#050a10", "sky-horizon-blend": mode === "space" ? 0.18 : 0.35, "horizon-fog-blend": 0.55, "fog-ground-blend": 0.65, "atmosphere-blend": 0.95 }); } catch { /* optional */ }
+  }, [mode]);
 
-  return <div ref={holder} className="absolute inset-0 h-full w-full" style={{ background: C.ocean }} />;
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !autoRotate || historical) return;
+    let frame = 0;
+    let previous = performance.now();
+    const rotate = (now: number) => {
+      if (now - previous > 32) { map.setBearing(map.getBearing() + (now - previous) * 0.00032); previous = now; }
+      frame = requestAnimationFrame(rotate);
+    };
+    frame = requestAnimationFrame(rotate);
+    return () => cancelAnimationFrame(frame);
+  }, [autoRotate, historical]);
+
+  return <div ref={holder} className="absolute inset-0 h-full w-full" style={{ background: "radial-gradient(circle at 50% 45%,#091522,#010308 72%)" }} />;
 }
 
 export default MapCanvas;

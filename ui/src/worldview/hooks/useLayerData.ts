@@ -1,57 +1,57 @@
-/**
- * World View  per-layer data hook (TYL-131).
- *
- * Progressive + visibility-aware fetching per the spec: a layer only polls while
- * it is enabled AND the tab is visible. Uses TanStack Query with `enabled` gating
- * (the layerFetchedRef-style dedupe that OSIRIS relies on) so toggling a layer off
- * stops its network traffic.
- */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FeatureCollection } from "geojson";
-import type { LayerDef } from "../layerRegistry";
+import type { FeedState, LayerDef, LayerFetch } from "../layerRegistry";
 
 const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
 
 function usePageVisible(): boolean {
-  const [visible, setVisible] = useState(() =>
-    typeof document === "undefined" ? true : !document.hidden);
+  const [visible, setVisible] = useState(() => typeof document === "undefined" || !document.hidden);
   useEffect(() => {
-    const onChange = () => setVisible(!document.hidden);
-    document.addEventListener("visibilitychange", onChange);
-    return () => document.removeEventListener("visibilitychange", onChange);
+    const update = () => setVisible(!document.hidden);
+    document.addEventListener("visibilitychange", update);
+    return () => document.removeEventListener("visibilitychange", update);
   }, []);
   return visible;
+}
+
+export interface HistoricalOverride {
+  items: unknown[];
+  source: string;
+  state: FeedState;
+  note?: string | null;
+  at: Date;
 }
 
 export interface LayerData {
   geojson: FeatureCollection;
   count: number;
-  status: "idle" | "loading" | "live" | "error";
+  status: "idle" | "loading" | "live" | "fallback" | "needs_key" | "offline";
+  source: string;
   note: string | null;
 }
 
-export function useLayerData(layer: LayerDef, enabled: boolean): LayerData {
+export function useLayerData(layer: LayerDef, enabled: boolean, historical?: HistoricalOverride): LayerData {
   const visible = usePageVisible();
-
-  const q = useQuery({
+  const query = useQuery({
     queryKey: ["worldview", "layer", layer.id],
-    queryFn: async () => {
-      const items = await layer.fetch();
-      return { geojson: layer.toGeoJSON(items), count: items.length };
-    },
-    enabled,
-    // Fast layers pause when hidden; slow layers (satellites/conflicts) don't need it.
-    refetchInterval: enabled && visible ? layer.pollMs : false,
+    queryFn: () => layer.fetch(),
+    enabled: enabled && !historical,
+    refetchInterval: enabled && visible && !historical ? layer.pollMs : false,
     refetchIntervalInBackground: false,
-    staleTime: Math.min(layer.pollMs, 60000),
+    staleTime: Math.min(layer.pollMs, 60_000),
     retry: 1,
   });
 
+  const payload = historical || query.data;
+  const at = historical?.at;
+  const geojson = useMemo(() => payload ? layer.toGeoJSON(payload.items, at) : EMPTY, [layer, payload, at]);
+  const error = query.error instanceof Error ? query.error.message : query.error ? String(query.error) : null;
   return {
-    geojson: q.data?.geojson || EMPTY,
-    count: q.data?.count ?? 0,
-    status: !enabled ? "idle" : q.isLoading ? "loading" : q.isError ? "error" : "live",
-    note: q.isError ? String((q.error as Error)?.message || "feed error") : null,
+    geojson,
+    count: payload?.items.length || 0,
+    status: !enabled ? "idle" : query.isLoading && !historical ? "loading" : query.isError && !historical ? "offline" : payload?.state || "offline",
+    source: payload?.source || layer.provider,
+    note: payload?.note || error,
   };
 }

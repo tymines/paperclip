@@ -49,6 +49,7 @@ const ROUTE_MAP: Record<string, string> = {
   "live-news": "/api/live-news",
   radar: "/api/radar",
   health: "/health",
+  history: "/api/history",
 };
 
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -121,7 +122,10 @@ export function worldviewProxyRoutes(): Router {
       return;
     }
 
-    const target = `${COLLECTOR_BASE}${upstreamPath}`;
+    const historyQuery = req.params.feed === "history" && typeof req.query.at === "string"
+      ? `?at=${encodeURIComponent(req.query.at)}`
+      : "";
+    const target = `${COLLECTOR_BASE}${upstreamPath}${historyQuery}`;
     try {
       const upstream = await fetch(target, {
         method: "GET",
