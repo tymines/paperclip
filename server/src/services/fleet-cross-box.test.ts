@@ -24,6 +24,31 @@ const WINDOWS_FIXTURE_PATH = fileURLToPath(
   new URL("./__fixtures__/fleet-observation-windows-box.json", import.meta.url),
 );
 
+// Chronos PR #27 round-5 P1 (AUTONOMOUS GAP-FILL E follow-up): the strict
+// RFC 3339 timestamp grammar must enforce numeric time/offset ranges
+// explicitly. V8 `Date.parse` accepts "2026-07-28T24:00:00Z" (normalizing
+// hour 24 into the next day), so delegating ranges to it accepted
+// out-of-profile timestamps at both the top-level envelope and the
+// observation wrapper. Shared table: both validation paths below MUST agree.
+const RFC3339_TIME_BOUNDARY_CASES = {
+  invalid: [
+    "2026-07-28T24:00:00Z",      // Chronos r5 exact-head repro: hour 24 (RFC 3339 time-hour = 00-23)
+    "2026-07-28T24:00:00.000Z",  // hour 24 with fractional seconds
+    "2026-07-28T23:60:00Z",      // minute 60 (time-minute = 00-59)
+    "2026-07-28T23:59:60Z",      // second 60 (leap second: rejected by this profile)
+    "2026-07-28T23:59:59+24:00", // offset hour 24 (time-numoffset hour = 00-23)
+    "2026-07-28T23:59:59-24:00", // negative offset hour 24
+    "2026-07-28T23:59:59+02:60", // offset minute 60
+  ],
+  valid: [
+    "2026-07-28T23:59:59Z",      // max valid clock time
+    "2026-07-28T00:00:00Z",      // min valid clock time
+    "2026-07-28T23:59:59+23:59", // max valid offset
+    "2026-07-28T23:59:59-23:59", // min valid offset
+    "2026-07-28T12:30:45.999Z",  // mid-range with fraction
+  ],
+} as const;
+
 const tempPaths: string[] = [];
 
 async function tempDirectory() {
@@ -390,6 +415,22 @@ describe("envelope payload validation (fail-loud contract)", () => {
       expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
     }
   });
+
+  it("rejects RFC 3339 out-of-range time/offset boundaries and accepts in-range boundaries at observation observedAt", () => {
+    // Chronos PR #27 round-5 P1 (AUTONOMOUS GAP-FILL E): hour 24 must reject
+    // while 23:59:59 stays valid; shared RFC3339_TIME_BOUNDARY_CASES table
+    // keeps the observation path in lockstep with the top-level path.
+    for (const form of RFC3339_TIME_BOUNDARY_CASES.invalid) {
+      const envelope = validEnvelope();
+      envelope.observations[0].observedAt = form;
+      expectPayloadRejection(envelope, /observedAt/s);
+    }
+    for (const form of RFC3339_TIME_BOUNDARY_CASES.valid) {
+      const envelope = validEnvelope();
+      for (const observation of envelope.observations) observation.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
+  });
 });
 
 describe("top-level envelope validation (fail-loud trusted metadata)", () => {
@@ -462,6 +503,22 @@ describe("top-level envelope validation (fail-loud trusted metadata)", () => {
       "2024-02-29T23:59:59Z",                 // leap day
     ];
     for (const form of isoForms) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();
+    }
+  });
+
+  it("rejects RFC 3339 out-of-range time/offset boundaries and accepts in-range boundaries at envelope observedAt", () => {
+    // Chronos PR #27 round-5 P1 (AUTONOMOUS GAP-FILL E): the exact-head repro
+    // accepted "2026-07-28T24:00:00Z" here; shared RFC3339_TIME_BOUNDARY_CASES
+    // table keeps the top-level path in lockstep with the observation path.
+    for (const form of RFC3339_TIME_BOUNDARY_CASES.invalid) {
+      const envelope = validEnvelope();
+      envelope.observedAt = form;
+      expectTopLevelRejection(envelope, /observedAt/s);
+    }
+    for (const form of RFC3339_TIME_BOUNDARY_CASES.valid) {
       const envelope = validEnvelope();
       envelope.observedAt = form;
       expect(() => parseFleetObservationEnvelope(envelope)).not.toThrow();

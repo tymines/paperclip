@@ -485,8 +485,11 @@ const ISO_TIMESTAMP_PATTERN = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(
  *   YYYY-MM-DDTHH:mm:ss[.fraction](Z | ±HH:mm)
  *
  * Rejected: date-only forms, missing seconds, space separators, colon-less
- * offsets, week/ordinal dates, and impossible calendar dates such as
- * 2026-02-30 (which V8 `Date.parse` normalizes instead of rejecting).
+ * offsets, week/ordinal dates, impossible calendar dates such as
+ * 2026-02-30 (which V8 `Date.parse` normalizes instead of rejecting), and
+ * out-of-range time/offset values such as 24:00:00 (which V8 `Date.parse`
+ * normalizes into the next day instead of rejecting — Chronos PR #27
+ * round-5 P1, AUTONOMOUS GAP-FILL E follow-up).
  */
 function isIsoTimestampString(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -495,14 +498,29 @@ function isIsoTimestampString(value: unknown): value is string {
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
   if (month < 1 || month > 12) return false;
   // Day 0 of the next month is the last day of this month; leap years are
   // handled by Date.UTC. This rejects 2026-02-30 even though V8 parses it.
   const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
   if (day < 1 || day > daysInMonth) return false;
-  // Remaining range checks (hour/minute/second/offset) are reliable in
-  // Date.parse once the shape is pinned to the ISO grammar above.
-  return !Number.isNaN(Date.parse(value));
+  // RFC 3339 section 5.6 time ranges are checked explicitly, never via
+  // Date.parse: V8 accepts 24:00:00 and normalizes it to the next day, so
+  // the Chronos r5 exact-head repro "2026-07-28T24:00:00Z" passed both
+  // validation paths. Leap seconds (:60) remain rejected by this profile
+  // (narrower than the RFC, unchanged from prior behavior).
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  const offset = match[8];
+  if (offset !== "Z") {
+    // time-numoffset = ("+" / "-") time-hour ":" time-minute, so the offset
+    // hour/minute share the same 00-23 / 00-59 ranges.
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+    if (offsetHour > 23 || offsetMinute > 59) return false;
+  }
+  return true;
 }
 
 function isNullableFiniteNonNegative(value: unknown): value is number | null {
