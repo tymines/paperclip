@@ -375,80 +375,45 @@ function RowControls({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Section grouping derived from the org (reportsTo) hierarchy                 */
+/* Fleet display roles and list grouping                                      */
 /* -------------------------------------------------------------------------- */
+export type FleetDisplayRole = "CEO/Manager" | "Manager" | "Worker";
+
+const FLEET_DISPLAY_ROLES: Readonly<Record<string, FleetDisplayRole>> = {
+  zeus: "CEO/Manager",
+  ares: "Manager",
+  hermes: "Manager",
+};
+
+export function classifyFleetDisplayRole(name: string): FleetDisplayRole {
+  return FLEET_DISPLAY_ROLES[name.trim().toLowerCase()] ?? "Worker";
+}
+
 interface Groups {
   leadership: Agent[];
-  agents: Agent[];
-  external: Agent[];
+  workers: Agent[];
 }
 
 function countNodes(node: OrgNode): number {
   return 1 + node.reports.reduce((s, c) => s + countNodes(c), 0);
 }
 
-function deriveGroups(agents: Agent[], orgTree: OrgNode[] | undefined): Groups {
+export function groupFleetAgents(agents: Agent[]): Groups {
   const sortName = (a: Agent, b: Agent) => a.name.localeCompare(b.name);
-  if (!orgTree || orgTree.length === 0) {
-    return { leadership: [], agents: [...agents].sort(sortName), external: [] };
-  }
-  // Main hierarchy = the root with the largest subtree (Hermes). Other roots
-  // (e.g. Baily AI, which reports to no-one) are treated as External.
-  const mainRoot = [...orgTree].sort((a, b) => countNodes(b) - countNodes(a))[0]!;
-
-  const depthById = new Map<string, number>();
-  const hasReports = new Map<string, boolean>();
-  const walk = (node: OrgNode, depth: number) => {
-    depthById.set(node.id, depth);
-    hasReports.set(node.id, node.reports.length > 0);
-    node.reports.forEach((c) => walk(c, depth + 1));
-  };
-  walk(mainRoot, 0);
-
-  // Build a set of agent ids that are in the main tree (by depth) OR have
-  // reportsTo pointing into the main tree — catches agents like Brainstorm
-  // whose org-tree entry may be absent or under a different root.
-  const mainIds = new Set(depthById.keys());
-  function reportsToMainTree(a: Agent): boolean {
-    return a.reportsTo !== null && depthById.has(a.reportsTo!);
-  }
-
   const leadership: Agent[] = [];
   const workers: Agent[] = [];
-  const external: Agent[] = [];
-  // Explicit group assignments (Tyler directive 2026-07-07).
-  // ponytail: named sets take priority over org-tree traversal.
-  const LEADERSHIP_NAMES = new Set(["zeus", "zeus book keeper", "zeus critic"]);
-  const EXTERNAL_NAMES = new Set(["baily ai"]);
-  // Always keep Hermes & Brainstorm in the main team regardless of org-tree quirks.
-  const MAIN_TEAM_NAMES = new Set(["hermes", "brainstorm", "zeus vision", "zeus coding", "zeus brainstorm", "zeus reviewer"]);
-  for (const a of agents) {
-    const nameKey = a.name.toLowerCase().trim();
-    // Explicit group overrides (Tyler directive 2026-07-07).
-    if (LEADERSHIP_NAMES.has(nameKey)) {
-      leadership.push(a);
-    } else if (EXTERNAL_NAMES.has(nameKey)) {
-      external.push(a);
-    } else if (mainIds.has(a.id)) {
-      // In the main org tree — classify by reports.
-      if (hasReports.get(a.id)) {
-        leadership.push(a);
-      } else {
-        workers.push(a);
-      }
-    } else if (reportsToMainTree(a)) {
-      // Reports into the main subtree — pull in as a worker.
-      workers.push(a);
-    } else if (MAIN_TEAM_NAMES.has(a.name.toLowerCase().trim())) {
-      workers.push(a);
+
+  for (const agent of agents) {
+    if (classifyFleetDisplayRole(agent.name) === "Worker") {
+      workers.push(agent);
     } else {
-      external.push(a);
+      leadership.push(agent);
     }
   }
-  leadership.sort((a, b) => (depthById.get(a.id)! - depthById.get(b.id)!) || sortName(a, b));
+
+  leadership.sort(sortName);
   workers.sort(sortName);
-  external.sort(sortName);
-  return { leadership, agents: workers, external };
+  return { leadership, workers };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -488,7 +453,6 @@ function AgentRow({
   pending,
   onOpen,
   onPauseResume,
-  external,
 }: {
   agent: Agent;
   currentTask: string;
@@ -496,11 +460,10 @@ function AgentRow({
   pending: boolean;
   onOpen: (a: Agent) => void;
   onPauseResume: (a: Agent, action: "pause" | "resume") => void;
-  external?: boolean;
 }) {
   const model = getConfiguredModel(agent) ?? "—";
   const dim = agent.status === "paused" || agent.status === "terminated";
-  const role = roleLabels[agent.role] ?? agent.role;
+  const role = classifyFleetDisplayRole(agent.name);
   return (
     <div
       role="button"
@@ -530,17 +493,12 @@ function AgentRow({
             <span className="truncate text-[14px] font-semibold" style={{ color: DS.text }}>
               {agent.name}
             </span>
-            {external && (
-              <span
-                className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
-                style={{ background: DS.surface3, color: DS.textMuted, border: `1px solid ${DS.border2}` }}
-              >
-                External
-              </span>
-            )}
           </div>
           <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>
-            {agent.title ?? role}
+            {role}
+          </div>
+          <div className="truncate font-mono text-[10px] lg:hidden" style={{ color: DS.textMuted }} title={model}>
+            {model}
           </div>
           {hostForAgent(agent.name) && (
             <div className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
@@ -593,7 +551,6 @@ function AgentRow({
 function ListSection({
   label,
   rows,
-  external,
   currentTaskFor,
   liveFor,
   pendingIds,
@@ -602,7 +559,6 @@ function ListSection({
 }: {
   label: string;
   rows: Agent[];
-  external?: boolean;
   currentTaskFor: (a: Agent) => string;
   liveFor: (a: Agent) => boolean;
   pendingIds: Set<string>;
@@ -622,7 +578,6 @@ function ListSection({
         <AgentRow
           key={agent.id}
           agent={agent}
-          external={external}
           currentTask={currentTaskFor(agent)}
           live={liveFor(agent)}
           pending={pendingIds.has(agent.id)}
@@ -1147,7 +1102,7 @@ export function Agents() {
   };
 
   const visibleAgents = allAgents.filter((a) => matchesFilter(a.status, tab));
-  const groups = deriveGroups(visibleAgents, orgTree);
+  const groups = groupFleetAgents(visibleAgents);
 
   const summarySpend = costSummary
     ? formatUsd(costSummary.spendCents)
@@ -1245,18 +1200,8 @@ export function Agents() {
                 onPauseResume={onPauseResume}
               />
               <ListSection
-                label="Agents"
-                rows={groups.agents}
-                currentTaskFor={currentTaskFor}
-                liveFor={liveFor}
-                pendingIds={pendingAgentIds}
-                onOpen={(a) => setOpenAgentId(a.id)}
-                onPauseResume={onPauseResume}
-              />
-              <ListSection
-                label="External"
-                rows={groups.external}
-                external
+                label="Workers"
+                rows={groups.workers}
                 currentTaskFor={currentTaskFor}
                 liveFor={liveFor}
                 pendingIds={pendingAgentIds}
