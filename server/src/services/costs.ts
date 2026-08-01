@@ -18,6 +18,23 @@ function sumAsNumber(column: typeof costEvents.costCents | typeof costEvents.inp
   return sql<number>`coalesce(sum(${column}), 0)::double precision`;
 }
 
+// GAP-FILL R10 (Chronos r9 P2): PostgreSQL count(*) returns bigint. Narrowing
+// it to `::int` (int4) errors at the first unrepresentable count
+// (2,147,483,648), while the shared `number` contract represents exact
+// integers through 2^53 - 1. Keep count(*) un-narrowed and convert the
+// driver's exact decimal representation to the shared numeric type, failing
+// loud rather than returning an inexact or invalid count.
+export function eventCountAsNumber(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  const n = Number(value);
+  if (!Number.isSafeInteger(n) || n < 0) {
+    throw new Error(
+      `cost event count is not representable as a non-negative safe integer: ${String(value)}`,
+    );
+  }
+  return n;
+}
+
 function currentUtcMonthWindow(now = new Date()) {
   const year = now.getUTCFullYear();
   const month = now.getUTCMonth();
@@ -119,7 +136,9 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .select({
           total: sumAsNumber(costEvents.costCents),
           // GAP-FILL R9-F: expose the number of cost_events behind the total.
-          eventCount: sql<number>`count(*)::int`,
+          // GAP-FILL R10 (Chronos r9 P2): no ::int narrowing — count(*) stays
+          // bigint and converts exactly via eventCountAsNumber.
+          eventCount: sql<string>`count(*)`,
         })
         .from(costEvents)
         .where(and(...conditions));
@@ -135,7 +154,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
-        eventCount: Number(eventCount ?? 0),
+        eventCount: eventCountAsNumber(eventCount),
       };
     },
 

@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
 import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,7 +19,7 @@ import {
   issues,
   projects,
 } from "@paperclipai/db";
-import { costService } from "../services/costs.ts";
+import { costService, eventCountAsNumber } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
 import {
   getEmbeddedPostgresTestSupport,
@@ -560,6 +561,40 @@ describe("cost routes", () => {
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
+// GAP-FILL R10 (Chronos r9 P2): PostgreSQL count(*) returns bigint. The
+// previous `count(*)::int` narrowed to int4 and errored at the first
+// unrepresentable count (2,147,483,648) even though the shared `number`
+// contract represents exact integers through 2^53 - 1. These tests pin the
+// conversion used by costService.summary from the driver's count(*) value to
+// the shared numeric representation.
+describe("eventCountAsNumber conversion (GAP-FILL R10, Chronos r9 P2)", () => {
+  it("converts the first int4-unrepresentable count exactly", () => {
+    expect(eventCountAsNumber("2147483648")).toBe(2_147_483_648);
+  });
+
+  it("converts Number.MAX_SAFE_INTEGER exactly", () => {
+    expect(eventCountAsNumber("9007199254740991")).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("normalizes empty and zero counts to 0", () => {
+    expect(eventCountAsNumber(null)).toBe(0);
+    expect(eventCountAsNumber(undefined)).toBe(0);
+    expect(eventCountAsNumber("0")).toBe(0);
+    expect(eventCountAsNumber(0)).toBe(0);
+  });
+
+  it("accepts number and bigint driver representations", () => {
+    expect(eventCountAsNumber(2)).toBe(2);
+    expect(eventCountAsNumber(2n)).toBe(2);
+  });
+
+  it("fails loud instead of returning an inexact or invalid count", () => {
+    expect(() => eventCountAsNumber("9007199254740993")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("not-a-count")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("-1")).toThrow(/safe integer/);
+  });
+});
+
 describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   let db!: ReturnType<typeof createDb>;
   let costs!: ReturnType<typeof costService>;
@@ -667,6 +702,116 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     const summary = await costs.summary(companyId, range);
     expect(summary.spendCents).toBe(4_000_000_000);
     expect(summary.eventCount).toBe(2);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): empty request-scoped population must
+  // report zero for both the total and the count of the same rows.
+  it("returns zero spendCents and zero eventCount for an empty request-scoped population", async () => {
+    const companyId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Empty Co",
+      issuePrefix: `E${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const unfiltered = await costs.summary(companyId);
+    expect(unfiltered.spendCents).toBe(0);
+    expect(unfiltered.eventCount).toBe(0);
+
+    const ranged = await costs.summary(companyId, {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    });
+    expect(ranged.spendCents).toBe(0);
+    expect(ranged.eventCount).toBe(0);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): documents the exact failure boundary the
+  // fix removes — the previous `count(*)::int` expression errors at the
+  // first int4-unrepresentable count, while the un-narrowed bigint count
+  // converts exactly through eventCountAsNumber.
+  it("keeps count(*) un-narrowed: the int4 cast errors at 2^31 while bigint converts exactly", async () => {
+    await expect(db.execute(sql`select 2147483648::int`)).rejects.toThrow();
+
+    const raw: unknown = await db.execute(sql`select 2147483648::bigint as c`);
+    const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? []);
+    expect(eventCountAsNumber((rows[0] as { c?: unknown })?.c)).toBe(2_147_483_648);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): the count must describe exactly the
+  // request-scoped rows behind spendCents, and the raw driver count must
+  // round-trip exactly through the same conversion the service uses.
+  it("counts exactly the request-scoped rows behind spendCents", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Scoped Co",
+      issuePrefix: `S${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Scoped Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const inRange = [
+      new Date("2026-04-10T00:00:00.000Z"),
+      new Date("2026-04-11T00:00:00.000Z"),
+      new Date("2026-04-12T00:00:00.000Z"),
+    ];
+    await db.insert(costEvents).values([
+      ...inRange.map((occurredAt) => ({
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 100,
+        occurredAt,
+      })),
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 999,
+        occurredAt: new Date("2026-05-01T00:00:00.000Z"),
+      },
+    ]);
+
+    const range = {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    };
+    const summary = await costs.summary(companyId, range);
+    expect(summary.spendCents).toBe(300);
+    expect(summary.eventCount).toBe(3);
+
+    const raw: unknown = await db.execute(
+      sql`select count(*) as c from cost_events where company_id = ${companyId} and occurred_at >= ${range.from.toISOString()} and occurred_at <= ${range.to.toISOString()}`,
+    );
+    const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? []);
+    expect(eventCountAsNumber((rows[0] as { c?: unknown })?.c)).toBe(summary.eventCount);
   });
 
   it("fails the local fleet dashboard endpoint closed when the collector company binding is missing", async () => {
