@@ -115,9 +115,11 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
       if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
 
-      const [{ total }] = await db
+      const [{ total, eventCount }] = await db
         .select({
           total: sumAsNumber(costEvents.costCents),
+          // GAP-FILL R9-F: expose the number of cost_events behind the total.
+          eventCount: sql<number>`count(*)::int`,
         })
         .from(costEvents)
         .where(and(...conditions));
@@ -133,6 +135,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        eventCount: Number(eventCount ?? 0),
       };
     },
 

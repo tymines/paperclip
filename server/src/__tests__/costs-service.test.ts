@@ -662,6 +662,11 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byAgentRow?.inputTokens).toBe(4_000_000_000);
     expect(byProjectRow?.costCents).toBe(4_000_000_000);
     expect(byAgentModelRow?.costCents).toBe(4_000_000_000);
+
+    // GAP-FILL R9-F: summary returns the event count behind the total.
+    const summary = await costs.summary(companyId, range);
+    expect(summary.spendCents).toBe(4_000_000_000);
+    expect(summary.eventCount).toBe(2);
   });
 
   it("fails the local fleet dashboard endpoint closed when the collector company binding is missing", async () => {

@@ -26,6 +26,12 @@ export interface CostSummary {
   spendCents: number;
   budgetCents: number;
   utilizationPercent: number;
+  /**
+   * Count of cost_events rows aggregated into spendCents for the requested
+   * range (GAP-FILL R9-F: makes the event count behind a spend total visible
+   * in the UI, not just derivable from the DB).
+   */
+  eventCount: number;
 }
 
 export interface IssueCostSummary {

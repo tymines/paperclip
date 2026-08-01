@@ -873,6 +873,10 @@ export function Costs() {
   const budgetCents = spendData?.summary.budgetCents ?? 0;
   const hasBudgetCap = budgetCents > 0;
   const spendCents = spendData?.summary.spendCents ?? 0;
+  // GAP-FILL R9-F: number of cost_events rows behind the request-scoped
+  // total, rendered next to the ledger total so the event count is visible
+  // in the DOM/pixels, not just derivable from the DB.
+  const spendEventCount = spendData?.summary.eventCount ?? 0;
   // Repoint the Inference-spend headline from the cost_events bridge ESTIMATE
   // to the authoritative MLflow total (real per-call billed cost across every
   // metered model, including Gemini + Qwen which bypass the litellm proxy and
@@ -1101,7 +1105,7 @@ export function Costs() {
               {/* Row 1: spend-over-time · spend-by-agent · budget status + alerts */}
               <div className="grid gap-5 lg:grid-cols-[1.45fr_0.95fr_1.05fr]">
                 {/* Spend over time */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <TrendingUp className="h-4 w-4" style={{ color: DS.primary }} />
@@ -1121,7 +1125,7 @@ export function Costs() {
                 </div>
 
                 {/* Spend by agent */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Spend by agent</SectionLabel>
                   </div>
@@ -1345,11 +1349,11 @@ export function Costs() {
               {/* Row 2: inference ledger + finance ledger tables */}
               <div className="grid gap-5 lg:grid-cols-2">
                 {/* Inference ledger */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Inference ledger (request-scoped)</SectionLabel>
                     <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>
-                      {formatCents(spendCents)}
+                      {formatCents(spendCents)} · {spendEventCount} events
                     </span>
                   </div>
                   {inferenceLedger.length === 0 ? (
@@ -1400,7 +1404,7 @@ export function Costs() {
                 </div>
 
                 {/* Finance ledger */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Finance ledger (account-level)</SectionLabel>
                     <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>
