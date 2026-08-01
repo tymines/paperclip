@@ -168,9 +168,18 @@ describeEmbeddedPostgres("jarvis peer-agent delegation", () => {
     expect(dispatch.remainingQuotaThisMinute).toBeLessThan(3);
 
     // The dispatch should have hit the bridge URL at least once.
-    const bridgeCall = fetchMock.mock.calls.find(([url]) => {
-      const u = typeof url === "string" ? url : url?.toString() ?? "";
-      return u.includes("/jarvis/dispatch");
+    // GAP-FILL R9: the bridge POST is now fire-and-forget (the service flips
+    // the row to "failed" on unreachable peers instead of blocking the
+    // enqueue), and the default dispatch path is /agent/message
+    // (JARVIS_DISPATCH_PATH override) — wait for the async call and match the
+    // current path instead of the retired /jarvis/dispatch.
+    const bridgeCall = await vi.waitFor(() => {
+      const call = fetchMock.mock.calls.find(([url]) => {
+        const u = typeof url === "string" ? url : url?.toString() ?? "";
+        return u.includes("/agent/message");
+      });
+      expect(call).toBeDefined();
+      return call;
     });
     expect(bridgeCall).toBeDefined();
 
