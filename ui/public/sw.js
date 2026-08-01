@@ -24,16 +24,19 @@ self.addEventListener("activate", (event) => {
       // refresh them, so force a one-time reload so they re-fetch fresh,
       // network-first content. activate() only fires once per SW version, so
       // this cannot loop.
+      //
+      // IMPORTANT: these navigate() calls must stay fire-and-forget. Awaiting
+      // them inside activate()'s waitUntil deadlocks the page: the forced
+      // navigation's fetch event is queued until this worker finishes
+      // activating, but activation cannot finish while waitUntil is waiting
+      // on navigate() to resolve. The result is a permanently hung document
+      // request (page never commits, main thread unresponsive). Firing
+      // without await lets activation complete, the worker becomes active,
+      // and the queued navigation then proceeds through the fetch handler.
       const clients = await self.clients.matchAll({ type: "window" });
-      await Promise.all(
-        clients.map((client) => {
-          try {
-            return client.navigate(client.url).catch(() => undefined);
-          } catch {
-            return undefined;
-          }
-        })
-      );
+      for (const client of clients) {
+        client.navigate(client.url).catch(() => undefined);
+      }
     })()
   );
 });

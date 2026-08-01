@@ -1,0 +1,980 @@
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  aggregateFleetCostDashboard,
+  buildFleetObservationEnvelope,
+  extractFullHermesSessionId,
+  ingestFleetObservations,
+  readHermesApiCalls,
+  readHermesSessionUsage,
+  type FleetObservationStore,
+  type HermesApiCall,
+  type HermesModelUsage,
+  type HermesRunAttribution,
+  type HermesSessionUsage,
+} from "./fleet-cost-dashboard.js";
+
+const tempPaths: string[] = [];
+
+async function tempDirectory() {
+  const path = await mkdtemp(join(tmpdir(), "paperclip-fleet-cost-"));
+  tempPaths.push(path);
+  return path;
+}
+
+afterEach(async () => {
+  await Promise.all(tempPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+function createHermesStateFixture(path: string) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      started_at REAL,
+      ended_at REAL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT
+    );
+    CREATE TABLE session_model_usage (
+      session_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      billing_provider TEXT NOT NULL,
+      task TEXT NOT NULL DEFAULT '',
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT,
+      first_seen REAL,
+      last_seen REAL
+    );
+  `);
+  db.prepare(`
+    INSERT INTO sessions (
+      id, started_at, ended_at, input_tokens, output_tokens,
+      cache_read_tokens, cache_write_tokens, reasoning_tokens, api_call_count,
+      estimated_cost_usd, actual_cost_usd, billing_mode, cost_status, cost_source, pricing_version
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    "20260724_010203_aaaaaaaa",
+    1784854923,
+    1784854933,
+    1000,
+    600,
+    200,
+    50,
+    25,
+    4,
+    0,
+    null,
+    "subscription_included",
+    "included",
+    "none",
+    "hermes-2026-07",
+  );
+  const insertUsage = db.prepare(`
+    INSERT INTO session_model_usage (
+      session_id, model, billing_provider, task, api_call_count,
+      input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+      reasoning_tokens, estimated_cost_usd, actual_cost_usd, billing_mode,
+      cost_status, cost_source, pricing_version, first_seen, last_seen
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  insertUsage.run(
+    "20260724_010203_aaaaaaaa",
+    "model-included",
+    "provider-a",
+    "",
+    3,
+    900,
+    600,
+    200,
+    50,
+    25,
+    0,
+    null,
+    "subscription_included",
+    "included",
+    "none",
+    "hermes-2026-07",
+    1784854923,
+    1784854932,
+  );
+  insertUsage.run(
+    "20260724_010203_aaaaaaaa",
+    "model-compress",
+    "provider-a",
+    "compression",
+    2,
+    100,
+    0,
+    0,
+    0,
+    0,
+    0.02,
+    0.02,
+    "metered",
+    "estimated",
+    "pricing_table",
+    "hermes-2026-07",
+    1784854927,
+    1784854930,
+  );
+  insertUsage.run(
+    "20260724_010203_bbbbbbbb",
+    "wrong-prefix-model",
+    "provider-a",
+    "",
+    99,
+    99999,
+    99999,
+    0,
+    0,
+    0,
+    999,
+    999,
+    "metered",
+    "actual",
+    "provider",
+    "hermes-2026-07",
+    1784854923,
+    1784854932,
+  );
+  db.close();
+}
+
+function createSidecarFixture(path: string) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE api_calls (
+      session_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      api_request_id TEXT NOT NULL,
+      paperclip_run_id TEXT,
+      model TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      started_at REAL NOT NULL,
+      ended_at REAL NOT NULL,
+      api_duration REAL NOT NULL,
+      ttft REAL,
+      PRIMARY KEY (session_id, api_request_id)
+    );
+  `);
+  db.prepare("INSERT INTO api_calls VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(
+      "20260724_010203_aaaaaaaa",
+      "turn-1",
+      "request-1",
+      "run-1",
+      "model-included",
+      "provider-a",
+      500,
+      100,
+      100,
+      20,
+      5,
+      100,
+      102,
+      2,
+      0.42,
+    );
+  db.close();
+}
+
+function fleetSessionFixture(overrides: Partial<HermesSessionUsage> = {}): HermesSessionUsage {
+  return {
+    sessionId: "session-1",
+    startedAt: 1_785_000_000,
+    endedAt: 1_785_000_010,
+    inputTokens: 20,
+    outputTokens: 10,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    apiCallCount: 1,
+    estimatedCostUsd: 0.03,
+    actualCostUsd: null,
+    billingMode: "metered",
+    costStatus: "estimated",
+    costSource: "mixed",
+    pricingVersion: null,
+    ...overrides,
+  };
+}
+
+function fleetModelUsageFixture(overrides: Partial<HermesModelUsage> = {}): HermesModelUsage {
+  return {
+    sessionId: "session-1",
+    model: "same-model",
+    provider: "provider-a",
+    task: "",
+    apiCallCount: 1,
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    estimatedCostUsd: 0.01,
+    actualCostUsd: null,
+    billingMode: "metered",
+    costStatus: "estimated",
+    costSource: "pricing_table",
+    pricingVersion: "v1",
+    firstSeen: 1_785_000_000,
+    lastSeen: 1_785_000_010,
+    ...overrides,
+  };
+}
+
+function fleetApiCallFixture(overrides: Partial<HermesApiCall> = {}): HermesApiCall {
+  return {
+    sessionId: "session-1",
+    turnId: "turn-1",
+    apiRequestId: "request-1",
+    paperclipRunId: null,
+    model: "same-model",
+    provider: "provider-a",
+    inputTokens: 10,
+    outputTokens: 5,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    reasoningTokens: 0,
+    startedAt: 1_785_000_000,
+    endedAt: 1_785_000_002,
+    apiDuration: 2,
+    ttft: 0.5,
+    ...overrides,
+  };
+}
+
+describe("fleet cost dashboard collector", () => {
+  it("preserves Hermes billing semantics and nullable actual cost", async () => {
+    const dir = await tempDirectory();
+    const statePath = join(dir, "state.db");
+    createHermesStateFixture(statePath);
+
+    const result = readHermesSessionUsage(statePath);
+
+    expect(result.sessions[0]).toMatchObject({
+      sessionId: "20260724_010203_aaaaaaaa",
+      estimatedCostUsd: 0,
+      actualCostUsd: null,
+      billingMode: "subscription_included",
+      costStatus: "included",
+      costSource: "none",
+      pricingVersion: "hermes-2026-07",
+    });
+    expect(result.modelUsage[0]).toMatchObject({
+      model: "model-included",
+      actualCostUsd: null,
+      billingMode: "subscription_included",
+      costStatus: "included",
+      costSource: "none",
+      pricingVersion: "hermes-2026-07",
+    });
+  });
+
+  it("fails loudly on incompatible Hermes aggregate schema", async () => {
+    const dir = await tempDirectory();
+    const statePath = join(dir, "state.db");
+    const db = new DatabaseSync(statePath);
+    db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+    db.close();
+
+    expect(() => readHermesSessionUsage(statePath)).toThrowError(/Hermes aggregate usage is unavailable/i);
+  });
+
+  it("keeps model rows separate when cost source or pricing version differ", async () => {
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      range: { from: new Date("2026-07-25T00:00:00.000Z"), to: new Date("2026-07-26T00:00:00.000Z") },
+      grain: "day",
+      usage: {
+        sessions: [{
+          sessionId: "session-1",
+          startedAt: 1_785_000_000,
+          endedAt: 1_785_000_010,
+          inputTokens: 20,
+          outputTokens: 10,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          apiCallCount: 2,
+          estimatedCostUsd: 0.03,
+          actualCostUsd: null,
+          billingMode: "metered",
+          costStatus: "estimated",
+          costSource: "mixed",
+          pricingVersion: null,
+        }],
+        modelUsage: [
+          {
+            sessionId: "session-1",
+            model: "same-model",
+            provider: "provider-a",
+            task: "",
+            apiCallCount: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+            estimatedCostUsd: 0.01,
+            actualCostUsd: null,
+            billingMode: "metered",
+            costStatus: "estimated",
+            costSource: "pricing_table",
+            pricingVersion: "v1",
+            firstSeen: 1_785_000_000,
+            lastSeen: 1_785_000_005,
+          },
+          {
+            sessionId: "session-1",
+            model: "same-model",
+            provider: "provider-a",
+            task: "",
+            apiCallCount: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            reasoningTokens: 0,
+            estimatedCostUsd: 0.02,
+            actualCostUsd: null,
+            billingMode: "metered",
+            costStatus: "estimated",
+            costSource: "provider_estimate",
+            pricingVersion: "v2",
+            firstSeen: 1_785_000_005,
+            lastSeen: 1_785_000_010,
+          },
+        ],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-24T01:02:10.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    expect(dashboard.modelRows.map((row) => ({
+      costSource: row.costSource,
+      pricingVersion: row.pricingVersion,
+      estimatedCostUsd: row.estimatedCostUsd,
+    }))).toEqual([
+      { costSource: "provider_estimate", pricingVersion: "v2", estimatedCostUsd: 0.02 },
+      { costSource: "pricing_table", pricingVersion: "v1", estimatedCostUsd: 0.01 },
+    ]);
+  });
+
+  it("never duplicates one observed API call across split model rows and fails honest on ambiguity", () => {
+    // Regression for Atlas PR #27 P1: two model rows share provider/model in
+    // one session but differ in billing/cost identity, with one underlying
+    // observed API call. The source cannot say which identity owns the call,
+    // so the documented fail-honest policy marks speed telemetry unavailable
+    // on every ambiguous split row instead of duplicating the call's
+    // latency/TTFT/throughput across all of them.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [
+          fleetModelUsageFixture({ estimatedCostUsd: 0.01, costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ estimatedCostUsd: 0.02, costSource: "provider_estimate", pricingVersion: "v2" }),
+        ],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    // The one underlying call may contribute speed telemetry to at most one
+    // compatible row; identical duplicated samples on both rows are the defect.
+    const rowsWithObservedSpeed = dashboard.modelRows.filter((row) => row.avgLatencyMs !== null);
+    expect(rowsWithObservedSpeed.length).toBeLessThanOrEqual(1);
+    for (const row of dashboard.modelRows) {
+      expect(row.avgLatencyMs).toBeNull();
+      expect(row.avgTtftMs).toBeNull();
+      expect(row.throughputOutputTokensPerSecond).toBeNull();
+      // Ambiguous ownership: the observed-sample count, per-row availability,
+      // and observed turns must be null/ambiguous, never zero or guessed; the
+      // omitted ambiguous candidate count stays exact.
+      expect(row.speedSampleApiCalls).toBeNull();
+      expect(row.speedAvailability).toBe("ambiguous");
+      expect(row.speedAmbiguousOmittedApiCalls).toBe(1);
+      expect(row.turns).toBeNull();
+      // The Hermes state.db per-identity usage count stays exact and is
+      // contracted under its own source-explicit name.
+      expect(row.usageApiCalls).toBe(1);
+      expect(row).not.toHaveProperty("apiCalls");
+    }
+    // Global availability must reflect what rows actually render: every model
+    // row is ambiguous, so model speed is globally unavailable even though a
+    // sidecar call exists. The task surface is computed from the task's own
+    // calls and stays honest independently.
+    expect(dashboard.availability).toEqual({
+      modelSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      taskSpeed: {
+        avgLatencyMs: "available",
+        avgTtftMs: "available",
+        throughputOutputTokensPerSecond: "available",
+      },
+      stalls: "unavailable",
+    });
+  });
+
+  it("attributes an observed API call to exactly one model row when the session has a single billing identity", () => {
+    // Unsplit control: one billing identity in the session, so the observed
+    // call's speed telemetry lands on that row and nowhere else.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      provider: "provider-a",
+      model: "same-model",
+      costSource: "pricing_table",
+      pricingVersion: "v1",
+      usageApiCalls: 1,
+      speedSampleApiCalls: 1,
+      speedAvailability: "available",
+      avgLatencyMs: 2000,
+      avgTtftMs: 500,
+      throughputOutputTokensPerSecond: 2.5,
+      turns: 1,
+      compactions: 0,
+    });
+    expect(dashboard.modelRows[0]).not.toHaveProperty("apiCalls");
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "available",
+      avgTtftMs: "available",
+      throughputOutputTokensPerSecond: "available",
+    });
+  });
+
+  it("derives global model speed availability from attributed rows, not sidecar row presence", () => {
+    // An observed sidecar call exists but matches no billing identity in its
+    // own session: no model row can render speed, so global model speed must
+    // report unavailable rather than leaning on sidecar presence.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 1 })],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture({ model: "other-model", provider: "other-provider" })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      usageApiCalls: 1,
+      speedSampleApiCalls: 0,
+      speedAmbiguousOmittedApiCalls: 0,
+      speedAvailability: "unavailable",
+      avgLatencyMs: null,
+      avgTtftMs: null,
+      throughputOutputTokensPerSecond: null,
+      turns: null,
+    });
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "unavailable",
+      avgTtftMs: "unavailable",
+      throughputOutputTokensPerSecond: "unavailable",
+    });
+  });
+
+  it("partitions per-model turns and compactions for a task spanning two models", () => {
+    // Regression for Atlas PR #27 rereview P1: per-model turns/compactions
+    // must come from the model identity's own attributed calls and usage
+    // rows, never copied from whole-task totals onto every model row.
+    const attributions: HermesRunAttribution[] = [{
+      runId: "run-1",
+      sessionId: "session-1",
+      agentId: "agent-1",
+      agentName: "Fleet Agent",
+      issueId: "issue-1",
+      issueIdentifier: "PAP-1",
+      issueTitle: "Two-model task",
+      projectId: "project-1",
+      projectName: "Cost visibility",
+      status: "succeeded",
+      runStartedAt: new Date("2026-07-25T00:00:00.000Z"),
+      runFinishedAt: new Date("2026-07-25T00:01:00.000Z"),
+    }];
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 4 })],
+        modelUsage: [
+          fleetModelUsageFixture({ model: "model-a", provider: "provider-a", apiCallCount: 2 }),
+          fleetModelUsageFixture({ model: "model-a", provider: "provider-a", task: "compression", apiCallCount: 1 }),
+          fleetModelUsageFixture({ model: "model-b", provider: "provider-b", apiCallCount: 1 }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ model: "model-a", provider: "provider-a", apiRequestId: "req-a1", turnId: "turn-1" }),
+        fleetApiCallFixture({ model: "model-a", provider: "provider-a", apiRequestId: "req-a2", turnId: "turn-2" }),
+        fleetApiCallFixture({ model: "model-b", provider: "provider-b", apiRequestId: "req-b1", turnId: "turn-3" }),
+      ],
+      attributions,
+      freshness: { observedAt: "2026-07-25T00:01:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows).toHaveLength(1);
+    expect(dashboard.taskRows[0]).toMatchObject({ issueId: "issue-1", turns: 3, compactions: 1 });
+
+    const rowA = dashboard.modelRows.find((row) => row.model === "model-a");
+    const rowB = dashboard.modelRows.find((row) => row.model === "model-b");
+    expect(rowA).toMatchObject({ turns: 2, compactions: 1, usageApiCalls: 3, speedSampleApiCalls: 2 });
+    expect(rowB).toMatchObject({ turns: 1, compactions: 0, usageApiCalls: 1, speedSampleApiCalls: 1 });
+    // Neither row may carry the whole-task totals, and per-model turns
+    // partition the task's observed turns.
+    expect(rowA?.turns).not.toBe(dashboard.taskRows[0].turns);
+    expect(rowB?.turns).not.toBe(dashboard.taskRows[0].turns);
+    expect((rowA?.turns ?? 0) + (rowB?.turns ?? 0)).toBe(dashboard.taskRows[0].turns);
+  });
+
+  it("correlates observed API calls by box-qualified session identity, not provider/model alone", () => {
+    // Same session id on two boxes, same provider/model, different billing
+    // identities: each call must attribute only to the identity observed in
+    // its own box-qualified session.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [
+          fleetSessionFixture({ sessionId: "shared-id", boxId: "box-a" }),
+          fleetSessionFixture({ sessionId: "shared-id", boxId: "box-b" }),
+        ],
+        modelUsage: [
+          fleetModelUsageFixture({ sessionId: "shared-id", boxId: "box-a", costSource: "pricing_table", pricingVersion: "v1", estimatedCostUsd: 0.01 }),
+          fleetModelUsageFixture({ sessionId: "shared-id", boxId: "box-b", costSource: "provider_estimate", pricingVersion: "v2", estimatedCostUsd: 0.02 }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ sessionId: "shared-id", boxId: "box-a", apiRequestId: "req-a", apiDuration: 2, ttft: 0.5 }),
+        fleetApiCallFixture({ sessionId: "shared-id", boxId: "box-b", apiRequestId: "req-b", apiDuration: 4, ttft: 0.25 }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    const rowV1 = dashboard.modelRows.find((row) => row.pricingVersion === "v1");
+    const rowV2 = dashboard.modelRows.find((row) => row.pricingVersion === "v2");
+    expect(rowV1).toMatchObject({ avgLatencyMs: 2000, avgTtftMs: 500, throughputOutputTokensPerSecond: 2.5 });
+    expect(rowV2).toMatchObject({ avgLatencyMs: 4000, avgTtftMs: 250, throughputOutputTokensPerSecond: 1.25 });
+  });
+
+  it("builds versioned generic observations and deduplicates replay by observation id", async () => {
+    const dir = await tempDirectory();
+    const statePath = join(dir, "state.db");
+    createHermesStateFixture(statePath);
+
+    const envelope = buildFleetObservationEnvelope({
+      boxId: "mac-local",
+      collectorId: "hermes-local",
+      profileId: "default",
+      observedAt: "2026-07-24T01:02:10.000Z",
+      checkpoint: { sequence: 7, cursor: "state.db:7" },
+      usage: readHermesSessionUsage(statePath),
+      apiCalls: [],
+    });
+    const store: FleetObservationStore = new Map();
+
+    expect(ingestFleetObservations(store, envelope)).toEqual({ inserted: 3, skipped: 0 });
+    expect(ingestFleetObservations(store, envelope)).toEqual({ inserted: 0, skipped: 3 });
+    expect([...store.values()].every((observation) => observation.schemaVersion === "fleet-observation/v1")).toBe(true);
+  });
+
+  it("rejects incompatible observation schemas instead of returning empty success", () => {
+    const envelope = {
+      schemaVersion: "fleet-observation/v0",
+      source: { boxId: "mac-local", collectorId: "hermes-local" },
+      observations: [],
+    };
+    expect(() => ingestFleetObservations(new Map(), envelope as never)).toThrowError(/unsupported fleet observation schema/i);
+  });
+
+  it("attributes only exact full session ids and keeps unattributed sessions visible", async () => {
+    const dir = await tempDirectory();
+    const statePath = join(dir, "state.db");
+    const sidecarPath = join(dir, "telemetry.sqlite3");
+    createHermesStateFixture(statePath);
+    createSidecarFixture(sidecarPath);
+
+    const attributions: HermesRunAttribution[] = [
+      {
+        runId: "run-1",
+        sessionId: "20260724_010203_aaaaaaaa",
+        agentId: "agent-1",
+        agentName: "Fleet Agent",
+        issueId: "issue-1",
+        issueIdentifier: "PAP-1",
+        issueTitle: "Ship dashboard",
+        projectId: "project-1",
+        projectName: "Cost visibility",
+        status: "succeeded",
+        runStartedAt: new Date("2026-07-24T01:02:03.000Z"),
+        runFinishedAt: new Date("2026-07-24T01:02:13.000Z"),
+      },
+    ];
+
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      range: { from: new Date("2026-07-24T00:00:00.000Z"), to: new Date("2026-07-25T00:00:00.000Z") },
+      grain: "day",
+      filters: { projectId: "project-1", issueId: "issue-1", agentId: "agent-1", model: "model-included" },
+      usage: readHermesSessionUsage(statePath),
+      apiCalls: readHermesApiCalls(sidecarPath),
+      attributions,
+      freshness: {
+        observedAt: "2026-07-24T01:02:10.000Z",
+        checkpoint: { sequence: 7, cursor: "state.db:7" },
+        errors: [],
+      },
+    });
+
+    expect(extractFullHermesSessionId({ resultJson: { session_id: "20260724_010203_aaaaaaaa" }, sessionIdAfter: "20260724_010203" }))
+      .toBe("20260724_010203_aaaaaaaa");
+    expect(extractFullHermesSessionId({ resultJson: {}, sessionIdAfter: "20260724_010203" })).toBeNull();
+    expect(dashboard.taskRows).toEqual([
+      expect.objectContaining({
+        issueId: "issue-1",
+        projectId: "project-1",
+        agentId: "agent-1",
+        completionState: "succeeded",
+        costPerCompletedTaskUsd: 0,
+        wallClockMs: 10_000,
+        turns: 1,
+        avgLatencyMs: 2000,
+        avgTtftMs: 420,
+        models: expect.arrayContaining([
+          expect.objectContaining({
+            model: "model-included",
+            billingMode: "subscription_included",
+            costStatus: "included",
+            actualCostUsd: null,
+          }),
+        ]),
+      }),
+    ]);
+    expect(dashboard.unattributedSessions).toEqual([
+      expect.objectContaining({ sessionId: "20260724_010203_bbbbbbbb" }),
+    ]);
+  });
+
+  it("uses actual metered cost for model cost per completed task", () => {
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [{
+          sessionId: "session-actual",
+          startedAt: 1_785_000_000,
+          endedAt: 1_785_000_010,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          apiCallCount: 1,
+          estimatedCostUsd: 0.1,
+          actualCostUsd: 0.25,
+          billingMode: "metered_api",
+          costStatus: "actual",
+          costSource: "provider",
+          pricingVersion: "v1",
+        }],
+        modelUsage: [{
+          sessionId: "session-actual",
+          model: "model-actual",
+          provider: "provider-a",
+          task: "",
+          apiCallCount: 1,
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          reasoningTokens: 0,
+          estimatedCostUsd: 0.1,
+          actualCostUsd: 0.25,
+          billingMode: "metered_api",
+          costStatus: "actual",
+          costSource: "provider",
+          pricingVersion: "v1",
+          firstSeen: 1_785_000_000,
+          lastSeen: 1_785_000_010,
+        }],
+      },
+      apiCalls: [],
+      attributions: [{
+        runId: "run-actual",
+        sessionId: "session-actual",
+        agentId: "agent-1",
+        agentName: "Agent",
+        issueId: "issue-1",
+        issueIdentifier: "PAP-1",
+        issueTitle: "Completed task",
+        projectId: "project-1",
+        projectName: "Project",
+        status: "succeeded",
+        runStartedAt: new Date("2026-07-25T00:00:00.000Z"),
+        runFinishedAt: new Date("2026-07-25T00:00:10.000Z"),
+      }],
+      freshness: { observedAt: "2026-07-25T00:00:10.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows[0]).toMatchObject({
+      actualCostUsd: 0.25,
+      estimatedCostUsd: 0.1,
+      completedTasks: 1,
+      costPerCompletedTaskUsd: 0.25,
+    });
+  });
+
+  it("computes task and model throughput from the same observed sample population", () => {
+    // Atlas PR #27 rereview-v2 P1 reproduction: 1000 aggregate state.db usage
+    // output tokens over 2 usage calls, but only one observed sidecar call
+    // with 10 output tokens over 2 seconds. The observed rate is 5 tok/s;
+    // dividing the usage total by the sampled duration reported 500 tok/s.
+    // Throughput numerator and denominator must come from the exact same
+    // observed calls; state.db usage output tokens stay separately labeled
+    // usage totals and never enter sampled throughput.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 2 })],
+        modelUsage: [fleetModelUsageFixture({ outputTokens: 1000, apiCallCount: 2 })],
+      },
+      apiCalls: [fleetApiCallFixture({ outputTokens: 10, apiDuration: 2 })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows).toHaveLength(1);
+    expect(dashboard.taskRows[0].throughputOutputTokensPerSecond).toBe(5);
+    // usage totals stay intact and separately labeled on the task row
+    expect(dashboard.taskRows[0].outputTokens).toBe(1000);
+
+    expect(dashboard.modelRows).toHaveLength(1);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      outputTokens: 1000,
+      usageApiCalls: 2,
+      speedSampleApiCalls: 1,
+      speedAvailability: "available",
+      throughputOutputTokensPerSecond: 5,
+    });
+  });
+
+  it("computes throughput from summed sample tokens over summed sample duration for heterogeneous calls", () => {
+    // Multi-call control: the rate is total observed output tokens divided by
+    // total observed duration, not an average of per-call rates and never the
+    // usage-row token total.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture({ apiCallCount: 2 })],
+        modelUsage: [fleetModelUsageFixture({ outputTokens: 1000, apiCallCount: 2 })],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ apiRequestId: "req-1", outputTokens: 10, apiDuration: 2 }),
+        fleetApiCallFixture({ apiRequestId: "req-2", turnId: "turn-2", outputTokens: 30, apiDuration: 4, ttft: 0.25 }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.taskRows[0].throughputOutputTokensPerSecond).toBeCloseTo(40 / 6, 6);
+    expect(dashboard.modelRows[0]).toMatchObject({
+      speedSampleApiCalls: 2,
+      avgLatencyMs: 3000,
+      avgTtftMs: 375,
+      turns: 2,
+    });
+    expect(dashboard.modelRows[0].throughputOutputTokensPerSecond).toBeCloseTo(40 / 6, 6);
+  });
+
+  it("reports null throughput when there are no usable observed samples or nonpositive duration", () => {
+    const noCalls = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(noCalls.taskRows[0].throughputOutputTokensPerSecond).toBeNull();
+    expect(noCalls.modelRows[0].throughputOutputTokensPerSecond).toBeNull();
+
+    const zeroDuration = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture({ apiDuration: 0 })],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(zeroDuration.taskRows[0].throughputOutputTokensPerSecond).toBeNull();
+    expect(zeroDuration.modelRows[0].throughputOutputTokensPerSecond).toBeNull();
+  });
+
+  it("preserves uniquely attributable samples under mixed ambiguity with an explicit partial state", () => {
+    // Atlas PR #27 rereview-v2 P2 reproduction: one session with a uniquely
+    // attributable call for identity K plus one unrelated ambiguous session
+    // that also candidated K. The old global ambiguity boolean discarded K's
+    // valid unique sample.
+    // AUTONOMOUS GAP-FILL C (flagged in PR body + revision-3 artifact):
+    // model speed availability gains an explicit `partial` state when valid
+    // unique samples coexist with ambiguous omitted samples; metrics use only
+    // unique observed samples and disclose both included and omitted counts.
+    const dashboard = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [
+          fleetSessionFixture({ sessionId: "unique-session" }),
+          fleetSessionFixture({ sessionId: "ambiguous-session" }),
+        ],
+        modelUsage: [
+          fleetModelUsageFixture({ sessionId: "unique-session", costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ sessionId: "ambiguous-session", costSource: "pricing_table", pricingVersion: "v1" }),
+          fleetModelUsageFixture({ sessionId: "ambiguous-session", costSource: "provider_estimate", pricingVersion: "v2" }),
+        ],
+      },
+      apiCalls: [
+        fleetApiCallFixture({ sessionId: "unique-session", apiRequestId: "req-unique" }),
+        fleetApiCallFixture({ sessionId: "ambiguous-session", apiRequestId: "req-ambiguous" }),
+      ],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+
+    expect(dashboard.modelRows).toHaveLength(2);
+    const rowK = dashboard.modelRows.find((row) => row.costSource === "pricing_table");
+    const rowL = dashboard.modelRows.find((row) => row.costSource === "provider_estimate");
+
+    // K keeps its uniquely attributable sample under an explicit partial
+    // state; metrics are computed from unique samples only.
+    expect(rowK).toMatchObject({
+      speedAvailability: "partial",
+      speedSampleApiCalls: 1,
+      speedAmbiguousOmittedApiCalls: 1,
+      avgLatencyMs: 2000,
+      avgTtftMs: 500,
+      throughputOutputTokensPerSecond: 2.5,
+      turns: 1,
+    });
+    // L has no unique samples and one ambiguous candidate: fully ambiguous.
+    expect(rowL).toMatchObject({
+      speedAvailability: "ambiguous",
+      speedSampleApiCalls: null,
+      speedAmbiguousOmittedApiCalls: 1,
+      avgLatencyMs: null,
+      avgTtftMs: null,
+      throughputOutputTokensPerSecond: null,
+      turns: null,
+    });
+    // Global availability reflects what rows render: K renders real metrics.
+    expect(dashboard.availability.modelSpeed).toEqual({
+      avgLatencyMs: "available",
+      avgTtftMs: "available",
+      throughputOutputTokensPerSecond: "available",
+    });
+  });
+
+  it("reports zero ambiguous omitted samples for fully available and unavailable identities", () => {
+    // AUTONOMOUS GAP-FILL C contract states:
+    //   available:   unique > 0, ambiguous omitted = 0
+    //   partial:     unique > 0, ambiguous omitted > 0
+    //   ambiguous:   unique = 0, ambiguous omitted > 0
+    //   unavailable: unique = 0, ambiguous omitted = 0
+    const available = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [fleetApiCallFixture()],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(available.modelRows[0]).toMatchObject({
+      speedAvailability: "available",
+      speedSampleApiCalls: 1,
+      speedAmbiguousOmittedApiCalls: 0,
+    });
+
+    const unavailable = aggregateFleetCostDashboard({
+      companyId: "company-1",
+      grain: "day",
+      usage: {
+        sessions: [fleetSessionFixture()],
+        modelUsage: [fleetModelUsageFixture()],
+      },
+      apiCalls: [],
+      attributions: [],
+      freshness: { observedAt: "2026-07-25T00:00:00.000Z", checkpoint: null, errors: [] },
+    });
+    expect(unavailable.modelRows[0]).toMatchObject({
+      speedAvailability: "unavailable",
+      speedSampleApiCalls: 0,
+      speedAmbiguousOmittedApiCalls: 0,
+      avgLatencyMs: null,
+      turns: null,
+    });
+  });
+});

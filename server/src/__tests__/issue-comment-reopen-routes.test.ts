@@ -119,6 +119,11 @@ vi.mock("../services/index.js", () => ({
   companyService: () => ({
     getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
   }),
+  // bounded costService mock family (AUTONOMOUS GAP-FILL D): issueRoutes
+  // instantiates costService; same pattern as revision 2's issue-activity fix
+  costService: () => ({
+    byIssueIds: vi.fn(async () => new Map()),
+  }),
   accessService: () => mockAccessService,
   agentService: () => mockAgentService,
   documentService: () => ({}),

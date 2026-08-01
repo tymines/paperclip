@@ -1,5 +1,7 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
+import type { FleetCostDashboardGrain as FleetDashboardGrain } from "@paperclipai/shared";
+import { HermesUsageReadError } from "../services/fleet-cost-dashboard.js";
 import {
   createCostEventSchema,
   createFinanceEventSchema,
@@ -21,7 +23,7 @@ import {
 } from "../services/index.js";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
 import { fetchAllQuotaWindows } from "../services/quota-windows.js";
-import { badRequest } from "../errors.js";
+import { badRequest, HttpError, serviceUnavailable } from "../errors.js";
 import type { PluginWorkerManager } from "../services/plugin-worker-manager.js";
 
 export function parseCostDateRange(query: Record<string, unknown>) {
@@ -42,6 +44,30 @@ export function parseCostLimit(query: Record<string, unknown>) {
     throw badRequest("invalid 'limit' value");
   }
   return limit;
+}
+
+export function parseFleetDashboardQuery(query: Record<string, unknown>) {
+  const range = parseCostDateRange(query);
+  const grainRaw = Array.isArray(query.grain) ? query.grain[0] : query.grain;
+  const grain = (grainRaw == null || grainRaw === "" ? "day" : String(grainRaw)) as FleetDashboardGrain;
+  if (grain !== "day" && grain !== "week" && grain !== "month") {
+    throw badRequest("invalid 'grain' value");
+  }
+  const optionalString = (key: string) => {
+    const raw = Array.isArray(query[key]) ? query[key][0] : query[key];
+    return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+  };
+  const filters = {
+    projectId: optionalString("projectId"),
+    issueId: optionalString("issueId"),
+    agentId: optionalString("agentId"),
+    model: optionalString("model"),
+  };
+  return {
+    range,
+    filters: Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== undefined)),
+    grain,
+  };
 }
 
 export function costRoutes(
@@ -164,6 +190,29 @@ export function costRoutes(
     const range = parseCostDateRange(req.query);
     const rows = await costs.byAgentModel(companyId, range);
     res.json(rows);
+  });
+
+  router.get("/companies/:companyId/costs/fleet-dashboard", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const query = parseFleetDashboardQuery(req.query);
+    try {
+      const payload = await costs.fleetDashboard(companyId, query);
+      res.json(payload);
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      // Hermes collector failures map to 503; errors that already carry an
+      // explicit status keep it; anything else propagates to the global
+      // handler instead of being mislabeled service-unavailable.
+      if (error instanceof HermesUsageReadError) {
+        throw serviceUnavailable(error.message);
+      }
+      const status = (error as { status?: unknown })?.status;
+      if (typeof status === "number") {
+        throw new HttpError(status, error instanceof Error ? error.message : "Fleet dashboard request failed");
+      }
+      throw error;
+    }
   });
 
   router.get("/companies/:companyId/costs/by-provider", async (req, res) => {

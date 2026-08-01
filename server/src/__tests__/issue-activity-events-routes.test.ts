@@ -82,6 +82,9 @@ function registerModuleMocks() {
     agentService: () => ({
       getById: vi.fn(async () => null),
     }),
+    costService: () => ({
+      byIssueIds: vi.fn(async () => new Map()),
+    }),
     documentService: () => ({}),
     executionWorkspaceService: () => ({}),
     feedbackService: () => mockFeedbackService,

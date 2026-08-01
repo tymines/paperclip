@@ -4,6 +4,7 @@ import type { Db } from "@paperclipai/db";
 import { activityLog, agents, companies, costEvents, heartbeatRuns, issues, projects } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { budgetService, type BudgetServiceHooks } from "./budgets.js";
+import { buildFleetCostDashboard, type FleetDashboardQuery } from "./fleet-cost-dashboard.js";
 
 export interface CostDateRange {
   from?: Date;
@@ -15,6 +16,48 @@ const SUBSCRIPTION_BILLING_TYPES = ["subscription_included", "subscription_overa
 
 function sumAsNumber(column: typeof costEvents.costCents | typeof costEvents.inputTokens | typeof costEvents.cachedInputTokens | typeof costEvents.outputTokens) {
   return sql<number>`coalesce(sum(${column}), 0)::double precision`;
+}
+
+// GAP-FILL R10 (Chronos r9 P2): PostgreSQL count(*) returns bigint. Narrowing
+// it to `::int` (int4) errors at the first unrepresentable count
+// (2,147,483,648), while the shared `number` contract represents exact
+// integers through 2^53 - 1. Keep count(*) un-narrowed and convert the
+// driver's exact decimal representation to the shared numeric type, failing
+// loud rather than returning an inexact or invalid count.
+//
+// GAP-FILL R14 (Chronos r10 P2): validate the contract exactly — no Number()
+// coercion. Only null/undefined (normalized to 0), primitive canonical
+// non-negative integer strings, primitive safe non-negative integer numbers,
+// and primitive non-negative bigints at or below Number.MAX_SAFE_INTEGER are
+// accepted. Canonical strings are parsed through BigInt (exact integer
+// semantics) so a malformed decimal like "9007199254740990.9" is rejected
+// instead of rounding into a safe integer.
+const CANONICAL_NONNEGATIVE_INTEGER = /^(0|[1-9]\d*)$/;
+
+function invalidEventCount(value: unknown): Error {
+  return new Error(
+    `cost event count is not representable as a non-negative safe integer: ${String(value)}`,
+  );
+}
+
+export function eventCountAsNumber(value: unknown): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw invalidEventCount(value);
+    return value;
+  }
+  let parsed: bigint;
+  if (typeof value === "string") {
+    if (!CANONICAL_NONNEGATIVE_INTEGER.test(value)) throw invalidEventCount(value);
+    parsed = BigInt(value);
+  } else if (typeof value === "bigint") {
+    if (value < 0n) throw invalidEventCount(value);
+    parsed = value;
+  } else {
+    throw invalidEventCount(value);
+  }
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw invalidEventCount(value);
+  return Number(parsed);
 }
 
 function currentUtcMonthWindow(now = new Date()) {
@@ -114,9 +157,13 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
       if (range?.from) conditions.push(gte(costEvents.occurredAt, range.from));
       if (range?.to) conditions.push(lte(costEvents.occurredAt, range.to));
 
-      const [{ total }] = await db
+      const [{ total, eventCount }] = await db
         .select({
           total: sumAsNumber(costEvents.costCents),
+          // GAP-FILL R9-F: expose the number of cost_events behind the total.
+          // GAP-FILL R10 (Chronos r9 P2): no ::int narrowing — count(*) stays
+          // bigint and converts exactly via eventCountAsNumber.
+          eventCount: sql<string>`count(*)`,
         })
         .from(costEvents)
         .where(and(...conditions));
@@ -132,6 +179,7 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         spendCents,
         budgetCents: company.budgetMonthlyCents,
         utilizationPercent: Number(utilization.toFixed(2)),
+        eventCount: eventCountAsNumber(eventCount),
       };
     },
 
@@ -539,6 +587,16 @@ export function costService(db: Db, budgetHooks: BudgetServiceHooks = {}) {
         .where(and(...conditions, sql`${effectiveProjectId} is not null`))
         .groupBy(effectiveProjectId, projects.name)
         .orderBy(desc(costCentsExpr));
+    },
+
+    fleetDashboard: async (companyId: string, query: FleetDashboardQuery = {}) => {
+      const company = await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(eq(companies.id, companyId))
+        .then((rows) => rows[0] ?? null);
+      if (!company) throw notFound("Company not found");
+      return buildFleetCostDashboard(db, companyId, query);
     },
   };
 }

@@ -3,10 +3,12 @@ import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { goals, issues, projects, projectGoals } from "@paperclipai/db";
 import { createGoalSchema, updateGoalSchema, linkProjectToGoalSchema } from "@paperclipai/shared";
+import { trackGoalCreated } from "@paperclipai/shared/telemetry";
 import { validate } from "../middleware/validate.js";
 import { goalService, logActivity } from "../services/index.js";
 import { wakeGoalOwner } from "../services/goal-wakeups.js";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { getTelemetryClient } from "../telemetry.js";
 
 export function goalRoutes(db: Db) {
   const router = Router();
@@ -48,6 +50,14 @@ export function goalRoutes(db: Db) {
 
     if (goal.status === "active") {
       await wakeGoalOwner(db, goal.id, "goal_activated", { actor });
+    }
+
+    // GAP-FILL R9: restore goal.created telemetry emission — the shared
+    // trackGoalCreated helper and the project-goal-telemetry-routes contract
+    // both expect parity with project.created, but the route never emitted.
+    const telemetryClient = getTelemetryClient();
+    if (telemetryClient) {
+      trackGoalCreated(telemetryClient, { goalLevel: goal.level });
     }
 
     res.status(201).json(goal);

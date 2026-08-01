@@ -26,6 +26,12 @@ export interface CostSummary {
   spendCents: number;
   budgetCents: number;
   utilizationPercent: number;
+  /**
+   * Count of cost_events rows aggregated into spendCents for the requested
+   * range (GAP-FILL R9-F: makes the event count behind a spend total visible
+   * in the UI, not just derivable from the DB).
+   */
+  eventCount: number;
 }
 
 export interface IssueCostSummary {
@@ -125,6 +131,193 @@ export interface CostByProject {
   inputTokens: number;
   cachedInputTokens: number;
   outputTokens: number;
+}
+
+export type FleetCostDashboardGrain = "day" | "week" | "month";
+
+export type FleetCostDashboardSourceStatus = "ok" | "unavailable" | "not-configured";
+
+export interface FleetCostDashboardSource {
+  boxId: string;
+  collectorId: string;
+  profileId: string | null;
+  /** collection mechanism: local Hermes DBs or a staged cross-box envelope file */
+  kind: "hermes-local" | "envelope-file";
+  status: FleetCostDashboardSourceStatus;
+  observedAt: string | null;
+  checkpoint: { sequence: number; cursor?: string | null } | null;
+  errors: string[];
+  /** human-readable explanation for non-ok statuses; never silently omitted */
+  detail: string | null;
+}
+
+/**
+ * Per-row speed availability (AUTONOMOUS GAP-FILL C mixed coverage contract):
+ * `available` = one or more observed sidecar calls uniquely attributed to this
+ * model identity and zero ambiguous omitted candidate calls; `partial` = one
+ * or more unique samples coexist with one or more ambiguous omitted candidate
+ * calls (speed metrics are computed from the unique samples only and visibly
+ * labeled partial); `ambiguous` = zero unique samples and one or more
+ * ambiguous candidate calls (ownership cannot be determined without guessing,
+ * so all speed fields are null); `unavailable` = neither unique nor ambiguous
+ * samples.
+ */
+export type FleetModelSpeedAvailability = "available" | "partial" | "unavailable" | "ambiguous";
+
+export interface FleetSpeedMetricAvailability {
+  avgLatencyMs: "available" | "unavailable";
+  avgTtftMs: "available" | "unavailable";
+  throughputOutputTokensPerSecond: "available" | "unavailable";
+}
+
+/**
+ * Global availability for the fleet dashboard. Derived from what rows
+ * actually render, never from raw sidecar row presence: if every model row
+ * is ambiguous or has no attributed samples, `modelSpeed` is `unavailable`
+ * even when observed sidecar calls exist. The task surface (`taskSpeed`) is
+ * computed from each task's own observed calls and is reported independently
+ * of model-row attribution ambiguity. `stalls` is reserved and currently
+ * always `unavailable`.
+ */
+export interface FleetCostDashboardAvailability {
+  /** availability of the per-model decision surface speed metrics */
+  modelSpeed: FleetSpeedMetricAvailability;
+  /** availability of the per-task speed metrics */
+  taskSpeed: FleetSpeedMetricAvailability;
+  stalls: "available" | "unavailable";
+}
+
+export interface FleetCostDashboardPayload {
+  companyId: string;
+  grain: FleetCostDashboardGrain;
+  filters: Record<string, string | undefined>;
+  freshness: {
+    observedAt: string | null;
+    checkpoint: { sequence: number; cursor?: string | null } | null;
+    errors: string[];
+  };
+  /** per-box collection reports; every configured source is listed, ok or not */
+  sources: FleetCostDashboardSource[];
+  availability: FleetCostDashboardAvailability;
+  trends: Array<{
+    bucket: string;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    completedTasks: number;
+  }>;
+  modelRows: Array<{
+    provider: string;
+    model: string;
+    billingMode: string;
+    costStatus: string;
+    costSource: string;
+    pricingVersion: string | null;
+    estimatedCostUsd: number;
+    actualCostUsd: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+    reasoningTokens: number;
+    /**
+     * API-call count from the Hermes `state.db` `session_model_usage.api_call_count`
+     * cost-usage telemetry for this exact billing/cost identity. This is the
+     * aggregate-usage source; it is NOT the count of observed sidecar speed
+     * samples and may legitimately differ from `speedSampleApiCalls`.
+     */
+    usageApiCalls: number;
+    /**
+     * Count of observed sidecar `api_calls` speed samples uniquely attributed
+     * to this exact billing/cost identity. `null` when ownership is ambiguous
+     * (split billing identities in one session); exact (possibly 0) otherwise.
+     * In the `partial` state this counts only the unique samples that back the
+     * rendered speed metrics.
+     */
+    speedSampleApiCalls: number | null;
+    /**
+     * Count of observed candidate speed samples omitted from this identity's
+     * metrics because their attribution was ambiguous (split billing
+     * identities in one session). Exact in every state (0 when none); the
+     * included (`speedSampleApiCalls`) and omitted counts are always
+     * disclosed together (AUTONOMOUS GAP-FILL C).
+     */
+    speedAmbiguousOmittedApiCalls: number;
+    /** per-row speed availability/reason; see FleetModelSpeedAvailability */
+    speedAvailability: FleetModelSpeedAvailability;
+    avgLatencyMs: number | null;
+    avgTtftMs: number | null;
+    throughputOutputTokensPerSecond: number | null;
+    completedTasks: number;
+    costPerCompletedTaskUsd: number | null;
+    avgTaskWallClockMs: number | null;
+    /**
+     * Distinct observed `turnId`s among sidecar calls uniquely attributed to
+     * this exact model identity. `null` when speed telemetry is ambiguous or
+     * unavailable; never copied from whole-task totals.
+     */
+    turns: number | null;
+    /**
+     * Sum of `api_call_count` over this identity's own `session_model_usage`
+     * rows whose task is `compression`. Exact per identity; never copied from
+     * another model or from whole-task totals.
+     */
+    compactions: number;
+    stalls: number | null;
+    stallsAvailability: "available" | "unavailable";
+    /** fleet boxes that contributed usage to this merged model row */
+    boxes: string[];
+  }>;
+  taskRows: Array<{
+    issueId: string | null;
+    issueIdentifier: string | null;
+    issueTitle: string | null;
+    projectId: string | null;
+    projectName: string | null;
+    agentId: string | null;
+    agentName: string | null;
+    runIds: string[];
+    sessionIds: string[];
+    completionState: string | null;
+    costUsd: number;
+    costPerCompletedTaskUsd: number | null;
+    inputTokens: number;
+    outputTokens: number;
+    wallClockMs: number | null;
+    turns: number;
+    throughputOutputTokensPerSecond: number | null;
+    avgLatencyMs: number | null;
+    avgTtftMs: number | null;
+    compactions: number;
+    stalls: number | null;
+    /** fleet boxes that contributed usage to this task row */
+    boxes: string[];
+    models: Array<{
+      provider: string;
+      model: string;
+      billingMode: string;
+      costStatus: string;
+      costSource: string;
+      pricingVersion: string | null;
+      estimatedCostUsd: number | null;
+      actualCostUsd: number | null;
+      costUsd: number | null;
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheWriteTokens: number;
+      reasoningTokens: number;
+    }>;
+  }>;
+  unattributedSessions: Array<{
+    sessionId: string;
+    boxId: string;
+    startedAt: string | null;
+    billingMode: string;
+    costStatus: string;
+    estimatedCostUsd: number | null;
+    actualCostUsd: number | null;
+  }>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

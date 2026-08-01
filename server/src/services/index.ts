@@ -36,6 +36,31 @@ export { budgetService } from "./budgets.js";
 export { secretService } from "./secrets.js";
 export { routineService } from "./routines.js";
 export { costService } from "./costs.js";
+export {
+  aggregateFleetCostDashboard,
+  buildFleetCostDashboard,
+  buildFleetObservationEnvelope,
+  buildLocalFleetCostDashboard,
+  collectWindowsEnvelopeBox,
+  DEFAULT_FLEET_BOX_ID,
+  extractFullHermesSessionId,
+  FleetObservationEnvelopeError,
+  HermesUsageReadError,
+  ingestFleetObservations,
+  loadHermesRunAttributions,
+  normalizeFleetEnvelopeToUsage,
+  parseFleetObservationEnvelope,
+  readHermesApiCalls,
+  readHermesSessionUsage,
+  type FleetBoxCollection,
+  type FleetDashboardQuery,
+  type FleetObservationEnvelope,
+  type FleetObservationStore,
+  type FleetSourceReport,
+  type HermesApiCall,
+  type HermesRunAttribution,
+  type HermesUsageSnapshot,
+} from "./fleet-cost-dashboard.js";
 export { financeService } from "./finance.js";
 export { heartbeatService } from "./heartbeat.js";
 export {

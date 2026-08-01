@@ -36,6 +36,7 @@ import { EmptyState } from "../components/EmptyState";
 import { FinanceBillerCard } from "../components/FinanceBillerCard";
 import { FinanceKindCard } from "../components/FinanceKindCard";
 import { FinanceTimelineCard } from "../components/FinanceTimelineCard";
+import { FleetCostDashboardPanel } from "../components/FleetCostDashboardPanel";
 import { Identity } from "../components/Identity";
 import { PageSkeleton } from "../components/PageSkeleton";
 import { PageTabBar } from "../components/PageTabBar";
@@ -488,6 +489,11 @@ export function Costs() {
   });
 
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [fleetProjectId, setFleetProjectId] = useState("");
+  const [fleetIssueId, setFleetIssueId] = useState("");
+  const [fleetAgentId, setFleetAgentId] = useState("");
+  const [fleetModel, setFleetModel] = useState("");
+  const [fleetGrain, setFleetGrain] = useState<"day" | "week" | "month">("day");
   useEffect(() => {
     setExpandedAgents(new Set());
   }, [companyId, from, to]);
@@ -513,6 +519,35 @@ export function Costs() {
     }
     return map;
   }, [spendData?.byAgentModel]);
+
+  const fleetProjectOptions = useMemo(
+    () => (spendData?.byProject ?? []).filter((row) => row.projectId),
+    [spendData?.byProject],
+  );
+  const fleetAgentOptions = useMemo(
+    () => (spendData?.byAgent ?? []).filter((row) => row.agentId),
+    [spendData?.byAgent],
+  );
+  const fleetModelOptions = useMemo(
+    () => [...new Set((spendData?.byAgentModel ?? []).map((row) => row.model))].sort(),
+    [spendData?.byAgentModel],
+  );
+
+  const { data: fleetCostDashboard, error: fleetCostDashboardError } = useQuery({
+    queryKey: ["costs", "fleet-dashboard", companyId, from || undefined, to || undefined, fleetProjectId, fleetIssueId, fleetAgentId, fleetModel, fleetGrain],
+    queryFn: () => costsApi.fleetDashboard(companyId, {
+      from: from || undefined,
+      to: to || undefined,
+      projectId: fleetProjectId || undefined,
+      issueId: fleetIssueId || undefined,
+      agentId: fleetAgentId || undefined,
+      model: fleetModel || undefined,
+      grain: fleetGrain,
+    }),
+    enabled: !!selectedCompanyId && customReady,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
 
   const { data: providerData } = useQuery({
     queryKey: queryKeys.usageByProvider(companyId, from || undefined, to || undefined),
@@ -838,6 +873,10 @@ export function Costs() {
   const budgetCents = spendData?.summary.budgetCents ?? 0;
   const hasBudgetCap = budgetCents > 0;
   const spendCents = spendData?.summary.spendCents ?? 0;
+  // GAP-FILL R9-F: number of cost_events rows behind the request-scoped
+  // total, rendered next to the ledger total so the event count is visible
+  // in the DOM/pixels, not just derivable from the DB.
+  const spendEventCount = spendData?.summary.eventCount ?? 0;
   // Repoint the Inference-spend headline from the cost_events bridge ESTIMATE
   // to the authoritative MLflow total (real per-call billed cost across every
   // metered model, including Gemini + Qwen which bypass the litellm proxy and
@@ -1066,7 +1105,7 @@ export function Costs() {
               {/* Row 1: spend-over-time · spend-by-agent · budget status + alerts */}
               <div className="grid gap-5 lg:grid-cols-[1.45fr_0.95fr_1.05fr]">
                 {/* Spend over time */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <TrendingUp className="h-4 w-4" style={{ color: DS.primary }} />
@@ -1086,7 +1125,7 @@ export function Costs() {
                 </div>
 
                 {/* Spend by agent */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Spend by agent</SectionLabel>
                   </div>
@@ -1228,14 +1267,93 @@ export function Costs() {
                 </div>
               </div>
 
+              <div style={surfaceCard} className="space-y-3 p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div>
+                    <SectionLabel>Fleet collector</SectionLabel>
+                    <div className="mt-1 text-[13px]" style={{ color: DS.textMuted }}>
+                      Combined cost and speed filters across fleet observation sources (Mac-local collector plus staged cross-box envelopes).
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    <select
+                      value={fleetProjectId}
+                      onChange={(event) => setFleetProjectId(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet project filter"
+                    >
+                      <option value="">All projects</option>
+                      {fleetProjectOptions.map((row) => (
+                        <option key={row.projectId ?? ""} value={row.projectId ?? ""}>{row.projectName ?? "Unnamed project"}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={fleetAgentId}
+                      onChange={(event) => setFleetAgentId(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet agent filter"
+                    >
+                      <option value="">All agents</option>
+                      {fleetAgentOptions.map((row) => (
+                        <option key={row.agentId} value={row.agentId}>{row.agentName ?? row.agentId}</option>
+                      ))}
+                    </select>
+                    <input
+                      value={fleetIssueId}
+                      onChange={(event) => setFleetIssueId(event.target.value)}
+                      placeholder="Issue id"
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet issue filter"
+                    />
+                    <select
+                      value={fleetModel}
+                      onChange={(event) => setFleetModel(event.target.value)}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet model filter"
+                    >
+                      <option value="">All models</option>
+                      {fleetModelOptions.map((model) => (
+                        <option key={model} value={model}>{model}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={fleetGrain}
+                      onChange={(event) => setFleetGrain(event.target.value as "day" | "week" | "month")}
+                      className="h-9 rounded-md border px-2 text-sm"
+                      style={{ background: DS.surface, borderColor: DS.border2, color: DS.text }}
+                      aria-label="Fleet trend grain"
+                    >
+                      <option value="day">Day</option>
+                      <option value="week">Week</option>
+                      <option value="month">Month</option>
+                    </select>
+                  </div>
+                </div>
+                {fleetCostDashboard ? (
+                  <FleetCostDashboardPanel payload={fleetCostDashboard} />
+                ) : fleetCostDashboardError ? (
+                  <div className="rounded-lg border border-dashed p-4 text-sm" style={{ borderColor: DS.border2, color: DS.textMuted }}>
+                    Fleet dashboard unavailable: {fleetCostDashboardError instanceof Error ? fleetCostDashboardError.message : "collector error"}
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-dashed p-4 text-sm" style={{ borderColor: DS.border2, color: DS.textMuted }}>
+                    Fleet dashboard data is loading.
+                  </div>
+                )}
+              </div>
+
               {/* Row 2: inference ledger + finance ledger tables */}
               <div className="grid gap-5 lg:grid-cols-2">
                 {/* Inference ledger */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Inference ledger (request-scoped)</SectionLabel>
                     <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>
-                      {formatCents(spendCents)}
+                      {formatCents(spendCents)} · {spendEventCount} events
                     </span>
                   </div>
                   {inferenceLedger.length === 0 ? (
@@ -1286,7 +1404,7 @@ export function Costs() {
                 </div>
 
                 {/* Finance ledger */}
-                <div style={surfaceCard} className="flex flex-col p-5">
+                <div style={surfaceCard} className="flex min-w-0 flex-col p-5">
                   <div className="mb-3 flex items-center justify-between">
                     <SectionLabel>Finance ledger (account-level)</SectionLabel>
                     <span className="text-[11px] tabular-nums" style={{ color: DS.textFaint, fontFamily: MONO }}>

@@ -3,6 +3,11 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { afterAll, afterEach, beforeAll } from "vitest";
 import { randomUUID } from "node:crypto";
+import { sql } from "drizzle-orm";
+import { DatabaseSync } from "node:sqlite";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   createDb,
   companies,
@@ -14,12 +19,74 @@ import {
   issues,
   projects,
 } from "@paperclipai/db";
-import { costService } from "../services/costs.ts";
+import { costService, eventCountAsNumber } from "../services/costs.ts";
 import { financeService } from "../services/finance.ts";
 import {
   getEmbeddedPostgresTestSupport,
   startEmbeddedPostgresTestDatabase,
 } from "./helpers/embedded-postgres.js";
+
+const tempPaths: string[] = [];
+
+async function tempDirectory() {
+  const path = await mkdtemp(join(tmpdir(), "paperclip-cost-route-"));
+  tempPaths.push(path);
+  return path;
+}
+
+function createHermesStateDb(path: string, sessionId = "20260724_010203_unbound") {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      started_at REAL,
+      ended_at REAL,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT
+    );
+    CREATE TABLE session_model_usage (
+      session_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      billing_provider TEXT NOT NULL,
+      task TEXT NOT NULL DEFAULT '',
+      api_call_count INTEGER NOT NULL DEFAULT 0,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+      reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+      estimated_cost_usd REAL,
+      actual_cost_usd REAL,
+      billing_mode TEXT NOT NULL DEFAULT 'unknown',
+      cost_status TEXT NOT NULL DEFAULT 'unknown',
+      cost_source TEXT NOT NULL DEFAULT 'none',
+      pricing_version TEXT,
+      first_seen REAL,
+      last_seen REAL
+    );
+  `);
+  db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(sessionId, 1_785_000_000, 1_785_000_010, 10, 5, 0, 0, 0, 1, 0, null, "subscription_included", "included", "none", "hermes-2026-07");
+  db.prepare("INSERT INTO session_model_usage VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(sessionId, "included-model", "provider-a", "", 1, 10, 5, 0, 0, 0, 0, null, "subscription_included", "included", "none", "hermes-2026-07", 1_785_000_000, 1_785_000_010);
+  db.close();
+}
+
+function createIncompatibleHermesStateDb(path: string) {
+  const db = new DatabaseSync(path);
+  db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY)");
+  db.close();
+}
 
 function makeDb(overrides: Record<string, unknown> = {}) {
   const selectChain = {
@@ -84,6 +151,29 @@ const mockCostService = vi.hoisted(() => ({
   }),
   windowSpend: vi.fn().mockResolvedValue([]),
   byProject: vi.fn().mockResolvedValue([]),
+  fleetDashboard: vi.fn().mockResolvedValue({
+    companyId: "company-1",
+    grain: "day",
+    filters: {},
+    freshness: { observedAt: null, checkpoint: null, errors: [] },
+    availability: {
+      modelSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      taskSpeed: {
+        avgLatencyMs: "unavailable",
+        avgTtftMs: "unavailable",
+        throughputOutputTokensPerSecond: "unavailable",
+      },
+      stalls: "unavailable",
+    },
+    trends: [],
+    taskRows: [],
+    modelRows: [],
+    unattributedSessions: [],
+  }),
 }));
 const mockFinanceService = vi.hoisted(() => ({
   createEvent: vi.fn(),
@@ -200,6 +290,10 @@ beforeEach(() => {
   mockBudgetService.upsertPolicy.mockResolvedValue(undefined);
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("cost routes", () => {
   it("accepts valid ISO date strings", async () => {
     const { parseCostDateRange } = await loadCostParsers();
@@ -257,6 +351,80 @@ describe("cost routes", () => {
       runCount: 0,
       runtimeMs: 0,
     });
+  });
+
+  it("routes combined fleet dashboard filters through the company-scoped cost service", async () => {
+    const app = await createApp();
+    mockCostService.fleetDashboard.mockResolvedValueOnce({
+      companyId: "company-1",
+      grain: "week",
+      filters: {
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+      },
+      freshness: {
+        observedAt: "2026-07-24T01:02:10.000Z",
+        checkpoint: { sequence: 7 },
+        errors: [],
+      },
+      availability: {
+        modelSpeed: {
+          avgLatencyMs: "unavailable",
+          avgTtftMs: "available",
+          throughputOutputTokensPerSecond: "unavailable",
+        },
+        taskSpeed: {
+          avgLatencyMs: "unavailable",
+          avgTtftMs: "unavailable",
+          throughputOutputTokensPerSecond: "unavailable",
+        },
+        stalls: "unavailable",
+      },
+      trends: [],
+      taskRows: [],
+      modelRows: [],
+      unattributedSessions: [],
+    });
+
+    const res = await request(app)
+      .get("/api/companies/company-1/costs/fleet-dashboard")
+      .query({
+        from: "2026-07-01T00:00:00.000Z",
+        to: "2026-07-31T23:59:59.999Z",
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+        grain: "week",
+      });
+
+    expect(res.status).toBe(200);
+    expect(mockCostService.fleetDashboard).toHaveBeenCalledWith("company-1", {
+      range: {
+        from: new Date("2026-07-01T00:00:00.000Z"),
+        to: new Date("2026-07-31T23:59:59.999Z"),
+      },
+      filters: {
+        projectId: "project-1",
+        issueId: "issue-1",
+        agentId: "agent-1",
+        model: "model-included",
+      },
+      grain: "week",
+    });
+    expect(res.body.grain).toBe("week");
+  });
+
+  it("returns 503 when the fleet dashboard collector fails closed", async () => {
+    const app = await createApp();
+    mockCostService.fleetDashboard.mockRejectedValueOnce(Object.assign(new Error("HERMES_COST_COMPANY_ID is required"), { status: 503 }));
+
+    const res = await request(app).get("/api/companies/company-1/costs/fleet-dashboard");
+
+    expect(res.status).toBe(503);
+    expect(res.body).toEqual({ error: "HERMES_COST_COMPANY_ID is required" });
   });
 
   it("returns 400 for invalid finance event list limits", async () => {
@@ -393,6 +561,111 @@ describe("cost routes", () => {
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
+// GAP-FILL R10 (Chronos r9 P2): PostgreSQL count(*) returns bigint. The
+// previous `count(*)::int` narrowed to int4 and errored at the first
+// unrepresentable count (2,147,483,648) even though the shared `number`
+// contract represents exact integers through 2^53 - 1. These tests pin the
+// conversion used by costService.summary from the driver's count(*) value to
+// the shared numeric representation.
+describe("eventCountAsNumber conversion (GAP-FILL R10, Chronos r9 P2)", () => {
+  it("converts the first int4-unrepresentable count exactly", () => {
+    expect(eventCountAsNumber("2147483648")).toBe(2_147_483_648);
+  });
+
+  it("converts Number.MAX_SAFE_INTEGER exactly", () => {
+    expect(eventCountAsNumber("9007199254740991")).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it("normalizes empty and zero counts to 0", () => {
+    expect(eventCountAsNumber(null)).toBe(0);
+    expect(eventCountAsNumber(undefined)).toBe(0);
+    expect(eventCountAsNumber("0")).toBe(0);
+    expect(eventCountAsNumber(0)).toBe(0);
+  });
+
+  it("accepts number and bigint driver representations", () => {
+    expect(eventCountAsNumber(2)).toBe(2);
+    expect(eventCountAsNumber(2n)).toBe(2);
+  });
+
+  it("fails loud instead of returning an inexact or invalid count", () => {
+    expect(() => eventCountAsNumber("9007199254740993")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("not-a-count")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("-1")).toThrow(/safe integer/);
+  });
+});
+
+// GAP-FILL R14 (Chronos r10 P2): the converter must validate the advertised
+// string/number/bigint/null contract exactly — no Number() coercion of
+// malformed or unsupported values. Empty/whitespace strings, booleans,
+// objects/arrays, exponent strings, fraction strings, non-canonical signs,
+// negatives, and over-MAX_SAFE values must throw; canonical decimal strings
+// are parsed through exact integer (BigInt) semantics before the safe-integer
+// ceiling is enforced.
+describe("eventCountAsNumber strict exact parser (GAP-FILL R14, Chronos r10 P2)", () => {
+  it("rejects empty and whitespace-only strings instead of coercing them to 0", () => {
+    expect(() => eventCountAsNumber("")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("   ")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("\t\n ")).toThrow(/safe integer/);
+  });
+
+  it("rejects booleans instead of coercing them to 0/1", () => {
+    expect(() => eventCountAsNumber(false)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(true)).toThrow(/safe integer/);
+  });
+
+  it("rejects objects and arrays instead of coercing them", () => {
+    expect(() => eventCountAsNumber({})).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber([])).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber([3])).toThrow(/safe integer/);
+  });
+
+  it("rejects exponent strings instead of coercing them", () => {
+    expect(() => eventCountAsNumber("1e3")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("2E5")).toThrow(/safe integer/);
+  });
+
+  it("rejects fraction strings, including integral-looking .0 forms", () => {
+    expect(() => eventCountAsNumber("1.0")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("3.14")).toThrow(/safe integer/);
+  });
+
+  it("rejects a near-MAX_SAFE decimal that Number() would round into a safe integer", () => {
+    // Number("9007199254740990.9") rounds to 9007199254740991; the coercive
+    // parser silently returned that different count. Exact integer semantics
+    // must reject the malformed string instead.
+    expect(() => eventCountAsNumber("9007199254740990.9")).toThrow(/safe integer/);
+  });
+
+  it("rejects non-canonical signs and surrounding whitespace on strings", () => {
+    expect(() => eventCountAsNumber("+1")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("-0")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(" 1")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("1 ")).toThrow(/safe integer/);
+  });
+
+  it("rejects negative numbers/bigints and values beyond the safe-integer ceiling", () => {
+    expect(() => eventCountAsNumber(-1)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(-1n)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(1.5)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(9007199254740993n)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("9007199254740992")).toThrow(/safe integer/);
+  });
+
+  it("preserves valid canonical inputs exactly", () => {
+    expect(eventCountAsNumber(null)).toBe(0);
+    expect(eventCountAsNumber(undefined)).toBe(0);
+    expect(eventCountAsNumber("0")).toBe(0);
+    expect(eventCountAsNumber("2147483648")).toBe(2_147_483_648);
+    expect(eventCountAsNumber("9007199254740991")).toBe(Number.MAX_SAFE_INTEGER);
+    expect(eventCountAsNumber(0)).toBe(0);
+    expect(eventCountAsNumber(398)).toBe(398);
+    expect(eventCountAsNumber(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(eventCountAsNumber(2n)).toBe(2);
+    expect(eventCountAsNumber(9007199254740991n)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
 describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   let db!: ReturnType<typeof createDb>;
   let costs!: ReturnType<typeof costService>;
@@ -407,6 +680,7 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   }, 20_000);
 
   afterEach(async () => {
+    await Promise.all(tempPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
     await db.delete(financeEvents);
     await db.delete(costEvents);
     await db.delete(activityLog);
@@ -494,6 +768,204 @@ describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
     expect(byAgentRow?.inputTokens).toBe(4_000_000_000);
     expect(byProjectRow?.costCents).toBe(4_000_000_000);
     expect(byAgentModelRow?.costCents).toBe(4_000_000_000);
+
+    // GAP-FILL R9-F: summary returns the event count behind the total.
+    const summary = await costs.summary(companyId, range);
+    expect(summary.spendCents).toBe(4_000_000_000);
+    expect(summary.eventCount).toBe(2);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): empty request-scoped population must
+  // report zero for both the total and the count of the same rows.
+  it("returns zero spendCents and zero eventCount for an empty request-scoped population", async () => {
+    const companyId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Empty Co",
+      issuePrefix: `E${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const unfiltered = await costs.summary(companyId);
+    expect(unfiltered.spendCents).toBe(0);
+    expect(unfiltered.eventCount).toBe(0);
+
+    const ranged = await costs.summary(companyId, {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    });
+    expect(ranged.spendCents).toBe(0);
+    expect(ranged.eventCount).toBe(0);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): documents the exact failure boundary the
+  // fix removes — the previous `count(*)::int` expression errors at the
+  // first int4-unrepresentable count, while the un-narrowed bigint count
+  // converts exactly through eventCountAsNumber.
+  it("keeps count(*) un-narrowed: the int4 cast errors at 2^31 while bigint converts exactly", async () => {
+    await expect(db.execute(sql`select 2147483648::int`)).rejects.toThrow();
+
+    const raw: unknown = await db.execute(sql`select 2147483648::bigint as c`);
+    const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? []);
+    expect(eventCountAsNumber((rows[0] as { c?: unknown })?.c)).toBe(2_147_483_648);
+  });
+
+  // GAP-FILL R10 (Chronos r9 P2): the count must describe exactly the
+  // request-scoped rows behind spendCents, and the raw driver count must
+  // round-trip exactly through the same conversion the service uses.
+  it("counts exactly the request-scoped rows behind spendCents", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Scoped Co",
+      issuePrefix: `S${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+    await db.insert(agents).values({
+      id: agentId,
+      companyId,
+      name: "Scoped Agent",
+      role: "engineer",
+      status: "active",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+
+    const inRange = [
+      new Date("2026-04-10T00:00:00.000Z"),
+      new Date("2026-04-11T00:00:00.000Z"),
+      new Date("2026-04-12T00:00:00.000Z"),
+    ];
+    await db.insert(costEvents).values([
+      ...inRange.map((occurredAt) => ({
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 100,
+        occurredAt,
+      })),
+      {
+        companyId,
+        agentId,
+        provider: "openai",
+        biller: "openai",
+        billingType: "metered_api",
+        model: "gpt-5",
+        inputTokens: 1,
+        cachedInputTokens: 0,
+        outputTokens: 1,
+        costCents: 999,
+        occurredAt: new Date("2026-05-01T00:00:00.000Z"),
+      },
+    ]);
+
+    const range = {
+      from: new Date("2026-04-01T00:00:00.000Z"),
+      to: new Date("2026-04-15T23:59:59.999Z"),
+    };
+    const summary = await costs.summary(companyId, range);
+    expect(summary.spendCents).toBe(300);
+    expect(summary.eventCount).toBe(3);
+
+    const raw: unknown = await db.execute(
+      sql`select count(*) as c from cost_events where company_id = ${companyId} and occurred_at >= ${range.from.toISOString()} and occurred_at <= ${range.to.toISOString()}`,
+    );
+    const rows = Array.isArray(raw) ? raw : ((raw as { rows?: unknown[] })?.rows ?? []);
+    expect(eventCountAsNumber((rows[0] as { c?: unknown })?.c)).toBe(summary.eventCount);
+  });
+
+  it("fails the local fleet dashboard endpoint closed when the collector company binding is missing", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", undefined);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const service = costService(db);
+    await expect(service.fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/HERMES_COST_COMPANY_ID/i);
+  });
+
+  it("fails the local fleet dashboard endpoint closed when the collector company binding mismatches", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", randomUUID());
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const service = costService(db);
+    await expect(service.fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/collector company binding/i);
+  });
+
+  it("allows unattributed local sessions only when the collector company binding matches", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", companyId);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    const dashboard = await costService(db).fleetDashboard(companyId, { grain: "day" });
+
+    expect(dashboard.unattributedSessions).toEqual([
+      expect.objectContaining({
+        sessionId: "20260724_010203_unbound",
+        billingMode: "subscription_included",
+        costStatus: "included",
+        actualCostUsd: null,
+      }),
+    ]);
+  });
+
+  it("fails the local fleet dashboard endpoint loudly on incompatible Hermes state schema", async () => {
+    const companyId = randomUUID();
+    const statePath = join(await tempDirectory(), "state.db");
+    createIncompatibleHermesStateDb(statePath);
+    vi.stubEnv("HERMES_STATE_DB_PATH", statePath);
+    vi.stubEnv("HERMES_COST_TELEMETRY_DB_PATH", join(await tempDirectory(), "telemetry.sqlite3"));
+    vi.stubEnv("HERMES_COST_COMPANY_ID", companyId);
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `T${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      requireBoardApprovalForNewAgents: false,
+    });
+
+    await expect(costService(db).fleetDashboard(companyId, { grain: "day" })).rejects.toThrow(/Hermes aggregate usage is unavailable/i);
   });
 
   it("aggregates issue costs across recursive descendants only", async () => {
