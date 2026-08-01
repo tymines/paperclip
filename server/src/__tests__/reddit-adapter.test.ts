@@ -8,7 +8,9 @@
  *  - Real-token self-post hits POST oauth.reddit.com/api/submit with the
  *    correct headers + body and unwraps Reddit's JSON-of-JSON envelope.
  *  - Real-token link post sets kind=link + url.
- *  - Image posts are explicitly not yet implemented and throw 501.
+ *  - Single-image posts go through the asset-lease upload flow; gallery
+ *    (multi-image) posts are explicitly not yet implemented and throw 501.
+ *    Media served with an unsupported MIME type throws 415.
  *  - 429 surfaces as RedditRateLimitError with the Retry-After seconds so
  *    the scheduler can back off.
  *  - Reddit's `json.errors` rejection paths surface as RedditApiError.
@@ -222,7 +224,30 @@ describe("reddit adapter — real-token publish", () => {
     expect(body.get("text")).toBeNull();
   });
 
-  it("rejects image posts with a 501 documenting the next iteration", async () => {
+  // GAP-FILL R9: single-image upload is now implemented (asset-lease flow in
+  // services/social-scheduler/reddit.ts); the honest 501 moved to gallery
+  // posts, and unsupported media types surface as 415.
+  it("rejects gallery (multi-image) posts with a 501 documenting the next iteration", async () => {
+    captureFetch(() => jsonResponse({}));
+
+    await expect(
+      redditAdapter.publishPost(
+        fakeAccount(),
+        selfPost({
+          mediaUrls: [
+            "https://cdn.paperclip/local/one.png",
+            "https://cdn.paperclip/local/two.png",
+          ],
+          metadata: { title: "Pics", subreddit: "test" },
+        }),
+      ),
+    ).rejects.toMatchObject({
+      name: "RedditApiError",
+      statusCode: 501,
+    });
+  });
+
+  it("rejects media served with an unsupported MIME type with a 415", async () => {
     captureFetch(() => jsonResponse({}));
 
     await expect(
@@ -235,7 +260,7 @@ describe("reddit adapter — real-token publish", () => {
       ),
     ).rejects.toMatchObject({
       name: "RedditApiError",
-      statusCode: 501,
+      statusCode: 415,
     });
   });
 

@@ -6,7 +6,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Agents } from "./Agents";
+import { Agents, classifyFleetDisplayRole, groupFleetAgents } from "./Agents";
 import { ToastProvider } from "../context/ToastContext";
 
 const mockAgentsApi = vi.hoisted(() => ({
@@ -87,6 +87,32 @@ function makeAgent(overrides: Partial<Agent>): Agent {
     ...overrides,
   };
 }
+
+describe("Fleet display roles", () => {
+  it.each([
+    ["Zeus", "CEO/Manager"],
+    ["Ares", "Manager"],
+    ["Hermes", "Manager"],
+    ["New Agent", "Worker"],
+  ] as const)("classifies %s as %s", (name, role) => {
+    expect(classifyFleetDisplayRole(name)).toBe(role);
+  });
+
+  it("groups only Zeus, Ares, and Hermes in Leadership and defaults unknown agents to Workers", () => {
+    const agents = [
+      makeAgent({ id: "new", name: "New Agent" }),
+      makeAgent({ id: "hermes", name: "Hermes" }),
+      makeAgent({ id: "zeus", name: "Zeus" }),
+      makeAgent({ id: "ares", name: "Ares" }),
+      makeAgent({ id: "baily", name: "Baily AI" }),
+    ];
+
+    const groups = groupFleetAgents(agents);
+
+    expect(groups.leadership.map((agent) => agent.name)).toEqual(["Ares", "Hermes", "Zeus"]);
+    expect(groups.workers.map((agent) => agent.name)).toEqual(["Baily AI", "New Agent"]);
+  });
+});
 
 async function flushReact() {
   await act(async () => {
