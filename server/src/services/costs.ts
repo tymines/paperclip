@@ -24,15 +24,40 @@ function sumAsNumber(column: typeof costEvents.costCents | typeof costEvents.inp
 // integers through 2^53 - 1. Keep count(*) un-narrowed and convert the
 // driver's exact decimal representation to the shared numeric type, failing
 // loud rather than returning an inexact or invalid count.
+//
+// GAP-FILL R14 (Chronos r10 P2): validate the contract exactly — no Number()
+// coercion. Only null/undefined (normalized to 0), primitive canonical
+// non-negative integer strings, primitive safe non-negative integer numbers,
+// and primitive non-negative bigints at or below Number.MAX_SAFE_INTEGER are
+// accepted. Canonical strings are parsed through BigInt (exact integer
+// semantics) so a malformed decimal like "9007199254740990.9" is rejected
+// instead of rounding into a safe integer.
+const CANONICAL_NONNEGATIVE_INTEGER = /^(0|[1-9]\d*)$/;
+
+function invalidEventCount(value: unknown): Error {
+  return new Error(
+    `cost event count is not representable as a non-negative safe integer: ${String(value)}`,
+  );
+}
+
 export function eventCountAsNumber(value: unknown): number {
   if (value === null || value === undefined) return 0;
-  const n = Number(value);
-  if (!Number.isSafeInteger(n) || n < 0) {
-    throw new Error(
-      `cost event count is not representable as a non-negative safe integer: ${String(value)}`,
-    );
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) throw invalidEventCount(value);
+    return value;
   }
-  return n;
+  let parsed: bigint;
+  if (typeof value === "string") {
+    if (!CANONICAL_NONNEGATIVE_INTEGER.test(value)) throw invalidEventCount(value);
+    parsed = BigInt(value);
+  } else if (typeof value === "bigint") {
+    if (value < 0n) throw invalidEventCount(value);
+    parsed = value;
+  } else {
+    throw invalidEventCount(value);
+  }
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) throw invalidEventCount(value);
+  return Number(parsed);
 }
 
 function currentUtcMonthWindow(now = new Date()) {

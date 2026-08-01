@@ -595,6 +595,77 @@ describe("eventCountAsNumber conversion (GAP-FILL R10, Chronos r9 P2)", () => {
   });
 });
 
+// GAP-FILL R14 (Chronos r10 P2): the converter must validate the advertised
+// string/number/bigint/null contract exactly — no Number() coercion of
+// malformed or unsupported values. Empty/whitespace strings, booleans,
+// objects/arrays, exponent strings, fraction strings, non-canonical signs,
+// negatives, and over-MAX_SAFE values must throw; canonical decimal strings
+// are parsed through exact integer (BigInt) semantics before the safe-integer
+// ceiling is enforced.
+describe("eventCountAsNumber strict exact parser (GAP-FILL R14, Chronos r10 P2)", () => {
+  it("rejects empty and whitespace-only strings instead of coercing them to 0", () => {
+    expect(() => eventCountAsNumber("")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("   ")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("\t\n ")).toThrow(/safe integer/);
+  });
+
+  it("rejects booleans instead of coercing them to 0/1", () => {
+    expect(() => eventCountAsNumber(false)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(true)).toThrow(/safe integer/);
+  });
+
+  it("rejects objects and arrays instead of coercing them", () => {
+    expect(() => eventCountAsNumber({})).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber([])).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber([3])).toThrow(/safe integer/);
+  });
+
+  it("rejects exponent strings instead of coercing them", () => {
+    expect(() => eventCountAsNumber("1e3")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("2E5")).toThrow(/safe integer/);
+  });
+
+  it("rejects fraction strings, including integral-looking .0 forms", () => {
+    expect(() => eventCountAsNumber("1.0")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("3.14")).toThrow(/safe integer/);
+  });
+
+  it("rejects a near-MAX_SAFE decimal that Number() would round into a safe integer", () => {
+    // Number("9007199254740990.9") rounds to 9007199254740991; the coercive
+    // parser silently returned that different count. Exact integer semantics
+    // must reject the malformed string instead.
+    expect(() => eventCountAsNumber("9007199254740990.9")).toThrow(/safe integer/);
+  });
+
+  it("rejects non-canonical signs and surrounding whitespace on strings", () => {
+    expect(() => eventCountAsNumber("+1")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("-0")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(" 1")).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("1 ")).toThrow(/safe integer/);
+  });
+
+  it("rejects negative numbers/bigints and values beyond the safe-integer ceiling", () => {
+    expect(() => eventCountAsNumber(-1)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(-1n)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(1.5)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber(9007199254740993n)).toThrow(/safe integer/);
+    expect(() => eventCountAsNumber("9007199254740992")).toThrow(/safe integer/);
+  });
+
+  it("preserves valid canonical inputs exactly", () => {
+    expect(eventCountAsNumber(null)).toBe(0);
+    expect(eventCountAsNumber(undefined)).toBe(0);
+    expect(eventCountAsNumber("0")).toBe(0);
+    expect(eventCountAsNumber("2147483648")).toBe(2_147_483_648);
+    expect(eventCountAsNumber("9007199254740991")).toBe(Number.MAX_SAFE_INTEGER);
+    expect(eventCountAsNumber(0)).toBe(0);
+    expect(eventCountAsNumber(398)).toBe(398);
+    expect(eventCountAsNumber(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(eventCountAsNumber(2n)).toBe(2);
+    expect(eventCountAsNumber(9007199254740991n)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+});
+
 describeEmbeddedPostgres("cost and finance aggregate overflow handling", () => {
   let db!: ReturnType<typeof createDb>;
   let costs!: ReturnType<typeof costService>;
