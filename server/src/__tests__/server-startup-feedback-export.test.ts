@@ -28,6 +28,9 @@ const {
   const feedbackServiceFactoryMock = vi.fn(() => feedbackExportServiceMock);
   const fakeServer = {
     once: vi.fn().mockReturnThis(),
+    // GAP-FILL R9: startServer now also wires the room websocket server, which
+    // subscribes via server.on("upgrade", ...); the http mock predates that.
+    on: vi.fn().mockReturnThis(),
     off: vi.fn().mockReturnThis(),
     listen: vi.fn((_port: number, _host: string, callback?: () => void) => {
       callback?.();

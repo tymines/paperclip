@@ -218,9 +218,14 @@ describe("POST /generate/outline-beats", () => {
       status: "draft",
       entityType: "outline-beats",
     });
-    expect(res.body.draft.chapterNumber).toBe(1);
-    expect(res.body.draft.beats).toBeInstanceOf(Array);
-    expect(res.body.draft.beats.length).toBeGreaterThanOrEqual(2);
+    // GAP-FILL R9: the outline-beats handler now returns a multi-chapter
+    // envelope { draft: { chapters: [...] } } with deterministic server-side
+    // numbering (routes/story-bible-generate.ts, acceptance finding #3 fix);
+    // the old flat draft.chapterNumber shape no longer exists.
+    expect(res.body.draft.chapters).toBeInstanceOf(Array);
+    expect(res.body.draft.chapters[0].chapterNumber).toBe(1);
+    expect(res.body.draft.chapters[0].beats).toBeInstanceOf(Array);
+    expect(res.body.draft.chapters[0].beats.length).toBeGreaterThanOrEqual(2);
   });
 });
 
