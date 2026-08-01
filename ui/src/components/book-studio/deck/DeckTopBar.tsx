@@ -33,16 +33,16 @@ export function DeckTopBar({ books, activeBookId, onSelectBook, onNewBook, statu
   ];
   return (
     <header className="flex items-center gap-3.5 px-4 h-[52px] border-b border-white/5 bg-[#0a0c10] min-w-0">
-      <div className="font-serif text-[15px] whitespace-nowrap">Book <em className="not-italic text-[#e0955a]">Studio</em></div>
+      <div className="font-serif text-[15px] whitespace-nowrap">Book Studio</div>
       <span className="text-gray-600">/</span>
       <span className="w-4 h-[23px] rounded-sm border border-white/15 bg-gradient-to-br from-[#3a2c1e] to-[#6a3f2a] self-center" title="Cover — manage in Media" />
       <select
-        className="bg-transparent border border-white/15 text-gray-200 rounded-md px-1.5 py-1 text-xs max-w-[170px]"
+        className="bg-[#0a0c10] border border-white/15 text-gray-100 rounded-md px-1.5 py-1 text-xs max-w-[170px]"
         value={activeBookId ?? ""}
         onChange={(e) => onSelectBook(e.target.value)}
         title="Switch book"
       >
-        {books.map((b) => <option key={b.id} value={b.id}>{b.title}</option>)}
+        {books.map((b) => <option key={b.id} value={b.id} className="bg-[#0a0c10] text-gray-100">{b.title}</option>)}
       </select>
       <button className="hidden md:inline-flex items-center px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide border border-white/15 rounded-md hover:bg-white/5" onClick={onNewBook} title="Create a new book">+ New Book</button>
       <div className="flex-1" />
