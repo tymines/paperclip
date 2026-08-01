@@ -64,7 +64,15 @@ async function startBridge(overrides: Partial<BridgeConfig> = {}) {
 
 /** Dead-sink callback server: records POSTed bodies; optionally hangs. */
 async function startSink(opts: { hang?: boolean } = {}) {
-  const bodies: Array<{ status?: string; result?: string; error?: string }> = [];
+  const bodies: Array<{
+    status?: string;
+    result?: string;
+    error?: string;
+    stdoutTruncated?: boolean;
+    stderrTruncated?: boolean;
+    stdoutBytes?: number;
+    stderrBytes?: number;
+  }> = [];
   const closes: boolean[] = [];
   let hangingReq: http.IncomingMessage | null = null;
   const server = http.createServer((req, res) => {
@@ -167,6 +175,34 @@ describe("hermes-peer-bridge — resource bounds (PR #30 r7)", () => {
       expect(result).toContain("truncated");
       // Ring keeps the LAST bytes: the head of the output is gone.
       expect(result).not.toContain("HEAD-MARKER");
+      // Success path carries the truncation provenance too (PR #30 r8).
+      expect(sink.bodies[0]!.stdoutTruncated).toBe(true);
+      expect(sink.bodies[0]!.stdoutBytes).toBeGreaterThan(512);
+    } finally {
+      bridge.server.close();
+      sink.server.close();
+      vi.unstubAllEnvs();
+    }
+  }, 15_000);
+
+  it("propagates stderr truncation provenance through the FAILURE callback payload (PR #30 r8)", async () => {
+    // Stub writes >cap bytes to stderr, then exits 1. r7 dropped the
+    // truncation flags on this path — Poseidon's live probe got
+    // {status:"failed"} with no truncation provenance on a 5KB stderr.
+    vi.stubEnv("STUB_ERR_TEXT", "e".repeat(5000));
+    vi.stubEnv("STUB_EXIT", "1");
+    const bridge = await startBridge({ MAX_OUTPUT_BYTES: 512 });
+    const sink = await startSink();
+    try {
+      const { status } = await postDispatch(bridge.url, dispatchBody(sink.url));
+      expect(status).toBe(202);
+      await waitFor(() => sink.bodies.length === 1, 8_000);
+      const payload = sink.bodies[0]!;
+      expect(payload.status).toBe("failed");
+      expect(payload.stderrTruncated).toBe(true);
+      expect(payload.stderrBytes).toBeGreaterThan(512);
+      // stdout was tiny — its flag stays false (provenance is per-stream).
+      expect(payload.stdoutTruncated).toBe(false);
     } finally {
       bridge.server.close();
       sink.server.close();

@@ -154,9 +154,11 @@ class ByteRing {
     this.chunks = [];
     this.size = 0;
     this.truncated = false;
+    this.totalBytes = 0; // everything ever pushed, before capping
   }
 
   push(buf) {
+    this.totalBytes += buf.length;
     if (buf.length >= this.cap) {
       this.chunks = [buf.subarray(buf.length - this.cap)];
       this.size = this.cap;
@@ -230,21 +232,34 @@ export function createBridge(overrides = {}) {
       const proc = spawn(config.HERMES_BIN, args, { env, stdio: ["ignore", "pipe", "pipe"] });
       const out = new ByteRing(config.MAX_OUTPUT_BYTES);
       const err = new ByteRing(config.MAX_OUTPUT_BYTES);
+      // Truncation provenance (PR #30 r8): attached to EVERY outcome —
+      // success, non-zero exit, spawn error, timeout — so no callback
+      // payload can silently drop the fact that captured output was cut.
+      const outputMeta = () => ({
+        stdoutTruncated: out.truncated,
+        stderrTruncated: err.truncated,
+        stdoutBytes: out.totalBytes,
+        stderrBytes: err.totalBytes,
+      });
+      const fail = (e) => {
+        e.outputMeta = outputMeta();
+        reject(e);
+      };
       const timer = setTimeout(() => {
         proc.kill("SIGKILL");
-        reject(new Error(`agent turn timed out after ${config.TURN_TIMEOUT_MS}ms`));
+        fail(new Error(`agent turn timed out after ${config.TURN_TIMEOUT_MS}ms`));
       }, config.TURN_TIMEOUT_MS);
       proc.stdout.on("data", (d) => out.push(d));
       proc.stderr.on("data", (d) => err.push(d));
-      proc.on("error", (e) => { clearTimeout(timer); reject(e); });
+      proc.on("error", (e) => { clearTimeout(timer); fail(e); });
       proc.on("close", (code) => {
         clearTimeout(timer);
         let text = cleanOutput(out.text());
         if (out.truncated) {
           text += `\n\n[output truncated — kept the last ${config.MAX_OUTPUT_BYTES} bytes of agent stdout]`;
         }
-        if (code === 0 && text.trim()) return resolve(text.trim());
-        reject(new Error(`hermes exited ${code}: ${(err.text() || out.text() || "no output").slice(0, 300)}`));
+        if (code === 0 && text.trim()) return resolve({ text: text.trim(), outputMeta: outputMeta() });
+        fail(new Error(`hermes exited ${code}: ${(err.text() || out.text() || "no output").slice(0, 300)}`));
       });
     });
   }
@@ -348,10 +363,10 @@ export function createBridge(overrides = {}) {
       (async () => {
         try {
           console.log(`[${peer} ${delegationId}] dispatch received (${task.length} chars)`);
-          const result = await runAgent(peer, task);
+          const { text, outputMeta } = await runAgent(peer, task);
           if (callback.url && callback.token) {
             try {
-              await postCallback(callback, { status: "completed", result }, `[${peer} ${delegationId}]`);
+              await postCallback(callback, { status: "completed", result: text, ...outputMeta }, `[${peer} ${delegationId}]`);
             } catch (cbErr) {
               // Terminal: log and stop. The server-side lane timeout abandons
               // the row; a retry here risks a duplicate callback, not a save.
@@ -363,7 +378,16 @@ export function createBridge(overrides = {}) {
         } catch (e) {
           console.error(`[${peer} ${delegationId}] failed:`, e.message);
           if (callback.url && callback.token) {
-            await postCallback(callback, { status: "failed", error: e.message.slice(0, 300) }, `[${peer} ${delegationId}]`)
+            // Failure/timeout payloads carry the same truncation provenance
+            // as success (PR #30 r8) — a reviewer must know the captured
+            // stderr/stdout was cut even when the agent died.
+            const meta = e.outputMeta ?? {
+              stdoutTruncated: false,
+              stderrTruncated: false,
+              stdoutBytes: 0,
+              stderrBytes: 0,
+            };
+            await postCallback(callback, { status: "failed", error: e.message.slice(0, 300), ...meta }, `[${peer} ${delegationId}]`)
               .catch((cbErr) => console.error(`[${peer} ${delegationId}] failure callback failed:`, cbErr.message));
           }
         } finally {
