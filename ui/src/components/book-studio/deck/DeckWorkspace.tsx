@@ -95,6 +95,14 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
     saveBeats(next);
   }
 
+  function deleteBeat(i: number) {
+    if (i < 0 || i >= beats.length) return;
+    if (editing === i) setEditing(null);
+    const next = beats.slice();
+    next.splice(i, 1);
+    saveBeats(next);
+  }
+
   async function draft(kind: "fast" | "craft") {
     setDraftMenu(false);
     setBusy(kind);
@@ -229,6 +237,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
                   <button className="w-6 h-6 rounded-md border border-white/15 text-gray-500 hover:text-gray-200 text-[11px]" onClick={() => setEditing(editing === i ? null : i)} title="Edit">✎</button>
                   <button className="w-6 h-6 rounded-md border border-white/15 text-gray-500 hover:text-gray-200 text-[11px]" onClick={() => moveBeat(i, -1)} title="Move up">↑</button>
                   <button className="w-6 h-6 rounded-md border border-white/15 text-gray-500 hover:text-gray-200 text-[11px]" onClick={() => moveBeat(i, 1)} title="Move down">↓</button>
+                  <button className="w-6 h-6 rounded-md border border-white/15 text-gray-500 hover:text-red-300 hover:border-red-400/40 text-[11px]" onClick={() => deleteBeat(i)} title="Delete beat">✕</button>
                 </div>
               </article>
             ))}
