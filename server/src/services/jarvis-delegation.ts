@@ -39,6 +39,9 @@ export type PeerAgentId =
   // Calliope — the creative-Muse agent (Spec v1.4): Book Studio's
   // brainstorm/write chat window IS Calliope. Same additive plain-text path.
   | "calliope"
+  // Hades — the Kimi K3 reviewer agent (PR #30): Book Studio's critic lane
+  // IS Hades. Writer ≠ critic at the agent level, never a raw-model stand-in.
+  | "hades"
   | "august"
   | "codex"
   | "content"
@@ -50,6 +53,10 @@ export interface PeerEndpoint {
   url: string;
   token: string;
   identityId: string;
+  /** Dispatch path on the peer URL (per-peer override of JARVIS_DISPATCH_PATH). */
+  dispatchPath: string;
+  /** Operator-declared peer model (JARVIS_PEER_<NAME>_MODEL) for provenance. */
+  model: string | null;
 }
 
 export interface DelegationInput {
@@ -92,7 +99,12 @@ export function getPeerEndpoint(peer: PeerAgentId): PeerEndpoint {
     process.env[`JARVIS_PEER_${upper}_URL`] ?? DEFAULT_BRIDGE_URL;
   const token =
     process.env[`JARVIS_PEER_${upper}_TOKEN`] ?? DEFAULT_BRIDGE_TOKEN;
-  return { url, token, identityId: peer };
+  const dispatchPath =
+    process.env[`JARVIS_PEER_${upper}_DISPATCH_PATH`] ??
+    process.env.JARVIS_DISPATCH_PATH ??
+    "/jarvis/dispatch";
+  const model = process.env[`JARVIS_PEER_${upper}_MODEL`] ?? null;
+  return { url, token, identityId: peer, dispatchPath, model };
 }
 
 // ============================================================================
@@ -285,10 +297,11 @@ export async function dispatchDelegation(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS);
     try {
-      const target = new URL(
-        process.env.JARVIS_DISPATCH_PATH ?? "/agent/message",
-        endpoint.url,
-      ).toString();
+      // Default dispatch path is /jarvis/dispatch — the endpoint bridge
+      // v3 actually serves for delegations (paperclip-bridge.js). A peer
+      // can override it via JARVIS_PEER_<NAME>_DISPATCH_PATH (resolved into
+      // the endpoint by getPeerEndpoint).
+      const target = new URL(endpoint.dispatchPath, endpoint.url).toString();
       const resp = await fetch(target, {
         method: "POST",
         headers: {
@@ -577,6 +590,7 @@ const PEER_LABEL: Record<PeerAgentId, string> = {
   hermes: "Hermes",
   ares: "Ares (COO)",
   calliope: "Calliope",
+  hades: "Hades (critic)",
   august: "August",
   codex: "Codex",
   content: "the content desk",
@@ -589,6 +603,7 @@ const PEER_ETA: Record<PeerAgentId, string> = {
   hermes: "about ten minutes",
   ares: "a few minutes — Ares fans it out to the fleet",
   calliope: "a minute or two",
+  hades: "a few minutes — Hades reads the whole chapter",
   august: "a few minutes — assuming the Mac mini's reachable",
   codex: "a couple of minutes",
   content: "fifteen or twenty minutes",
