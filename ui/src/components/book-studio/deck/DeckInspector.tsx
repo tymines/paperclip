@@ -22,7 +22,9 @@ interface ReviewRun {
   chapterNumber: number;
   scores?: Record<string, number>;
   verdict?: string;
-  /** Critic provenance — e.g. "hades (agent lane)" or a degraded marker (PR #30). */
+  /** Run summary — baseline runs are prefixed "[PASS]" / "[FAIL]" / "[NO_VERDICT]". */
+  summary?: string;
+  /** Critic provenance — e.g. "hades (live lane) · kimi-k3" or a degraded marker (PR #30). */
   model?: string;
   reviewer?: string;
   createdAt: string;
@@ -77,8 +79,27 @@ export function DeckInspector({ bookId, companySlug, chapterNumber, chapterStatu
   const scores = latestRun?.scores ?? {};
   const dims = Object.keys(DIM_LABELS).filter((d) => scores[d] != null);
 
-  const verdict = chapterStatus === "exception" ? "FAIL" : chapterStatus === "queued" ? "PASS" : chapterStatus === "drafting" || chapterStatus === "draft-pending-review" ? "WORKING" : null;
-  const verdictCls = verdict === "FAIL" ? "text-red-400" : verdict === "WORKING" ? "text-amber-400" : "text-emerald-400";
+  // The run's own recorded verdict (baseline runs stamp "[VERDICT] …" on the
+  // summary) — evidence, never a guess. chapterStatus "exception" collapses
+  // BOTH FAIL and NO_VERDICT; only the run record can tell them apart.
+  const runVerdict = useMemo(() => {
+    const m = /^\[(PASS|FAIL|NO_VERDICT)\]/.exec(latestRun?.summary ?? "");
+    return (m?.[1] as "PASS" | "FAIL" | "NO_VERDICT" | undefined) ?? null;
+  }, [latestRun]);
+
+  // PR #30 r7: an "exception" status is NOT automatically a FAIL. A degraded
+  // Hades NO_VERDICT renders as NO_VERDICT (amber, halts-and-surfaces) —
+  // distinctly from FAIL — and an exception with no run evidence renders as
+  // an unresolved EXCEPTION, never an evidence-free FAIL.
+  const verdict =
+    chapterStatus === "exception"
+      ? runVerdict === "NO_VERDICT" ? "NO_VERDICT"
+        : runVerdict === "FAIL" ? "FAIL"
+        : "EXCEPTION"
+      : chapterStatus === "queued" ? "PASS"
+      : chapterStatus === "drafting" || chapterStatus === "draft-pending-review" ? "WORKING"
+      : null;
+  const verdictCls = verdict === "FAIL" ? "text-red-400" : verdict === "PASS" ? "text-emerald-400" : "text-amber-400";
 
   return (
     <aside className="border-l border-white/5 bg-[#0d1016] min-w-0 overflow-auto flex flex-col" aria-label="Quality inspector">
@@ -105,6 +126,8 @@ export function DeckInspector({ bookId, companySlug, chapterNumber, chapterStatu
                   <b className={`font-serif text-[22px] block ${verdictCls}`}>{verdict}</b>
                   <span className="text-[11px] text-gray-400">
                     {verdict === "FAIL" ? "1 canon exception · re-enters revision"
+                      : verdict === "NO_VERDICT" ? "Critic degraded — no verdict; halts and surfaces, never silently passes"
+                      : verdict === "EXCEPTION" ? "Gate exception — run verdict unavailable; see notes"
                       : verdict === "WORKING" ? "Pipeline running · gate evaluates when the draft lands"
                       : "All rubric ≥ threshold · zero canon violations · queued quietly"}
                   </span>
@@ -115,7 +138,7 @@ export function DeckInspector({ bookId, companySlug, chapterNumber, chapterStatu
             </div>
             {latestRun && (
               <p className="text-[10px] text-gray-600 mb-3 leading-relaxed">
-                writer <b className="text-gray-400">gemini / configured lane</b> · critic <b className="text-gray-400">{latestRun.model || "hades (live lane)"}</b> · run {latestRun.id.slice(0, 8)}
+                writer <b className="text-gray-400">gemini / configured lane</b> · critic <b className="text-gray-400">{latestRun.model || "unknown — no provenance recorded"}</b> · run {latestRun.id.slice(0, 8)}
               </p>
             )}
             {chapterStatus === "exception" && (

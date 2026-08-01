@@ -715,6 +715,8 @@ export type {
   ChatMessageResponse,
   SendChatMessageResponse,
   SendChatMessageDegradedResponse,
+  BaselineReviewReport,
+  RunBaselineReviewResponse,
   DraftEntityType,
   ToDraftResponse,
 } from "./types/index.js";

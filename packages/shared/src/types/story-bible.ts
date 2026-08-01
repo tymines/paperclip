@@ -164,8 +164,40 @@ export interface SendChatMessageDegradedResponse {
   provenance: LiveAgentProvenance;
 }
 
-export type DraftEntityType = "character" | "world-location" | "style" | "outline";
+/**
+ * One per-chapter baseline review report on the POST …/review wire (PR #30
+ * r7). The critic lane IS Hades — every report carries the shared live-agent
+ * provenance payload, and a report whose lane answer was live also carries
+ * the delegationId audit pointer. There is NO criticProvider/criticDegraded:
+ * provenance.status "degraded" + detail is the only degradation channel.
+ * Single source of truth for the route body and the UI consumer
+ * (ReviewDialog).
+ */
+export interface BaselineReviewReport {
+  chapterNumber: number;
+  verdict: "PASS" | "FAIL" | "NO_VERDICT";
+  scores: Record<string, number>;
+  failures: string[];
+  summary: string;
+  findings: Array<{ excerpt?: string; note: string; category?: string; kind?: string }>;
+  /** Human-readable reason when verdict is NO_VERDICT. */
+  noVerdictReason?: string;
+  provenance: LiveAgentProvenance;
+  /** Present when the live Hades lane answered (the audit-trail row id). */
+  delegationId?: string;
+  /** Where the route persisted the report. */
+  stored: "annotations" | "review-notes";
+}
 
+/** POST …/book-studio/books/:bookId/review wire response (HTTP 201). */
+export interface RunBaselineReviewResponse {
+  scope: "chapter" | "book";
+  reports: BaselineReviewReport[];
+  /** Chapter numbers whose verdict is not PASS. */
+  exceptions: number[];
+}
+
+export type DraftEntityType = "character" | "world-location" | "style" | "outline";
 export interface ToDraftQuery {
   target: DraftEntityType;
 }

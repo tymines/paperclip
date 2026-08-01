@@ -12,8 +12,8 @@
 // TYLER'S LAW — ZERO raw-model fallback: when Hades is unreachable, times
 // out, or fails, the review does NOT buy a raw-model substitute. It returns
 // a degraded NO_VERDICT report (verdict NO_VERDICT — halts and surfaces,
-// never silently passes) carrying provenance: criticProvider "hades (agent
-// lane)", criticDegraded: true, and the lane error as detail. A raw-model
+// never silently passes) carrying the shared live-agent provenance payload
+// ({ agent: "hades", model, status: "degraded", detail }). A raw-model
 // answer is never passed off as the named critic.
 //
 // Verdicts (Spec v1 §4): PASS → the chapter queues silently · FAIL → exception
@@ -31,11 +31,10 @@ import {
   manuscriptChapters,
 } from "@paperclipai/db";
 import { and } from "drizzle-orm";
+import type { LiveAgentProvenance } from "@paperclipai/shared";
 import { chapterContentHash } from "./book-prose-writer.js";
 import { callAgentLane, AgentLaneUnavailableError } from "./book-agent-lanes.js";
-
-/** Provenance string stamped on reports + review runs when the live Hades agent lane answered. */
-export const HADES_CRITIC_PROVIDER = "hades (agent lane)";
+import { getPeerModelOrNull } from "./jarvis-delegation.js";
 
 // The 8 rubric dimensions (Spec v1 §4 — 8-dim rubric scorecards). Score 1–10.
 export const RUBRIC_DIMENSIONS = [
@@ -71,12 +70,27 @@ export interface BaselineReport {
   failures: string[];
   summary: string;
   findings: BaselineFinding[];
-  criticProvider: string;
-  criticDegraded: boolean;
+  /**
+   * Shared live-agent provenance (PR #30 r7 — the same contract the chat
+   * lane carries): { agent: "hades", model, status, detail? }. "degraded" +
+   * detail is the ONLY degradation channel — there is no criticProvider /
+   * criticDegraded on this contract.
+   */
+  provenance: LiveAgentProvenance;
+  /** The delegation audit row when the live Hades lane answered. */
+  delegationId?: string;
   /** Human-readable reason when verdict is NO_VERDICT. */
   noVerdictReason?: string;
-  /** Lane error detail when the live-agent critic degraded (NO_VERDICT path). */
-  agentLaneError?: string;
+}
+
+/** Provenance for the lane that answered (or failed to): agent hades, operator-declared model. */
+function hadesProvenance(status: "live" | "degraded", detail?: string): LiveAgentProvenance {
+  return {
+    agent: "hades",
+    model: getPeerModelOrNull("hades"),
+    status,
+    ...(detail ? { detail } : {}),
+  };
 }
 
 function extractJson(raw: string): unknown {
@@ -160,7 +174,7 @@ export async function runBaselineReview(
   // never a silent same-shop model call. A missing companyId means the
   // delegation contract cannot be used at all (company-scoped rows), so that
   // too is a degraded NO_VERDICT, not a model call.
-  let critic: { text: string; provider: string; criticDegraded: boolean };
+  let critic: { text: string; provenance: LiveAgentProvenance; delegationId: string };
   if (!args.companyId) {
     return {
       chapterNumber,
@@ -169,8 +183,7 @@ export async function runBaselineReview(
       failures: [],
       summary: "Critic lane unconfigured — no company context, so the Hades delegation contract cannot run. No raw-model substitute is permitted.",
       findings: [],
-      criticProvider: HADES_CRITIC_PROVIDER,
-      criticDegraded: true,
+      provenance: hadesProvenance("degraded", "no company context — the Hades delegation contract cannot run"),
       noVerdictReason: "critic-lane-unconfigured",
     };
   }
@@ -182,7 +195,7 @@ export async function runBaselineReview(
       metadata: { bookId, chapterNumber },
       requestedByActorId: args.requestedByActorId ?? null,
     });
-    critic = { text: lane.text, provider: HADES_CRITIC_PROVIDER, criticDegraded: false };
+    critic = { text: lane.text, provenance: hadesProvenance("live"), delegationId: lane.delegationId };
   } catch (laneErr) {
     if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
     // Degraded, honestly: NO_VERDICT halts and surfaces (§6.4) — the report
@@ -194,12 +207,10 @@ export async function runBaselineReview(
       failures: [],
       summary: `Hades (live critic) could not review this chapter: ${laneErr.reason}`,
       findings: [],
-      criticProvider: HADES_CRITIC_PROVIDER,
-      criticDegraded: true,
+      provenance: hadesProvenance("degraded", laneErr.message),
       noVerdictReason: laneErr.fallbackSafe
         ? "critic-lane-unavailable"
         : "critic-lane-indeterminate",
-      agentLaneError: laneErr.message,
     };
   }
 
@@ -219,8 +230,8 @@ export async function runBaselineReview(
       failures: [],
       summary: "Critic returned unparseable output — no verdict could be formed.",
       findings: [],
-      criticProvider: critic.provider,
-      criticDegraded: critic.criticDegraded,
+      provenance: critic.provenance,
+      delegationId: critic.delegationId,
       noVerdictReason: "unparseable-critic-output",
     };
   }
@@ -239,8 +250,8 @@ export async function runBaselineReview(
       failures: [],
       summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : "Critic returned incomplete scores.",
       findings: [],
-      criticProvider: critic.provider,
-      criticDegraded: critic.criticDegraded,
+      provenance: critic.provenance,
+      delegationId: critic.delegationId,
       noVerdictReason: "incomplete-rubric-scores",
     };
   }
@@ -266,8 +277,8 @@ export async function runBaselineReview(
     failures,
     summary: typeof parsed.summary === "string" ? parsed.summary.slice(0, 2000) : "",
     findings,
-    criticProvider: critic.provider,
-    criticDegraded: critic.criticDegraded,
+    provenance: critic.provenance,
+    delegationId: critic.delegationId,
   };
 }
 
@@ -282,6 +293,12 @@ export async function persistBaselineReport(
   args: { bookId: string; companyId: string; report: BaselineReport; chapterId: string; content: string },
 ): Promise<{ runId: string; annotationCount: number; unanchored: number }> {
   const { bookId, companyId, report, chapterId, content } = args;
+  // Review-run provenance label, derived from the shared payload: a live
+  // lane answer is labeled live (with the operator-declared model when one
+  // exists); a degraded lane is labeled degraded — never the reverse.
+  const modelLabel = report.provenance.status === "live"
+    ? `hades (live lane)${report.provenance.model ? ` · ${report.provenance.model}` : ""}`
+    : `hades (degraded — live lane unavailable)${report.provenance.model ? ` · ${report.provenance.model}` : ""}`;
   const [run] = await db
     .insert(bookReviewRuns)
     .values({
@@ -289,7 +306,7 @@ export async function persistBaselineReport(
       companyId,
       lens: "baseline",
       reviewer: "ai-critic",
-      model: `${report.criticProvider}${report.criticDegraded ? " (degraded — live Hades lane unavailable)" : ""}`,
+      model: modelLabel,
       scope: `chapter:${report.chapterNumber}`,
       summary: `[${report.verdict}] ${report.summary}`.slice(0, 2000),
     })

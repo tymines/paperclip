@@ -82,8 +82,8 @@ const PASS_REPORT = {
   failures: [],
   summary: "Solid.",
   findings: [],
-  criticProvider: "hades (agent lane)",
-  criticDegraded: false,
+  provenance: { agent: "hades" as const, model: "kimi-k3", status: "live" as const },
+  delegationId: "del-1",
 };
 
 async function waitForSettled(bookId: string, timeoutMs = 5_000) {
@@ -182,14 +182,17 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     // Review outcome is activity-logged with its provenance.
     const reviews = activityCalls("book.baseline_review");
     expect(reviews).toHaveLength(1);
-    expect(reviews[0]!.details).toMatchObject({ verdict: "PASS", criticProvider: "hades (agent lane)" });
+    expect(reviews[0]!.details).toMatchObject({
+      verdict: "PASS",
+      critic: { agent: "hades", model: "kimi-k3", status: "live" },
+    });
   });
 
   it("a degraded critic report is still a SINGLE charge — the review action is charged exactly once", async () => {
     vi.mocked(runBaselineReview).mockResolvedValue({
       ...PASS_REPORT,
-      criticProvider: "deepseek",
-      criticDegraded: true,
+      provenance: { agent: "hades" as const, model: null, status: "degraded" as const, detail: "peer unreachable" },
+      delegationId: undefined,
     } as never);
     const db = dbWithSelectScript([BOOK_ID_SLUG, OUTLINE, [], [], BOOK_FULL]);
     orchestrator.startAutopilot("budget-fallback", "co-1", "My Book", { budgetCents: 7 }, db, ACTOR);
@@ -199,7 +202,9 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     expect(settled.spendCents).toBe(7);
     const reviews = activityCalls("book.baseline_review");
     expect(reviews).toHaveLength(1);
-    expect(reviews[0]!.details).toMatchObject({ criticProvider: "deepseek", criticDegraded: true });
+    expect(reviews[0]!.details).toMatchObject({
+      critic: { agent: "hades", status: "degraded" },
+    });
   });
 
   it("an indeterminate lane error from the review action is charged once, non-fatal, and never retried", async () => {

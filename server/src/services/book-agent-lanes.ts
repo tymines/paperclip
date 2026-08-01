@@ -108,6 +108,37 @@ function defaultPollMs(): number {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * CALLBACK IDENTITY BINDING (PR #30 r7). A completed row is accepted as lane
+ * success only when it is bound to THIS pending delegation end-to-end:
+ *
+ *   1. the poll selects by the exact delegation id this call dispatched
+ *      (+ company scope) — never "any completed row";
+ *   2. the row could only have reached "completed" through
+ *      recordDelegationResult, which requires the per-row callback token
+ *      minted at dispatch time and atomically refuses unknown/terminal rows
+ *      (a callback for an unknown or terminal delegation flips nothing);
+ *   3. the row's agent identity must equal the requested lane's peer — a
+ *      non-empty body under a DIFFERENT agent is not proof this lane
+ *      delivered. A mismatch contradicts the dispatch record, so it is
+ *      indeterminate and NOT fallback-safe (never silently retried into a
+ *      possible dual execution).
+ */
+function assertLaneIdentity(
+  lane: BookAgentLane,
+  peer: PeerAgentId,
+  row: { agent?: unknown },
+  delegationId: string,
+): void {
+  if (row.agent !== peer) {
+    throw new AgentLaneUnavailableError(
+      lane,
+      `delegation ${delegationId} completed under agent "${String(row.agent ?? "unknown")}", not the requested "${peer}" — identity mismatch; the result is not proof the ${lane} lane delivered (NOT fallback-safe)`,
+      { fallbackSafe: false },
+    );
+  }
+}
+
+/**
  * Dispatch one task to a live Book Studio agent (Calliope or Hades) through
  * the peer-delegation contract and await its result callback. Throws
  * AgentLaneUnavailableError on unreachable/timeout/failed/empty — the caller
@@ -196,6 +227,7 @@ export async function callAgentLane(
         )
         .limit(1);
       if (row?.status === "completed") {
+        assertLaneIdentity(lane, peer, row, dispatch.id);
         const text = (row.result ?? "").trim();
         if (text) return { text, delegationId: dispatch.id, lane };
         // Completed with an EMPTY result is a terminal peer outcome. The
@@ -276,6 +308,7 @@ export async function callAgentLane(
           );
         }
         if (current.status === "completed") {
+          assertLaneIdentity(lane, peer, current, dispatch.id);
           const text = (current.result ?? "").trim();
           // The peer WON the race: return its result. A caller retry
           // must never dual-execute with a successful peer.

@@ -444,6 +444,8 @@ export type {
   ChatMessageResponse,
   SendChatMessageResponse,
   SendChatMessageDegradedResponse,
+  BaselineReviewReport,
+  RunBaselineReviewResponse,
   DraftEntityType,
   ToDraftQuery,
   ToDraftResponse,

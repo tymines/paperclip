@@ -18,6 +18,7 @@ import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse, chapterContentHash, writeChapterToVault } from "../services/book-prose-writer.js";
 import { lockedError, findOverlappingLocks, isMissingLocksTable, assertChapterWritable, getPassageLocks, spansOverlap, resolveChapterLocked, assertHumanActor } from "../services/book-locks.js";
 import { runBaselineReview, persistBaselineReport, type BaselineReport } from "../services/book-review.js";
+import type { RunBaselineReviewResponse } from "@paperclipai/shared";
 
 // Gated-migration pattern (same as book_annotations/0151): if 0157 isn't
 // applied yet, every revisions endpoint answers honestly instead of crashing.
@@ -186,7 +187,7 @@ export function bookStudioReviewRoutes(db: Db) {
         scope: resolvedScope,
         reports,
         exceptions: reports.filter((r) => r.verdict !== "PASS").map((r) => r.chapterNumber),
-      });
+      } satisfies RunBaselineReviewResponse);
     } catch (err) { next(err); }
   });
 

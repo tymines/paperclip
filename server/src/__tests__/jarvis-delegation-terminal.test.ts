@@ -328,6 +328,26 @@ describeEmbeddedPostgres("delegation terminal transitions are atomic (P1A)", () 
     expect(meta.lateCallback).toBeUndefined();
   });
 
+  it("a callback for an UNKNOWN delegation is rejected and flips nothing (PR #30 r7 identity binding)", async () => {
+    const company = await seedCompany(db);
+    const row = await insertDelegation(db, company.id, { status: "queued" });
+
+    const out = await recordDelegationResult(db, {
+      delegationId: randomUUID(), // never dispatched — no such pending delegation
+      companyId: company.id,
+      callbackToken: "tok-1",
+      status: "completed",
+      result: "forged success",
+    });
+
+    expect(out).toEqual({ ok: false, error: "delegation_not_found" });
+    // The real pending row is untouched — no lane can read a live success
+    // out of a callback aimed at an unknown delegation.
+    const after = await fetchRow(db, row.id);
+    expect(after.status).toBe("queued");
+    expect(after.result).toBeNull();
+  });
+
   it("timely transitions still succeed: queued → running → completed", async () => {
     const company = await seedCompany(db);
     const row = await insertDelegation(db, company.id, { status: "queued" });

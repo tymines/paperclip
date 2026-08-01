@@ -14,7 +14,6 @@ vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
 
 import {
   runBaselineReview,
-  HADES_CRITIC_PROVIDER,
   RUBRIC_DIMENSIONS,
 } from "../services/book-review.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
@@ -79,8 +78,12 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
     });
 
     expect(report.verdict).toBe("PASS");
-    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
-    expect(report.criticDegraded).toBe(false);
+    // Shared live-agent provenance contract (PR #30 r7): the successful lane
+    // answer carries { agent, model, status } + the delegation audit pointer.
+    expect(report.provenance).toEqual({ agent: "hades", model: null, status: "live" });
+    expect(report.delegationId).toBe("del-7");
+    expect(report).not.toHaveProperty("criticProvider");
+    expect(report).not.toHaveProperty("criticDegraded");
     const laneCall = vi.mocked(callAgentLane).mock.calls[0][1];
     expect(laneCall.lane).toBe("hades");
     expect(laneCall.companyId).toBe("co-1");
@@ -104,9 +107,9 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
 
     expect(report.verdict).toBe("NO_VERDICT");
     expect(report.noVerdictReason).toBe("critic-lane-unavailable");
-    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
-    expect(report.criticDegraded).toBe(true);
-    expect(report.agentLaneError).toContain("hades");
+    expect(report.provenance).toMatchObject({ agent: "hades", status: "degraded" });
+    expect(report.provenance.detail).toContain("hades");
+    expect(report.delegationId).toBeUndefined();
     expect(report.summary).toContain("Hades");
     expect(report.scores).toEqual({});
     expect(report.findings).toEqual([]);
@@ -125,9 +128,8 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
 
     expect(report.verdict).toBe("NO_VERDICT");
     expect(report.noVerdictReason).toBe("critic-lane-indeterminate");
-    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
-    expect(report.criticDegraded).toBe(true);
-    expect(report.agentLaneError).toContain("indeterminate");
+    expect(report.provenance).toMatchObject({ agent: "hades", status: "degraded" });
+    expect(report.provenance.detail).toContain("indeterminate");
   });
 
   it("degrades to NO_VERDICT (critic-lane-unconfigured) when no companyId is provided — no silent model lane", async () => {
@@ -135,7 +137,7 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
 
     expect(report.verdict).toBe("NO_VERDICT");
     expect(report.noVerdictReason).toBe("critic-lane-unconfigured");
-    expect(report.criticDegraded).toBe(true);
+    expect(report.provenance).toMatchObject({ agent: "hades", status: "degraded" });
     expect(callAgentLane).not.toHaveBeenCalled();
   });
 
@@ -154,8 +156,10 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
 
     expect(report.verdict).toBe("NO_VERDICT");
     expect(report.noVerdictReason).toBe("unparseable-critic-output");
-    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
-    expect(report.criticDegraded).toBe(false);
+    // The lane DID answer live — the degradation is parse-level, so the
+    // provenance stays live and keeps the delegation audit pointer.
+    expect(report.provenance).toEqual({ agent: "hades", model: null, status: "live" });
+    expect(report.delegationId).toBe("del-9");
   });
 
   it("marks a FAIL verdict from Hades findings", async () => {
@@ -173,7 +177,8 @@ describe("runBaselineReview — Hades critic lane (PR #30)", () => {
 
     expect(report.verdict).toBe("FAIL");
     expect(report.failures).toContain("pacing");
-    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
+    expect(report.provenance).toEqual({ agent: "hades", model: null, status: "live" });
+    expect(report.delegationId).toBe("del-11");
   });
 
   it("rejects a companyId that does not match the book's company BEFORE loading content or invoking any lane (P1)", async () => {

@@ -54,8 +54,8 @@ describe("book-agent-lanes.callAgentLane", () => {
 
   it("dispatches to the calliope peer through the delegation contract and returns her reply", async () => {
     const db = dbWithRows([
-      { id: "del-1", companyId: "co-1", status: "queued" },
-      { id: "del-1", companyId: "co-1", status: "completed", result: "  What if the mentor is the villain?  " },
+      { id: "del-1", companyId: "co-1", agent: "calliope", status: "queued" },
+      { id: "del-1", companyId: "co-1", agent: "calliope", status: "completed", result: "  What if the mentor is the villain?  " },
     ]);
 
     const out = await callAgentLane(db, {
@@ -84,7 +84,7 @@ describe("book-agent-lanes.callAgentLane", () => {
 
   it("dispatches critic work to the hades peer with book-studio-critic metadata", async () => {
     const db = dbWithRows([
-      { id: "del-1", companyId: "co-1", status: "completed", result: "{\"scores\":{}}" },
+      { id: "del-1", companyId: "co-1", agent: "hades", status: "completed", result: "{\"scores\":{}}" },
     ]);
 
     const out = await callAgentLane(db, {
@@ -182,12 +182,32 @@ describe("book-agent-lanes.callAgentLane", () => {
 
   it("throws on an empty completed result rather than passing silence upstream", async () => {
     const db = dbWithRows([
-      { id: "del-1", companyId: "co-1", status: "completed", result: "   " },
+      { id: "del-1", companyId: "co-1", agent: "hades", status: "completed", result: "   " },
     ]);
 
     await expect(
       callAgentLane(db, { lane: "hades", companyId: "co-1", task: "t", timeoutMs: 500, pollIntervalMs: 1 }),
     ).rejects.toMatchObject({ reason: expect.stringContaining("empty result") });
+  });
+
+  it("rejects a completed row whose agent identity does NOT match the requested lane — a non-empty body alone is never proof of lane success (PR #30 r7)", async () => {
+    const db = dbWithRows([
+      { id: "del-1", companyId: "co-1", agent: "hades", status: "completed", result: "an answer — but not from calliope" },
+    ]);
+
+    const err = await callAgentLane(db, {
+      lane: "calliope",
+      companyId: "co-1",
+      task: "t",
+      timeoutMs: 500,
+      pollIntervalMs: 1,
+    }).catch((e) => e);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.reason).toContain("identity mismatch");
+    // The durable state contradicts the dispatch — indeterminate, so even a
+    // retry must be treated with care: NOT fallback-safe.
+    expect(err.fallbackSafe).toBe(false);
   });
 
   it("normalizes unexpected transport errors into AgentLaneUnavailableError", async () => {
@@ -258,6 +278,7 @@ describe("callAgentLane — timeout fallback safety (Chronos PR #30 rereview-v2 
     const db = dbTimeoutRace(ACTIVE_ROW, {
       id: "del-1",
       companyId: "co-1",
+      agent: "calliope",
       status: "completed",
       result: "the peer's real answer",
     });
@@ -282,6 +303,7 @@ describe("callAgentLane — timeout fallback safety (Chronos PR #30 rereview-v2 
     const db = dbTimeoutRace(ACTIVE_ROW, {
       id: "del-1",
       companyId: "co-1",
+      agent: "calliope",
       status: "completed",
       result: "   ",
     });
@@ -291,6 +313,22 @@ describe("callAgentLane — timeout fallback safety (Chronos PR #30 rereview-v2 
     expect(err).toBeInstanceOf(AgentLaneUnavailableError);
     expect(err.fallbackSafe).toBe(false);
     expect(err.reason).toContain("empty result");
+  });
+
+  it("zero-row abandon + completed under the WRONG agent identity ⇒ rejected, NOT fallback-safe (PR #30 r7)", async () => {
+    const db = dbTimeoutRace(ACTIVE_ROW, {
+      id: "del-1",
+      companyId: "co-1",
+      agent: "hades", // the race-winner row is not the calliope lane's agent
+      status: "completed",
+      result: "wrong agent's answer",
+    });
+
+    const err = await call(db);
+
+    expect(err).toBeInstanceOf(AgentLaneUnavailableError);
+    expect(err.fallbackSafe).toBe(false);
+    expect(err.reason).toContain("identity mismatch");
   });
 
   it("zero-row abandon + terminal FAILED ⇒ the fallback-safe failure error", async () => {

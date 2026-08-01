@@ -454,8 +454,10 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
             source: "autopilot",
             verdict: report.verdict,
             failures: report.failures,
-            criticProvider: report.criticProvider,
-            criticDegraded: report.criticDegraded,
+            // Shared live-agent provenance payload (PR #30 r7) — the ONLY
+            // critic provenance channel; never a provider/degraded pair.
+            critic: report.provenance,
+            ...(report.delegationId ? { delegationId: report.delegationId } : {}),
             noVerdictReason: report.noVerdictReason,
           },
         }).catch(() => {});

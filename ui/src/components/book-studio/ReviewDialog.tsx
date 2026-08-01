@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { X, Loader2, ShieldCheck, ShieldAlert, ShieldQuestion } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { BaselineReviewReport, RunBaselineReviewResponse } from "@paperclipai/shared";
 
 const API_BASE = "/api";
 
@@ -23,19 +24,6 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(`API ${res.status}: ${text || res.statusText}`);
   }
   return res.json();
-}
-
-interface BaselineReport {
-  chapterNumber: number;
-  verdict: "PASS" | "FAIL" | "NO_VERDICT";
-  scores: Record<string, number>;
-  failures: string[];
-  summary: string;
-  findings: Array<{ excerpt?: string; note: string; category?: string }>;
-  criticProvider: string;
-  criticDegraded: boolean;
-  noVerdictReason?: string;
-  stored: "annotations" | "review-notes";
 }
 
 interface Props {
@@ -64,7 +52,7 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
   const [pickedChapter, setPickedChapter] = useState<number | null>(defaultChapter);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [reports, setReports] = useState<BaselineReport[] | null>(null);
+  const [reports, setReports] = useState<BaselineReviewReport[] | null>(null);
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${bookId}`;
 
@@ -74,7 +62,7 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
     setReports(null);
     try {
       const body = scope === "book" ? { scope: "book" } : { scope: "chapter", chapterNumber: pickedChapter };
-      const res = await apiFetch<{ reports: BaselineReport[] }>(`${API_PREFIX}/review`, {
+      const res = await apiFetch<RunBaselineReviewResponse>(`${API_PREFIX}/review`, {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -178,10 +166,14 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
                     {r.noVerdictReason && (
                       <p className="text-[10px] text-amber-400/90">No verdict: {r.noVerdictReason} — needs your decision.</p>
                     )}
+                    {r.provenance.status === "degraded" && r.provenance.detail && (
+                      <p className="text-[10px] text-amber-400/80">Critic degraded: {r.provenance.detail}</p>
+                    )}
                     {r.summary && <p className="text-[11px] leading-relaxed text-gray-400">{r.summary}</p>}
                     <p className="text-[10px] text-gray-600">
                       {r.findings.length} finding{r.findings.length === 1 ? "" : "s"} → {r.stored === "annotations" ? "annotations" : "review notes"}
-                      {" · "}critic: {r.criticProvider}{r.criticDegraded ? " (degraded — no verdict)" : ""}
+                      {" · "}critic: {r.provenance.agent}{r.provenance.model ? ` · ${r.provenance.model}` : ""}
+                      {r.provenance.status === "degraded" ? " (degraded — no verdict)" : " (live)"}
                     </p>
                   </div>
                 );

@@ -55,8 +55,8 @@ const PASS_REPORT = {
   failures: [],
   summary: "Solid chapter.",
   findings: [],
-  criticProvider: "deepseek",
-  criticDegraded: false,
+  provenance: { agent: "hades" as const, model: null, status: "live" as const },
+  delegationId: "del-1",
 };
 
 // ── Mock DB (table-reference routing) ─────────────────────────────────
@@ -176,6 +176,12 @@ describe("POST /review — baseline pass", () => {
     expect(res.status).toBe(201);
     expect(res.body.reports).toHaveLength(1);
     expect(res.body.reports[0].verdict).toBe("PASS");
+    // Wire contract (PR #30 r7): every report carries the shared live-agent
+    // provenance payload + the successful delegation audit pointer.
+    expect(res.body.reports[0].provenance).toEqual({ agent: "hades", model: null, status: "live" });
+    expect(res.body.reports[0].delegationId).toBe("del-1");
+    expect(res.body.reports[0]).not.toHaveProperty("criticProvider");
+    expect(res.body.reports[0]).not.toHaveProperty("criticDegraded");
     expect(res.body.exceptions).toEqual([]);
     expect(runBaselineReview).toHaveBeenCalledWith(db, {
       bookId: "book-1", chapterNumber: 1, companyId: "co-1", requestedByActorId: "board",
