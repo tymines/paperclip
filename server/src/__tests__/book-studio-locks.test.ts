@@ -65,7 +65,7 @@ interface MockState {
 
 function mockDb(opts?: Partial<MockState>) {
   const state: MockState = {
-    book: opts?.book ?? { id: "book-1", title: "The Test Novel", slug: "test-novel", metadata: {} },
+    book: opts?.book ?? { id: "book-1", companyId: "co-1", title: "The Test Novel", slug: "test-novel", metadata: {} },
     chapters: opts?.chapters ?? [
       { id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: PROSE, locked: false },
     ],

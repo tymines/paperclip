@@ -718,6 +718,17 @@ export type {
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {
+  DELEGATION_ACTIVE_STATUSES,
+  DELEGATION_TERMINAL_STATUSES,
+  DELEGATION_STATUSES,
+  isDelegationStatus,
+  isDelegationActiveStatus,
+  isDelegationTerminalStatus,
+  type DelegationActiveStatus,
+  type DelegationTerminalStatus,
+  type DelegationStatus,
+} from "./types/delegation.js";
+export {
   ISSUE_REFERENCE_IDENTIFIER_RE,
   buildIssueReferenceHref,
   extractIssueReferenceIdentifiers,

@@ -40,6 +40,7 @@ const COLUMNS: ReadonlyArray<{
   { key: "running", label: "In progress", tone: "info" },
   { key: "completed", label: "Completed", tone: "success" },
   { key: "failed", label: "Failed", tone: "critical" },
+  { key: "abandoned", label: "Abandoned", tone: "warning" },
 ];
 
 const AGENT_STATUS_TONE: Record<string, Tone> = {
@@ -218,6 +219,7 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
       running: [],
       completed: [],
       failed: [],
+      abandoned: [],
     };
     for (const d of delegations) (map[d.status] ??= []).push(d);
     return map;
@@ -300,7 +302,7 @@ export default function TeamModeBoard({ companyId }: { companyId: string }) {
           ) : delegations.length === 0 ? (
             <EmptyBoard />
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
               {COLUMNS.map((col) => (
                 <div key={col.key} className="min-w-0">
                   <div className="mb-2 flex items-center gap-2 px-1">

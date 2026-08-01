@@ -26,6 +26,7 @@ import { errorHandler } from "../middleware/error-handler.js";
 import {
   __resetRateLimits,
   __resetReachabilityCache,
+  abandonDelegation,
   dispatchDelegation,
   naturalAcknowledgment,
 } from "../services/jarvis-delegation.js";
@@ -307,4 +308,76 @@ describeEmbeddedPostgres("jarvis peer-agent delegation", () => {
     expect(row!.status).toBe("failed");
     expect(row!.result).toBeTruthy();
   });
+
+  it("abandonment is terminal: a late callback is rejected and cannot overwrite the abandoned row (P2)", async () => {
+    const company = await seedCompany(db);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/health")) {
+        return new Response("ok", { status: 200 });
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 202,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const dispatch = await dispatchDelegation(db, {
+      companyId: company.id,
+      agent: "hermes",
+      task: "Slow brainstorm task that will time out locally",
+      requestedByActorId: "tyler",
+    });
+    expect(dispatch.status).toBe("queued");
+
+    // The timeout path atomically abandons the still-active row.
+    const abandoned = await abandonDelegation(db, {
+      delegationId: dispatch.id,
+      companyId: company.id,
+      reason: "timed out after 45000ms awaiting the result callback — abandoned before fallback",
+    });
+    expect(abandoned).toBe(true);
+
+    const [row] = await db
+      .select()
+      .from(jarvisDelegations)
+      .where(eq(jarvisDelegations.id, dispatch.id))
+      .limit(1);
+    expect(row!.status).toBe("abandoned");
+    expect(row!.completedAt).not.toBeNull();
+    expect(row!.result).toContain("timed out");
+    const callbackToken = (row!.metadata as Record<string, unknown>).callbackToken as string;
+
+    // A late peer callback with the VALID token is rejected and must NOT
+    // flip the terminal row to completed — it is classified in metadata only.
+    const app = buildApp(db);
+    const late = await request(app)
+      .post(`/api/companies/${company.id}/jarvis/delegations/${dispatch.id}/result`)
+      .set("Authorization", `Bearer ${callbackToken}`)
+      .send({ status: "completed", result: "sorry I'm late — peer answer" });
+    expect(late.status).toBe(404);
+    expect(late.body.error).toBe("delegation_abandoned");
+
+    const [after] = await db
+      .select()
+      .from(jarvisDelegations)
+      .where(eq(jarvisDelegations.id, dispatch.id))
+      .limit(1);
+    expect(after!.status).toBe("abandoned");
+    expect(after!.result).toContain("timed out");
+    const meta = after!.metadata as Record<string, unknown>;
+    expect(meta.lateCallback).toMatchObject({
+      status: "completed",
+      result: "sorry I'm late — peer answer",
+    });
+
+    // A second abandon against the terminal row is an atomic no-op.
+    expect(
+      await abandonDelegation(db, {
+        delegationId: dispatch.id,
+        companyId: company.id,
+        reason: "second timeout",
+      }),
+    ).toBe(false);
+  }, 20_000);
 });

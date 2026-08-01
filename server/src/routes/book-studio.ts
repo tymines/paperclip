@@ -32,7 +32,8 @@ import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { callBrainstormChat } from "../services/brainstorm-chat.js";
+import { callBrainstormChat, buildSystemPrompt } from "../services/brainstorm-chat.js";
+import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
 import {
@@ -1184,9 +1185,12 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     if (!parsed.success) throw badRequest(parsed.error.message);
     const { message } = parsed.data;
 
-    // Load full bible
+    // Load full bible — bound to BOTH the URL company and the book id: a
+    // book that belongs to another company is not-found here, before any
+    // dependent content is read, persisted, or delegated (company-boundary
+    // rule; Chronos PR #30 finding 1).
     const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-    if (!book) throw notFound("Book not found");
+    if (!book || book.companyId !== companyId) throw notFound("Book not found");
 
     const characters = await db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId));
     const locations = await db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId));
@@ -1216,15 +1220,68 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
     historyEntries.push({ role: "user", content: message });
 
+    // Spec v1.4: this window IS Calliope — the live creative-Muse agent,
+    // reached through the existing peer-delegation contract (delegation row +
+    // bridge dispatch + result callback; the row is the audit trail). While
+    // cross-box co-location is pending, an unreachable/slow/failed Calliope
+    // falls back to the configured model lane and the response says so
+    // honestly (`via` + `agentLaneError`) — never a fabricated agent reply.
+    const actor = getActorInfo(req);
     let reply: string;
+    let via: "calliope" | "model" = "model";
+    let agentLaneError: string | undefined;
+    let delegationId: string | undefined;
     try {
-      const result = await callBrainstormChat(bibleContext, historyEntries, message);
-      if (!result) throw new Error("Empty reply from LLM");
-      reply = result;
-    } catch (err) {
-      // Still persist user message so history isn't lost
-      res.status(503).json({ error: "AI service temporarily unavailable", messageId: userMsg.id });
-      return;
+      const lane = await callAgentLane(db, {
+        lane: "calliope",
+        companyId,
+        task: [
+          buildSystemPrompt(bibleContext),
+          "",
+          "--- CONVERSATION (oldest first) ---",
+          ...historyEntries.map((h) => `${h.role.toUpperCase()}: ${h.content}`),
+          "",
+          "Reply as Calliope to Baily's latest message.",
+        ].join("\n"),
+        metadata: { bookId },
+        requestedByActorId: actor.actorId,
+      });
+      reply = lane.text;
+      via = "calliope";
+      delegationId = lane.delegationId;
+    } catch (laneErr) {
+      if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
+      agentLaneError = laneErr.message;
+      // Fallback safety (Chronos rereview-v2 P1A): the paid model fallback
+      // may run ONLY for machine-checkably fallback-safe failures. An
+      // indeterminate outcome means the peer may already hold (or have
+      // delivered) the work — never buy a second lane. Surface honestly;
+      // the user's message is already persisted so history isn't lost.
+      if (!laneErr.fallbackSafe) {
+        res.status(502).json({
+          error: "Live Calliope lane outcome indeterminate — refusing to dual-execute a paid model fallback",
+          messageId: userMsg.id,
+          via: "none",
+          agentLane: "indeterminate",
+          agentLaneError,
+        });
+        return;
+      }
+      try {
+        const result = await callBrainstormChat(bibleContext, historyEntries, message);
+        if (!result) throw new Error("Empty reply from LLM");
+        reply = result;
+      } catch (err) {
+        // Still persist user message so history isn't lost
+        res.status(503).json({
+          error: "AI service temporarily unavailable",
+          messageId: userMsg.id,
+          via: "none",
+          agentLane: "unavailable",
+          agentLaneError,
+        });
+        return;
+      }
     }
 
     // Persist assistant reply
@@ -1236,6 +1293,9 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       reply,
       messageId: assistantMsg.id,
       userMessageId: userMsg.id,
+      via,
+      ...(delegationId ? { delegationId } : {}),
+      ...(agentLaneError ? { agentLane: "unavailable", agentLaneError } : {}),
     });
   });
 

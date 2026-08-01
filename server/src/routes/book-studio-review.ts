@@ -50,9 +50,12 @@ export function bookStudioReviewRoutes(db: Db) {
   const router = Router();
   const BASE = "/companies/:companyId/book-studio/books/:bookId";
 
-  async function loadBook(bookId: string) {
+  async function loadBook(bookId: string, companyId: string) {
+    // Bound to BOTH ids: a book outside the authorized company is not-found
+    // before chapters load or anything is dispatched/persisted against it
+    // (company-boundary rule; Chronos PR #30 finding 1).
     const [book] = await db.select().from(books).where(eq(books.id, bookId));
-    if (!book) throw notFound("Book not found");
+    if (!book || book.companyId !== companyId) throw notFound("Book not found");
     return book;
   }
 
@@ -80,7 +83,7 @@ export function bookStudioReviewRoutes(db: Db) {
         throw err;
       }
       // Fallback: first-class JSONB notes with provenance ai-critic (§5.C).
-      const book = await loadBook(bookId);
+      const book = await loadBook(bookId, companyId);
       const meta = (book.metadata ?? {}) as Record<string, unknown>;
       const notes = (meta.reviewNotes as ReviewNote[]) ?? [];
       const now = new Date().toISOString();
@@ -121,8 +124,8 @@ export function bookStudioReviewRoutes(db: Db) {
   }
 
   /** Record the verdict in books.metadata.chapterStatus (§5.B: pass queues silently, fail = exception). */
-  async function recordChapterStatus(bookId: string, chapterNumber: number, verdict: BaselineReport["verdict"]) {
-    const book = await loadBook(bookId);
+  async function recordChapterStatus(bookId: string, companyId: string, chapterNumber: number, verdict: BaselineReport["verdict"]) {
+    const book = await loadBook(bookId, companyId);
     const meta = (book.metadata ?? {}) as Record<string, unknown>;
     const chapterStatus = { ...((meta.chapterStatus as Record<string, string>) ?? {}) };
     chapterStatus[String(chapterNumber)] = verdict === "PASS" ? "queued" : "exception";
@@ -145,7 +148,7 @@ export function bookStudioReviewRoutes(db: Db) {
         throw badRequest("chapterNumber (number) is required for chapter scope");
       }
 
-      const book = await loadBook(bookId);
+      const book = await loadBook(bookId, companyId);
       const chapters = resolvedScope === "book"
         ? await db.select().from(manuscriptChapters).where(eq(manuscriptChapters.bookId, bookId))
         : [await loadChapter(bookId, chapterNumber!)].filter(Boolean);
@@ -155,12 +158,15 @@ export function bookStudioReviewRoutes(db: Db) {
 
       const reports = [];
       for (const ch of targets) {
-        const report = await runBaselineReview(db, { bookId, chapterNumber: ch.chapterNumber });
+        const report = await runBaselineReview(db, {
+          bookId, chapterNumber: ch.chapterNumber, companyId,
+          requestedByActorId: getActorInfo(req).actorId,
+        });
         const { stored } = await persistReport({
           bookId, companyId, bookSlug: book.slug,
           report, chapterId: ch.id, content: ch.content ?? "",
         });
-        await recordChapterStatus(bookId, ch.chapterNumber, report.verdict);
+        await recordChapterStatus(bookId, companyId, ch.chapterNumber, report.verdict);
         reports.push({ ...report, stored });
       }
 
@@ -239,7 +245,7 @@ export function bookStudioReviewRoutes(db: Db) {
         throw err;
       }
 
-      const book = await loadBook(bookId);
+      const book = await loadBook(bookId, companyId);
       const chapter = await loadChapter(bookId, chapterNumber);
       if (!chapter || !(chapter.content ?? "").trim()) {
         throw badRequest(`Chapter ${chapterNumber} has no prose to revise yet.`);
@@ -409,7 +415,7 @@ export function bookStudioReviewRoutes(db: Db) {
       if (!revision) throw notFound("Revision not found");
       if (revision.status !== "pending") throw conflict(`Revision is already ${revision.status}.`);
 
-      const book = await loadBook(bookId);
+      const book = await loadBook(bookId, companyId);
       const chapter = await loadChapter(bookId, revision.chapterNumber);
       const content = chapter?.content ?? "";
 

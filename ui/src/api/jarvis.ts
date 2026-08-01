@@ -1,4 +1,7 @@
 import { api } from "./client";
+import type { DelegationStatus } from "@paperclipai/shared";
+
+export type { DelegationStatus };
 
 export type JarvisVoiceTierId = "premium" | "standard" | "browser-native";
 
@@ -57,7 +60,7 @@ export interface JarvisDelegationRow {
   conversationId: string | null;
   agent: JarvisPeerAgentId;
   task: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: DelegationStatus;
   result: string | null;
   metadata: Record<string, unknown> | null;
   requestedByActorId: string | null;
@@ -397,7 +400,7 @@ export const jarvisApi = {
    */
   delegations: (
     companyId: string,
-    opts: { status?: "queued" | "running" | "completed" | "failed"; limit?: number } = {},
+    opts: { status?: DelegationStatus; limit?: number } = {},
   ): Promise<JarvisDelegationsResponse> => {
     const qs = new URLSearchParams();
     if (opts.status) qs.set("status", opts.status);

@@ -41,6 +41,10 @@ import {
   dispatchDelegation,
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
+import {
+  isDelegationStatus,
+  type DelegationStatus,
+} from "@paperclipai/shared";
 import { kickoffBrainstorm } from "../services/brainstorm-kickoff.js";
 import { kickoffZeusPlan, replanFromRevision } from "../services/zeus-plan.js";
 import { projectizePlan } from "../services/projectize-plan.js";
@@ -1239,17 +1243,32 @@ export function jarvisRoutes(db: Db) {
     async (req, res) => {
       const { companyId } = req.params as { companyId: string };
       assertCompanyAccess(req, companyId);
-      const statusParam = typeof req.query.status === "string" ? req.query.status : undefined;
       const conversationId =
         typeof req.query.conversationId === "string" ? req.query.conversationId : undefined;
       const limit = Math.min(
         Math.max(Number.parseInt(String(req.query.limit ?? "50"), 10) || 50, 1),
         200,
       );
-      const allowed = new Set(["queued", "running", "completed", "failed"]);
-      const status = statusParam && allowed.has(statusParam)
-        ? (statusParam as "queued" | "running" | "completed" | "failed")
-        : undefined;
+      // The five-state delegation status contract (queued | running |
+      // completed | failed | abandoned) is shared via @paperclipai/shared.
+      // Every non-string or unknown form — repeated keys (?status=a&status=b
+      // arrive as an array), ?status[x]=1 (object), or an unknown scalar —
+      // is rejected outright: never silently drop the filter and return a
+      // misleading unfiltered list.
+      const rawStatus = req.query.status;
+      // `status[...]` subscript keys arrive under the simple query parser as
+      // literal keys (object intent); repeated keys arrive as an array.
+      const hasStatusParam = Object.keys(req.query).some(
+        (k) => k === "status" || k.startsWith("status["),
+      );
+      let status: DelegationStatus | undefined;
+      if (hasStatusParam) {
+        if (typeof rawStatus !== "string" || !isDelegationStatus(rawStatus)) {
+          res.status(400).json({ ok: false, error: "invalid_status" });
+          return;
+        }
+        status = rawStatus;
+      }
       const rows = await listDelegations(db, companyId, { status, conversationId, limit });
       res.json({ delegations: rows });
     },
@@ -1310,6 +1329,8 @@ export function jarvisRoutes(db: Db) {
       assertCompanyAccess(req, companyId);
       const allowed: PeerAgentId[] = [
         "hermes",
+        "ares",
+        "calliope",
         "august",
         "codex",
         "content",

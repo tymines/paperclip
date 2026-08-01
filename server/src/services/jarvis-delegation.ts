@@ -1,6 +1,11 @@
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { jarvisDelegations } from "@paperclipai/db";
+import {
+  DELEGATION_ACTIVE_STATUSES,
+  DELEGATION_TERMINAL_STATUSES,
+  type DelegationStatus,
+} from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
 
 /**
@@ -31,6 +36,9 @@ export type PeerAgentId =
   // routes here; Ares fans the plan out to the fleet. Additive: the `agent`
   // column is plain text, so no migration is required.
   | "ares"
+  // Calliope — the creative-Muse agent (Spec v1.4): Book Studio's
+  // brainstorm/write chat window IS Calliope. Same additive plain-text path.
+  | "calliope"
   | "august"
   | "codex"
   | "content"
@@ -292,14 +300,22 @@ export async function dispatchDelegation(
         redirect: "manual",
       });
       if (!resp.ok) {
-        await markFailed(db, row.id, `bridge_${resp.status}`);
+        await markDelegationFailed(
+          db,
+          { delegationId: row.id, companyId: input.companyId },
+          `bridge_${resp.status}`,
+        );
         logger.warn(
           { delegationId: row.id, status: resp.status, agent: input.agent },
           "jarvis-delegation: bridge POST returned non-2xx",
         );
       }
     } catch (err) {
-      await markFailed(db, row.id, (err as Error).message ?? "dispatch_failed");
+      await markDelegationFailed(
+        db,
+        { delegationId: row.id, companyId: input.companyId },
+        (err as Error).message ?? "dispatch_failed",
+      );
       logger.warn(
         { err, delegationId: row.id, agent: input.agent },
         "jarvis-delegation: bridge POST threw",
@@ -325,7 +341,18 @@ export async function dispatchDelegation(
   };
 }
 
-async function markFailed(db: Db, id: string, error: string): Promise<void> {
+/**
+ * Asynchronous dispatch-failure handler. Terminal-safe and company-scoped:
+ * the guard lives in the WHERE clause, so a row that already reached ANY
+ * terminal state (completed/failed/abandoned — e.g. a peer result that beat
+ * the failing bridge POST, or a caller-side timeout abandonment) is never
+ * regressed by this late failure write.
+ */
+export async function markDelegationFailed(
+  db: Db,
+  ref: { delegationId: string; companyId: string },
+  error: string,
+): Promise<void> {
   try {
     await db
       .update(jarvisDelegations)
@@ -334,10 +361,56 @@ async function markFailed(db: Db, id: string, error: string): Promise<void> {
         result: error,
         completedAt: new Date(),
       })
-      .where(eq(jarvisDelegations.id, id));
+      .where(
+        and(
+          eq(jarvisDelegations.id, ref.delegationId),
+          eq(jarvisDelegations.companyId, ref.companyId),
+          inArray(jarvisDelegations.status, [...DELEGATION_ACTIVE_STATUSES]),
+        ),
+      );
   } catch (err) {
-    logger.error({ err, id }, "jarvis-delegation: failed to mark row failed");
+    logger.error({ err, id: ref.delegationId }, "jarvis-delegation: failed to mark row failed");
   }
+}
+
+// ============================================================================
+// Terminal timeout state (abandoned)
+// ============================================================================
+
+/**
+ * Atomically transition a still-active delegation to the terminal
+ * "abandoned" state — used by callers that gave up awaiting the result
+ * callback (local timeout) BEFORE falling back to another lane, so one user
+ * action can never execute in two lanes and the audit row explains that its
+ * eventual peer result was abandoned.
+ *
+ * The guard lives in the WHERE clause: only the row matching BOTH the
+ * delegation id and the company id AND still in a non-terminal state
+ * (queued/running) is flipped. A row that already completed/failed/abandoned
+ * is untouched. Returns true when this call performed the transition.
+ *
+ * The status column is free-text, so "abandoned" needs no migration.
+ */
+export async function abandonDelegation(
+  db: Db,
+  input: { delegationId: string; companyId: string; reason: string },
+): Promise<boolean> {
+  const updated = await db
+    .update(jarvisDelegations)
+    .set({
+      status: "abandoned",
+      result: input.reason,
+      completedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(jarvisDelegations.id, input.delegationId),
+        eq(jarvisDelegations.companyId, input.companyId),
+        inArray(jarvisDelegations.status, [...DELEGATION_ACTIVE_STATUSES]),
+      ),
+    )
+    .returning({ id: jarvisDelegations.id });
+  return updated.length > 0;
 }
 
 // ============================================================================
@@ -374,6 +447,13 @@ export async function recordDelegationResult(
     return { ok: false, error: "callback_token_mismatch" };
   }
 
+  // Atomic terminal-safe transition: the guard lives IN the statement.
+  // A `running` callback may transition only an ACTIVE row; a
+  // `completed`/`failed` callback may terminally transition only an ACTIVE
+  // row. Any duplicate/out-of-order callback against a terminal row
+  // (completed | failed | abandoned) matches zero rows here — no
+  // check-then-update race can regress a terminal state, because the source
+  // status is re-evaluated by Postgres inside the same UPDATE.
   const update: Partial<typeof jarvisDelegations.$inferInsert> = {
     status: input.status,
   };
@@ -384,12 +464,62 @@ export async function recordDelegationResult(
     update.result = input.result;
   }
 
-  await db
+  const transitioned = await db
     .update(jarvisDelegations)
     .set(update)
-    .where(eq(jarvisDelegations.id, input.delegationId));
+    .where(
+      and(
+        eq(jarvisDelegations.id, input.delegationId),
+        eq(jarvisDelegations.companyId, input.companyId),
+        inArray(jarvisDelegations.status, [...DELEGATION_ACTIVE_STATUSES]),
+      ),
+    )
+    .returning({ id: jarvisDelegations.id });
+  if (transitioned.length > 0) return { ok: true };
 
-  return { ok: true };
+  // Zero affected rows: the row was already terminal (or went terminal
+  // concurrently — e.g. the timeout path abandoned it between our SELECT and
+  // this UPDATE). Re-fetch to classify the CURRENT state; never overwrite
+  // terminal status/result/completedAt.
+  const [current] = await db
+    .select()
+    .from(jarvisDelegations)
+    .where(
+      and(
+        eq(jarvisDelegations.id, input.delegationId),
+        eq(jarvisDelegations.companyId, input.companyId),
+      ),
+    )
+    .limit(1);
+  if (!current) return { ok: false, error: "delegation_not_found" };
+
+  // Record the late/duplicate arrival for audit with a concurrency-safe,
+  // terminal-preserving update: an atomic jsonb top-level merge that keeps
+  // every unrelated metadata key and is itself guarded to terminal rows, so
+  // it can never resurrect or rewrite an active/terminal lifecycle state.
+  const lateCallback = {
+    status: input.status,
+    result: input.result ?? input.error ?? null,
+    receivedAt: new Date().toISOString(),
+  };
+  await db
+    .update(jarvisDelegations)
+    .set({
+      metadata: sql`coalesce(${jarvisDelegations.metadata}, '{}'::jsonb) || ${JSON.stringify({ lateCallback })}::jsonb`,
+    })
+    .where(
+      and(
+        eq(jarvisDelegations.id, input.delegationId),
+        eq(jarvisDelegations.companyId, input.companyId),
+        inArray(jarvisDelegations.status, [...DELEGATION_TERMINAL_STATUSES]),
+      ),
+    );
+
+  return {
+    ok: false,
+    error:
+      current.status === "abandoned" ? "delegation_abandoned" : "delegation_terminal",
+  };
 }
 
 // ============================================================================
@@ -397,7 +527,7 @@ export async function recordDelegationResult(
 // ============================================================================
 
 export interface ListDelegationsOptions {
-  status?: "queued" | "running" | "completed" | "failed";
+  status?: DelegationStatus;
   conversationId?: string;
   limit?: number;
 }
@@ -446,6 +576,7 @@ export async function countRecentDelegations(
 const PEER_LABEL: Record<PeerAgentId, string> = {
   hermes: "Hermes",
   ares: "Ares (COO)",
+  calliope: "Calliope",
   august: "August",
   codex: "Codex",
   content: "the content desk",
@@ -457,6 +588,7 @@ const PEER_LABEL: Record<PeerAgentId, string> = {
 const PEER_ETA: Record<PeerAgentId, string> = {
   hermes: "about ten minutes",
   ares: "a few minutes — Ares fans it out to the fleet",
+  calliope: "a minute or two",
   august: "a few minutes — assuming the Mac mini's reachable",
   codex: "a couple of minutes",
   content: "fifteen or twenty minutes",

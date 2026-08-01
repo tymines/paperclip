@@ -22,6 +22,9 @@ interface ReviewRun {
   chapterNumber: number;
   scores?: Record<string, number>;
   verdict?: string;
+  /** Critic provenance — e.g. "ares (agent lane)" or a configured model lane (Spec v1.4). */
+  model?: string;
+  reviewer?: string;
   createdAt: string;
 }
 
@@ -112,7 +115,7 @@ export function DeckInspector({ bookId, companySlug, chapterNumber, chapterStatu
             </div>
             {latestRun && (
               <p className="text-[10px] text-gray-600 mb-3 leading-relaxed">
-                writer <b className="text-gray-400">gemini / configured lane</b> · critic <b className="text-gray-400">configured lane</b> · run {latestRun.id.slice(0, 8)}
+                writer <b className="text-gray-400">gemini / configured lane</b> · critic <b className="text-gray-400">{latestRun.model || "ares → configured lane"}</b> · run {latestRun.id.slice(0, 8)}
               </p>
             )}
             {chapterStatus === "exception" && (

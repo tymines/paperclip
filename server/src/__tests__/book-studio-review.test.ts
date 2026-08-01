@@ -46,6 +46,7 @@ import { books, manuscriptChapters, bookRevisions } from "@paperclipai/db";
 import { runBaselineReview, persistBaselineReport } from "../services/book-review.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
+import { logActivity } from "../services/index.js";
 
 const PASS_REPORT = {
   chapterNumber: 1,
@@ -71,7 +72,7 @@ interface MockState {
 
 function mockDb(opts?: Partial<MockState>) {
   const state: MockState = {
-    book: opts?.book ?? { id: "book-1", title: "The Test Novel", slug: "test-novel", metadata: {} },
+    book: opts?.book ?? { id: "book-1", companyId: "co-1", title: "The Test Novel", slug: "test-novel", metadata: {} },
     chapters: opts?.chapters ?? [
       { id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: "The quick brown fox jumps over the lazy dog. More prose follows here." },
     ],
@@ -176,7 +177,9 @@ describe("POST /review — baseline pass", () => {
     expect(res.body.reports).toHaveLength(1);
     expect(res.body.reports[0].verdict).toBe("PASS");
     expect(res.body.exceptions).toEqual([]);
-    expect(runBaselineReview).toHaveBeenCalledWith(db, { bookId: "book-1", chapterNumber: 1 });
+    expect(runBaselineReview).toHaveBeenCalledWith(db, {
+      bookId: "book-1", chapterNumber: 1, companyId: "co-1", requestedByActorId: "board",
+    });
     expect(persistBaselineReport).toHaveBeenCalled();
     // PASS → chapter queues silently (§5.B)
     expect(db.__state.book.metadata.chapterStatus["1"]).toBe("queued");
@@ -233,6 +236,23 @@ describe("POST /review — baseline pass", () => {
     const app = await createTestApp(mockDb());
     const res = await request(app).post(`${BASE}/review`).send({ scope: "chapter" });
     expect(res.status).toBe(400);
+  });
+
+  it("returns 404 for a book outside the authorized company — no critic, no persistence, no activity (P1)", async () => {
+    // Book exists but belongs to co-2; the URL is authorized for co-1. The
+    // route must treat the pair as not-found BEFORE loading chapters,
+    // dispatching to Ares/the model lanes, or persisting anything.
+    const db = mockDb({
+      book: { id: "book-1", companyId: "co-2", title: "Foreign Novel", slug: "foreign-novel", metadata: {} },
+    });
+    const app = await createTestApp(db);
+    const res = await request(app).post(`${BASE}/review`).send({ scope: "chapter", chapterNumber: 1 });
+    expect(res.status).toBe(404);
+    expect(runBaselineReview).not.toHaveBeenCalled();
+    expect(persistBaselineReport).not.toHaveBeenCalled();
+    expect(logActivity).not.toHaveBeenCalled();
+    // Nothing was written onto the foreign book either.
+    expect(db.__state.book.metadata).toEqual({});
   });
 });
 
@@ -339,7 +359,7 @@ describe("POST /revisions/:id/accept|reject", () => {
   it("accept resolves the originating critique note (§5.C lifecycle)", async () => {
     const db = mockDb({
       book: {
-        id: "book-1", title: "The Test Novel", slug: "test-novel",
+        id: "book-1", companyId: "co-1", title: "The Test Novel", slug: "test-novel",
         metadata: { reviewNotes: [{ id: "note-1", category: "prose", text: "Weak verb", chapterNumber: 1, provenance: "baily", status: "open", createdAt: "x", updatedAt: "x" }] },
       },
     });
