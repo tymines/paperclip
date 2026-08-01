@@ -157,7 +157,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
     await tempDb?.cleanup();
   });
 
-  const laneArgs = (companyId: string, lane: "calliope" | "ares") => ({
+  const laneArgs = (companyId: string, lane: "calliope" | "hades") => ({
     lane,
     companyId,
     task: "race probe",
@@ -192,7 +192,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
     expect(after.result).toBe("the peer's real answer");
   });
 
-  it.each(["calliope", "ares"] as const)(
+  it.each(["calliope", "hades"] as const)(
     "abandon wins the race (%s lane) ⇒ fallback-safe timeout error and a durably abandoned row",
     async (lane) => {
       const company = await seedCompany(db);
@@ -223,7 +223,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
       expect(out.ok).toBe(true);
     });
 
-    const err = await callAgentLane(raced, laneArgs(company.id, "ares")).catch((e) => e);
+    const err = await callAgentLane(raced, laneArgs(company.id, "hades")).catch((e) => e);
 
     expect(err).toBeInstanceOf(AgentLaneUnavailableError);
     expect(err.fallbackSafe).toBe(true);
@@ -281,7 +281,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
       throw new Error("connection reset by peer");
     });
 
-    const err = await callAgentLane(raced, laneArgs(company.id, "ares")).catch((e) => e);
+    const err = await callAgentLane(raced, laneArgs(company.id, "hades")).catch((e) => e);
 
     expect(err).toBeInstanceOf(AgentLaneUnavailableError);
     expect(err.fallbackSafe).toBe(false);

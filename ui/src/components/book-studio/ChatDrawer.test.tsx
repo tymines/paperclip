@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 //
-// ChatDrawer — the window that IS Calliope (Spec v1.4). Proves the request
-// shape, the live-agent provenance chip, and the honest fallback notice.
+// ChatDrawer — the window that IS Calliope (PR #30). Proves the request
+// shape, the live-agent provenance chip, and the visible degraded failure
+// (Tyler's law: no raw-model substitute is ever shown as Calliope).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -69,12 +70,18 @@ async function sendMessage(text: string) {
   });
 }
 
-describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
+describe("ChatDrawer — Calliope window (PR #30)", () => {
   it("loads history and posts the message to the book chat endpoint", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] })) // GET history
       .mockResolvedValueOnce(
-        jsonResponse({ reply: "Ooh, tell me more!", messageId: "m2", userMessageId: "m1", via: "calliope", delegationId: "del-1" }),
+        jsonResponse({
+          reply: "Ooh, tell me more!",
+          messageId: "m2",
+          userMessageId: "m1",
+          provenance: { agent: "calliope", model: "sol", status: "live" },
+          delegationId: "del-1",
+        }),
       );
 
     await mount();
@@ -90,46 +97,56 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     expect(container.textContent).toContain("Ooh, tell me more!");
   });
 
-  it("shows the live-agent provenance chip when Calliope answers", async () => {
-    fetchMock
-      .mockResolvedValueOnce(jsonResponse({ messages: [] }))
-      .mockResolvedValueOnce(
-        jsonResponse({ reply: "A twist!", messageId: "m2", userMessageId: "m1", via: "calliope" }),
-      );
-
-    await mount();
-    await sendMessage("hi");
-
-    expect(container.textContent).toContain("via Calliope ✦ live agent");
-    expect(container.textContent).not.toContain("model fallback");
-  });
-
-  it("shows the honest fallback notice when Calliope is unreachable", async () => {
+  it("shows the live-agent provenance chip (with model) when Calliope answers", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] }))
       .mockResolvedValueOnce(
         jsonResponse({
-          reply: "Model answer.",
+          reply: "A twist!",
           messageId: "m2",
           userMessageId: "m1",
-          via: "model",
-          agentLane: "unavailable",
-          agentLaneError: "Book Studio calliope lane unavailable: peer unreachable (timeout)",
+          provenance: { agent: "calliope", model: "sol", status: "live" },
         }),
       );
 
     await mount();
     await sendMessage("hi");
 
-    expect(container.textContent).toContain("Model answer.");
-    expect(container.textContent).toContain("Calliope unreachable — answered by the model fallback");
+    expect(container.textContent).toContain("via Calliope ✦ live agent · sol");
+    expect(container.textContent).not.toContain("degraded");
+  });
+
+  it("shows the visible degraded failure when Calliope is unreachable — no model substitute (Tyler's law)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ messages: [] }))
+      .mockResolvedValueOnce(
+        jsonResponse(
+          {
+            error: "Calliope is unreachable — no reply was generated (no raw-model substitute).",
+            messageId: "m1",
+            provenance: {
+              agent: "calliope",
+              model: null,
+              status: "degraded",
+              detail: "Book Studio calliope lane unavailable: peer unreachable (timeout)",
+            },
+          },
+          502,
+        ),
+      );
+
+    await mount();
+    await sendMessage("hi");
+
+    expect(container.textContent).toContain("Calliope is unreachable — no reply was generated (no raw-model substitute).");
+    expect(container.textContent).toContain("Calliope unreachable — degraded, no model substitute");
     expect(container.textContent).not.toContain("via Calliope ✦ live agent");
   });
 
-  it("surfaces a send failure instead of a fabricated reply", async () => {
+  it("surfaces a generic send failure instead of a fabricated reply", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] }))
-      .mockResolvedValueOnce(jsonResponse({ error: "AI service temporarily unavailable", via: "none" }, 503));
+      .mockResolvedValueOnce(jsonResponse({ error: "boom" }, 500));
 
     await mount();
     await sendMessage("hi");

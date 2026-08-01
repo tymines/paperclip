@@ -23,6 +23,7 @@ import {
   updateStoryBibleOutlineSchema,
   sendChatMessageSchema,
   toDraftQuerySchema,
+  type LiveAgentProvenance,
 } from "@paperclipai/shared";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -32,8 +33,9 @@ import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { callBrainstormChat, buildSystemPrompt } from "../services/brainstorm-chat.js";
+import { buildSystemPrompt } from "../services/brainstorm-chat.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
+import { getPeerEndpoint } from "../services/jarvis-delegation.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
 import {
@@ -1220,16 +1222,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
     historyEntries.push({ role: "user", content: message });
 
-    // Spec v1.4: this window IS Calliope — the live creative-Muse agent,
+    // PR #30: this window IS Calliope — the live creative-Muse agent,
     // reached through the existing peer-delegation contract (delegation row +
-    // bridge dispatch + result callback; the row is the audit trail). While
-    // cross-box co-location is pending, an unreachable/slow/failed Calliope
-    // falls back to the configured model lane and the response says so
-    // honestly (`via` + `agentLaneError`) — never a fabricated agent reply.
+    // bridge dispatch + result callback; the row is the audit trail).
+    // TYLER'S LAW — ZERO raw-model fallback: an unreachable/slow/failed
+    // Calliope is a VISIBLE degraded failure (502 + degraded provenance),
+    // never a raw-model substitute passed off as (or silently swapped for)
+    // the named agent. The user's message is already persisted either way,
+    // so history isn't lost.
     const actor = getActorInfo(req);
+    const calliopeModel = getPeerEndpoint("calliope").model;
     let reply: string;
-    let via: "calliope" | "model" = "model";
-    let agentLaneError: string | undefined;
     let delegationId: string | undefined;
     try {
       const lane = await callAgentLane(db, {
@@ -1247,41 +1250,23 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         requestedByActorId: actor.actorId,
       });
       reply = lane.text;
-      via = "calliope";
       delegationId = lane.delegationId;
     } catch (laneErr) {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
-      agentLaneError = laneErr.message;
-      // Fallback safety (Chronos rereview-v2 P1A): the paid model fallback
-      // may run ONLY for machine-checkably fallback-safe failures. An
-      // indeterminate outcome means the peer may already hold (or have
-      // delivered) the work — never buy a second lane. Surface honestly;
-      // the user's message is already persisted so history isn't lost.
-      if (!laneErr.fallbackSafe) {
-        res.status(502).json({
-          error: "Live Calliope lane outcome indeterminate — refusing to dual-execute a paid model fallback",
-          messageId: userMsg.id,
-          via: "none",
-          agentLane: "indeterminate",
-          agentLaneError,
-        });
-        return;
-      }
-      try {
-        const result = await callBrainstormChat(bibleContext, historyEntries, message);
-        if (!result) throw new Error("Empty reply from LLM");
-        reply = result;
-      } catch (err) {
-        // Still persist user message so history isn't lost
-        res.status(503).json({
-          error: "AI service temporarily unavailable",
-          messageId: userMsg.id,
-          via: "none",
-          agentLane: "unavailable",
-          agentLaneError,
-        });
-        return;
-      }
+      const provenance: LiveAgentProvenance = {
+        agent: "calliope",
+        model: calliopeModel,
+        status: "degraded",
+        detail: laneErr.message,
+      };
+      res.status(502).json({
+        error: laneErr.fallbackSafe
+          ? "Calliope is unreachable — no reply was generated (no raw-model substitute)."
+          : "Calliope's lane outcome is indeterminate — the peer may still hold this work; no reply was generated.",
+        messageId: userMsg.id,
+        provenance,
+      });
+      return;
     }
 
     // Persist assistant reply
@@ -1289,13 +1274,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       bookId, role: "assistant", content: reply,
     }).returning();
 
+    const provenance: LiveAgentProvenance = {
+      agent: "calliope",
+      model: calliopeModel,
+      status: "live",
+    };
     res.json({
       reply,
       messageId: assistantMsg.id,
       userMessageId: userMsg.id,
-      via,
+      provenance,
       ...(delegationId ? { delegationId } : {}),
-      ...(agentLaneError ? { agentLane: "unavailable", agentLaneError } : {}),
     });
   });
 

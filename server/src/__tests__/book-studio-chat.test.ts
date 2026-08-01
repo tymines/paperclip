@@ -3,22 +3,16 @@ import express from "express";
 import request from "supertest";
 import type { Db } from "@paperclipai/db";
 
-// Mock the brainstorm chat service (keep the real buildSystemPrompt — the
-// route uses it to brief the Calliope lane).
-vi.mock("../services/brainstorm-chat.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../services/brainstorm-chat.js")>();
-  return { ...mod, callBrainstormChat: vi.fn() };
-});
-
 // Mock the live-agent lane, keeping the real error class so the route's
-// fallback branch (AgentLaneUnavailableError → model lane) is exercised.
+// degraded-provenance branch (AgentLaneUnavailableError → visible 502) is
+// exercised. There is NO model-lane mock: the raw-model path was removed
+// (PR #30, Tyler's law) — the route cannot call one even in tests.
 vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/book-agent-lanes.js")>();
   return { ...mod, callAgentLane: vi.fn() };
 });
 
 import { bookStudioRoutes } from "../routes/book-studio.js";
-import { callBrainstormChat } from "../services/brainstorm-chat.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
 /**
@@ -43,6 +37,28 @@ function mockQuery<T>(resolveData: T) {
   q.orderBy.mockReturnValue(q);
   q.limit.mockResolvedValue(resolveData);
   return q;
+}
+
+const BOOK = {
+  id: "book-1",
+  companyId: "company-1",
+  slug: "my-book",
+  title: "My Book",
+  metadata: {},
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
+
+/** Queue the six selects the chat handler performs (book → bible × 4 → history). */
+function queueChatSelects(db: Db) {
+  const select = (db as unknown as { select: ReturnType<typeof vi.fn> }).select;
+  select
+    .mockReturnValueOnce(mockQuery([BOOK]))   // book
+    .mockReturnValueOnce(mockQuery([]))         // characters
+    .mockReturnValueOnce(mockQuery([]))         // locations
+    .mockReturnValueOnce(mockQuery([]))         // styles
+    .mockReturnValueOnce(mockQuery([]))         // outlines
+    .mockReturnValueOnce(mockQuery([]));        // history
 }
 
 function createApp() {
@@ -83,11 +99,12 @@ function createApp() {
 describe("Book Studio Brainstorm Chat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: the live Calliope lane is down (pre-co-location) — routes fall
-    // back to the model lane unless a test opts the agent lane back in.
-    vi.mocked(callAgentLane).mockRejectedValue(
-      new AgentLaneUnavailableError("calliope", "peer unreachable (timeout)"),
-    );
+    // Default: the live Calliope lane answers.
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: "Ooh — what if the map is lying?",
+      delegationId: "del-42",
+      lane: "calliope",
+    });
   });
 
   afterEach(() => {
@@ -95,51 +112,35 @@ describe("Book Studio Brainstorm Chat", () => {
   });
 
   describe("POST /chat", () => {
-    it("returns 200 with reply shape when valid message is sent", async () => {
+    it("answers via the live Calliope agent lane with live provenance (PR #30)", async () => {
       const { app, db, mockQuery } = createApp();
+      queueChatSelects(db);
 
-      const book = {
-        id: "book-1",
-        companyId: "company-1",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      // Order of select().from().where().limit() calls:
-      // 1. book lookup (limit:1 -> [book])
-      // 2. characters (no limit -> [])
-      // 3. locations (no limit -> [])
-      // 4. styles (no limit -> [])
-      // 5. outlines (no limit -> [])
-      // 6. history (limit:50 -> [])
-
-      db.select
-        .mockReturnValueOnce(mockQuery([book]))   // book
-        .mockReturnValueOnce(mockQuery([]))         // characters
-        .mockReturnValueOnce(mockQuery([]))         // locations
-        .mockReturnValueOnce(mockQuery([]))         // styles
-        .mockReturnValueOnce(mockQuery([]))         // outlines
-        .mockReturnValueOnce(mockQuery([]));        // history
-
-      // Mock insert chain: user msg insert -> assistant msg insert
       db.returning
         .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }])
-        .mockResolvedValueOnce([{ id: "msg-2", bookId: "book-1", role: "assistant", content: "Hi there!", createdAt: new Date() }]);
-
-      vi.mocked(callBrainstormChat).mockResolvedValue("Hi there!");
+        .mockResolvedValueOnce([{ id: "msg-2", bookId: "book-1", role: "assistant", content: "Ooh — what if the map is lying?", createdAt: new Date() }]);
 
       const res = await request(app)
         .post("/api/companies/company-1/book-studio/books/book-1/chat")
         .send({ message: "hello" })
         .expect(200);
 
-      expect(res.body).toHaveProperty("reply", "Hi there!");
+      expect(res.body).toHaveProperty("reply", "Ooh — what if the map is lying?");
       expect(res.body).toHaveProperty("messageId", "msg-2");
       expect(res.body).toHaveProperty("userMessageId", "msg-1");
-      expect(callBrainstormChat).toHaveBeenCalledTimes(1);
+      expect(res.body).toHaveProperty("delegationId", "del-42");
+      // Provenance payload shape (PR #30 contract).
+      expect(res.body.provenance).toMatchObject({
+        agent: "calliope",
+        status: "live",
+      });
+      expect(res.body.provenance).toHaveProperty("model");
+      // The delegation contract received the company-scoped brief.
+      const laneCall = vi.mocked(callAgentLane).mock.calls[0][1];
+      expect(laneCall.lane).toBe("calliope");
+      expect(laneCall.companyId).toBe("company-1");
+      expect(laneCall.metadata).toMatchObject({ bookId: "book-1" });
+      expect(laneCall.task).toContain("USER: hello");
     });
 
     it("returns 400 when message is empty", async () => {
@@ -153,184 +154,39 @@ describe("Book Studio Brainstorm Chat", () => {
       expect(res.body).toHaveProperty("error");
     });
 
-    it("returns 503 when LLM service fails gracefully", async () => {
-      const { app, db, mockQuery } = createApp();
+    it("returns a visible 502 with DEGRADED provenance when Calliope is unreachable — NO raw-model substitute (Tyler's law)", async () => {
+      const { app, db } = createApp();
+      queueChatSelects(db);
 
-      const book = {
-        id: "book-1",
-        companyId: "company-1",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      db.select
-        .mockReturnValueOnce(mockQuery([book]))   // book
-        .mockReturnValueOnce(mockQuery([]))         // characters
-        .mockReturnValueOnce(mockQuery([]))         // locations
-        .mockReturnValueOnce(mockQuery([]))         // styles
-        .mockReturnValueOnce(mockQuery([]))         // outlines
-        .mockReturnValueOnce(mockQuery([]));        // history
-
-      // Mock returning for user message insert only (assistant never inserted)
+      // User message persists; the assistant reply must NOT.
       db.returning
         .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }]);
 
-      // Mock LLM to throw
-      vi.mocked(callBrainstormChat).mockRejectedValue(new Error("API down"));
+      vi.mocked(callAgentLane).mockRejectedValue(
+        new AgentLaneUnavailableError("calliope", "peer unreachable (timeout)"),
+      );
 
       const res = await request(app)
         .post("/api/companies/company-1/book-studio/books/book-1/chat")
         .send({ message: "hello" })
-        .expect(503);
+        .expect(502);
 
-      expect(res.body).toHaveProperty("error", "AI service temporarily unavailable");
+      expect(res.body.error).toContain("Calliope");
       expect(res.body).toHaveProperty("messageId", "msg-1");
-      expect(res.body).toHaveProperty("via", "none");
-      expect(res.body).toHaveProperty("agentLane", "unavailable");
-    });
-
-    it("returns 404 for a book outside the authorized company — no delegation, no fallback call, no persistence (P1)", async () => {
-      const { app, db, mockQuery } = createApp();
-
-      // The book exists but belongs to company-2; the URL is authorized for
-      // company-1. The route must treat the pair as not-found BEFORE reading
-      // the bible/history, persisting anything, or invoking any lane.
-      const foreignBook = {
-        id: "book-1",
-        companyId: "company-2",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      db.select.mockReturnValueOnce(mockQuery([foreignBook])); // book lookup
-
-      const res = await request(app)
-        .post("/api/companies/company-1/book-studio/books/book-1/chat")
-        .send({ message: "hello" })
-        .expect(404);
-
-      expect(res.body).toHaveProperty("error");
-      expect(callAgentLane).not.toHaveBeenCalled();
-      expect(callBrainstormChat).not.toHaveBeenCalled();
-      expect(db.insert).not.toHaveBeenCalled();
-    });
-
-    it("answers via the live Calliope agent lane when she is reachable (Spec v1.4)", async () => {
-      const { app, db, mockQuery } = createApp();
-
-      const book = {
-        id: "book-1",
-        companyId: "company-1",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      db.select
-        .mockReturnValueOnce(mockQuery([book]))   // book
-        .mockReturnValueOnce(mockQuery([]))         // characters
-        .mockReturnValueOnce(mockQuery([]))         // locations
-        .mockReturnValueOnce(mockQuery([]))         // styles
-        .mockReturnValueOnce(mockQuery([]))         // outlines
-        .mockReturnValueOnce(mockQuery([]));        // history
-
-      db.returning
-        .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }])
-        .mockResolvedValueOnce([{ id: "msg-2", bookId: "book-1", role: "assistant", content: "Ooh — what if the map is lying?", createdAt: new Date() }]);
-
-      vi.mocked(callAgentLane).mockResolvedValue({
-        text: "Ooh — what if the map is lying?",
-        delegationId: "del-42",
-        lane: "calliope",
+      expect(res.body.provenance).toMatchObject({
+        agent: "calliope",
+        status: "degraded",
       });
-
-      const res = await request(app)
-        .post("/api/companies/company-1/book-studio/books/book-1/chat")
-        .send({ message: "hello" })
-        .expect(200);
-
-      expect(res.body).toHaveProperty("reply", "Ooh — what if the map is lying?");
-      expect(res.body).toHaveProperty("via", "calliope");
-      expect(res.body).toHaveProperty("delegationId", "del-42");
-      // The agent answered — the model fallback was never touched.
-      expect(callBrainstormChat).not.toHaveBeenCalled();
-      // The delegation contract received the company-scoped brief.
-      const laneCall = vi.mocked(callAgentLane).mock.calls[0][1];
-      expect(laneCall.lane).toBe("calliope");
-      expect(laneCall.companyId).toBe("company-1");
-      expect(laneCall.metadata).toMatchObject({ bookId: "book-1" });
-      expect(laneCall.task).toContain("USER: hello");
+      expect(res.body.provenance.detail).toContain("peer unreachable");
+      expect(res.body).not.toHaveProperty("reply");
+      // Only the user message was persisted — no fabricated assistant reply.
+      expect(db.insert).toHaveBeenCalledTimes(1);
     });
 
-    it("falls back to the model lane with honest provenance when Calliope is unreachable", async () => {
-      const { app, db, mockQuery } = createApp();
+    it("returns a visible 502 with degraded provenance on an INDETERMINATE lane outcome — no dual execution", async () => {
+      const { app, db } = createApp();
+      queueChatSelects(db);
 
-      const book = {
-        id: "book-1",
-        companyId: "company-1",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      db.select
-        .mockReturnValueOnce(mockQuery([book]))   // book
-        .mockReturnValueOnce(mockQuery([]))         // characters
-        .mockReturnValueOnce(mockQuery([]))         // locations
-        .mockReturnValueOnce(mockQuery([]))         // styles
-        .mockReturnValueOnce(mockQuery([]))         // outlines
-        .mockReturnValueOnce(mockQuery([]));        // history
-
-      db.returning
-        .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }])
-        .mockResolvedValueOnce([{ id: "msg-2", bookId: "book-1", role: "assistant", content: "Hi there!", createdAt: new Date() }]);
-
-      vi.mocked(callBrainstormChat).mockResolvedValue("Hi there!");
-
-      const res = await request(app)
-        .post("/api/companies/company-1/book-studio/books/book-1/chat")
-        .send({ message: "hello" })
-        .expect(200);
-
-      expect(res.body).toHaveProperty("reply", "Hi there!");
-      expect(res.body).toHaveProperty("via", "model");
-      expect(res.body).toHaveProperty("agentLane", "unavailable");
-      expect(res.body.agentLaneError).toContain("calliope");
-      expect(callAgentLane).toHaveBeenCalledTimes(1);
-      expect(callBrainstormChat).toHaveBeenCalledTimes(1);
-    });
-
-    it("never falls back on a NON-fallback-safe lane failure — honest 502, no paid model call, no fabricated reply (P1A)", async () => {
-      const { app, db, mockQuery } = createApp();
-
-      const book = {
-        id: "book-1",
-        companyId: "company-1",
-        slug: "my-book",
-        title: "My Book",
-        metadata: {},
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-
-      db.select
-        .mockReturnValueOnce(mockQuery([book]))   // book
-        .mockReturnValueOnce(mockQuery([]))         // characters
-        .mockReturnValueOnce(mockQuery([]))         // locations
-        .mockReturnValueOnce(mockQuery([]))         // styles
-        .mockReturnValueOnce(mockQuery([]))         // outlines
-        .mockReturnValueOnce(mockQuery([]));        // history
-
-      // User message persists; the assistant reply must NOT.
       db.returning
         .mockResolvedValueOnce([{ id: "msg-1", bookId: "book-1", role: "user", content: "hello", createdAt: new Date() }]);
 
@@ -343,14 +199,33 @@ describe("Book Studio Brainstorm Chat", () => {
         .send({ message: "hello" })
         .expect(502);
 
-      expect(res.body).toHaveProperty("via", "none");
-      expect(res.body).toHaveProperty("agentLane", "indeterminate");
+      expect(res.body.error).toContain("indeterminate");
       expect(res.body).toHaveProperty("messageId", "msg-1");
-      expect(res.body.agentLaneError).toContain("indeterminate");
-      // The paid model fallback was NEVER bought for an unproven peer outcome.
-      expect(callBrainstormChat).not.toHaveBeenCalled();
-      // Only the user message was persisted — no fabricated assistant reply.
+      expect(res.body.provenance).toMatchObject({
+        agent: "calliope",
+        status: "degraded",
+      });
+      expect(res.body.provenance.detail).toContain("indeterminate");
       expect(db.insert).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns 404 for a book outside the authorized company — no delegation, no persistence (P1)", async () => {
+      const { app, db, mockQuery } = createApp();
+
+      // The book exists but belongs to company-2; the URL is authorized for
+      // company-1. The route must treat the pair as not-found BEFORE reading
+      // the bible/history, persisting anything, or invoking any lane.
+      const foreignBook = { ...BOOK, companyId: "company-2" };
+      db.select.mockReturnValueOnce(mockQuery([foreignBook])); // book lookup
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/chat")
+        .send({ message: "hello" })
+        .expect(404);
+
+      expect(res.body).toHaveProperty("error");
+      expect(callAgentLane).not.toHaveBeenCalled();
+      expect(db.insert).not.toHaveBeenCalled();
     });
   });
 

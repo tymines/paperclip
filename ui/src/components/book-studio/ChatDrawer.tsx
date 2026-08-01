@@ -6,8 +6,20 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Send, Loader2, Sparkles } from "lucide-react";
+import type { LiveAgentProvenance } from "@paperclipai/shared";
 
 // ── Inline apiFetch ──────────────────────────────────────────────────────────
+
+class ApiError extends Error {
+  status: number;
+  /** Parsed JSON error body, when the server sent one (e.g. degraded provenance). */
+  payload: Record<string, unknown> | null;
+  constructor(status: number, text: string, payload: Record<string, unknown> | null) {
+    super(`API ${status}: ${text}`);
+    this.status = status;
+    this.payload = payload;
+  }
+}
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`/api${url}`, {
@@ -16,7 +28,13 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+    let payload: Record<string, unknown> | null = null;
+    try {
+      payload = text ? (JSON.parse(text) as Record<string, unknown>) : null;
+    } catch {
+      payload = null;
+    }
+    throw new ApiError(res.status, text || res.statusText, payload);
   }
   if (res.status === 204) return undefined as unknown as T;
   return res.json();
@@ -30,9 +48,8 @@ interface ChatMessage {
   messageId: string;
   userMessageId: string;
   createdAt: string;
-  /** Which lane answered (Spec v1.4): the live Calliope agent, or the model fallback. */
-  via?: "calliope" | "model";
-  agentLaneError?: string;
+  /** Live-agent provenance (PR #30): live Calliope, or a visible degraded failure. */
+  provenance?: LiveAgentProvenance;
 }
 
 export interface ChatDrawerProps {
@@ -136,7 +153,7 @@ export function ChatDrawer({
     abortRef.current = controller;
 
     try {
-      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string; via?: "calliope" | "model"; agentLaneError?: string }>(
+      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string; provenance?: LiveAgentProvenance }>(
         `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
         { method: "POST", body: JSON.stringify({ message: text }), signal: controller.signal },
       );
@@ -151,14 +168,25 @@ export function ChatDrawer({
             reply: res.reply,
             messageId: res.messageId,
             userMessageId: res.userMessageId,
-            via: res.via,
-            agentLaneError: res.agentLaneError,
+            provenance: res.provenance,
           };
         }
         return updated;
       });
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
+      // A degraded lane failure (502) carries provenance — surface it
+      // verbatim as the (visible) failure bubble; anything else is generic.
+      const degraded =
+        err instanceof ApiError
+          ? (err.payload?.provenance as LiveAgentProvenance | undefined)
+          : undefined;
+      const degradedError =
+        err instanceof ApiError &&
+        degraded?.status === "degraded" &&
+        typeof err.payload?.error === "string"
+          ? err.payload.error
+          : undefined;
       // Mark last message as error
       setMessages((prev) => {
         const updated = [...prev];
@@ -166,7 +194,8 @@ export function ChatDrawer({
         if (idx >= 0) {
           updated[idx] = {
             ...updated[idx],
-            reply: "Failed to get reply. Please try again.",
+            reply: degradedError ?? "Failed to get reply. Please try again.",
+            provenance: degraded,
           };
         }
         return updated;
@@ -249,13 +278,16 @@ export function ChatDrawer({
                 <div className="flex justify-start">
                   <div className="max-w-[85%] rounded-lg bg-gray-800 border border-gray-700 px-3 py-2">
                     <p className="text-xs text-gray-300 whitespace-pre-wrap">{msg.reply}</p>
-                    {/* Lane provenance (Spec v1.4 — honest, never faked) */}
-                    {msg.via === "calliope" && (
-                      <p className="text-[9px] text-purple-400/80 mt-1.5">via Calliope ✦ live agent</p>
+                    {/* Lane provenance (PR #30 — honest, never faked) */}
+                    {msg.provenance?.status === "live" && (
+                      <p className="text-[9px] text-purple-400/80 mt-1.5">
+                        via {msg.provenance.agent === "hades" ? "Hades" : "Calliope"} ✦ live agent
+                        {msg.provenance.model ? ` · ${msg.provenance.model}` : ""}
+                      </p>
                     )}
-                    {msg.via === "model" && msg.agentLaneError && (
-                      <p className="text-[9px] text-amber-400/90 mt-1.5" title={msg.agentLaneError}>
-                        Calliope unreachable — answered by the model fallback
+                    {msg.provenance?.status === "degraded" && (
+                      <p className="text-[9px] text-amber-400/90 mt-1.5" title={msg.provenance.detail}>
+                        {msg.provenance.agent === "hades" ? "Hades" : "Calliope"} unreachable — degraded, no model substitute
                       </p>
                     )}
                     {/* Send to Draft buttons */}

@@ -1,14 +1,11 @@
-// Contract tests for the Ares critic lane in runBaselineReview (Spec v1.4):
-// Ares (live agent, via the peer-delegation contract) answers first; the
-// configured model lanes are the documented pre-co-location fallback. All
-// transport is mocked — these prove lane selection, provenance, and verdict
-// behavior, not a live cross-box run (deferred until co-location).
+// Contract tests for the Hades critic lane in runBaselineReview (PR #30):
+// Hades (live agent, via the peer-delegation contract) is the ONLY critic.
+// Tyler's law — ZERO raw-model fallback: a lane failure degrades to a
+// visible NO_VERDICT report with provenance, never a raw-model substitute.
+// All transport is mocked — these prove lane selection, provenance, and
+// verdict behavior, not a live cross-box run.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "@paperclipai/db";
-
-vi.mock("../services/chapter-generator.js", () => ({
-  callCriticLLM: vi.fn(),
-}));
 
 vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/book-agent-lanes.js")>();
@@ -17,10 +14,9 @@ vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
 
 import {
   runBaselineReview,
-  ARES_CRITIC_PROVIDER,
+  HADES_CRITIC_PROVIDER,
   RUBRIC_DIMENSIONS,
 } from "../services/book-review.js";
-import { callCriticLLM } from "../services/chapter-generator.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
 /** Thenable query stub — runBaselineReview awaits .where() directly (no .limit). */
@@ -63,16 +59,16 @@ function criticJson(overrides: Record<string, unknown> = {}) {
   return JSON.stringify({ scores: FULL_SCORES, summary: "Solid chapter.", findings: [], ...overrides });
 }
 
-describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
+describe("runBaselineReview — Hades critic lane (PR #30)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("uses the Ares agent lane when it answers, with agent provenance", async () => {
+  it("uses the Hades agent lane when it answers, with agent provenance", async () => {
     vi.mocked(callAgentLane).mockResolvedValue({
       text: criticJson(),
       delegationId: "del-7",
-      lane: "ares",
+      lane: "hades",
     });
 
     const report = await runBaselineReview(dbForReview(), {
@@ -83,28 +79,22 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
     });
 
     expect(report.verdict).toBe("PASS");
-    expect(report.criticProvider).toBe(ARES_CRITIC_PROVIDER);
+    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
     expect(report.criticDegraded).toBe(false);
-    expect(callCriticLLM).not.toHaveBeenCalled();
     const laneCall = vi.mocked(callAgentLane).mock.calls[0][1];
-    expect(laneCall.lane).toBe("ares");
+    expect(laneCall.lane).toBe("hades");
     expect(laneCall.companyId).toBe("co-1");
     expect(laneCall.metadata).toMatchObject({ bookId: "book-1", chapterNumber: 2 });
     expect(laneCall.requestedByActorId).toBe("user-1");
-    // Ares receives the same rubric/fact-check brief the model lane would.
+    // Hades receives the same rubric/fact-check brief the critic lane defines.
     expect(laneCall.task).toContain("rubric dimensions");
     expect(laneCall.task).toContain("Some prose with enough words to review.");
   });
 
-  it("falls back to the configured model lanes when Ares is unavailable", async () => {
+  it("degrades to a visible NO_VERDICT when Hades is unreachable — NO raw-model substitute (Tyler's law)", async () => {
     vi.mocked(callAgentLane).mockRejectedValue(
-      new AgentLaneUnavailableError("ares", "peer unreachable (timeout)"),
+      new AgentLaneUnavailableError("hades", "peer unreachable (timeout)"),
     );
-    vi.mocked(callCriticLLM).mockResolvedValue({
-      text: criticJson(),
-      provider: "deepseek",
-      criticDegraded: false,
-    });
 
     const report = await runBaselineReview(dbForReview(), {
       bookId: "book-1",
@@ -112,29 +102,48 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
       companyId: "co-1",
     });
 
-    expect(report.verdict).toBe("PASS");
-    expect(report.criticProvider).toBe("deepseek");
-    expect(callCriticLLM).toHaveBeenCalledTimes(1);
+    expect(report.verdict).toBe("NO_VERDICT");
+    expect(report.noVerdictReason).toBe("critic-lane-unavailable");
+    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
+    expect(report.criticDegraded).toBe(true);
+    expect(report.agentLaneError).toContain("hades");
+    expect(report.summary).toContain("Hades");
+    expect(report.scores).toEqual({});
+    expect(report.findings).toEqual([]);
   });
 
-  it("keeps the model-lane-only behavior when no companyId is provided", async () => {
-    vi.mocked(callCriticLLM).mockResolvedValue({
-      text: criticJson(),
-      provider: "deepseek",
-      criticDegraded: false,
+  it("degrades to NO_VERDICT with the indeterminate reason on a NON-fallback-safe lane failure — never thrown away, never substituted", async () => {
+    vi.mocked(callAgentLane).mockRejectedValue(
+      new AgentLaneUnavailableError("hades", "lane outcome indeterminate — durable state unproven", { fallbackSafe: false }),
+    );
+
+    const report = await runBaselineReview(dbForReview(), {
+      bookId: "book-1",
+      chapterNumber: 2,
+      companyId: "co-1",
     });
 
+    expect(report.verdict).toBe("NO_VERDICT");
+    expect(report.noVerdictReason).toBe("critic-lane-indeterminate");
+    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
+    expect(report.criticDegraded).toBe(true);
+    expect(report.agentLaneError).toContain("indeterminate");
+  });
+
+  it("degrades to NO_VERDICT (critic-lane-unconfigured) when no companyId is provided — no silent model lane", async () => {
     const report = await runBaselineReview(dbForReview(), { bookId: "book-1", chapterNumber: 2 });
 
-    expect(report.criticProvider).toBe("deepseek");
+    expect(report.verdict).toBe("NO_VERDICT");
+    expect(report.noVerdictReason).toBe("critic-lane-unconfigured");
+    expect(report.criticDegraded).toBe(true);
     expect(callAgentLane).not.toHaveBeenCalled();
   });
 
-  it("turns unparseable Ares output into NO_VERDICT with agent provenance — never a silent pass", async () => {
+  it("turns unparseable Hades output into NO_VERDICT with agent provenance — never a silent pass", async () => {
     vi.mocked(callAgentLane).mockResolvedValue({
       text: "sorry, I cannot review this",
       delegationId: "del-9",
-      lane: "ares",
+      lane: "hades",
     });
 
     const report = await runBaselineReview(dbForReview(), {
@@ -145,15 +154,15 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
 
     expect(report.verdict).toBe("NO_VERDICT");
     expect(report.noVerdictReason).toBe("unparseable-critic-output");
-    expect(report.criticProvider).toBe(ARES_CRITIC_PROVIDER);
+    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
     expect(report.criticDegraded).toBe(false);
   });
 
-  it("marks a FAIL verdict from Ares findings the same as a model-lane FAIL", async () => {
+  it("marks a FAIL verdict from Hades findings", async () => {
     vi.mocked(callAgentLane).mockResolvedValue({
       text: criticJson({ scores: { ...FULL_SCORES, pacing: 4 }, summary: "Pacing sags badly." }),
       delegationId: "del-11",
-      lane: "ares",
+      lane: "hades",
     });
 
     const report = await runBaselineReview(dbForReview(), {
@@ -164,7 +173,7 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
 
     expect(report.verdict).toBe("FAIL");
     expect(report.failures).toContain("pacing");
-    expect(report.criticProvider).toBe(ARES_CRITIC_PROVIDER);
+    expect(report.criticProvider).toBe(HADES_CRITIC_PROVIDER);
   });
 
   it("rejects a companyId that does not match the book's company BEFORE loading content or invoking any lane (P1)", async () => {
@@ -175,74 +184,15 @@ describe("runBaselineReview — Ares critic lane (Spec v1.4)", () => {
     ).rejects.toThrow("Book not found");
 
     expect(callAgentLane).not.toHaveBeenCalled();
-    expect(callCriticLLM).not.toHaveBeenCalled();
     // Only the book lookup ran — no chapter or bible content was read.
     expect((db as unknown as { select: ReturnType<typeof vi.fn> }).select).toHaveBeenCalledTimes(1);
   });
 
-  it("rethrows unexpected lane errors (only AgentLaneUnavailableError triggers fallback)", async () => {
+  it("rethrows unexpected lane errors (only AgentLaneUnavailableError degrades)", async () => {
     vi.mocked(callAgentLane).mockRejectedValue(new TypeError("db on fire"));
 
     await expect(
       runBaselineReview(dbForReview(), { bookId: "book-1", chapterNumber: 2, companyId: "co-1" }),
     ).rejects.toThrow("db on fire");
-    expect(callCriticLLM).not.toHaveBeenCalled();
-  });
-
-  it("forces criticDegraded:true when Ares safely degrades to the model fallback — regardless of the model helper's own flag (parseable output)", async () => {
-    vi.mocked(callAgentLane).mockRejectedValue(
-      new AgentLaneUnavailableError("ares", "timed out — delegation marked abandoned before fallback", { fallbackSafe: true }),
-    );
-    // The raw model helper defaults to NOT degraded; the requested-Ares
-    // degradation must still be reported honestly.
-    vi.mocked(callCriticLLM).mockResolvedValue({
-      text: criticJson(),
-      provider: "deepseek",
-      criticDegraded: false,
-    });
-
-    const report = await runBaselineReview(dbForReview(), {
-      bookId: "book-1",
-      chapterNumber: 2,
-      companyId: "co-1",
-    });
-
-    expect(report.verdict).toBe("PASS");
-    expect(report.criticProvider).toBe("deepseek");
-    expect(report.criticDegraded).toBe(true);
-    expect(report.agentLaneError).toContain("ares");
-  });
-
-  it("keeps forced degraded provenance when the fallback output is UNPARSEABLE (NO_VERDICT path)", async () => {
-    vi.mocked(callAgentLane).mockRejectedValue(
-      new AgentLaneUnavailableError("ares", "peer unreachable (timeout)", { fallbackSafe: true }),
-    );
-    vi.mocked(callCriticLLM).mockResolvedValue({
-      text: "sorry, no JSON here",
-      provider: "deepseek",
-      criticDegraded: false,
-    });
-
-    const report = await runBaselineReview(dbForReview(), {
-      bookId: "book-1",
-      chapterNumber: 2,
-      companyId: "co-1",
-    });
-
-    expect(report.verdict).toBe("NO_VERDICT");
-    expect(report.noVerdictReason).toBe("unparseable-critic-output");
-    expect(report.criticProvider).toBe("deepseek");
-    expect(report.criticDegraded).toBe(true);
-  });
-
-  it("a NON-fallback-safe lane failure propagates — the paid model fallback is never invoked", async () => {
-    vi.mocked(callAgentLane).mockRejectedValue(
-      new AgentLaneUnavailableError("ares", "lane outcome indeterminate — durable state unproven", { fallbackSafe: false }),
-    );
-
-    await expect(
-      runBaselineReview(dbForReview(), { bookId: "book-1", chapterNumber: 2, companyId: "co-1" }),
-    ).rejects.toMatchObject({ name: "AgentLaneUnavailableError", fallbackSafe: false });
-    expect(callCriticLLM).not.toHaveBeenCalled();
   });
 });

@@ -727,6 +727,9 @@ export {
   type DelegationActiveStatus,
   type DelegationTerminalStatus,
   type DelegationStatus,
+  BOOK_AGENT_LANE_IDS,
+  type BookAgentLaneId,
+  type LiveAgentProvenance,
 } from "./types/delegation.js";
 export {
   ISSUE_REFERENCE_IDENTIFIER_RE,

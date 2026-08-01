@@ -1331,6 +1331,7 @@ export function jarvisRoutes(db: Db) {
         "hermes",
         "ares",
         "calliope",
+        "hades",
         "august",
         "codex",
         "content",

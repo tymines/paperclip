@@ -1,26 +1,26 @@
-// Book Studio — live-agent lanes (Spec v1, amendment v1.4, 2026-07-26).
+// Book Studio — live-agent lanes (Spec v1, amendment v1.4; PR #30, 2026-07-31).
 //
 // The brainstorm/write chat window IS Calliope (the SOL creative-Muse agent)
-// and the review/critic lane routes to Ares (reviewer under Ares, Kimi K3) —
-// a genuine two-model loop: writer ≠ critic, builder ≠ reviewer. Both run
+// and the review/critic lane IS Hades (the Kimi K3 reviewer agent) — a
+// genuine two-agent loop: writer ≠ critic, builder ≠ reviewer. Both run
 // through the EXISTING peer-delegation contract (dispatchDelegation →
 // jarvis_delegations row → bridge POST → /jarvis/delegations/:id/result
-// callback) — the same contract the War Room "Approve & send to team" gate
-// uses for Ares. No machine addresses, tokens, or credentials live here:
-// peers resolve through JARVIS_PEER_<NAME>_URL/TOKEN with the shared
+// callback). No machine addresses, tokens, or credentials live here: peers
+// resolve through JARVIS_PEER_<NAME>_URL/TOKEN with the shared
 // OPENCLAW_BRIDGE_URL fallback, exactly like every other peer.
 //
-// DEFERRED BOUNDARY (do not fake): live cross-box E2E is deferred until
-// post-migration co-location. When the peer is unreachable, times out, or
-// fails, this module throws AgentLaneUnavailableError and the CALLER falls
-// back to the configured model lane — reporting the degradation honestly
-// (via / criticProvider / criticDegraded), never a fabricated agent success.
+// TYLER'S LAW — ZERO raw-model fallback: a raw-model answer is NEVER passed
+// off as a named agent, and an unreachable/slow/failed peer is NEVER
+// silently substituted. When the lane cannot deliver a live peer result this
+// module throws AgentLaneUnavailableError and the CALLER returns a visible
+// degraded failure carrying provenance ({ agent, model, status: "degraded",
+// detail }) — the UI shows the degradation, nobody gets a fake agent reply.
 //
-// FALLBACK SAFETY (Chronos PR #30 rereview-v2 P1A): a paid model fallback is
-// lawful ONLY when durable state proves the peer cannot also deliver — i.e.
-// AgentLaneUnavailableError.fallbackSafe === true. Callers must check the
-// flag, never fall back on every lane error. See the state table on
-// AgentLaneUnavailableError below.
+// The `fallbackSafe` flag on AgentLaneUnavailableError is retained as a
+// machine-checkable indeterminacy signal: fallbackSafe === false means the
+// peer may still hold (or have delivered) the work, so even a RETRY must be
+// treated with care (never dual-execute). It no longer gates a model
+// fallback — there is none.
 import { and, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import { jarvisDelegations } from "@paperclipai/db";
@@ -31,12 +31,13 @@ import {
   type PeerAgentId,
 } from "./jarvis-delegation.js";
 
-export type BookAgentLane = "calliope" | "ares";
+export type BookAgentLane = "calliope" | "hades";
 
 /**
  * Single failure type for the lane. `fallbackSafe` is the machine-checkable
- * fallback-safety distinction — callers may invoke the paid model fallback
- * ONLY when it is true:
+ * indeterminacy signal — true means durable state PROVES no peer result can
+ * still arrive (a clean failure); false means the peer may still win and
+ * even a caller-side retry risks dual execution:
  *
  *   fallbackSafe = true  (proven no dual-execution risk)
  *     · peer unreachable / dispatch failed (nothing was ever launched)
@@ -48,13 +49,12 @@ export type BookAgentLane = "calliope" | "ares";
  *     · timeout whose abandon lost the race AND the refetch shows the row
  *       still active / missing / unreadable (the peer may still win)
  *     · abandonment DB error (a failed write is NOT proof of abandonment)
- *     · COMPLETED with an empty result (terminal peer outcome; the product
- *       contract does not silently buy a second lane for it)
+ *     · COMPLETED with an empty result (terminal peer outcome)
  *     · any unexpected post-dispatch error (durable state unproven)
  *
  * Special non-error outcome: if the abandon loses the race because the peer
  * COMPLETED with a nonempty result, callAgentLane RETURNS that peer result —
- * the caller never learns a timeout happened and never falls back.
+ * the caller never learns a timeout happened.
  */
 export class AgentLaneUnavailableError extends Error {
   readonly lane: BookAgentLane;
@@ -83,7 +83,7 @@ export interface AgentLaneCall {
   /** Extra metadata stamped on the delegation row (kind/bookId/chapterNumber…). */
   metadata?: Record<string, unknown>;
   requestedByActorId?: string | null;
-  /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_ARES_TIMEOUT_MS (120s). */
+  /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_HADES_TIMEOUT_MS (120s). */
   timeoutMs?: number;
   /** Result-row poll interval. Default BOOK_AGENT_LANE_POLL_MS (2s). */
   pollIntervalMs?: number;
@@ -93,7 +93,7 @@ function defaultTimeoutMs(lane: BookAgentLane): number {
   const raw =
     lane === "calliope"
       ? process.env.BOOK_CALLIOPE_TIMEOUT_MS
-      : process.env.BOOK_ARES_TIMEOUT_MS;
+      : process.env.BOOK_HADES_TIMEOUT_MS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return lane === "calliope" ? 45_000 : 120_000;
@@ -108,11 +108,11 @@ function defaultPollMs(): number {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Dispatch one task to a live Book Studio agent (Calliope or Ares) through
+ * Dispatch one task to a live Book Studio agent (Calliope or Hades) through
  * the peer-delegation contract and await its result callback. Throws
  * AgentLaneUnavailableError on unreachable/timeout/failed/empty — the caller
- * decides whether to fall back (and may do so ONLY when the error is
- * fallback-safe); this function never fabricates a reply.
+ * surfaces a visible degraded failure with provenance (never a raw-model
+ * substitute, never a fabricated reply).
  */
 export async function callAgentLane(
   db: Db,
@@ -171,9 +171,9 @@ export async function callAgentLane(
 
     // Await the peer's result callback (POST /jarvis/delegations/:id/result),
     // which flips this row to completed/failed. The delegation row is the
-    // audit trail either way. On local timeout the row must be PROVEN
-    // terminally safe (see the fallback-safety table above) before the
-    // caller may fall back — never faked, never dual-executed.
+    // audit trail either way. On local timeout the row's durable state is
+    // classified (see the indeterminacy table above) so the caller surfaces
+    // an honest degraded failure — never faked, never dual-executed.
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const [row] = await db
@@ -210,7 +210,7 @@ export async function callAgentLane(
         // present a late/arrested row as a live-agent result.
         throw new AgentLaneUnavailableError(
           lane,
-          `delegation ${dispatch.id} was abandoned (timed out) — its result was given up on before fallback`,
+          `delegation ${dispatch.id} was abandoned (timed out) — its result was given up on before the caller degraded`,
           { fallbackSafe: true },
         );
       }
@@ -224,7 +224,7 @@ export async function callAgentLane(
           abandoned = await abandonDelegation(db, {
             delegationId: dispatch.id,
             companyId,
-            reason: `timed out after ${timeoutMs}ms awaiting the result callback — abandoned before model-lane fallback`,
+            reason: `timed out after ${timeoutMs}ms awaiting the result callback — abandoned before the caller degrades to a visible failure`,
           });
         } catch (abandonErr) {
           // A DB error is NOT proof of abandonment. Preserve it as a
@@ -242,7 +242,7 @@ export async function callAgentLane(
           // Confirmed guarded abandonment: no callback can still win.
           throw new AgentLaneUnavailableError(
             lane,
-            `timed out after ${timeoutMs}ms awaiting the result callback — delegation ${dispatch.id} marked abandoned before fallback`,
+            `timed out after ${timeoutMs}ms awaiting the result callback — delegation ${dispatch.id} marked abandoned before the caller degrades`,
             { fallbackSafe: true },
           );
         }
@@ -268,7 +268,7 @@ export async function callAgentLane(
         }
         if (current.status === "completed") {
           const text = (current.result ?? "").trim();
-          // The peer WON the race: return its result. The model fallback
+          // The peer WON the race: return its result. A caller retry
           // must never dual-execute with a successful peer.
           if (text) return { text, delegationId: dispatch.id, lane };
           throw new AgentLaneUnavailableError(
@@ -287,12 +287,12 @@ export async function callAgentLane(
         if (current.status === "abandoned") {
           throw new AgentLaneUnavailableError(
             lane,
-            `delegation ${dispatch.id} was abandoned (timed out) — its result was given up on before fallback`,
+            `delegation ${dispatch.id} was abandoned (timed out) — its result was given up on before the caller degraded`,
             { fallbackSafe: true },
           );
         }
-        // Still active (or an unknown status): do NOT claim abandonment and
-        // do NOT trigger a fallback — the peer may still win.
+        // Still active (or an unknown status): do NOT claim abandonment —
+        // the peer may still win; indeterminate, NOT fallback-safe.
         throw new AgentLaneUnavailableError(
           lane,
           `timed out after ${timeoutMs}ms but delegation ${dispatch.id} is still ${current.status ?? "unknown"} after a zero-row abandonment — indeterminate; NOT fallback-safe`,

@@ -82,7 +82,7 @@ const PASS_REPORT = {
   failures: [],
   summary: "Solid.",
   findings: [],
-  criticProvider: "ares (agent lane)",
+  criticProvider: "hades (agent lane)",
   criticDegraded: false,
 };
 
@@ -124,7 +124,7 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     vi.mocked(runBaselineReview).mockResolvedValue(PASS_REPORT as never);
   });
 
-  it("already AT the hard budget ⇒ pauses + checkpoints + activity-logs the hard stop, and dispatches NO critic lane (neither Ares nor model fallback)", async () => {
+  it("already AT the hard budget ⇒ pauses + checkpoints + activity-logs the hard stop, and dispatches NO critic lane (no Hades dispatch)", async () => {
     // Draft estimate is 5¢; budget 5¢ ⇒ spend already equals the budget when
     // the review action would start.
     const db = dbWithSelectScript([BOOK_ID_SLUG, OUTLINE, [], []]);
@@ -182,10 +182,10 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     // Review outcome is activity-logged with its provenance.
     const reviews = activityCalls("book.baseline_review");
     expect(reviews).toHaveLength(1);
-    expect(reviews[0]!.details).toMatchObject({ verdict: "PASS", criticProvider: "ares (agent lane)" });
+    expect(reviews[0]!.details).toMatchObject({ verdict: "PASS", criticProvider: "hades (agent lane)" });
   });
 
-  it("a degraded model-fallback critic report is still a SINGLE charge — no double charge when one lane falls back to the other", async () => {
+  it("a degraded critic report is still a SINGLE charge — the review action is charged exactly once", async () => {
     vi.mocked(runBaselineReview).mockResolvedValue({
       ...PASS_REPORT,
       criticProvider: "deepseek",

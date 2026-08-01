@@ -82,13 +82,13 @@ describe("book-agent-lanes.callAgentLane", () => {
     expect(call.requestedByActorId).toBe("user-1");
   });
 
-  it("dispatches critic work to the ares peer with book-studio-critic metadata", async () => {
+  it("dispatches critic work to the hades peer with book-studio-critic metadata", async () => {
     const db = dbWithRows([
       { id: "del-1", companyId: "co-1", status: "completed", result: "{\"scores\":{}}" },
     ]);
 
     const out = await callAgentLane(db, {
-      lane: "ares",
+      lane: "hades",
       companyId: "co-1",
       task: "critic brief",
       metadata: { bookId: "book-1", chapterNumber: 3 },
@@ -96,9 +96,9 @@ describe("book-agent-lanes.callAgentLane", () => {
       pollIntervalMs: 1,
     });
 
-    expect(out.lane).toBe("ares");
+    expect(out.lane).toBe("hades");
     const call = vi.mocked(dispatchDelegation).mock.calls[0][1];
-    expect(call.agent).toBe("ares");
+    expect(call.agent).toBe("hades");
     expect(call.metadata).toMatchObject({
       kind: "book-studio-critic",
       bookId: "book-1",
@@ -127,7 +127,7 @@ describe("book-agent-lanes.callAgentLane", () => {
     const db = dbWithRows([]);
 
     await expect(
-      callAgentLane(db, { lane: "ares", companyId: "co-1", task: "t", timeoutMs: 100, pollIntervalMs: 1 }),
+      callAgentLane(db, { lane: "hades", companyId: "co-1", task: "t", timeoutMs: 100, pollIntervalMs: 1 }),
     ).rejects.toMatchObject({ name: "AgentLaneUnavailableError", reason: expect.stringContaining("rate_limited") });
   });
 
@@ -169,7 +169,7 @@ describe("book-agent-lanes.callAgentLane", () => {
     ]);
 
     const err = await callAgentLane(db, {
-      lane: "ares",
+      lane: "hades",
       companyId: "co-1",
       task: "t",
       timeoutMs: 500,
@@ -186,7 +186,7 @@ describe("book-agent-lanes.callAgentLane", () => {
     ]);
 
     await expect(
-      callAgentLane(db, { lane: "ares", companyId: "co-1", task: "t", timeoutMs: 500, pollIntervalMs: 1 }),
+      callAgentLane(db, { lane: "hades", companyId: "co-1", task: "t", timeoutMs: 500, pollIntervalMs: 1 }),
     ).rejects.toMatchObject({ reason: expect.stringContaining("empty result") });
   });
 

@@ -3,15 +3,18 @@
 // story-bible fact-check with cited entities. ANNOTATES AND SCORES ONLY — the
 // critic never rewrites and never commits.
 //
-// Critic lane (Spec v1 amendment v1.4): the review function routes to ARES —
-// a live agent (reviewer under Ares, Kimi K3), reached through the existing
+// Critic lane (Spec v1 amendment v1.4; PR #30): the review function routes to
+// HADES — the live Kimi K3 reviewer agent, reached through the existing
 // peer-delegation contract (book-agent-lanes.ts → dispatchDelegation →
 // result callback). Writer ≠ critic is preserved at the AGENT level, not
-// just the model level. While cross-box co-location is pending, an
-// unreachable/slow/failed Ares falls back to the configured model lanes
-// (callCriticLLM in chapter-generator.ts) and the report says which lane
-// actually answered (criticProvider + criticDegraded) — never silently
-// same-model, never a fabricated agent verdict.
+// just the model level.
+//
+// TYLER'S LAW — ZERO raw-model fallback: when Hades is unreachable, times
+// out, or fails, the review does NOT buy a raw-model substitute. It returns
+// a degraded NO_VERDICT report (verdict NO_VERDICT — halts and surfaces,
+// never silently passes) carrying provenance: criticProvider "hades (agent
+// lane)", criticDegraded: true, and the lane error as detail. A raw-model
+// answer is never passed off as the named critic.
 //
 // Verdicts (Spec v1 §4): PASS → the chapter queues silently · FAIL → exception
 // in the review queue · NO_VERDICT → missing/stale evidence — halts, surfaces,
@@ -28,12 +31,11 @@ import {
   manuscriptChapters,
 } from "@paperclipai/db";
 import { and } from "drizzle-orm";
-import { callCriticLLM } from "./chapter-generator.js";
 import { chapterContentHash } from "./book-prose-writer.js";
 import { callAgentLane, AgentLaneUnavailableError } from "./book-agent-lanes.js";
 
-/** Provenance string stamped on reports + review runs when the live Ares agent lane answered. */
-export const ARES_CRITIC_PROVIDER = "ares (agent lane)";
+/** Provenance string stamped on reports + review runs when the live Hades agent lane answered. */
+export const HADES_CRITIC_PROVIDER = "hades (agent lane)";
 
 // The 8 rubric dimensions (Spec v1 §4 — 8-dim rubric scorecards). Score 1–10.
 export const RUBRIC_DIMENSIONS = [
@@ -73,7 +75,7 @@ export interface BaselineReport {
   criticDegraded: boolean;
   /** Human-readable reason when verdict is NO_VERDICT. */
   noVerdictReason?: string;
-  /** Lane error when a requested live-agent critic safely degraded to the model fallback. */
+  /** Lane error detail when the live-agent critic degraded (NO_VERDICT path). */
   agentLaneError?: string;
 }
 
@@ -152,38 +154,53 @@ export async function runBaselineReview(
     `STORY BIBLE (fact-check evidence):\n${bibleParts.length ? bibleParts.join("\n\n") : "(no bible entries yet — score craft only, note the missing evidence in summary)"}\n\n` +
     "Respond with the JSON object only.";
 
-  // Spec v1.4: Ares first (live agent, via the peer-delegation contract);
-  // the configured model lanes are the documented pre-co-location fallback.
-  // `companyId` is optional so existing tests/callers without a company
-  // context keep the model-lane-only behavior.
+  // PR #30: Hades ONLY (live agent, via the peer-delegation contract).
+  // Tyler's law: there is NO raw-model substitute. A lane failure degrades
+  // to a visible NO_VERDICT report with provenance — never a faked verdict,
+  // never a silent same-shop model call. A missing companyId means the
+  // delegation contract cannot be used at all (company-scoped rows), so that
+  // too is a degraded NO_VERDICT, not a model call.
   let critic: { text: string; provider: string; criticDegraded: boolean };
-  let agentLaneError: string | undefined;
-  if (args.companyId) {
-    try {
-      const lane = await callAgentLane(db, {
-        lane: "ares",
-        companyId: args.companyId,
-        task: `${systemPrompt}\n\n${userPrompt}`,
-        metadata: { bookId, chapterNumber },
-        requestedByActorId: args.requestedByActorId ?? null,
-      });
-      critic = { text: lane.text, provider: ARES_CRITIC_PROVIDER, criticDegraded: false };
-    } catch (laneErr) {
-      if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
-      // Fallback safety (Chronos rereview-v2 P1A): the paid model lane may
-      // run ONLY for machine-checkably fallback-safe failures. An
-      // indeterminate outcome (peer may still hold/deliver the work)
-      // propagates — never a dual execution.
-      if (!laneErr.fallbackSafe) throw laneErr;
-      agentLaneError = laneErr.message;
-      const model = await callCriticLLM(systemPrompt, userPrompt);
-      // Honest degradation provenance: a requested-Ares review the model
-      // lane answered is ALWAYS degraded, regardless of the raw model
-      // helper's own default flag.
-      critic = { ...model, criticDegraded: true };
-    }
-  } else {
-    critic = await callCriticLLM(systemPrompt, userPrompt);
+  if (!args.companyId) {
+    return {
+      chapterNumber,
+      verdict: "NO_VERDICT",
+      scores: {},
+      failures: [],
+      summary: "Critic lane unconfigured — no company context, so the Hades delegation contract cannot run. No raw-model substitute is permitted.",
+      findings: [],
+      criticProvider: HADES_CRITIC_PROVIDER,
+      criticDegraded: true,
+      noVerdictReason: "critic-lane-unconfigured",
+    };
+  }
+  try {
+    const lane = await callAgentLane(db, {
+      lane: "hades",
+      companyId: args.companyId,
+      task: `${systemPrompt}\n\n${userPrompt}`,
+      metadata: { bookId, chapterNumber },
+      requestedByActorId: args.requestedByActorId ?? null,
+    });
+    critic = { text: lane.text, provider: HADES_CRITIC_PROVIDER, criticDegraded: false };
+  } catch (laneErr) {
+    if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
+    // Degraded, honestly: NO_VERDICT halts and surfaces (§6.4) — the report
+    // names the lane that was requested and why it could not answer.
+    return {
+      chapterNumber,
+      verdict: "NO_VERDICT",
+      scores: {},
+      failures: [],
+      summary: `Hades (live critic) could not review this chapter: ${laneErr.reason}`,
+      findings: [],
+      criticProvider: HADES_CRITIC_PROVIDER,
+      criticDegraded: true,
+      noVerdictReason: laneErr.fallbackSafe
+        ? "critic-lane-unavailable"
+        : "critic-lane-indeterminate",
+      agentLaneError: laneErr.message,
+    };
   }
 
   let parsed: {
@@ -205,7 +222,6 @@ export async function runBaselineReview(
       criticProvider: critic.provider,
       criticDegraded: critic.criticDegraded,
       noVerdictReason: "unparseable-critic-output",
-      ...(agentLaneError ? { agentLaneError } : {}),
     };
   }
 
@@ -226,7 +242,6 @@ export async function runBaselineReview(
       criticProvider: critic.provider,
       criticDegraded: critic.criticDegraded,
       noVerdictReason: "incomplete-rubric-scores",
-      ...(agentLaneError ? { agentLaneError } : {}),
     };
   }
 
@@ -253,7 +268,6 @@ export async function runBaselineReview(
     findings,
     criticProvider: critic.provider,
     criticDegraded: critic.criticDegraded,
-    ...(agentLaneError ? { agentLaneError } : {}),
   };
 }
 
@@ -275,7 +289,7 @@ export async function persistBaselineReport(
       companyId,
       lens: "baseline",
       reviewer: "ai-critic",
-      model: `${report.criticProvider}${report.criticDegraded ? " (fallback — pinned critic unavailable)" : ""}`,
+      model: `${report.criticProvider}${report.criticDegraded ? " (degraded — live Hades lane unavailable)" : ""}`,
       scope: `chapter:${report.chapterNumber}`,
       summary: `[${report.verdict}] ${report.summary}`.slice(0, 2000),
     })

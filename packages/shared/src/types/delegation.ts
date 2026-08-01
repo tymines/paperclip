@@ -55,3 +55,26 @@ export function isDelegationTerminalStatus(
     value === "completed" || value === "failed" || value === "abandoned"
   );
 }
+
+/**
+ * Book Studio live-agent lanes (PR #30). The brainstorm/co-writer chat IS
+ * Calliope and the critic/review lane IS Hades — both reached through the
+ * peer-delegation contract above. Tyler's law: a raw-model answer is NEVER
+ * passed off as a named agent; an unreachable peer is a visible degraded
+ * failure carrying this provenance, never a silent substitute.
+ */
+export const BOOK_AGENT_LANE_IDS = ["calliope", "hades"] as const;
+export type BookAgentLaneId = (typeof BOOK_AGENT_LANE_IDS)[number];
+
+/**
+ * Provenance attached to every Book Studio live-agent response (and to
+ * degraded failures). `model` is the operator-declared peer model
+ * (JARVIS_PEER_<NAME>_MODEL) or null when undeclared; `detail` carries the
+ * human-readable degradation reason when status is "degraded".
+ */
+export interface LiveAgentProvenance {
+  agent: BookAgentLaneId;
+  model: string | null;
+  status: "live" | "degraded";
+  detail?: string;
+}

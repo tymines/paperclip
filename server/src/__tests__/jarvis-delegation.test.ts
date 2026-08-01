@@ -28,9 +28,65 @@ import {
   __resetReachabilityCache,
   abandonDelegation,
   dispatchDelegation,
+  getPeerEndpoint,
   naturalAcknowledgment,
 } from "../services/jarvis-delegation.js";
 import { TOOL_NAME_TO_PEER } from "../services/jarvis-delegation-tools.js";
+
+describe("getPeerEndpoint — named peer env resolution (PR #30)", () => {
+  const ENV_KEYS = [
+    "JARVIS_PEER_HADES_URL",
+    "JARVIS_PEER_HADES_TOKEN",
+    "JARVIS_PEER_HADES_MODEL",
+    "JARVIS_PEER_HADES_DISPATCH_PATH",
+    "JARVIS_PEER_CALLIOPE_URL",
+    "JARVIS_PEER_CALLIOPE_TOKEN",
+    "JARVIS_PEER_CALLIOPE_MODEL",
+    "JARVIS_DISPATCH_PATH",
+  ];
+  const saved: Record<string, string | undefined> = {};
+  beforeEach(() => {
+    for (const k of ENV_KEYS) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it("resolves hades as a first-class peer from JARVIS_PEER_HADES_* env", () => {
+    process.env.JARVIS_PEER_HADES_URL = "http://127.0.0.1:18791";
+    process.env.JARVIS_PEER_HADES_TOKEN = "test-token";
+    process.env.JARVIS_PEER_HADES_MODEL = "kimi-k3";
+
+    const ep = getPeerEndpoint("hades");
+
+    expect(ep.url).toBe("http://127.0.0.1:18791");
+    expect(ep.token).toBe("test-token");
+    expect(ep.identityId).toBe("hades");
+    expect(ep.model).toBe("kimi-k3");
+    expect(ep.dispatchPath).toBe("/jarvis/dispatch");
+  });
+
+  it("falls back to the shared bridge defaults and a null model when no per-peer env is set", () => {
+    const ep = getPeerEndpoint("hades");
+    expect(ep.url).toBe("http://127.0.0.1:18790");
+    expect(ep.model).toBeNull();
+    expect(ep.dispatchPath).toBe("/jarvis/dispatch");
+  });
+
+  it("honors a per-peer dispatch path override over the global JARVIS_DISPATCH_PATH", () => {
+    process.env.JARVIS_DISPATCH_PATH = "/global/path";
+    process.env.JARVIS_PEER_CALLIOPE_DISPATCH_PATH = "/peer/path";
+
+    expect(getPeerEndpoint("calliope").dispatchPath).toBe("/peer/path");
+    expect(getPeerEndpoint("hades").dispatchPath).toBe("/global/path");
+  });
+});
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported

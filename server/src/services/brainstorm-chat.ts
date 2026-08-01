@@ -1,31 +1,14 @@
 /**
- * Brainstorm Chat — Gemini 2.5 Pro reasoning layer for Book Studio.
+ * Brainstorm Chat — shared prompt/context types for Book Studio's
+ * brainstorm/co-writer window.
  *
- * Uses the same OpenAI-compatible endpoint as design-chat.ts but with a
- * richer system prompt that injects the full story bible context so the
- * model can reason about characters, world, style, and outline together.
- *
- * NO streaming — simple request/response.
+ * PR #30 (Tyler's law): this window IS Calliope, the live agent, reached
+ * through the peer-delegation contract (book-agent-lanes.ts). The raw
+ * Gemini 2.5 Pro call path was REMOVED — a raw-model answer is never passed
+ * off as (or silently substituted for) the named agent. What remains here
+ * is the exact bible brief builder the Calliope lane receives, plus the
+ * shared context/history types.
  */
-
-export const BRAINSTORM_MODEL = "gemini-2.5-pro";
-
-// Gemini's OpenAI-compatible Chat Completions endpoint.
-const GEMINI_OPENAI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-
-export class BrainstormModelUnconfiguredError extends Error {
-  constructor() {
-    super(
-      "Brainstorm chat model (Gemini 2.5 Pro) not configured — set GEMINI_API_KEY or GOOGLE_API_KEY.",
-    );
-    this.name = "BrainstormModelUnconfiguredError";
-  }
-}
-
-export function geminiApiKey(env: NodeJS.ProcessEnv = process.env): string | null {
-  return env.GEMINI_API_KEY || env.GOOGLE_API_KEY || null;
-}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -44,8 +27,8 @@ export interface HistoryEntry {
 
 // ── System Prompt Builder ────────────────────────────────────────────────────
 
-// Exported so the Calliope agent lane (book-agent-lanes.ts) can hand the live
-// agent the exact same bible brief the model fallback receives.
+// The Calliope agent lane (book-agent-lanes.ts) receives this exact bible
+// brief as the head of its delegation task.
 export function buildSystemPrompt(context: BibleContext): string {
   const parts: string[] = [
     `You are a creative brainstorming partner for a book titled "${context.bookTitle}".`,
@@ -97,65 +80,4 @@ export function buildSystemPrompt(context: BibleContext): string {
   }
 
   return parts.join("\n");
-}
-
-// ── Main Service ─────────────────────────────────────────────────────────────
-
-/**
- * Call Gemini 2.5 Pro for a brainstorm chat response.
- * Returns the assistant reply text, or throws on error.
- */
-export async function callBrainstormChat(
-  context: BibleContext,
-  history: HistoryEntry[],
-  userMessage: string,
-  env?: NodeJS.ProcessEnv,
-): Promise<string> {
-  const resolvedEnv = env ?? process.env;
-  const key = geminiApiKey(resolvedEnv);
-  if (!key) throw new BrainstormModelUnconfiguredError();
-
-  const systemPrompt = buildSystemPrompt(context);
-
-  const messages = [
-    { role: "system", content: systemPrompt },
-    ...history.map((h) => ({ role: h.role, content: h.content })),
-    { role: "user", content: userMessage },
-  ];
-
-  // 45-second timeout
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45_000);
-
-  try {
-    const resp = await fetch(GEMINI_OPENAI_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model: BRAINSTORM_MODEL,
-        stream: false,
-        temperature: 0.8,
-        messages,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      throw new Error(`Gemini request failed (${resp.status}): ${detail.slice(0, 300)}`);
-    }
-
-    const json = await resp.json() as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-    const reply = json?.choices?.[0]?.message?.content;
-    if (!reply) throw new Error("Empty reply from Gemini");
-
-    return reply;
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
