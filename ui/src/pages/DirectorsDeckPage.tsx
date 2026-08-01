@@ -9,6 +9,7 @@ import { DeckRail, type DeckChapter, type DeckBibleSection } from "@/components/
 import { DeckWorkspace, type Beat } from "@/components/book-studio/deck/DeckWorkspace";
 import { DeckInspector } from "@/components/book-studio/deck/DeckInspector";
 import { DecisionInbox, TasteSheet, RunPlanSheet, ExportSheet } from "@/components/book-studio/deck/DeckOverlays";
+import { NewBookModal } from "@/components/book-studio/deck/NewBookModal";
 import { CodexPanel } from "@/components/book-studio/CodexPanel";
 import { ChatDrawer } from "@/components/book-studio/ChatDrawer";
 import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
@@ -21,7 +22,14 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
   });
-  if (!res.ok) throw new Error(`API ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    let msg = text;
+    try { msg = JSON.parse(text).error ?? text; } catch { /* raw */ }
+    const err = new Error(msg || res.statusText) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
+  }
   if (res.status === 204) return undefined as unknown as T;
   return res.json();
 }
@@ -65,6 +73,7 @@ export function DirectorsDeckPage() {
   const [showCodex, setShowCodex] = useState(false);
   const [overlay, setOverlay] = useState<"inbox" | "taste" | "runplan" | "export" | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [newBookOpen, setNewBookOpen] = useState(false);
   const [proseRefreshKey, setProseRefreshKey] = useState(0);
 
   const activeBook = useMemo(() => books.find((b) => b.id === activeBookId) ?? null, [books, activeBookId]);
@@ -159,6 +168,16 @@ export function DirectorsDeckPage() {
       return { ...s, count, ready: s.id === "overview" ? "ok" : n > 2 ? "ok" : n > 0 ? "thin" : "none" };
     }), [sectionCounts]);
 
+  async function handleCreateBook(title: string) {
+    // Create responses are wrapped — unwrap { book } (see BookWritingPage.createBook).
+    const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books`, {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    });
+    setBooks((prev) => [book, ...prev]);
+    setActiveBookId(book.id);
+  }
+
   async function handleModeChange(m: DirectorMode) {
     setMode(m);
     if (!activeBook) return;
@@ -205,7 +224,7 @@ export function DirectorsDeckPage() {
         books={books.map(({ id, slug, title }) => ({ id, slug, title }))}
         activeBookId={activeBookId}
         onSelectBook={setActiveBookId}
-        onNewBook={() => { /* 3b wires the creation prompt */ }}
+        onNewBook={() => setNewBookOpen(true)}
         status={{
           ready: deckChapters.filter((c) => c.state === "pass").length,
           working: deckChapters.filter((c) => c.state === "run").length,
@@ -276,6 +295,9 @@ export function DirectorsDeckPage() {
       </div>
 
       {/* overlays */}
+      {newBookOpen && (
+        <NewBookModal onClose={() => setNewBookOpen(false)} onCreate={handleCreateBook} />
+      )}
       {overlay === "inbox" && activeBook && (
         <DecisionInbox
           bookId={activeBook.id}
