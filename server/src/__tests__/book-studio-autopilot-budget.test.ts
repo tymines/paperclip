@@ -176,7 +176,7 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     // The hard stop did NOT fire; the post-chapter soft-cap pause did.
     expect(activityCalls("autopilot.hard_budget_stop")).toHaveLength(0);
     expect(settled.status).toBe("paused");
-    // Review ran with company + actor context (the live Ares lane inside it).
+    // Review ran with company + actor context (the live Hades lane inside it).
     const reviewArgs = vi.mocked(runBaselineReview).mock.calls[0]![1] as Record<string, unknown>;
     expect(reviewArgs).toMatchObject({ bookId: "budget-exact", chapterNumber: 1, companyId: "co-1" });
     // Review outcome is activity-logged with its provenance.

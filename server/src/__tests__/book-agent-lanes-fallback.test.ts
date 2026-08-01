@@ -134,6 +134,10 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-lane-fallback-");
     db = createDb(tempDb.connectionString);
+    // Fail-closed named peers (PR #30 r6) require explicit per-peer URLs —
+    // point them at a dead sink; fetch is stubbed below so no packet leaves.
+    vi.stubEnv("JARVIS_PEER_CALLIOPE_URL", "http://127.0.0.1:1");
+    vi.stubEnv("JARVIS_PEER_HADES_URL", "http://127.0.0.1:1");
     // The bridge daemon does not exist in tests: every fetch (reachability
     // probe + fire-and-forget dispatch POST) answers 200 so no background
     // markDelegationFailed can touch the row under test.
@@ -154,6 +158,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
 
   afterAll(async () => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     await tempDb?.cleanup();
   });
 

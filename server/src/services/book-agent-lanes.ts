@@ -174,6 +174,15 @@ export async function callAgentLane(
     // audit trail either way. On local timeout the row's durable state is
     // classified (see the indeterminacy table above) so the caller surfaces
     // an honest degraded failure — never faked, never dual-executed.
+    //
+    // TIMEOUT SEMANTICS (PR #30 r6): `timeoutMs` bounds ONLY this
+    // result-row polling phase. It does NOT include the reachability
+    // preflight above (≤4s, cached 30s per URL — usually free) or the
+    // fire-and-forget dispatch POST (≤12s, runs in the background) or DB
+    // time. Worst-case server-side wait is therefore roughly
+    // preflight + timeoutMs + one DB round-trip. Callers with a hard
+    // end-to-end deadline (e.g. the browser) must enforce their own —
+    // ChatDrawer aborts at 75s. See doc/BOOK-STUDIO-LIVE-AGENTS.md.
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const [row] = await db

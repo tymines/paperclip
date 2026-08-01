@@ -442,6 +442,8 @@ export type {
   StoryBibleChatMessage,
   SendChatMessageRequest,
   ChatMessageResponse,
+  SendChatMessageResponse,
+  SendChatMessageDegradedResponse,
   DraftEntityType,
   ToDraftQuery,
   ToDraftResponse,

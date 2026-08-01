@@ -71,15 +71,45 @@ function json(res, status, obj) {
   res.end(body);
 }
 
+const MAX_BODY_BYTES = 2_000_000; // briefs are < 100KB
+
+class PayloadTooLargeError extends Error {
+  constructor(limit) {
+    super(`request body exceeded ${limit} bytes`);
+    this.name = "PayloadTooLargeError";
+  }
+}
+
+/** Byte-accurate body reader — rejects with PayloadTooLargeError past the cap. */
 function readBody(req) {
   return new Promise((resolve, reject) => {
-    let data = "";
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
     req.on("data", (c) => {
-      data += c;
-      if (data.length > 2_000_000) req.destroy(); // 2MB cap — briefs are < 100KB
+      if (settled) return;
+      bytes += c.length; // Buffer.byteLength — actual received bytes, not UTF-16 units
+      if (bytes > MAX_BODY_BYTES) {
+        settled = true;
+        // Pause (don't destroy) so the handler can flush a clean 413 first.
+        req.pause();
+        reject(new PayloadTooLargeError(MAX_BODY_BYTES));
+        return;
+      }
+      chunks.push(c);
     });
-    req.on("end", () => resolve(data));
-    req.on("error", reject);
+    req.on("end", () => {
+      if (!settled) {
+        settled = true;
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      }
+    });
+    req.on("error", (e) => {
+      if (!settled) {
+        settled = true;
+        reject(e);
+      }
+    });
   });
 }
 
@@ -132,6 +162,18 @@ function runAgent(peer, task) {
   });
 }
 
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
+
+// Refuse the unsafe combo: a non-loopback bind with auth disabled would
+// accept unauthenticated dispatches from the network. Fail at startup,
+// not after the first forged delegation.
+if (!TOKEN && !LOOPBACK_HOSTS.has(HOST)) {
+  console.error(
+    `FATAL: HERMES_PEER_BRIDGE_HOST=${HOST} is not loopback but HERMES_PEER_BRIDGE_TOKEN is empty — refusing to bind. Set a shared token or bind to 127.0.0.1.`,
+  );
+  process.exit(1);
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
 
@@ -154,8 +196,18 @@ const server = http.createServer(async (req, res) => {
     let body;
     try {
       body = JSON.parse(await readBody(req));
-    } catch {
-      return json(res, 400, { error: "invalid json body" });
+    } catch (e) {
+      if (e instanceof PayloadTooLargeError) {
+        if (!res.writableEnded && !res.destroyed) {
+          res.on("finish", () => req.socket.destroy());
+          return json(res, 413, { error: "payload too large (max 2000000 bytes)" });
+        }
+        return;
+      }
+      if (!res.writableEnded && !res.destroyed) {
+        return json(res, 400, { error: "invalid json body" });
+      }
+      return;
     }
     if (!body || body.kind !== "jarvis-delegation") {
       return json(res, 400, { error: 'expected kind "jarvis-delegation"' });

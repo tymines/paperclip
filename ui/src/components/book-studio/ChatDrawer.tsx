@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Send, Loader2, Sparkles } from "lucide-react";
-import type { LiveAgentProvenance } from "@paperclipai/shared";
+import type { LiveAgentProvenance, SendChatMessageResponse } from "@paperclipai/shared";
 
 // ── Inline apiFetch ──────────────────────────────────────────────────────────
 
@@ -41,6 +41,14 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
+
+/**
+ * Client-side end-to-end deadline for one chat send (PR #30 r6). The
+ * server lane poll timeout (45s) excludes the reachability preflight and DB
+ * time, so the browser enforces its own hard bound: lane 45s + preflight
+ * 4s + margin.
+ */
+const CHAT_CLIENT_TIMEOUT_MS = 75_000;
 
 interface ChatMessage {
   userMessage: string;
@@ -78,6 +86,7 @@ export function ChatDrawer({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const deadlineAbortRef = useRef(false);
   const loadedRef = useRef(false);
 
   // Fetch history on open
@@ -151,9 +160,16 @@ export function ChatDrawer({
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    deadlineAbortRef.current = false;
+    // Hard client deadline — the server lane's poll timeout is not an
+    // end-to-end bound (preflight/DB time sit outside it).
+    const deadlineTimer = setTimeout(() => {
+      deadlineAbortRef.current = true;
+      controller.abort();
+    }, CHAT_CLIENT_TIMEOUT_MS);
 
     try {
-      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string; provenance?: LiveAgentProvenance }>(
+      const res = await apiFetch<SendChatMessageResponse>(
         `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
         { method: "POST", body: JSON.stringify({ message: text }), signal: controller.signal },
       );
@@ -174,7 +190,23 @@ export function ChatDrawer({
         return updated;
       });
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof DOMException && err.name === "AbortError") {
+        if (deadlineAbortRef.current) {
+          // Client deadline hit — visible timeout, not a silent spinner.
+          setMessages((prev) => {
+            const updated = [...prev];
+            const idx = updated.length - 1;
+            if (idx >= 0) {
+              updated[idx] = {
+                ...updated[idx],
+                reply: "Calliope did not answer in time — the request was aborted. Please try again.",
+              };
+            }
+            return updated;
+          });
+        }
+        return;
+      }
       // A degraded lane failure (502) carries provenance — surface it
       // verbatim as the (visible) failure bubble; anything else is generic.
       const degraded =
@@ -201,6 +233,7 @@ export function ChatDrawer({
         return updated;
       });
     } finally {
+      clearTimeout(deadlineTimer);
       setLoading(false);
     }
   };

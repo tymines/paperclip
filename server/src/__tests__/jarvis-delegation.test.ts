@@ -27,9 +27,11 @@ import {
   __resetRateLimits,
   __resetReachabilityCache,
   abandonDelegation,
+  checkPeerReachable,
   dispatchDelegation,
   getPeerEndpoint,
   naturalAcknowledgment,
+  PeerEndpointUnconfiguredError,
 } from "../services/jarvis-delegation.js";
 import { TOOL_NAME_TO_PEER } from "../services/jarvis-delegation-tools.js";
 
@@ -42,7 +44,9 @@ describe("getPeerEndpoint — named peer env resolution (PR #30)", () => {
     "JARVIS_PEER_CALLIOPE_URL",
     "JARVIS_PEER_CALLIOPE_TOKEN",
     "JARVIS_PEER_CALLIOPE_MODEL",
+    "JARVIS_PEER_ARES_URL",
     "JARVIS_DISPATCH_PATH",
+    "OPENCLAW_BRIDGE_URL",
   ];
   const saved: Record<string, string | undefined> = {};
   beforeEach(() => {
@@ -72,8 +76,36 @@ describe("getPeerEndpoint — named peer env resolution (PR #30)", () => {
     expect(ep.dispatchPath).toBe("/jarvis/dispatch");
   });
 
-  it("falls back to the shared bridge defaults and a null model when no per-peer env is set", () => {
-    const ep = getPeerEndpoint("hades");
+  it("FAIL CLOSED: calliope/hades can NEVER resolve to the default bridge when their per-peer URL is absent (regression — the :18790 bridge fabricates ares results)", () => {
+    // Even with the shared bridge explicitly configured, an unconfigured
+    // named peer must throw — never inherit it.
+    process.env.OPENCLAW_BRIDGE_URL = "http://127.0.0.1:18790";
+
+    for (const peer of ["calliope", "hades"] as const) {
+      expect(() => getPeerEndpoint(peer)).toThrowError(PeerEndpointUnconfiguredError);
+      try {
+        getPeerEndpoint(peer);
+        expect.unreachable("must have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(PeerEndpointUnconfiguredError);
+        expect((err as Error).message).toContain(`JARVIS_PEER_${peer.toUpperCase()}_URL`);
+      }
+    }
+  });
+
+  it("FAIL CLOSED: an unconfigured named peer is unreachable (peer_unconfigured), never probed at the default bridge", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    for (const peer of ["calliope", "hades"] as const) {
+      const out = await checkPeerReachable(peer);
+      expect(out.reachable).toBe(false);
+      expect(out.error).toBe("peer_unconfigured");
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("keeps the default-bridge fallback for peers genuinely served by that bridge (august/ares)", () => {
+    const ep = getPeerEndpoint("ares");
     expect(ep.url).toBe("http://127.0.0.1:18790");
     expect(ep.model).toBeNull();
     expect(ep.dispatchPath).toBe("/jarvis/dispatch");
@@ -81,7 +113,9 @@ describe("getPeerEndpoint — named peer env resolution (PR #30)", () => {
 
   it("honors a per-peer dispatch path override over the global JARVIS_DISPATCH_PATH", () => {
     process.env.JARVIS_DISPATCH_PATH = "/global/path";
+    process.env.JARVIS_PEER_CALLIOPE_URL = "http://127.0.0.1:18791";
     process.env.JARVIS_PEER_CALLIOPE_DISPATCH_PATH = "/peer/path";
+    process.env.JARVIS_PEER_HADES_URL = "http://127.0.0.1:18791";
 
     expect(getPeerEndpoint("calliope").dispatchPath).toBe("/peer/path");
     expect(getPeerEndpoint("hades").dispatchPath).toBe("/global/path");

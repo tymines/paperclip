@@ -13,6 +13,12 @@ jarvis peer-delegation contract — never raw models wearing agent names.
 A raw-model answer is never passed off as a named agent, and there is **no
 silent substitute**:
 
+- **Fail closed (PR #30 r6):** `calliope`/`hades` NEVER inherit the default
+  OpenClaw bridge. If `JARVIS_PEER_<NAME>_URL` is unset, `getPeerEndpoint`
+  throws `PeerEndpointUnconfiguredError`: reachability reports
+  `peer_unconfigured`, dispatch returns a visible failure, and the lanes
+  degrade as below. The default-bridge fallback remains only for peers
+  genuinely served by that bridge (august, ares).
 - Chat: if Calliope is unreachable/times out/fails, the route returns
   `502` with `provenance: { agent: "calliope", model, status: "degraded",
   detail }`. The UI shows an amber "Calliope unreachable — degraded, no
@@ -33,6 +39,20 @@ result callback flips it terminal, or the lane timeout
 (`BOOK_CALLIOPE_TIMEOUT_MS` 45s / `BOOK_HADES_TIMEOUT_MS` 120s). On timeout
 the row is terminally `abandoned` (guarded, atomic) before the caller
 degrades, so a late peer callback can never be presented as a fresh answer.
+
+### Poll timeout vs end-to-end request timeout (PR #30 r6)
+
+The lane timeout bounds ONLY the result-row polling phase. Outside it:
+
+- reachability preflight: ≤ 4s per probe, cached 30s per URL (usually free);
+- dispatch POST: ≤ 12s, fire-and-forget in the background;
+- DB query time for the polls.
+
+Worst-case server-side wait ≈ preflight + lane timeout + one DB round-trip.
+The browser enforces its own end-to-end deadline: ChatDrawer aborts the
+chat request at 75s (> 45s lane + preflight + margin) and shows a visible
+timeout bubble; the server lane still degrades/abandons independently, so a
+client abort never leaves a row that can later masquerade as a live answer.
 
 ## Operator setup
 

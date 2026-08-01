@@ -24,6 +24,8 @@ import {
   sendChatMessageSchema,
   toDraftQuerySchema,
   type LiveAgentProvenance,
+  type SendChatMessageResponse,
+  type SendChatMessageDegradedResponse,
 } from "@paperclipai/shared";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
@@ -35,7 +37,7 @@ import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { buildSystemPrompt } from "../services/brainstorm-chat.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
-import { getPeerEndpoint } from "../services/jarvis-delegation.js";
+import { getPeerModelOrNull } from "../services/jarvis-delegation.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
 import {
@@ -1231,7 +1233,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     // the named agent. The user's message is already persisted either way,
     // so history isn't lost.
     const actor = getActorInfo(req);
-    const calliopeModel = getPeerEndpoint("calliope").model;
+    const calliopeModel = getPeerModelOrNull("calliope");
     let reply: string;
     let delegationId: string | undefined;
     try {
@@ -1259,13 +1261,14 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         status: "degraded",
         detail: laneErr.message,
       };
-      res.status(502).json({
+      const degradedBody: SendChatMessageDegradedResponse = {
         error: laneErr.fallbackSafe
           ? "Calliope is unreachable — no reply was generated (no raw-model substitute)."
           : "Calliope's lane outcome is indeterminate — the peer may still hold this work; no reply was generated.",
         messageId: userMsg.id,
         provenance,
-      });
+      };
+      res.status(502).json(degradedBody);
       return;
     }
 
@@ -1279,13 +1282,14 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       model: calliopeModel,
       status: "live",
     };
-    res.json({
+    const body: SendChatMessageResponse = {
       reply,
       messageId: assistantMsg.id,
       userMessageId: userMsg.id,
       provenance,
       ...(delegationId ? { delegationId } : {}),
-    });
+    };
+    res.json(body);
   });
 
   // GET /chat — fetch chat messages for a book

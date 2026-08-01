@@ -66,6 +66,8 @@ export {
   countRecentDelegations,
   checkPeerReachable,
   getPeerEndpoint,
+  getPeerModelOrNull,
+  PeerEndpointUnconfiguredError,
   naturalAcknowledgment,
   type PeerAgentId,
   type DelegationInput,

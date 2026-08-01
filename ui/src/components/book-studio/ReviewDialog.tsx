@@ -181,7 +181,7 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
                     {r.summary && <p className="text-[11px] leading-relaxed text-gray-400">{r.summary}</p>}
                     <p className="text-[10px] text-gray-600">
                       {r.findings.length} finding{r.findings.length === 1 ? "" : "s"} → {r.stored === "annotations" ? "annotations" : "review notes"}
-                      {" · "}critic: {r.criticProvider}{r.criticDegraded ? " (fallback)" : ""}
+                      {" · "}critic: {r.criticProvider}{r.criticDegraded ? " (degraded — no verdict)" : ""}
                     </p>
                   </div>
                 );

@@ -88,15 +88,48 @@ const DEFAULT_BRIDGE_TOKEN =
   process.env.OPENCLAW_BRIDGE_TOKEN ?? "openclaw-dev-token";
 
 /**
+ * Named Book Studio live-agent peers (PR #30) FAIL CLOSED: they may never
+ * inherit the default OpenClaw bridge. That bridge's /jarvis/dispatch is a
+ * wire-up NOOP that answers every dispatch as "ares" — a completed row from
+ * it would be stamped with live Calliope/Hades provenance (fallback fraud
+ * by misconfiguration, Tyler's law). Only peers genuinely served by that
+ * bridge (august, ares) — and the pre-existing generic peers — keep the
+ * single-daemon default.
+ */
+export const FAIL_CLOSED_PEERS: ReadonlySet<PeerAgentId> = new Set([
+  "calliope",
+  "hades",
+]);
+
+/** Thrown by getPeerEndpoint when a fail-closed peer has no per-peer URL. */
+export class PeerEndpointUnconfiguredError extends Error {
+  readonly peer: PeerAgentId;
+  constructor(peer: PeerAgentId, envKey: string) {
+    super(
+      `peer "${peer}" is not configured — set ${envKey} (fail-closed named agent; the default bridge is never substituted for it)`,
+    );
+    this.name = "PeerEndpointUnconfiguredError";
+    this.peer = peer;
+  }
+}
+
+/**
  * Builds the peer endpoint table from env vars with a sensible
  * single-daemon fallback. Tyler can override any peer by setting the
  * per-name URL/TOKEN env. This is intentionally pure so tests can monkey
  * the env and re-call.
+ *
+ * Throws PeerEndpointUnconfiguredError for FAIL_CLOSED_PEERS (calliope,
+ * hades) whose JARVIS_PEER_<NAME>_URL is unset — never the default bridge.
  */
 export function getPeerEndpoint(peer: PeerAgentId): PeerEndpoint {
   const upper = peer.toUpperCase().replace(/-/g, "_");
-  const url =
-    process.env[`JARVIS_PEER_${upper}_URL`] ?? DEFAULT_BRIDGE_URL;
+  const urlEnvKey = `JARVIS_PEER_${upper}_URL`;
+  const explicitUrl = process.env[urlEnvKey];
+  if (!explicitUrl && FAIL_CLOSED_PEERS.has(peer)) {
+    throw new PeerEndpointUnconfiguredError(peer, urlEnvKey);
+  }
+  const url = explicitUrl ?? DEFAULT_BRIDGE_URL;
   const token =
     process.env[`JARVIS_PEER_${upper}_TOKEN`] ?? DEFAULT_BRIDGE_TOKEN;
   const dispatchPath =
@@ -105,6 +138,16 @@ export function getPeerEndpoint(peer: PeerAgentId): PeerEndpoint {
     "/jarvis/dispatch";
   const model = process.env[`JARVIS_PEER_${upper}_MODEL`] ?? null;
   return { url, token, identityId: peer, dispatchPath, model };
+}
+
+/**
+ * Provenance helper: the operator-declared model for a peer, or null.
+ * Never throws — an unconfigured fail-closed peer simply has no model label
+ * (its lane fails closed elsewhere with degraded provenance).
+ */
+export function getPeerModelOrNull(peer: PeerAgentId): string | null {
+  const upper = peer.toUpperCase().replace(/-/g, "_");
+  return process.env[`JARVIS_PEER_${upper}_MODEL`] ?? null;
 }
 
 // ============================================================================
@@ -122,7 +165,17 @@ const reachabilityCache = new Map<string, ReachabilityCacheEntry>();
 export async function checkPeerReachable(
   peer: PeerAgentId,
 ): Promise<{ reachable: boolean; error?: string }> {
-  const endpoint = getPeerEndpoint(peer);
+  let endpoint: PeerEndpoint;
+  try {
+    endpoint = getPeerEndpoint(peer);
+  } catch (err) {
+    // Fail-closed named peers: unconfigured is a distinct, visible state —
+    // never probe (or dispatch to) the default bridge in their name.
+    if (err instanceof PeerEndpointUnconfiguredError) {
+      return { reachable: false, error: "peer_unconfigured" };
+    }
+    throw err;
+  }
   const cached = reachabilityCache.get(endpoint.url);
   if (cached && Date.now() - cached.checkedAt < REACHABILITY_CACHE_TTL_MS) {
     return { reachable: cached.reachable, error: cached.error };
@@ -236,7 +289,25 @@ export async function dispatchDelegation(
     };
   }
 
-  const endpoint = getPeerEndpoint(input.agent);
+  const endpoint = (() => {
+    try {
+      return getPeerEndpoint(input.agent);
+    } catch (err) {
+      if (err instanceof PeerEndpointUnconfiguredError) return null;
+      throw err;
+    }
+  })();
+  if (!endpoint) {
+    // Fail-closed named peer with no per-peer URL: no row, no dispatch,
+    // no default-bridge inheritance — a visible failure instead.
+    return {
+      id: "",
+      status: "failed",
+      reachable: false,
+      remainingQuotaThisMinute: rate.remaining,
+      error: `peer_unconfigured: set JARVIS_PEER_${input.agent.toUpperCase().replace(/-/g, "_")}_URL`,
+    };
+  }
   const callbackToken = `cb_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 10)}`;

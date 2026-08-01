@@ -713,6 +713,8 @@ export type {
   StoryBibleChatMessage,
   SendChatMessageRequest,
   ChatMessageResponse,
+  SendChatMessageResponse,
+  SendChatMessageDegradedResponse,
   DraftEntityType,
   ToDraftResponse,
 } from "./types/index.js";
