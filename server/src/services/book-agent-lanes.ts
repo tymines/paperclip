@@ -1,7 +1,8 @@
 // Book Studio — live-agent lanes (Spec v1, amendment v1.4, 2026-07-26).
 //
 // The brainstorm/write chat window IS Calliope (the SOL creative-Muse agent)
-// and the review/critic lane routes to Ares (reviewer under Ares, Kimi K3) —
+// and the review/critic lane routes to Hades (Kimi K3). Both are named
+// Hermes Harness agents on Box 2 —
 // a genuine two-model loop: writer ≠ critic, builder ≠ reviewer. Both run
 // through the existing peer-delegation contract (dispatch, durable delegation
 // row, and result callback). No machine addresses, tokens, or credentials live
@@ -11,8 +12,8 @@
 //
 // When a peer is unreachable, times out, or fails, this module throws
 // AgentLaneUnavailableError. Calliope-only creative routes surface that error;
-// the separately governed Ares critic caller may retain its configured
-// degradation behavior. Neither path fabricates an agent success.
+// the Hades review routes surface it too. Neither path fabricates an agent
+// success or silently falls through to a generic model.
 //
 // DUAL-EXECUTION SAFETY (Chronos PR #30 rereview-v2 P1A): a secondary lane is
 // lawful ONLY when durable state proves the peer cannot also deliver — i.e.
@@ -29,7 +30,7 @@ import {
   type PeerAgentId,
 } from "./jarvis-delegation.js";
 
-export type BookAgentLane = "calliope" | "ares";
+export type BookAgentLane = "calliope" | "hades";
 
 /**
  * Single failure type for the lane. `fallbackSafe` is the machine-checkable
@@ -81,7 +82,7 @@ export interface AgentLaneCall {
   /** Extra metadata stamped on the delegation row (kind/bookId/chapterNumber…). */
   metadata?: Record<string, unknown>;
   requestedByActorId?: string | null;
-  /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_ARES_TIMEOUT_MS (120s). */
+  /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_HADES_TIMEOUT_MS (120s). */
   timeoutMs?: number;
   /** Result-row poll interval. Default BOOK_AGENT_LANE_POLL_MS (2s). */
   pollIntervalMs?: number;
@@ -91,7 +92,7 @@ function defaultTimeoutMs(lane: BookAgentLane): number {
   const raw =
     lane === "calliope"
       ? process.env.BOOK_CALLIOPE_TIMEOUT_MS
-      : process.env.BOOK_ARES_TIMEOUT_MS;
+      : process.env.BOOK_HADES_TIMEOUT_MS;
   const parsed = raw ? Number.parseInt(raw, 10) : NaN;
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
   return lane === "calliope" ? 45_000 : 120_000;
@@ -106,7 +107,7 @@ function defaultPollMs(): number {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Dispatch one task to a live Book Studio agent (Calliope or Ares) through
+ * Dispatch one task to a live Book Studio agent (Calliope or Hades) through
  * the peer-delegation contract and await its result callback. Throws
  * AgentLaneUnavailableError on unreachable/timeout/failed/empty — the caller
  * decides whether to fall back (and may do so ONLY when the error is

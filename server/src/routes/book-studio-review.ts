@@ -18,6 +18,7 @@ import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse, chapterContentHash, writeChapterToVault } from "../services/book-prose-writer.js";
 import { lockedError, findOverlappingLocks, isMissingLocksTable, assertChapterWritable, getPassageLocks, spansOverlap, resolveChapterLocked, assertHumanActor } from "../services/book-locks.js";
 import { runBaselineReview, persistBaselineReport, type BaselineReport } from "../services/book-review.js";
+import { AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
 // Gated-migration pattern (same as book_annotations/0151): if 0157 isn't
 // applied yet, every revisions endpoint answers honestly instead of crashing.
@@ -156,12 +157,19 @@ export function bookStudioReviewRoutes(db: Db) {
       const targets = chapters.filter((c) => (c.content ?? "").trim().length > 0);
       if (targets.length === 0) throw badRequest("No prose to review yet.");
 
-      const reports = [];
+      // Complete every Hades analysis before persisting any report or chapter
+      // status. A failed whole-book review must not leave a partial review run.
+      const analyzed = [];
       for (const ch of targets) {
         const report = await runBaselineReview(db, {
           bookId, chapterNumber: ch.chapterNumber, companyId,
           requestedByActorId: getActorInfo(req).actorId,
         });
+        analyzed.push({ ch, report });
+      }
+
+      const reports = [];
+      for (const { ch, report } of analyzed) {
         const { stored } = await persistReport({
           bookId, companyId, bookSlug: book.slug,
           report, chapterId: ch.id, content: ch.content ?? "",
@@ -187,7 +195,21 @@ export function bookStudioReviewRoutes(db: Db) {
         reports,
         exceptions: reports.filter((r) => r.verdict !== "PASS").map((r) => r.chapterNumber),
       });
-    } catch (err) { next(err); }
+    } catch (err) {
+      if (err instanceof AgentLaneUnavailableError) {
+        res.status(err.fallbackSafe ? 503 : 502).json({
+          available: false,
+          error: "Hades is unavailable. No review was stored.",
+          via: "none",
+          reviewer: "Hades",
+          model: "Kimi K3",
+          agentLane: err.fallbackSafe ? "unavailable" : "indeterminate",
+          agentLaneError: err.message,
+        });
+        return;
+      }
+      next(err);
+    }
   });
 
   // ── GET .../revisions?status=pending|accepted|rejected|all ─────────────

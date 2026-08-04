@@ -47,6 +47,7 @@ import { runBaselineReview, persistBaselineReport } from "../services/book-revie
 import { callLLM } from "../services/chapter-generator.js";
 import { persistChapterProse } from "../services/book-prose-writer.js";
 import { logActivity } from "../services/index.js";
+import { AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
 const PASS_REPORT = {
   chapterNumber: 1,
@@ -55,7 +56,7 @@ const PASS_REPORT = {
   failures: [],
   summary: "Solid chapter.",
   findings: [],
-  criticProvider: "deepseek",
+  criticProvider: "Hades / Kimi K3",
   criticDegraded: false,
 };
 
@@ -210,6 +211,47 @@ describe("POST /review — baseline pass", () => {
     expect(db.__state.book.metadata.chapterStatus["1"]).toBe("exception");
   });
 
+  it("returns 503 and stores nothing when Hades is unavailable", async () => {
+    const db = mockDb();
+    vi.mocked(runBaselineReview).mockRejectedValue(
+      new AgentLaneUnavailableError("hades", "peer unreachable (peer_unconfigured)"),
+    );
+    const app = await createTestApp(db);
+    const res = await request(app).post(`${BASE}/review`).send({ scope: "chapter", chapterNumber: 1 });
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      available: false,
+      via: "none",
+      reviewer: "Hades",
+      model: "Kimi K3",
+      agentLane: "unavailable",
+    });
+    expect(persistBaselineReport).not.toHaveBeenCalled();
+    expect(db.__state.book.metadata).toEqual({});
+  });
+
+  it("returns 502 for an indeterminate Hades outcome and stores no partial whole-book review", async () => {
+    const db = mockDb({
+      chapters: [
+        { id: "ch-1", bookId: "book-1", chapterNumber: 1, title: "One", content: "Prose one." },
+        { id: "ch-2", bookId: "book-1", chapterNumber: 2, title: "Two", content: "Prose two." },
+      ],
+    });
+    vi.mocked(runBaselineReview)
+      .mockResolvedValueOnce(PASS_REPORT as any)
+      .mockRejectedValueOnce(
+        new AgentLaneUnavailableError("hades", "durable state unproven", { fallbackSafe: false }),
+      );
+    const app = await createTestApp(db);
+    const res = await request(app).post(`${BASE}/review`).send({ scope: "book" });
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({ agentLane: "indeterminate", via: "none" });
+    expect(persistBaselineReport).not.toHaveBeenCalled();
+    expect(db.__state.book.metadata).toEqual({});
+  });
+
   it("falls back to first-class JSONB notes when annotation tables are missing (§5.C)", async () => {
     const db = mockDb();
     vi.mocked(runBaselineReview).mockResolvedValue({
@@ -241,7 +283,7 @@ describe("POST /review — baseline pass", () => {
   it("returns 404 for a book outside the authorized company — no critic, no persistence, no activity (P1)", async () => {
     // Book exists but belongs to co-2; the URL is authorized for co-1. The
     // route must treat the pair as not-found BEFORE loading chapters,
-    // dispatching to Ares/the model lanes, or persisting anything.
+    // dispatching to Hades or persisting anything.
     const db = mockDb({
       book: { id: "book-1", companyId: "co-2", title: "Foreign Novel", slug: "foreign-novel", metadata: {} },
     });

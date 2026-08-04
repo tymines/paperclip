@@ -18,6 +18,94 @@ export interface HistoryEntry {
   content: string;
 }
 
+export interface BrainstormChatRow {
+  id: string;
+  turnId: string | null;
+  role: string;
+  content: string;
+  status: string;
+  via: string | null;
+  delegationId: string | null;
+  error: string | null;
+  createdAt: Date;
+}
+
+export interface BrainstormTurnDto {
+  turnId: string;
+  userMessage: string;
+  reply: string;
+  userMessageId: string;
+  messageId: string;
+  createdAt: string;
+  status: "pending" | "completed" | "failed";
+  via?: "calliope";
+  delegationId?: string;
+  error?: string;
+}
+
+/** Pair chronological active rows into the durable turn contract used by the UI. */
+export function normalizeBrainstormTurns(rows: BrainstormChatRow[]): BrainstormTurnDto[] {
+  type MutableTurn = BrainstormTurnDto & { order: number };
+  const turns: MutableTurn[] = [];
+  const byTurnId = new Map<string, MutableTurn>();
+  let openLegacy: MutableTurn | null = null;
+
+  const createTurn = (turnId: string, row: BrainstormChatRow, order: number): MutableTurn => {
+    const turn: MutableTurn = {
+      turnId,
+      userMessage: "",
+      reply: "",
+      userMessageId: "",
+      messageId: "",
+      createdAt: row.createdAt.toISOString(),
+      status: "pending",
+      order,
+    };
+    turns.push(turn);
+    return turn;
+  };
+
+  rows.forEach((row, order) => {
+    const content = row.content.trim();
+    if (!content) return;
+
+    let turn: MutableTurn;
+    if (row.turnId) {
+      turn = byTurnId.get(row.turnId) ?? createTurn(row.turnId, row, order);
+      byTurnId.set(row.turnId, turn);
+    } else if (row.role === "user") {
+      turn = createTurn(`legacy:${row.id}`, row, order);
+      openLegacy = turn;
+    } else {
+      if (!openLegacy || openLegacy.reply) return;
+      turn = openLegacy;
+      openLegacy = null;
+    }
+
+    if (row.role === "user") {
+      turn.userMessage = content;
+      turn.userMessageId = row.id;
+      turn.createdAt = row.createdAt.toISOString();
+      turn.status = row.status === "failed" ? "failed" : row.status === "completed" ? "completed" : "pending";
+      if (turn.reply) turn.status = "completed";
+      if (row.error) turn.error = row.error;
+      if (row.via === "calliope") turn.via = "calliope";
+      if (row.delegationId) turn.delegationId = row.delegationId;
+    } else if (row.role === "assistant") {
+      turn.reply = content;
+      turn.messageId = row.id;
+      turn.status = "completed";
+      if (row.via === "calliope") turn.via = "calliope";
+      if (row.delegationId) turn.delegationId = row.delegationId;
+    }
+  });
+
+  return turns
+    .filter((turn) => turn.userMessage.length > 0)
+    .sort((a, b) => a.order - b.order)
+    .map(({ order: _order, ...turn }) => turn);
+}
+
 // Exported so the route can hand the live Calliope agent a complete bible brief.
 export function buildSystemPrompt(context: BibleContext): string {
   const parts: string[] = [

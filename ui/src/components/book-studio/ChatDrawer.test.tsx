@@ -58,7 +58,8 @@ async function mount() {
 
 async function sendMessage(text: string) {
   const input = container.querySelector("input")!;
-  const sendBtn = container.querySelectorAll("button")[1] as HTMLButtonElement; // [close, send]
+  const buttons = container.querySelectorAll("button");
+  const sendBtn = buttons[buttons.length - 1] as HTMLButtonElement;
   await act(async () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     setter.call(input, text);
@@ -74,7 +75,7 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] })) // GET history
       .mockResolvedValueOnce(
-        jsonResponse({ reply: "Ooh, tell me more!", messageId: "m2", userMessageId: "m1", via: "calliope", delegationId: "del-1" }),
+        jsonResponse({ turnId: "turn-1", reply: "Ooh, tell me more!", messageId: "m2", userMessageId: "m1", status: "completed", via: "calliope", delegationId: "del-1" }),
       );
 
     await mount();
@@ -94,7 +95,7 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] }))
       .mockResolvedValueOnce(
-        jsonResponse({ reply: "A twist!", messageId: "m2", userMessageId: "m1", via: "calliope" }),
+        jsonResponse({ turnId: "turn-1", reply: "A twist!", messageId: "m2", userMessageId: "m1", status: "completed", via: "calliope" }),
       );
 
     await mount();
@@ -140,5 +141,75 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ messages: [] }));
     await mount();
     expect(container.textContent).toContain("Calliope — Brainstorm");
+  });
+
+  it("shows a visible reset error and keeps the transcript when archive reset fails", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        messages: [{
+          turnId: "turn-existing",
+          userMessage: "Keep this",
+          reply: "Still here",
+          messageId: "m2",
+          userMessageId: "m1",
+          createdAt: new Date().toISOString(),
+          status: "completed",
+          via: "calliope",
+        }],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ error: "reset unavailable" }, 503));
+    vi.stubGlobal("confirm", vi.fn(() => true));
+
+    await mount();
+    const reset = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Reset chat"),
+    ) as HTMLButtonElement;
+    await act(async () => reset.click());
+
+    expect(container.textContent).toContain("Chat reset could not be confirmed. The displayed transcript was not cleared");
+    expect(container.textContent).toContain("Keep this");
+    expect(container.textContent).toContain("Still here");
+  });
+
+  it("shows a visible error when the persisted history cannot be loaded", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: "history unavailable" }, 503));
+    await mount();
+    expect(container.textContent).toContain("Chat history could not be loaded");
+  });
+
+  it("does not repopulate archived history when reset wins a pending history load", async () => {
+    let resolveHistory!: (response: Response) => void;
+    const pendingHistory = new Promise<Response>((resolve) => {
+      resolveHistory = resolve;
+    });
+    fetchMock
+      .mockReturnValueOnce(pendingHistory)
+      .mockResolvedValueOnce(jsonResponse({ messages: [], archivedCount: 1, activeCount: 0 }));
+    vi.stubGlobal("confirm", vi.fn(() => true));
+
+    await mount();
+    const reset = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Reset chat"),
+    ) as HTMLButtonElement;
+    await act(async () => reset.click());
+
+    await act(async () => {
+      resolveHistory(jsonResponse({
+        messages: [{
+          turnId: "stale-turn",
+          userMessage: "Stale question",
+          reply: "Stale answer",
+          messageId: "stale-a",
+          userMessageId: "stale-u",
+          createdAt: new Date().toISOString(),
+          status: "completed",
+          via: "calliope",
+        }],
+      }));
+      await pendingHistory;
+    });
+
+    expect(container.textContent).not.toContain("Stale question");
+    expect(container.textContent).not.toContain("Stale answer");
   });
 });

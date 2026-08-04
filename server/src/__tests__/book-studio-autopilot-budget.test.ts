@@ -1,5 +1,5 @@
 // PR #30 Chronos rereview-v2 — blocking P1B: the autopilot loop must enforce
-// the HARD budget BEFORE the Ares critic / model-fallback review action is
+// the HARD budget BEFORE the Hades reviewer action is
 // dispatched, charge that review action exactly once, and activity-log +
 // checkpoint any hard stop. These tests drive the real runAutopilotLoop via
 // startAutopilot with every writer/critic seam mocked.
@@ -82,7 +82,7 @@ const PASS_REPORT = {
   failures: [],
   summary: "Solid.",
   findings: [],
-  criticProvider: "ares (agent lane)",
+  criticProvider: "Hades / Kimi K3",
   criticDegraded: false,
 };
 
@@ -124,7 +124,7 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     vi.mocked(runBaselineReview).mockResolvedValue(PASS_REPORT as never);
   });
 
-  it("already AT the hard budget ⇒ pauses + checkpoints + activity-logs the hard stop, and dispatches NO critic lane (neither Ares nor model fallback)", async () => {
+  it("already AT the hard budget ⇒ pauses + checkpoints + activity-logs the hard stop, and dispatches no Hades review", async () => {
     // Draft estimate is 5¢; budget 5¢ ⇒ spend already equals the budget when
     // the review action would start.
     const db = dbWithSelectScript([BOOK_ID_SLUG, OUTLINE, [], []]);
@@ -176,30 +176,34 @@ describe("autopilot budget hard-stop before the critic review action (P1B)", () 
     // The hard stop did NOT fire; the post-chapter soft-cap pause did.
     expect(activityCalls("autopilot.hard_budget_stop")).toHaveLength(0);
     expect(settled.status).toBe("paused");
-    // Review ran with company + actor context (the live Ares lane inside it).
+    // Review ran with company + actor context (the live Hades lane inside it).
     const reviewArgs = vi.mocked(runBaselineReview).mock.calls[0]![1] as Record<string, unknown>;
     expect(reviewArgs).toMatchObject({ bookId: "budget-exact", chapterNumber: 1, companyId: "co-1" });
     // Review outcome is activity-logged with its provenance.
     const reviews = activityCalls("book.baseline_review");
     expect(reviews).toHaveLength(1);
-    expect(reviews[0]!.details).toMatchObject({ verdict: "PASS", criticProvider: "ares (agent lane)" });
+    expect(reviews[0]!.details).toMatchObject({ verdict: "PASS", criticProvider: "Hades / Kimi K3" });
   });
 
-  it("a degraded model-fallback critic report is still a SINGLE charge — no double charge when one lane falls back to the other", async () => {
+  it("a Hades NO_VERDICT report is still a single charged review action", async () => {
     vi.mocked(runBaselineReview).mockResolvedValue({
       ...PASS_REPORT,
-      criticProvider: "deepseek",
-      criticDegraded: true,
+      verdict: "NO_VERDICT",
+      noVerdictReason: "incomplete-rubric-scores",
     } as never);
     const db = dbWithSelectScript([BOOK_ID_SLUG, OUTLINE, [], [], BOOK_FULL]);
-    orchestrator.startAutopilot("budget-fallback", "co-1", "My Book", { budgetCents: 7 }, db, ACTOR);
-    const settled = await waitForSettled("budget-fallback");
+    orchestrator.startAutopilot("budget-no-verdict", "co-1", "My Book", { budgetCents: 7 }, db, ACTOR);
+    const settled = await waitForSettled("budget-no-verdict");
 
     expect(runBaselineReview).toHaveBeenCalledTimes(1);
     expect(settled.spendCents).toBe(7);
     const reviews = activityCalls("book.baseline_review");
     expect(reviews).toHaveLength(1);
-    expect(reviews[0]!.details).toMatchObject({ criticProvider: "deepseek", criticDegraded: true });
+    expect(reviews[0]!.details).toMatchObject({
+      criticProvider: "Hades / Kimi K3",
+      criticDegraded: false,
+      noVerdictReason: "incomplete-rubric-scores",
+    });
   });
 
   it("an indeterminate lane error from the review action is charged once, non-fatal, and never retried", async () => {

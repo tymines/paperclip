@@ -52,6 +52,7 @@ function createApp() {
   const mockDb = {
     select: vi.fn(),
     insert: vi.fn(),
+    update: vi.fn(),
     values: vi.fn(),
     returning: vi.fn(),
   } as unknown as Db;
@@ -62,6 +63,13 @@ function createApp() {
   // Wire .insert().values().returning() chain
   mockDb.insert.mockReturnValue(mockDb);
   mockDb.values.mockReturnValue(mockDb);
+  mockDb.update.mockImplementation(() => ({
+    set: vi.fn().mockReturnValue({
+      where: vi.fn().mockReturnValue({
+        returning: vi.fn().mockResolvedValue([]),
+      }),
+    }),
+  }));
 
   app.use("/api", bookStudioRoutes(mockDb));
 
@@ -431,16 +439,19 @@ describe("Book Studio Brainstorm Chat", () => {
   });
 
   describe("GET /chat", () => {
-    it("returns messages newest-first", async () => {
+    it("returns paired turns in chronological order", async () => {
       const { app, db, mockQuery } = createApp();
 
       const messages = [
-        { id: "msg-3", bookId: "book-1", role: "assistant" as const, content: "second reply", createdAt: new Date("2025-01-03") },
-        { id: "msg-2", bookId: "book-1", role: "user" as const, content: "follow-up", createdAt: new Date("2025-01-02") },
-        { id: "msg-1", bookId: "book-1", role: "assistant" as const, content: "first reply", createdAt: new Date("2025-01-01") },
+        { id: "msg-4", turnId: "turn-2", bookId: "book-1", role: "assistant" as const, content: "second reply", status: "completed", via: "calliope", createdAt: new Date("2025-01-04") },
+        { id: "msg-3", turnId: "turn-2", bookId: "book-1", role: "user" as const, content: "follow-up", status: "completed", via: "calliope", createdAt: new Date("2025-01-03") },
+        { id: "msg-2", turnId: "turn-1", bookId: "book-1", role: "assistant" as const, content: "first reply", status: "completed", via: "calliope", createdAt: new Date("2025-01-02") },
+        { id: "msg-1", turnId: "turn-1", bookId: "book-1", role: "user" as const, content: "hello", status: "completed", via: "calliope", createdAt: new Date("2025-01-01") },
       ];
 
-      db.select.mockReturnValueOnce(mockQuery(messages));
+      db.select
+        .mockReturnValueOnce(mockQuery([{ id: "book-1", companyId: "company-1" }]))
+        .mockReturnValueOnce(mockQuery(messages));
 
       const res = await request(app)
         .get("/api/companies/company-1/book-studio/books/book-1/chat")
@@ -448,7 +459,103 @@ describe("Book Studio Brainstorm Chat", () => {
 
       expect(res.body).toHaveProperty("messages");
       expect(Array.isArray(res.body.messages)).toBe(true);
-      expect(res.body.messages).toHaveLength(3);
+      expect(res.body.messages).toHaveLength(2);
+      expect(res.body.messages.map((turn: { turnId: string }) => turn.turnId)).toEqual(["turn-1", "turn-2"]);
+    });
+  });
+
+  describe("POST /review-runs", () => {
+    const book = { id: "book-1", companyId: "company-1", title: "My Book" };
+    const chapter = {
+      id: "chapter-1",
+      bookId: "book-1",
+      chapterNumber: 1,
+      content: "A chapter passage that Hades can review.",
+    };
+
+    function arrangeReviewContext(db: any, mockQueryFor: typeof mockQuery) {
+      db.select
+        .mockReturnValueOnce(mockQueryFor([book]))
+        .mockReturnValueOnce(mockQueryFor([]))
+        .mockReturnValueOnce(mockQueryFor([chapter]));
+    }
+
+    it("fails closed with no stored run when Hades is unavailable", async () => {
+      const { app, db, mockQuery: mockQueryFor } = createApp();
+      arrangeReviewContext(db, mockQueryFor);
+      vi.mocked(callAgentLane).mockRejectedValue(
+        new AgentLaneUnavailableError("hades", "peer unreachable (peer_unconfigured)"),
+      );
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/review-runs")
+        .send({ chapterNumber: 1, lens: "prose" })
+        .expect(503);
+
+      expect(res.body).toMatchObject({
+        available: false,
+        via: "none",
+        reviewer: "Hades",
+        model: "Kimi K3",
+        agentLane: "unavailable",
+      });
+      expect(db.insert).not.toHaveBeenCalled();
+    });
+
+    it("routes a stored review only through Hades with Kimi K3 provenance", async () => {
+      const { app, db, mockQuery: mockQueryFor } = createApp();
+      arrangeReviewContext(db, mockQueryFor);
+      vi.mocked(callAgentLane).mockResolvedValue({
+        text: JSON.stringify({
+          summary: "Focused review.",
+          findings: [{ excerpt: "chapter passage", note: "Tighten this phrase.", kind: "suggestion" }],
+        }),
+        delegationId: "del-hades-review",
+        lane: "hades",
+      });
+      db.returning
+        .mockResolvedValueOnce([{ id: "run-1", reviewer: "Hades", model: "Kimi K3 (kimi-coding/kimi-k3)" }])
+        .mockResolvedValueOnce([{ id: "anno-1", spanStart: 2 }]);
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/review-runs")
+        .send({ chapterNumber: 1, lens: "prose" })
+        .expect(201);
+
+      expect(res.body.available).toBe(true);
+      expect(vi.mocked(callAgentLane).mock.calls[0][1]).toMatchObject({
+        lane: "hades",
+        companyId: "company-1",
+        metadata: { bookId: "book-1", chapterNumber: 1, lens: "prose", operation: "review-run" },
+      });
+      expect(db.values.mock.calls[0][0]).toMatchObject({
+        reviewer: "Hades",
+        model: "Kimi K3 (kimi-coding/kimi-k3)",
+      });
+      expect(db.values.mock.calls[1][0]).toMatchObject({ author: "Hades / Kimi K3" });
+    });
+  });
+
+  describe("POST /chat/reset", () => {
+    it("archives active rows and never deletes transcript history", async () => {
+      const { app, db, mockQuery: mockQueryFor } = createApp();
+      db.select.mockReturnValueOnce(mockQueryFor([{ id: "book-1", companyId: "company-1" }]));
+      const set = vi.fn();
+      const where = vi.fn();
+      const returning = vi.fn().mockResolvedValue([{ id: "m1" }, { id: "m2" }]);
+      set.mockReturnValue({ where });
+      where.mockReturnValue({ returning });
+      db.update.mockReturnValue({ set });
+
+      const res = await request(app)
+        .post("/api/companies/company-1/book-studio/books/book-1/chat/reset")
+        .send({})
+        .expect(200);
+
+      expect(res.body).toEqual({ messages: [], archivedCount: 2, activeCount: 0 });
+      expect(set).toHaveBeenCalledWith({ archivedAt: expect.any(Date) });
+      expect(returning).toHaveBeenCalledTimes(1);
+      expect((db as unknown as { delete?: unknown }).delete).toBeUndefined();
     });
   });
 

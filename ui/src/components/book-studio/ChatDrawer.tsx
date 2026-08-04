@@ -5,7 +5,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Send, Loader2, Sparkles } from "lucide-react";
+import { X, Send, Loader2, RotateCcw, Sparkles } from "lucide-react";
 
 // ── Inline apiFetch ──────────────────────────────────────────────────────────
 
@@ -25,13 +25,17 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ChatMessage {
+  turnId: string;
   userMessage: string;
   reply: string;
   messageId: string;
   userMessageId: string;
   createdAt: string;
+  status: "pending" | "completed" | "failed";
   /** Successful replies can only come from the live Calliope agent. */
   via?: "calliope";
+  delegationId?: string;
+  error?: string;
 }
 
 export interface ChatDrawerProps {
@@ -56,43 +60,48 @@ export function ChatDrawer({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [loadedScope, setLoadedScope] = useState("");
   const [sendingDraft, setSendingDraft] = useState<string | null>(null); // messageId being drafted
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const loadedRef = useRef(false);
+  const scope = `${companySlug}:${bookId}`;
+  const visibleMessages = loadedScope === scope ? messages : [];
 
-  // Fetch history on open
+  // Reload from the server for every open and book/company change.
   useEffect(() => {
-    if (!isOpen || !bookId || loadedRef.current) return;
-    loadedRef.current = true;
+    if (!isOpen || !bookId) return;
 
     const controller = new AbortController();
     abortRef.current?.abort();
     abortRef.current = controller;
+    setLoadedScope(scope);
+    setMessages([]);
+    setResetError(null);
+    setHistoryError(null);
 
     apiFetch<{ messages: ChatMessage[] }>(
       `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
       { signal: controller.signal },
     )
-      .then((res) => setMessages(res.messages || []))
+      .then((res) => {
+        if (!controller.signal.aborted) setMessages(res.messages || []);
+      })
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load chat history:", err);
+        setHistoryError("Chat history could not be loaded. Retry by reopening this chat.");
       });
-  }, [isOpen, bookId, companySlug]);
-
-  // Reset loaded flag on close
-  useEffect(() => {
-    if (!isOpen) {
-      loadedRef.current = false;
-    }
-  }, [isOpen]);
+    return () => controller.abort();
+  }, [isOpen, bookId, companySlug, scope]);
 
   // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [visibleMessages]);
 
   // Focus input on open
   useEffect(() => {
@@ -122,11 +131,13 @@ export function ChatDrawer({
 
     // Optimistic user message
     const tempUser: ChatMessage = {
+      turnId: `pending:${Date.now()}`,
       userMessage: text,
       reply: "",
       messageId: "",
       userMessageId: "",
       createdAt: new Date().toISOString(),
+      status: "pending",
     };
     setMessages((prev) => [...prev, tempUser]);
 
@@ -135,7 +146,7 @@ export function ChatDrawer({
     abortRef.current = controller;
 
     try {
-      const res = await apiFetch<{ reply: string; messageId: string; userMessageId: string; via?: "calliope" }>(
+      const res = await apiFetch<{ turnId: string; reply: string; messageId: string; userMessageId: string; status: "completed"; via: "calliope"; delegationId?: string }>(
         `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
         { method: "POST", body: JSON.stringify({ message: text }), signal: controller.signal },
       );
@@ -143,14 +154,17 @@ export function ChatDrawer({
       // Update the optimistic message with reply
       setMessages((prev) => {
         const updated = [...prev];
-        const idx = updated.length - 1;
+        const idx = updated.findIndex((message) => message.turnId === tempUser.turnId);
         if (idx >= 0) {
           updated[idx] = {
             ...updated[idx],
+            turnId: res.turnId,
             reply: res.reply,
             messageId: res.messageId,
             userMessageId: res.userMessageId,
             via: res.via,
+            status: res.status,
+            delegationId: res.delegationId,
           };
         }
         return updated;
@@ -160,17 +174,43 @@ export function ChatDrawer({
       // Mark last message as error
       setMessages((prev) => {
         const updated = [...prev];
-        const idx = updated.length - 1;
+        const idx = updated.findIndex((message) => message.turnId === tempUser.turnId);
         if (idx >= 0) {
           updated[idx] = {
             ...updated[idx],
-            reply: "Calliope is unavailable. No reply was generated. Please try again when she is back online.",
+            status: "failed",
+            error: "Calliope is unavailable. No reply was generated. Please try again when she is back online.",
           };
         }
         return updated;
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleReset = async () => {
+    if (resetting) return;
+    const confirmed = window.confirm(
+      "Reset this chat? The current transcript will be archived and retained with this book; no book content will be deleted.",
+    );
+    if (!confirmed) return;
+    setResetting(true);
+    setResetError(null);
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      await apiFetch(`/companies/${companySlug}/book-studio/books/${bookId}/chat/reset`, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      setLoadedScope(scope);
+      setMessages([]);
+    } catch {
+      setResetError("Chat reset could not be confirmed. The displayed transcript was not cleared; reload before retrying.");
+    } finally {
+      setResetting(false);
     }
   };
 
@@ -214,17 +254,38 @@ export function ChatDrawer({
               <p className="text-[10px] text-gray-500 mt-0.5">{activeBookTitle}</p>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="rounded p-1 text-gray-500 hover:text-gray-300"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleReset}
+              disabled={resetting || loading}
+              title="Archive this transcript and start a fresh chat"
+              className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 disabled:opacity-40"
+            >
+              {resetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+              Reset chat
+            </button>
+            <button
+              onClick={onClose}
+              className="rounded p-1 text-gray-500 hover:text-gray-300"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          {messages.length === 0 && (
+          {resetError && (
+            <div role="alert" className="rounded-md border border-red-800 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+              {resetError}
+            </div>
+          )}
+          {historyError && (
+            <div role="alert" className="rounded-md border border-amber-800 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              {historyError}
+            </div>
+          )}
+          {visibleMessages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="text-2xl mb-2 opacity-30">💬</div>
               <p className="text-xs text-gray-500 leading-relaxed max-w-[240px]">
@@ -233,8 +294,8 @@ export function ChatDrawer({
             </div>
           )}
 
-          {messages.map((msg, i) => (
-            <div key={i} className="space-y-2">
+          {visibleMessages.map((msg) => (
+            <div key={msg.turnId} className="space-y-2">
               {/* User message */}
               <div className="flex justify-end">
                 <div className="max-w-[85%] rounded-lg bg-blue-600/20 border border-blue-500/30 px-3 py-2">
@@ -268,6 +329,14 @@ export function ChatDrawer({
                       ))}
                     </div>
                   </div>
+                </div>
+              )}
+              {msg.status === "pending" && !msg.reply && (
+                <p className="text-[10px] text-gray-500">Waiting for Calliope…</p>
+              )}
+              {msg.status === "failed" && !msg.reply && (
+                <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300">
+                  {msg.error || "Calliope is unavailable. No reply was generated."}
                 </div>
               )}
             </div>

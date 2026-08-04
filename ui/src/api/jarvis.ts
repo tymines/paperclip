@@ -39,6 +39,9 @@ export interface JarvisVoiceResponse {
 
 export type JarvisPeerAgentId =
   | "hermes"
+  | "ares"
+  | "calliope"
+  | "hades"
   | "august"
   | "codex"
   | "content"
