@@ -13,6 +13,7 @@ import { companiesApi } from "../api/companies";
 import { ApiError } from "../api/client";
 import {
   buildBrowserStorageKeys,
+  getBrowserStorage,
   readBrowserStorageValue,
   removeBrowserStorageValue,
   writeBrowserStorageValue,
@@ -71,14 +72,14 @@ export function shouldClearStoredCompanySelection(input: {
 }
 
 function readStoredCompanySelection(selectableCompanyIds: ReadonlySet<string>): string | null {
-  return readBrowserStorageValue(localStorage, SELECTED_COMPANY_STORAGE_KEYS, {
+  return readBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS, {
     decode: (raw) => selectableCompanyIds.has(raw) ? raw : undefined,
     encode: String,
   }) ?? null;
 }
 
 function saveStoredCompanySelection(companyId: string): void {
-  writeBrowserStorageValue(localStorage, SELECTED_COMPANY_STORAGE_KEYS, companyId, String);
+  writeBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS, companyId, String);
 }
 
 export function CompanyProvider({ children }: { children: ReactNode }) {
@@ -122,7 +123,7 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (selectedCompanyId !== null) {
           setSelectedCompanyIdState(null);
         }
-        removeBrowserStorageValue(localStorage, SELECTED_COMPANY_STORAGE_KEYS);
+        removeBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS);
       }
       return;
     }

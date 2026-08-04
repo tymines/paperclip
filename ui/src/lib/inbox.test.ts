@@ -325,6 +325,30 @@ describe("inbox helpers", () => {
     storage.clear();
   });
 
+  it("uses safe defaults and no-op writes when global storage is absent or inaccessible", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    try {
+      Reflect.deleteProperty(globalThis, "localStorage");
+      expect(loadDismissedInboxAlerts()).toEqual(new Set());
+      expect(() => saveDismissedInboxAlerts(new Set(["alert:missing-storage"]))).not.toThrow();
+
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get: () => {
+          throw new Error("storage access blocked");
+        },
+      });
+      expect(loadReadInboxItems()).toEqual(new Set());
+      expect(() => saveReadInboxItems(new Set(["issue:blocked-storage"]))).not.toThrow();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      }
+    }
+  });
+
   const companyFilterKeys = {
     canonical: `${INBOX_FILTER_PREFERENCES_KEY_PREFIXES.canonical}:company-1`,
     compatibility: `${INBOX_FILTER_PREFERENCES_KEY_PREFIXES.compatibility}:company-1`,

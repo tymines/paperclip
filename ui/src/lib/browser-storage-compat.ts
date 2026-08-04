@@ -16,6 +16,14 @@ type ReadableBrowserStorage = Pick<Storage, "getItem" | "setItem">;
 type WritableBrowserStorage = Pick<Storage, "setItem">;
 type RemovableBrowserStorage = Pick<Storage, "removeItem">;
 
+export function getBrowserStorage(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function buildBrowserStorageKeys(
   separator: "." | ":",
   suffix: string,
@@ -27,10 +35,11 @@ export function buildBrowserStorageKeys(
 }
 
 function readDecoded<T>(
-  storage: Pick<Storage, "getItem">,
+  storage: Pick<Storage, "getItem"> | null | undefined,
   key: string,
   decode: BrowserStorageCodec<T>["decode"],
 ): T | undefined {
+  if (!storage) return undefined;
   try {
     const raw = storage.getItem(key);
     return raw === null ? undefined : decode(raw);
@@ -40,7 +49,7 @@ function readDecoded<T>(
 }
 
 export function readBrowserStorageIdentity<T>(
-  storage: Pick<Storage, "getItem">,
+  storage: Pick<Storage, "getItem"> | null | undefined,
   keys: BrowserStorageKeys,
   identity: BrowserStorageIdentity,
   decode: BrowserStorageCodec<T>["decode"],
@@ -49,11 +58,12 @@ export function readBrowserStorageIdentity<T>(
 }
 
 export function readBrowserStorageValue<T>(
-  storage: ReadableBrowserStorage,
+  storage: ReadableBrowserStorage | null | undefined,
   keys: BrowserStorageKeys,
   codec: BrowserStorageCodec<T>,
   options: { copyForward?: boolean } = {},
 ): T | undefined {
+  if (!storage) return undefined;
   const canonicalValue = readDecoded(storage, keys.canonical, codec.decode);
   if (canonicalValue !== undefined) return canonicalValue;
 
@@ -71,11 +81,12 @@ export function readBrowserStorageValue<T>(
 }
 
 export function writeBrowserStorageValue<T>(
-  storage: WritableBrowserStorage,
+  storage: WritableBrowserStorage | null | undefined,
   keys: BrowserStorageKeys,
   value: T,
   encode: (value: T) => string,
 ): void {
+  if (!storage) return;
   let raw: string;
   try {
     raw = encode(value);
@@ -95,9 +106,10 @@ export function writeBrowserStorageValue<T>(
 }
 
 export function removeBrowserStorageValue(
-  storage: RemovableBrowserStorage,
+  storage: RemovableBrowserStorage | null | undefined,
   keys: BrowserStorageKeys,
 ): void {
+  if (!storage) return;
   try {
     storage.removeItem(keys.canonical);
   } catch {

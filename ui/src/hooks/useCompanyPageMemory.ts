@@ -4,6 +4,7 @@ import { useCompany } from "../context/CompanyContext";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import {
   buildBrowserStorageKeys,
+  getBrowserStorage,
   readBrowserStorageValue,
   writeBrowserStorageValue,
 } from "../lib/browser-storage-compat";
@@ -36,13 +37,13 @@ const companyPathsCodec = {
 };
 
 export function getCompanyPaths(): Record<string, string> {
-  return readBrowserStorageValue(localStorage, COMPANY_PATHS_STORAGE_KEYS, companyPathsCodec) ?? {};
+  return readBrowserStorageValue(getBrowserStorage(), COMPANY_PATHS_STORAGE_KEYS, companyPathsCodec) ?? {};
 }
 
 export function saveCompanyPath(companyId: string, path: string) {
   const paths = getCompanyPaths();
   paths[companyId] = path;
-  writeBrowserStorageValue(localStorage, COMPANY_PATHS_STORAGE_KEYS, paths, companyPathsCodec.encode);
+  writeBrowserStorageValue(getBrowserStorage(), COMPANY_PATHS_STORAGE_KEYS, paths, companyPathsCodec.encode);
 }
 
 /**

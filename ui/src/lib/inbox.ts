@@ -15,6 +15,7 @@ import {
 import { formatAssigneeUserLabel } from "./assignees";
 import {
   buildBrowserStorageKeys,
+  getBrowserStorage,
   readBrowserStorageIdentity,
   readBrowserStorageValue,
   writeBrowserStorageValue,
@@ -193,8 +194,8 @@ function readInboxStorageValue<T>(
   options: InboxStorageReadOptions,
 ): T | undefined {
   return options.identity
-    ? readBrowserStorageIdentity(localStorage, keys, options.identity, codec.decode)
-    : readBrowserStorageValue(localStorage, keys, codec, options);
+    ? readBrowserStorageIdentity(getBrowserStorage(), keys, options.identity, codec.decode)
+    : readBrowserStorageValue(getBrowserStorage(), keys, codec, options);
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -276,7 +277,7 @@ export function saveInboxFilterPreferences(
 ) {
   const storageKeys = getInboxFilterPreferencesStorageKeys(companyId);
   if (!storageKeys) return;
-  writeBrowserStorageValue(localStorage, storageKeys, preferences, encodeInboxFilterPreferences);
+  writeBrowserStorageValue(getBrowserStorage(), storageKeys, preferences, encodeInboxFilterPreferences);
 }
 
 export function loadCollapsedInboxGroupKeys(
@@ -302,7 +303,7 @@ export function saveCollapsedInboxGroupKeys(
 ) {
   const storageKeys = getInboxCollapsedGroupsStorageKeys(companyId);
   if (!storageKeys) return;
-  writeBrowserStorageValue(localStorage, storageKeys, groupKeys, (value) => JSON.stringify([...value]));
+  writeBrowserStorageValue(getBrowserStorage(), storageKeys, groupKeys, (value) => JSON.stringify([...value]));
 }
 
 export function loadDismissedInboxAlerts(options: InboxStorageReadOptions = {}): Set<string> {
@@ -318,7 +319,7 @@ export function loadDismissedInboxAlerts(options: InboxStorageReadOptions = {}):
 }
 
 export function saveDismissedInboxAlerts(ids: Set<string>) {
-  writeBrowserStorageValue(localStorage, DISMISSED_KEYS, ids, (value) => JSON.stringify([...value]));
+  writeBrowserStorageValue(getBrowserStorage(), DISMISSED_KEYS, ids, (value) => JSON.stringify([...value]));
 }
 
 export function buildInboxDismissedAtByKey(dismissals: InboxDismissal[]): Map<string, number> {
@@ -350,7 +351,7 @@ export function loadReadInboxItems(options: InboxStorageReadOptions = {}): Set<s
 }
 
 export function saveReadInboxItems(ids: Set<string>) {
-  writeBrowserStorageValue(localStorage, READ_ITEMS_KEYS, ids, (value) => JSON.stringify([...value]));
+  writeBrowserStorageValue(getBrowserStorage(), READ_ITEMS_KEYS, ids, (value) => JSON.stringify([...value]));
 }
 
 export function normalizeInboxIssueColumns(columns: Iterable<string | InboxIssueColumn>): InboxIssueColumn[] {
@@ -377,7 +378,7 @@ export function loadInboxIssueColumns(options: InboxStorageReadOptions = {}): In
 
 export function saveInboxIssueColumns(columns: InboxIssueColumn[]) {
   writeBrowserStorageValue(
-    localStorage,
+    getBrowserStorage(),
     INBOX_ISSUE_COLUMNS_KEYS,
     columns,
     (value) => JSON.stringify(normalizeInboxIssueColumns(value)),
@@ -394,7 +395,7 @@ export function loadInboxWorkItemGroupBy(options: InboxStorageReadOptions = {}):
 }
 
 export function saveInboxWorkItemGroupBy(groupBy: InboxWorkItemGroupBy) {
-  writeBrowserStorageValue(localStorage, INBOX_GROUP_BY_KEYS, groupBy, String);
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_GROUP_BY_KEYS, groupBy, String);
 }
 
 export function shouldResetInboxWorkspaceGrouping(
@@ -639,7 +640,7 @@ export function loadInboxNesting(options: InboxStorageReadOptions = {}): boolean
 }
 
 export function saveInboxNesting(enabled: boolean) {
-  writeBrowserStorageValue(localStorage, INBOX_NESTING_KEYS, enabled, String);
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_NESTING_KEYS, enabled, String);
 }
 
 export function resolveInboxNestingEnabled(preferenceEnabled: boolean, isMobile: boolean): boolean {
@@ -663,7 +664,7 @@ export function loadLastInboxTab(options: InboxStorageReadOptions = {}): InboxTa
 }
 
 export function saveLastInboxTab(tab: InboxTab) {
-  writeBrowserStorageValue(localStorage, INBOX_LAST_TAB_KEYS, tab, String);
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_LAST_TAB_KEYS, tab, String);
 }
 
 export function isMineInboxTab(tab: InboxTab): boolean {

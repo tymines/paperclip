@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildBrowserStorageKeys,
+  getBrowserStorage,
   isBrowserStorageKey,
   readBrowserStorageIdentity,
   readBrowserStorageValue,
@@ -23,6 +24,14 @@ function createStorage(values: Record<string, string> = {}) {
   };
 }
 
+function restoreLocalStorageDescriptor(descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) {
+    Object.defineProperty(globalThis, "localStorage", descriptor);
+  } else {
+    Reflect.deleteProperty(globalThis, "localStorage");
+  }
+}
+
 describe("browser storage compatibility", () => {
   const keys = buildBrowserStorageKeys(":", "inbox:test");
 
@@ -35,6 +44,34 @@ describe("browser storage compatibility", () => {
       canonical: "olympus.selectedCompanyId",
       compatibility: "paperclip.selectedCompanyId",
     });
+  });
+
+  it("returns null when global storage is absent or its property getter throws", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    try {
+      Reflect.deleteProperty(globalThis, "localStorage");
+      expect(getBrowserStorage()).toBeNull();
+
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get: () => {
+          throw new Error("storage access blocked");
+        },
+      });
+      expect(getBrowserStorage()).toBeNull();
+    } finally {
+      restoreLocalStorageDescriptor(descriptor);
+    }
+  });
+
+  it("returns defaults and makes writes and removals no-ops without storage", () => {
+    const encode = vi.fn(String);
+
+    expect(readBrowserStorageValue(null, keys, codec)).toBeUndefined();
+    expect(readBrowserStorageIdentity(undefined, keys, "canonical", codec.decode)).toBeUndefined();
+    expect(() => writeBrowserStorageValue(null, keys, "valid", encode)).not.toThrow();
+    expect(() => removeBrowserStorageValue(undefined, keys)).not.toThrow();
+    expect(encode).not.toHaveBeenCalled();
   });
 
   it("prefers a valid canonical value without touching compatibility storage", () => {
