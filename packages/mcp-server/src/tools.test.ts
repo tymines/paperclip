@@ -2,6 +2,53 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PaperclipApiClient } from "./client.js";
 import { createToolDefinitions } from "./tools.js";
 
+const EXPECTED_OLYMPUS_TOOL_NAMES = [
+  "olympusAddApprovalComment",
+  "olympusAddComment",
+  "olympusApiRequest",
+  "olympusApprovalDecision",
+  "olympusAskUserQuestions",
+  "olympusCheckoutIssue",
+  "olympusControlIssueWorkspaceServices",
+  "olympusCreateApproval",
+  "olympusCreateIssue",
+  "olympusGetAgent",
+  "olympusGetApproval",
+  "olympusGetApprovalIssues",
+  "olympusGetComment",
+  "olympusGetDocument",
+  "olympusGetGoal",
+  "olympusGetHeartbeatContext",
+  "olympusGetIssue",
+  "olympusGetIssueWorkspaceRuntime",
+  "olympusGetProject",
+  "olympusInboxLite",
+  "olympusLinkIssueApproval",
+  "olympusListAgents",
+  "olympusListApprovalComments",
+  "olympusListApprovals",
+  "olympusListComments",
+  "olympusListDocumentRevisions",
+  "olympusListDocuments",
+  "olympusListGoals",
+  "olympusListIssueApprovals",
+  "olympusListIssues",
+  "olympusListProjects",
+  "olympusMe",
+  "olympusReleaseIssue",
+  "olympusRequestConfirmation",
+  "olympusRestoreIssueDocumentRevision",
+  "olympusSuggestTasks",
+  "olympusUnlinkIssueApproval",
+  "olympusUpdateIssue",
+  "olympusUpsertIssueDocument",
+  "olympusWaitForIssueWorkspaceService",
+] as const;
+
+const EXPECTED_PAPERCLIP_TOOL_NAMES = EXPECTED_OLYMPUS_TOOL_NAMES.map(
+  (name) => `paperclip${name.slice("olympus".length)}`,
+);
+
 function makeClient() {
   return new PaperclipApiClient({
     apiUrl: "http://localhost:3100/api",
@@ -28,6 +75,52 @@ function mockJsonResponse(body: unknown, status = 200) {
 describe("paperclip MCP tools", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("exposes exact one-to-one Paperclip and Olympus compatibility surfaces", () => {
+    const tools = createToolDefinitions(makeClient());
+    const names = tools.map((tool) => tool.name);
+    const paperclipNames = names.filter((name) => name.startsWith("paperclip")).sort();
+    const olympusNames = names.filter((name) => name.startsWith("olympus")).sort();
+
+    expect(tools).toHaveLength(80);
+    expect(new Set(names).size).toBe(80);
+    expect(paperclipNames).toEqual([...EXPECTED_PAPERCLIP_TOOL_NAMES].sort());
+    expect(olympusNames).toEqual([...EXPECTED_OLYMPUS_TOOL_NAMES].sort());
+    expect(olympusNames.every((name) => !name.includes("_"))).toBe(true);
+
+    for (const olympusName of EXPECTED_OLYMPUS_TOOL_NAMES) {
+      const paperclipName = `paperclip${olympusName.slice("olympus".length)}`;
+      const paperclipTool = tools.find((tool) => tool.name === paperclipName);
+      const olympusTool = tools.find((tool) => tool.name === olympusName);
+
+      expect(paperclipTool, paperclipName).toBeDefined();
+      expect(olympusTool, olympusName).toBeDefined();
+      expect(olympusTool?.schema).toBe(paperclipTool?.schema);
+      expect(olympusTool?.execute).toBe(paperclipTool?.execute);
+    }
+  });
+
+  it("executes an Olympus alias through the unchanged API path and headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      mockJsonResponse({ id: "PAP-1135", status: "done" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = getTool("olympusUpdateIssue");
+    await tool.execute({
+      issueId: "PAP-1135",
+      status: "done",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(String(url)).toBe("http://localhost:3100/api/issues/PAP-1135");
+    expect(init.method).toBe("PATCH");
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer token-123");
+    expect((init.headers as Record<string, string>)["X-Paperclip-Run-Id"]).toBe(
+      "33333333-3333-3333-3333-333333333333",
+    );
   });
 
   it("adds auth headers and run id to mutating requests", async () => {

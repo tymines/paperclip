@@ -1,12 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 import { PaperclipApiClient } from "./client.js";
 import { readConfigFromEnv, type PaperclipMcpConfig } from "./config.js";
 import { createToolDefinitions } from "./tools.js";
 
-export function createPaperclipMcpServer(config: PaperclipMcpConfig = readConfigFromEnv()) {
+type McpServerName =
+  | typeof PRODUCT_IDENTIFIERS.compatibility.mcpServerKey
+  | typeof PRODUCT_IDENTIFIERS.canonical.mcpServerKey;
+
+function createMcpServer(name: McpServerName, config: PaperclipMcpConfig) {
   const server = new McpServer({
-    name: "paperclip",
+    name,
     version: "0.1.0",
   });
 
@@ -23,8 +28,22 @@ export function createPaperclipMcpServer(config: PaperclipMcpConfig = readConfig
   };
 }
 
+export function createPaperclipMcpServer(config: PaperclipMcpConfig = readConfigFromEnv()) {
+  return createMcpServer(PRODUCT_IDENTIFIERS.compatibility.mcpServerKey, config);
+}
+
+export function createOlympusMcpServer(config: PaperclipMcpConfig = readConfigFromEnv()) {
+  return createMcpServer(PRODUCT_IDENTIFIERS.canonical.mcpServerKey, config);
+}
+
 export async function runServer(config: PaperclipMcpConfig = readConfigFromEnv()) {
   const { server } = createPaperclipMcpServer(config);
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
+
+export async function runOlympusServer(config: PaperclipMcpConfig = readConfigFromEnv()) {
+  const { server } = createOlympusMcpServer(config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

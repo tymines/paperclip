@@ -13,6 +13,8 @@
   },
   "type": "module",
   "bin": {
+    "mcp-server": "./dist/stdio.js",
+    "olympus-mcp-server": "./dist/stdio-olympus.js",
     "paperclip-mcp-server": "./dist/stdio.js"
   },
   "exports": {
@@ -21,6 +23,8 @@
   "publishConfig": {
     "access": "public",
     "bin": {
+      "mcp-server": "./dist/stdio.js",
+      "olympus-mcp-server": "./dist/stdio-olympus.js",
       "paperclip-mcp-server": "./dist/stdio.js"
     },
     "exports": {
