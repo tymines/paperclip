@@ -9,6 +9,7 @@ import { queryKeys } from "../lib/queryKeys";
 import {
   CompanyProvider,
   resolveBootstrapCompanySelection,
+  SELECTED_COMPANY_STORAGE_KEYS,
   shouldClearStoredCompanySelection,
   useCompany,
 } from "./CompanyContext";
@@ -191,5 +192,78 @@ describe("CompanyProvider", () => {
 
     expect(seen).toEqual([null, "company-1"]);
     expect(localStorage.getItem("paperclip.selectedCompanyId")).toBe("company-1");
+    expect(localStorage.getItem("olympus.selectedCompanyId")).toBe("company-1");
+  });
+
+  it("prefers a valid canonical company selection", async () => {
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.canonical, "company-2");
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility, "company-1");
+    queryClient.setQueryData(queryKeys.companies.all, {
+      companies: [makeCompany("company-1"), makeCompany("company-2")],
+      unauthorized: false,
+    });
+    mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+    const seen: Array<string | null> = [];
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyProvider>
+            <Probe onSelectedCompanyId={(companyId) => seen.push(companyId)} />
+          </CompanyProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(seen).toEqual([null, "company-2"]);
+    expect(localStorage.getItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility)).toBe("company-2");
+  });
+
+  it("falls back from a stale canonical selection and copies valid legacy state forward", async () => {
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.canonical, "stale-company");
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility, "company-2");
+    queryClient.setQueryData(queryKeys.companies.all, {
+      companies: [makeCompany("company-1"), makeCompany("company-2")],
+      unauthorized: false,
+    });
+    mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+    const seen: Array<string | null> = [];
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyProvider>
+            <Probe onSelectedCompanyId={(companyId) => seen.push(companyId)} />
+          </CompanyProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(seen).toEqual([null, "company-2"]);
+    expect(localStorage.getItem(SELECTED_COMPANY_STORAGE_KEYS.canonical)).toBe("company-2");
+    expect(localStorage.getItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility)).toBe("company-2");
+  });
+
+  it("removes both company selection keys when the authorized company list is empty", async () => {
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.canonical, "company-1");
+    localStorage.setItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility, "company-1");
+    queryClient.setQueryData(queryKeys.companies.all, {
+      companies: [],
+      unauthorized: false,
+    });
+    mockCompaniesApi.list.mockImplementation(() => new Promise(() => {}));
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <CompanyProvider>
+            <Probe onSelectedCompanyId={() => {}} />
+          </CompanyProvider>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(localStorage.getItem(SELECTED_COMPANY_STORAGE_KEYS.canonical)).toBeNull();
+    expect(localStorage.getItem(SELECTED_COMPANY_STORAGE_KEYS.compatibility)).toBeNull();
   });
 });

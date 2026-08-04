@@ -1,8 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   getRememberedPathOwnerCompanyId,
   sanitizeRememberedPathForCompany,
 } from "../lib/company-page-memory";
+import {
+  COMPANY_PATHS_STORAGE_KEYS,
+  getCompanyPaths,
+  saveCompanyPath,
+} from "./useCompanyPageMemory";
+
+const storage = new Map<string, string>();
+
+Object.defineProperty(globalThis, "localStorage", {
+  value: {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => storage.set(key, value),
+    removeItem: (key: string) => storage.delete(key),
+    clear: () => storage.clear(),
+  },
+  configurable: true,
+});
+
+beforeEach(() => {
+  localStorage.clear();
+});
 
 const companies = [
   { id: "for", issuePrefix: "FOR" },
@@ -86,5 +107,44 @@ describe("sanitizeRememberedPathForCompany", () => {
         companyPrefix: "PAP",
       }),
     ).toBe("/skills/skill-123/files/SKILL.md");
+  });
+});
+
+describe("company page-memory storage compatibility", () => {
+  it("migrates valid legacy JSON without deleting it", () => {
+    const raw = JSON.stringify({ pap: "/issues/PAP-12?tab=activity" });
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.compatibility, raw);
+
+    expect(getCompanyPaths()).toEqual({ pap: "/issues/PAP-12?tab=activity" });
+    expect(localStorage.getItem(COMPANY_PATHS_STORAGE_KEYS.canonical)).toBe(raw);
+    expect(localStorage.getItem(COMPANY_PATHS_STORAGE_KEYS.compatibility)).toBe(raw);
+  });
+
+  it("prefers valid canonical JSON", () => {
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.canonical, JSON.stringify({ pap: "/dashboard" }));
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.compatibility, JSON.stringify({ pap: "/issues/PAP-1" }));
+
+    expect(getCompanyPaths()).toEqual({ pap: "/dashboard" });
+    expect(localStorage.getItem(COMPANY_PATHS_STORAGE_KEYS.compatibility)).toBe(
+      JSON.stringify({ pap: "/issues/PAP-1" }),
+    );
+  });
+
+  it("falls back from malformed canonical data and defaults when neither value is valid", () => {
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.canonical, JSON.stringify(["/dashboard"]));
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.compatibility, JSON.stringify({ pap: "/dashboard" }));
+    expect(getCompanyPaths()).toEqual({ pap: "/dashboard" });
+
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.canonical, JSON.stringify({ pap: "https://example.com" }));
+    localStorage.setItem(COMPANY_PATHS_STORAGE_KEYS.compatibility, "not-json");
+    expect(getCompanyPaths()).toEqual({});
+  });
+
+  it("writes canonical first and keeps the compatibility map current", () => {
+    saveCompanyPath("pap", "/issues/PAP-12");
+
+    const expected = JSON.stringify({ pap: "/issues/PAP-12" });
+    expect(localStorage.getItem(COMPANY_PATHS_STORAGE_KEYS.canonical)).toBe(expected);
+    expect(localStorage.getItem(COMPANY_PATHS_STORAGE_KEYS.compatibility)).toBe(expected);
   });
 });

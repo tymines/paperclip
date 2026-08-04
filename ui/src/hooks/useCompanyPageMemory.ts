@@ -3,27 +3,46 @@ import { useLocation, useNavigate } from "@/lib/router";
 import { useCompany } from "../context/CompanyContext";
 import { toCompanyRelativePath } from "../lib/company-routes";
 import {
+  buildBrowserStorageKeys,
+  readBrowserStorageValue,
+  writeBrowserStorageValue,
+} from "../lib/browser-storage-compat";
+import {
   getRememberedPathOwnerCompanyId,
   isRememberableCompanyPath,
   sanitizeRememberedPathForCompany,
 } from "../lib/company-page-memory";
 
-const STORAGE_KEY = "paperclip.companyPaths";
+export const COMPANY_PATHS_STORAGE_KEYS = buildBrowserStorageKeys(".", "companyPaths");
 
-function getCompanyPaths(): Record<string, string> {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    /* ignore */
-  }
-  return {};
+function decodeCompanyPaths(raw: string): Record<string, string> | undefined {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+  const prototype = Object.getPrototypeOf(parsed);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const entries = Object.entries(parsed);
+  if (!entries.every(([companyId, path]) => (
+    companyId.length > 0
+    && typeof path === "string"
+    && path.startsWith("/")
+    && !path.startsWith("//")
+  ))) return undefined;
+  return Object.fromEntries(entries) as Record<string, string>;
 }
 
-function saveCompanyPath(companyId: string, path: string) {
+const companyPathsCodec = {
+  decode: decodeCompanyPaths,
+  encode: (paths: Record<string, string>) => JSON.stringify(paths),
+};
+
+export function getCompanyPaths(): Record<string, string> {
+  return readBrowserStorageValue(localStorage, COMPANY_PATHS_STORAGE_KEYS, companyPathsCodec) ?? {};
+}
+
+export function saveCompanyPath(companyId: string, path: string) {
   const paths = getCompanyPaths();
   paths[companyId] = path;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(paths));
+  writeBrowserStorageValue(localStorage, COMPANY_PATHS_STORAGE_KEYS, paths, companyPathsCodec.encode);
 }
 
 /**
