@@ -32,7 +32,7 @@ import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
-import { callBrainstormChat, buildSystemPrompt } from "../services/brainstorm-chat.js";
+import { buildSystemPrompt } from "../services/brainstorm-chat.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
@@ -653,35 +653,13 @@ export function bookStudioRoutes(db: Db) {
 
   // ── Suggest Next (Assisted Mode) ──────────────────────────────────────
 
-// ponytail: inline Gemini call — same pattern as story-bible-generate.ts
-async function callGeminiSimple(prompt: string): Promise<string> {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  if (!apiKey) throw Object.assign(new Error("Gemini API key not configured"), { status: 503 });
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: "You are a creative writing coach. Return ONLY valid JSON, no markdown fences." }] },
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.9, maxOutputTokens: 1024 },
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw Object.assign(new Error(`Gemini API error (${res.status}): ${body.slice(0, 300)}`), { status: 502 });
-  }
-  const data = await res.json() as any;
-  return data.candidates?.[0]?.content?.parts?.map((p: any) => p.text ?? "").join("") ?? "";
-}
-
 bookBibleRouter.post("/suggest-next", async (req, res) => {
   try {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
     assertCompanyAccess(req, companyId);
 
     const book = await db.select().from(books).where(eq(books.id, bookId)).then(r => r[0]);
-    if (!book) throw notFound("Book not found");
+    if (!book || book.companyId !== companyId) throw notFound("Book not found");
 
     const [chars, locs, styles, outlines, chapters] = await Promise.all([
       db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId)),
@@ -725,7 +703,20 @@ bookBibleRouter.post("/suggest-next", async (req, res) => {
       "}",
     ].join("\n");
 
-    const raw = await callGeminiSimple(prompt);
+    const actor = getActorInfo(req);
+    const lane = await callAgentLane(db, {
+      lane: "calliope",
+      companyId,
+      task: [
+        "You are Calliope, the Book Studio creative writing agent.",
+        "Return ONLY valid JSON with no markdown fences.",
+        "",
+        prompt,
+      ].join("\n"),
+      metadata: { bookId, operation: "suggest-next" },
+      requestedByActorId: actor.actorId,
+    });
+    const raw = lane.text;
     let parsed: any;
     try {
       // Handle markdown fences and extract JSON
@@ -745,6 +736,15 @@ bookBibleRouter.post("/suggest-next", async (req, res) => {
       suggestedData: parsed.suggestedData || undefined,
     });
   } catch (err: any) {
+    if (err instanceof AgentLaneUnavailableError) {
+      res.status(err.fallbackSafe ? 503 : 502).json({
+        error: "Calliope is unavailable. No suggestion was generated.",
+        via: "none",
+        agentLane: err.fallbackSafe ? "unavailable" : "indeterminate",
+        agentLaneError: err.message,
+      });
+      return;
+    }
     res.status(err.status || 500).json({ error: err.message });
   }
 });
@@ -1209,7 +1209,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       bookId, role: "user", content: message,
     }).returning();
 
-    // Call Gemini
+    // Build the complete book brief for Calliope.
     const bibleContext = {
       bookTitle: book.title,
       characters: characters.map(c => ({ name: c.name, role: c.role, description: c.description })),
@@ -1220,16 +1220,10 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const historyEntries = history.reverse().map(m => ({ role: m.role as "user" | "assistant", content: m.content }));
     historyEntries.push({ role: "user", content: message });
 
-    // Spec v1.4: this window IS Calliope — the live creative-Muse agent,
-    // reached through the existing peer-delegation contract (delegation row +
-    // bridge dispatch + result callback; the row is the audit trail). While
-    // cross-box co-location is pending, an unreachable/slow/failed Calliope
-    // falls back to the configured model lane and the response says so
-    // honestly (`via` + `agentLaneError`) — never a fabricated agent reply.
+    // This window is Calliope. The live agent lane is the only execution path;
+    // failures are surfaced honestly and never fabricate an assistant reply.
     const actor = getActorInfo(req);
     let reply: string;
-    let via: "calliope" | "model" = "model";
-    let agentLaneError: string | undefined;
     let delegationId: string | undefined;
     try {
       const lane = await callAgentLane(db, {
@@ -1247,41 +1241,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         requestedByActorId: actor.actorId,
       });
       reply = lane.text;
-      via = "calliope";
       delegationId = lane.delegationId;
     } catch (laneErr) {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
-      agentLaneError = laneErr.message;
-      // Fallback safety (Chronos rereview-v2 P1A): the paid model fallback
-      // may run ONLY for machine-checkably fallback-safe failures. An
-      // indeterminate outcome means the peer may already hold (or have
-      // delivered) the work — never buy a second lane. Surface honestly;
-      // the user's message is already persisted so history isn't lost.
-      if (!laneErr.fallbackSafe) {
-        res.status(502).json({
-          error: "Live Calliope lane outcome indeterminate — refusing to dual-execute a paid model fallback",
-          messageId: userMsg.id,
-          via: "none",
-          agentLane: "indeterminate",
-          agentLaneError,
-        });
-        return;
-      }
-      try {
-        const result = await callBrainstormChat(bibleContext, historyEntries, message);
-        if (!result) throw new Error("Empty reply from LLM");
-        reply = result;
-      } catch (err) {
-        // Still persist user message so history isn't lost
-        res.status(503).json({
-          error: "AI service temporarily unavailable",
-          messageId: userMsg.id,
-          via: "none",
-          agentLane: "unavailable",
-          agentLaneError,
-        });
-        return;
-      }
+      res.status(laneErr.fallbackSafe ? 503 : 502).json({
+        error: "Calliope is unavailable. Your message was saved, but no reply was generated.",
+        messageId: userMsg.id,
+        via: "none",
+        agentLane: laneErr.fallbackSafe ? "unavailable" : "indeterminate",
+        agentLaneError: laneErr.message,
+      });
+      return;
     }
 
     // Persist assistant reply
@@ -1293,9 +1263,8 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       reply,
       messageId: assistantMsg.id,
       userMessageId: userMsg.id,
-      via,
+      via: "calliope",
       ...(delegationId ? { delegationId } : {}),
-      ...(agentLaneError ? { agentLane: "unavailable", agentLaneError } : {}),
     });
   });
 

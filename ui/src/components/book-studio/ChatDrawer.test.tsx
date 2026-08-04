@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // ChatDrawer — the window that IS Calliope (Spec v1.4). Proves the request
-// shape, the live-agent provenance chip, and the honest fallback notice.
+// shape, the live-agent provenance chip, and the honest unavailable state.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -104,25 +104,24 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     expect(container.textContent).not.toContain("model fallback");
   });
 
-  it("shows the honest fallback notice when Calliope is unreachable", async () => {
+  it("shows an unavailable state instead of representing a model reply", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse({ messages: [] }))
       .mockResolvedValueOnce(
         jsonResponse({
-          reply: "Model answer.",
-          messageId: "m2",
-          userMessageId: "m1",
-          via: "model",
+          error: "Calliope is unavailable. Your message was saved, but no reply was generated.",
+          messageId: "m1",
+          via: "none",
           agentLane: "unavailable",
           agentLaneError: "Book Studio calliope lane unavailable: peer unreachable (timeout)",
-        }),
+        }, 503),
       );
 
     await mount();
     await sendMessage("hi");
 
-    expect(container.textContent).toContain("Model answer.");
-    expect(container.textContent).toContain("Calliope unreachable — answered by the model fallback");
+    expect(container.textContent).toContain("Calliope is unavailable. No reply was generated.");
+    expect(container.textContent).not.toContain("model fallback");
     expect(container.textContent).not.toContain("via Calliope ✦ live agent");
   });
 
@@ -134,7 +133,7 @@ describe("ChatDrawer — Calliope window (Spec v1.4)", () => {
     await mount();
     await sendMessage("hi");
 
-    expect(container.textContent).toContain("Failed to get reply. Please try again.");
+    expect(container.textContent).toContain("Calliope is unavailable. No reply was generated.");
   });
 
   it("is titled as Calliope's window", async () => {
