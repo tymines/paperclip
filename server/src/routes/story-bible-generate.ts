@@ -8,95 +8,8 @@ import {
   books,
 } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
-import { assertCompanyAccess } from "./authz.js";
-import { badRequest } from "../errors.js";
-
-// ── Gemini API lane ─────────────────────────────────────────────────────────
-
-const GEMINI_MODEL = "gemini-2.5-pro";
-const GEMINI_BASE =
-  "https://generativelanguage.googleapis.com/v1beta/models";
-
-function getApiKey(): string | null {
-  return process.env.GOOGLE_API_KEY ?? null;
-}
-
-interface GeminiResponse {
-  candidates?: {
-    content?: {
-      parts?: { text?: string }[];
-    };
-    finishReason?: string;
-  }[];
-}
-
-async function callGemini(
-  systemInstruction: string,
-  userMessage: string,
-): Promise<string> {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw Object.assign(new Error("Gemini API key not configured"), {
-      status: 503,
-    });
-  }
-
-  const url = `${GEMINI_BASE}/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: systemInstruction }],
-      },
-      contents: [
-        {
-          parts: [{ text: userMessage }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.9,
-        // gemini-2.5-pro is a THINKING model: reasoning tokens count against
-        // this budget. 2048 caused silent truncation (broken JSON) on bigger
-        // asks like multi-chapter outlines — keep this generous.
-        maxOutputTokens: 16384,
-      },
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw Object.assign(
-      new Error(`Gemini API error (${res.status}): ${body.slice(0, 500)}`),
-      { status: 502 },
-    );
-  }
-
-  const data = (await res.json()) as GeminiResponse;
-  const cand = data.candidates?.[0];
-  const text =
-    cand?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
-
-  if (!text) {
-    throw Object.assign(new Error("Gemini returned an empty response"), {
-      status: 502,
-    });
-  }
-
-  if (cand?.finishReason === "MAX_TOKENS") {
-    // Truncated JSON is unusable — surface a clear, actionable error instead
-    // of a downstream parse failure.
-    throw Object.assign(
-      new Error(
-        "Generation was cut off by the output limit — try asking for fewer chapters/items at once.",
-      ),
-      { status: 502 },
-    );
-  }
-
-  return text;
-}
+import { assertCompanyAccess, getActorInfo } from "./authz.js";
+import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
 // ── Context builder ─────────────────────────────────────────────────────────
 
@@ -199,7 +112,7 @@ function formatContext(ctx: BibleContext): string {
   return parts.length > 0 ? parts.join("\n") : "(No existing bible entries)";
 }
 
-// ponytail: normalize Gemini output to match DB column types
+// Normalize Calliope's structured output to match DB column types.
 // - voiceCard: string → { description: string }
 // - rules/sensoryNotes: array → { "0": item, ... }
 // - comps: array → comma-separated string
@@ -252,12 +165,19 @@ function extractJson(text: string): Record<string, unknown> {
   const end = raw.lastIndexOf("}");
   if (start === -1 || end === -1) {
     throw Object.assign(
-      new Error("Gemini response does not contain valid JSON"),
+      new Error("Calliope response does not contain valid JSON"),
       { status: 502 },
     );
   }
 
-  return JSON.parse(raw.slice(start, end + 1));
+  try {
+    return JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    throw Object.assign(
+      new Error("Calliope response does not contain valid JSON"),
+      { status: 502 },
+    );
+  }
 }
 
 // ── Route builder ───────────────────────────────────────────────────────────
@@ -280,12 +200,12 @@ export function storyBibleGenerateRoutes(db: Db) {
 
         // Verify the book exists
         const book = await db
-          .select({ id: books.id, title: books.title })
+          .select({ id: books.id, companyId: books.companyId, title: books.title })
           .from(books)
           .where(eq(books.id, bookId))
           .then((r) => r[0]);
 
-        if (!book) {
+        if (!book || book.companyId !== companyId) {
           throw Object.assign(new Error("Book not found"), { status: 404 });
         }
 
@@ -310,13 +230,19 @@ export function storyBibleGenerateRoutes(db: Db) {
           `\nGenerate a new ${entityType} entry as JSON with these exact fields: [${fields.join(", ")}].`,
         ].join("\n");
 
-        // Call Gemini
-        const raw = await callGemini(systemInstruction, userMessage);
+        const actor = getActorInfo(req);
+        const lane = await callAgentLane(db, {
+          lane: "calliope",
+          companyId,
+          task: [systemInstruction, "", userMessage].join("\n"),
+          metadata: { bookId, operation: `generate-${entityType}` },
+          requestedByActorId: actor.actorId,
+        });
 
         // Parse JSON from response
-        const parsed = extractJson(raw);
+        const parsed = extractJson(lane.text);
 
-        // Normalize Gemini output to match DB schemas
+        // Normalize Calliope output to match DB schemas.
         const normalized = normalizeEntityOutput(entityType, parsed);
 
         // Validate required fields
@@ -332,6 +258,15 @@ export function storyBibleGenerateRoutes(db: Db) {
           entityType,
         });
       } catch (err: any) {
+        if (err instanceof AgentLaneUnavailableError) {
+          res.status(err.fallbackSafe ? 503 : 502).json({
+            error: "Calliope is unavailable. No story-bible draft was generated.",
+            via: "none",
+            agentLane: err.fallbackSafe ? "unavailable" : "indeterminate",
+            agentLaneError: err.message,
+          });
+          return;
+        }
         if (err.status) {
           res.status(err.status).json({
             error: err.message,
@@ -408,11 +343,11 @@ export function storyBibleGenerateRoutes(db: Db) {
             : undefined;
 
         const book = await db
-          .select({ id: books.id, title: books.title })
+          .select({ id: books.id, companyId: books.companyId, title: books.title })
           .from(books)
           .where(eq(books.id, bookId))
           .then((r) => r[0]);
-        if (!book) {
+        if (!book || book.companyId !== companyId) {
           throw Object.assign(new Error("Book not found"), { status: 404 });
         }
 
@@ -438,8 +373,15 @@ export function storyBibleGenerateRoutes(db: Db) {
           "\nGenerate the outline chapters as JSON now.",
         ].join("\n");
 
-        const raw = await callGemini(systemInstruction, userMessage);
-        const parsed = extractJson(raw);
+        const actor = getActorInfo(req);
+        const lane = await callAgentLane(db, {
+          lane: "calliope",
+          companyId,
+          task: [systemInstruction, "", userMessage].join("\n"),
+          metadata: { bookId, operation: "generate-outline-beats" },
+          requestedByActorId: actor.actorId,
+        });
+        const parsed = extractJson(lane.text);
 
         // Accept both shapes: { chapters: [...] } or a bare single chapter.
         const rawChapters: Record<string, unknown>[] = Array.isArray(parsed.chapters)
@@ -447,7 +389,7 @@ export function storyBibleGenerateRoutes(db: Db) {
           : [parsed];
 
         if (rawChapters.length === 0) {
-          throw Object.assign(new Error("Gemini returned no chapters"), { status: 502 });
+          throw Object.assign(new Error("Calliope returned no chapters"), { status: 502 });
         }
 
         // Deterministic numbering: sequential after the existing outline —
@@ -467,6 +409,15 @@ export function storyBibleGenerateRoutes(db: Db) {
           entityType: "outline-beats",
         });
       } catch (err: any) {
+        if (err instanceof AgentLaneUnavailableError) {
+          res.status(err.fallbackSafe ? 503 : 502).json({
+            error: "Calliope is unavailable. No story-bible draft was generated.",
+            via: "none",
+            agentLane: err.fallbackSafe ? "unavailable" : "indeterminate",
+            agentLaneError: err.message,
+          });
+          return;
+        }
         if (err.status) {
           res.status(err.status).json({
             error: err.message,

@@ -9,9 +9,9 @@ import {
 import { logger } from "../middleware/logger.js";
 
 /**
- * Peer-agent delegation — Jarvis hands tasks off to other agents (Hermes,
- * August, Codex, content, social, researcher, claude-code) over the
- * OpenClaw bridge daemon.
+ * Peer-agent delegation — Paperclip hands tasks to named remote agent
+ * executors. Legacy peers may use the shared OpenClaw daemon; Book Studio's
+ * Calliope and Hades identities are hosted by the Hermes Harness on Box 2.
  *
  * The bridge daemon listens locally; for each peer identity we hold a
  * {url, token} pair. Dispatch is fire-and-forget over HTTP — the peer
@@ -39,6 +39,8 @@ export type PeerAgentId =
   // Calliope — the creative-Muse agent (Spec v1.4): Book Studio's
   // brainstorm/write chat window IS Calliope. Same additive plain-text path.
   | "calliope"
+  // Hades — the Book Studio reviewer hosted by the Hermes Harness on Box 2.
+  | "hades"
   | "august"
   | "codex"
   | "content"
@@ -50,6 +52,15 @@ export interface PeerEndpoint {
   url: string;
   token: string;
   identityId: string;
+}
+
+export class PeerUnconfiguredError extends Error {
+  readonly code = "peer_unconfigured";
+
+  constructor(readonly peer: PeerAgentId) {
+    super(`No explicit peer endpoint and token are configured for ${peer}`);
+    this.name = "PeerUnconfiguredError";
+  }
 }
 
 export interface DelegationInput {
@@ -88,10 +99,18 @@ const DEFAULT_BRIDGE_TOKEN =
  */
 export function getPeerEndpoint(peer: PeerAgentId): PeerEndpoint {
   const upper = peer.toUpperCase().replace(/-/g, "_");
-  const url =
-    process.env[`JARVIS_PEER_${upper}_URL`] ?? DEFAULT_BRIDGE_URL;
-  const token =
-    process.env[`JARVIS_PEER_${upper}_TOKEN`] ?? DEFAULT_BRIDGE_TOKEN;
+  const configuredUrl = process.env[`JARVIS_PEER_${upper}_URL`];
+  const configuredToken = process.env[`JARVIS_PEER_${upper}_TOKEN`];
+
+  // Book Studio agents live in the Hermes Harness on Box 2. Never allow
+  // these named identities to drift onto the legacy shared/default route:
+  // that could reach a different agent and falsely report success.
+  if ((peer === "calliope" || peer === "hades") && (!configuredUrl || !configuredToken)) {
+    throw new PeerUnconfiguredError(peer);
+  }
+
+  const url = configuredUrl ?? DEFAULT_BRIDGE_URL;
+  const token = configuredToken ?? DEFAULT_BRIDGE_TOKEN;
   return { url, token, identityId: peer };
 }
 
@@ -110,8 +129,17 @@ const reachabilityCache = new Map<string, ReachabilityCacheEntry>();
 export async function checkPeerReachable(
   peer: PeerAgentId,
 ): Promise<{ reachable: boolean; error?: string }> {
-  const endpoint = getPeerEndpoint(peer);
-  const cached = reachabilityCache.get(endpoint.url);
+  let endpoint: PeerEndpoint;
+  try {
+    endpoint = getPeerEndpoint(peer);
+  } catch (err) {
+    if (err instanceof PeerUnconfiguredError) {
+      return { reachable: false, error: err.code };
+    }
+    throw err;
+  }
+  const cacheKey = `${peer}:${endpoint.url}`;
+  const cached = reachabilityCache.get(cacheKey);
   if (cached && Date.now() - cached.checkedAt < REACHABILITY_CACHE_TTL_MS) {
     return { reachable: cached.reachable, error: cached.error };
   }
@@ -144,7 +172,7 @@ export async function checkPeerReachable(
     clearTimeout(timer);
   }
 
-  reachabilityCache.set(endpoint.url, {
+  reachabilityCache.set(cacheKey, {
     reachable,
     checkedAt: Date.now(),
     error,
@@ -224,7 +252,21 @@ export async function dispatchDelegation(
     };
   }
 
-  const endpoint = getPeerEndpoint(input.agent);
+  let endpoint: PeerEndpoint;
+  try {
+    endpoint = getPeerEndpoint(input.agent);
+  } catch (err) {
+    if (err instanceof PeerUnconfiguredError) {
+      return {
+        id: "",
+        status: "failed",
+        reachable: false,
+        remainingQuotaThisMinute: rate.remaining,
+        error: err.code,
+      };
+    }
+    throw err;
+  }
   const callbackToken = `cb_${Date.now().toString(36)}_${Math.random()
     .toString(36)
     .slice(2, 10)}`;
@@ -577,6 +619,7 @@ const PEER_LABEL: Record<PeerAgentId, string> = {
   hermes: "Hermes",
   ares: "Ares (COO)",
   calliope: "Calliope",
+  hades: "Hades",
   august: "August",
   codex: "Codex",
   content: "the content desk",
@@ -589,6 +632,7 @@ const PEER_ETA: Record<PeerAgentId, string> = {
   hermes: "about ten minutes",
   ares: "a few minutes — Ares fans it out to the fleet",
   calliope: "a minute or two",
+  hades: "a minute or two",
   august: "a few minutes — assuming the Mac mini's reachable",
   codex: "a couple of minutes",
   content: "fifteen or twenty minutes",

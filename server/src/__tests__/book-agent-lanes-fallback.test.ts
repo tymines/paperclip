@@ -132,6 +132,10 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
   let tempDb: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>> | null = null;
 
   beforeAll(async () => {
+    vi.stubEnv("JARVIS_PEER_CALLIOPE_URL", "http://127.0.0.1:29991");
+    vi.stubEnv("JARVIS_PEER_CALLIOPE_TOKEN", "test-calliope-token");
+    vi.stubEnv("JARVIS_PEER_HADES_URL", "http://127.0.0.1:29992");
+    vi.stubEnv("JARVIS_PEER_HADES_TOKEN", "test-hades-token");
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-lane-fallback-");
     db = createDb(tempDb.connectionString);
     // The bridge daemon does not exist in tests: every fetch (reachability
@@ -154,10 +158,11 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
 
   afterAll(async () => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     await tempDb?.cleanup();
   });
 
-  const laneArgs = (companyId: string, lane: "calliope" | "ares") => ({
+  const laneArgs = (companyId: string, lane: "calliope" | "hades") => ({
     lane,
     companyId,
     task: "race probe",
@@ -192,7 +197,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
     expect(after.result).toBe("the peer's real answer");
   });
 
-  it.each(["calliope", "ares"] as const)(
+  it.each(["calliope", "hades"] as const)(
     "abandon wins the race (%s lane) ⇒ fallback-safe timeout error and a durably abandoned row",
     async (lane) => {
       const company = await seedCompany(db);
@@ -223,7 +228,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
       expect(out.ok).toBe(true);
     });
 
-    const err = await callAgentLane(raced, laneArgs(company.id, "ares")).catch((e) => e);
+    const err = await callAgentLane(raced, laneArgs(company.id, "hades")).catch((e) => e);
 
     expect(err).toBeInstanceOf(AgentLaneUnavailableError);
     expect(err.fallbackSafe).toBe(true);
@@ -281,7 +286,7 @@ describeEmbeddedPostgres("callAgentLane timeout fallback safety — real embedde
       throw new Error("connection reset by peer");
     });
 
-    const err = await callAgentLane(raced, laneArgs(company.id, "ares")).catch((e) => e);
+    const err = await callAgentLane(raced, laneArgs(company.id, "hades")).catch((e) => e);
 
     expect(err).toBeInstanceOf(AgentLaneUnavailableError);
     expect(err.fallbackSafe).toBe(false);

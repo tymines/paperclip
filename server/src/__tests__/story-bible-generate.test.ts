@@ -1,239 +1,186 @@
-import { describe, expect, it, vi, beforeAll } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import express from "express";
 import request from "supertest";
-import type { Router } from "express";
+import type { Db } from "@paperclipai/db";
 
-// ── Mock Gemini ────────────────────────────────────────────────────────────
-
-const mockFetch = vi.spyOn(globalThis, "fetch");
-
-beforeAll(() => {
-  process.env.GOOGLE_API_KEY = "test-key";
+vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../services/book-agent-lanes.js")>();
+  return { ...mod, callAgentLane: vi.fn() };
 });
 
-function mockGeminiResponse(json: Record<string, unknown>) {
-  mockFetch.mockResolvedValueOnce({
-    ok: true,
-    status: 200,
-    json: async () => ({
-      candidates: [
-        {
-          content: {
-            parts: [{ text: JSON.stringify(json) }],
-          },
-        },
-      ],
-    }),
-  } as Response);
-}
+import { storyBibleGenerateRoutes } from "../routes/story-bible-generate.js";
+import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 
-// ── Mock DB ────────────────────────────────────────────────────────────────
-
-/**
- * A thenable chain for Drizzle queries.
- * `val` is what the query resolves to.
- */
-function q<T>(val: T): any {
-  const p = Promise.resolve(val);
-  const chain: Record<string, any> = Object.assign(
-    (resolve: any, _reject?: any) => p.then(resolve),
-    {
-      then: p.then.bind(p),
-      catch: p.catch.bind(p),
-      finally: p.finally.bind(p),
-    },
-  );
-  for (const method of [
-    "select", "from", "where", "orderBy", "limit",
-    "values", "set", "returning", "insert", "update", "delete",
-  ]) {
-    chain[method] = () => chain;
+function q<T>(value: T): any {
+  const promise = Promise.resolve(value);
+  const chain: Record<string, any> = {
+    then: promise.then.bind(promise),
+    catch: promise.catch.bind(promise),
+    finally: promise.finally.bind(promise),
+  };
+  for (const method of ["from", "where", "orderBy", "limit"]) {
+    chain[method] = vi.fn(() => chain);
   }
   return chain;
 }
 
-/** Create a mock Drizzle DB. The first .select().from().where() chain
- *  returns the book row so the handler's existence check passes.
- */
-function mockDb() {
-  const bookVal = [{ id: "book-1", title: "The Echo of Stone", slug: "echo-of-stone" }];
-  let bookCheckPassed = false;
-
-  const whereCb = () => {
-    if (!bookCheckPassed) {
-      bookCheckPassed = true;
-      return q(bookVal);    // first .where() — the book lookup
-    }
-    return q([]);            // subsequent .where() — context queries
-  };
-
+function mockDb(bookCompanyId = "c1"): Db {
+  let bookLookupPending = true;
   return {
-    select: () => ({
-      from: () => ({
-        where: whereCb,
-        then: (fn: any) => Promise.resolve([]).then(fn),
-      }),
-      then: (fn: any) => Promise.resolve([]).then(fn),
+    select: vi.fn(() => {
+      const value = bookLookupPending
+        ? [{ id: "book-1", companyId: bookCompanyId, title: "The Echo of Stone" }]
+        : [];
+      bookLookupPending = false;
+      return q(value);
     }),
-  };
+  } as unknown as Db;
 }
 
-// ── Build test app ─────────────────────────────────────────────────────────
-
-async function createTestApp() {
-  const mod = await import("../routes/story-bible-generate.js");
-  const router: Router = mod.storyBibleGenerateRoutes(mockDb());
+function createTestApp(bookCompanyId = "c1") {
   const app = express();
   app.use(express.json());
-
-  // Inject board-level actor so assertCompanyAccess passes
-  app.use((req: any, _res: any, next: any) => {
-    req.actor = { type: "board", source: "local_implicit" };
+  app.use((req: any, _res, next) => {
+    req.actor = { type: "board", userId: "test-user", source: "local_implicit" };
     next();
   });
-
-  app.use(router);
-  return { app };
+  app.use(storyBibleGenerateRoutes(mockDb(bookCompanyId)));
+  app.use((err: any, _req: any, res: any, _next: any) => {
+    res.status(err.status || 500).json({ error: err.message || "Internal error" });
+  });
+  return app;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────────────
+describe("Story-bible generation through Calliope", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-describe("POST /generate/character", () => {
-  it("returns a draft character entry", async () => {
-    const { app } = await createTestApp();
-    mockGeminiResponse({
-      name: "Elena Voss",
-      role: "protagonist",
-      description: "A sharp-witted archaeologist who distrusts easy answers.",
-      voiceCard: {
-        tone: "dry and intellectual",
-        speechPattern: "speaks in measured paragraphs",
+  const genericCases = [
+    {
+      endpoint: "character",
+      output: {
+        name: "Elena Voss",
+        role: "protagonist",
+        description: "A sharp-witted archaeologist.",
+        voiceCard: "dry and intellectual",
       },
+      assertion: (draft: Record<string, unknown>) => {
+        expect(draft.name).toBe("Elena Voss");
+        expect(draft.voiceCard).toEqual({ description: "dry and intellectual" });
+      },
+    },
+    {
+      endpoint: "location",
+      output: {
+        name: "Sunken Athenaeum",
+        description: "A ruined library in a flooded caldera.",
+        rules: ["magic is suppressed"],
+        sensoryNotes: "dripping water echoes",
+      },
+      assertion: (draft: Record<string, unknown>) => {
+        expect(draft.name).toBe("Sunken Athenaeum");
+        expect(draft.rules).toEqual({ "0": "magic is suppressed" });
+      },
+    },
+    {
+      endpoint: "world-rule",
+      output: {
+        name: "The Veil of Silence",
+        description: "Divine communication arrives garbled.",
+        rules: { prayer: "garbled" },
+      },
+      assertion: (draft: Record<string, unknown>) => {
+        expect(draft.name).toBe("The Veil of Silence");
+      },
+    },
+    {
+      endpoint: "style",
+      output: {
+        pov: "third person limited",
+        tense: "past",
+        comps: ["Shades of Magic", "Library at Mount Char"],
+        sampleParagraph: "The book did not want to open.",
+        bannedCliches: ["it was all a dream"],
+      },
+      assertion: (draft: Record<string, unknown>) => {
+        expect(draft.pov).toBe("third person limited");
+        expect(draft.comps).toBe("Shades of Magic, Library at Mount Char");
+      },
+    },
+  ];
+
+  it.each(genericCases)("returns the existing $endpoint draft shape from Calliope", async ({ endpoint, output, assertion }) => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: JSON.stringify(output),
+      delegationId: `del-${endpoint}`,
+      lane: "calliope",
     });
 
-    const res = await request(app)
-      .post("/companies/c1/book-studio/books/book-1/generate/character")
-      .send({ prompt: "Create a protagonist" });
+    const res = await request(createTestApp())
+      .post(`/companies/c1/book-studio/books/book-1/generate/${endpoint}`)
+      .send({ prompt: "Generate a fitting entry" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "draft",
-      entityType: "character",
+    expect(res.body).toMatchObject({ status: "draft", entityType: endpoint });
+    assertion(res.body.draft);
+    const laneCall = vi.mocked(callAgentLane).mock.calls[0][1];
+    expect(laneCall).toMatchObject({
+      lane: "calliope",
+      companyId: "c1",
+      metadata: { bookId: "book-1", operation: `generate-${endpoint}` },
+      requestedByActorId: "test-user",
     });
-    expect(res.body.draft.name).toBe("Elena Voss");
-    expect(res.body.draft.role).toBe("protagonist");
   });
-});
 
-describe("POST /generate/location", () => {
-  it("returns a draft location entry", async () => {
-    const { app } = await createTestApp();
-    mockGeminiResponse({
-      name: "Sunken Athenaeum",
-      description: "A ruined library half-submerged in a flooded caldera.",
-      rules: { magic: "suppressed", access: "requires_breathing_apparatus" },
-      sensoryNotes: { sight: "faded mosaics", sound: "dripping water echoes" },
+  it("preserves the multi-chapter outline response and deterministic numbering", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: JSON.stringify({
+        chapters: [
+          { chapterNumber: 99, title: "The Wrong Book", beats: ["Discovery", "Escape"] },
+          { chapterNumber: 200, title: "The Deep Door", beats: ["Descent"] },
+        ],
+      }),
+      delegationId: "del-outline",
+      lane: "calliope",
     });
 
-    const res = await request(app)
-      .post("/companies/c1/book-studio/books/book-1/generate/location")
-      .send({ prompt: "A mysterious library" });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "draft",
-      entityType: "location",
-    });
-    expect(res.body.draft.name).toBe("Sunken Athenaeum");
-    expect(res.body.draft.rules).toBeDefined();
-  });
-});
-
-describe("POST /generate/world-rule", () => {
-  it("returns a draft world-rule entry", async () => {
-    const { app } = await createTestApp();
-    mockGeminiResponse({
-      name: "The Veil of Silence",
-      description: "A cosmological barrier preventing divine communication.",
-      rules: { prayer: "arrives garbled", divine_intervention: "only through natural phenomena" },
-    });
-
-    const res = await request(app)
-      .post("/companies/c1/book-studio/books/book-1/generate/world-rule")
-      .send({ prompt: "A cosmology constraint" });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "draft",
-      entityType: "world-rule",
-    });
-    expect(res.body.draft.name).toBe("The Veil of Silence");
-  });
-});
-
-describe("POST /generate/style", () => {
-  it("returns a draft style entry", async () => {
-    const { app } = await createTestApp();
-    mockGeminiResponse({
-      pov: "third person limited",
-      tense: "past",
-      comps: "Shades of Magic meets Library at Mount Char",
-      sampleParagraph:
-        "The book did not want to open. Elena felt its reluctance through her gloves.",
-      bannedCliches: ["it was all a dream", "the real treasure was the friends"],
-    });
-
-    const res = await request(app)
-      .post("/companies/c1/book-studio/books/book-1/generate/style")
-      .send({ prompt: "Gothic adventure style" });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "draft",
-      entityType: "style",
-    });
-    expect(res.body.draft.pov).toBe("third person limited");
-    expect(res.body.draft.bannedCliches).toBeInstanceOf(Array);
-  });
-});
-
-describe("POST /generate/outline-beats", () => {
-  it("returns a draft outline entry", async () => {
-    const { app } = await createTestApp();
-    mockGeminiResponse({
-      chapterNumber: 1,
-      title: "The Wrong Book",
-      beats: [
-        { beat: "inciting discovery", description: "Elena triggers a hidden mechanism." },
-        { beat: "escalation", description: "She falls into an underground reservoir." },
-      ],
-    });
-
-    const res = await request(app)
+    const res = await request(createTestApp())
       .post("/companies/c1/book-studio/books/book-1/generate/outline-beats")
-      .send({ prompt: "Opening chapter outline" });
+      .send({ prompt: "Generate two chapters" });
 
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({
-      status: "draft",
-      entityType: "outline-beats",
-    });
-    expect(res.body.draft.chapterNumber).toBe(1);
-    expect(res.body.draft.beats).toBeInstanceOf(Array);
-    expect(res.body.draft.beats.length).toBeGreaterThanOrEqual(2);
+    expect(res.body).toMatchObject({ status: "draft", entityType: "outline-beats" });
+    expect(res.body.draft.chapters).toEqual([
+      { chapterNumber: 1, title: "The Wrong Book", beats: [{ description: "Discovery" }, { description: "Escape" }] },
+      { chapterNumber: 2, title: "The Deep Door", beats: [{ description: "Descent" }] },
+    ]);
   });
-});
 
-describe("API key missing", () => {
-  it("returns 503 when GOOGLE_API_KEY is unset", async () => {
-    delete process.env.GOOGLE_API_KEY;
-    const { app } = await createTestApp();
+  it("returns an honest 503 and no draft when Calliope is unavailable", async () => {
+    vi.mocked(callAgentLane).mockRejectedValue(
+      new AgentLaneUnavailableError("calliope", "peer unreachable (timeout)"),
+    );
 
-    const res = await request(app)
+    const res = await request(createTestApp())
       .post("/companies/c1/book-studio/books/book-1/generate/character")
       .send({});
 
     expect(res.status).toBe(503);
-    expect(res.body.error).toMatch(/Gemini API key not configured/i);
+    expect(res.body).toMatchObject({
+      error: "Calliope is unavailable. No story-bible draft was generated.",
+      via: "none",
+      agentLane: "unavailable",
+    });
+    expect(res.body).not.toHaveProperty("draft");
+  });
+
+  it("enforces the URL company before dispatching Calliope", async () => {
+    const res = await request(createTestApp("c2"))
+      .post("/companies/c1/book-studio/books/book-1/generate/character")
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(callAgentLane).not.toHaveBeenCalled();
   });
 });

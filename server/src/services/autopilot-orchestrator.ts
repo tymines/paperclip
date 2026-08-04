@@ -49,10 +49,9 @@ export interface AutopilotStartOptions {
 // --- Checkpoint Dir ---
 /**
  * Deterministic reservation (cents) charged ONCE per chapter baseline-review
- * action, before execution. It covers whichever critic lane answers — the
- * live Ares agent lane OR the degraded model fallback — so a fallback never
- * double-charges. Rough draft estimates are 5¢ (below); the critic pass is
- * a single scoring call, reserved at 2¢.
+ * action, before execution. It covers the live Hades reviewer dispatch once.
+ * Rough draft estimates are 5¢ (below); the review pass is a single scoring
+ * call, reserved at 2¢.
  */
 export const AUTOPILOT_REVIEW_RESERVATION_CENTS = 2;
 
@@ -389,11 +388,10 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
       writeCheckpoint(state);
 
       // BUDGET HARD-STOP (control-plane invariant; Chronos rereview-v2 P1B):
-      // the review action is the next paid lane dispatch (live Ares, or the
-      // degraded model fallback inside runBaselineReview). If its
+      // the review action is the next paid lane dispatch (live Hades). If its
       // reservation would exceed the hard budget, pause + checkpoint +
-      // activity-log BEFORE anything is dispatched — no Ares, no fallback
-      // critic. The soft-cap pause below stays a separate, post-chapter
+      // activity-log BEFORE anything is dispatched — no Hades work. The
+      // soft-cap pause below stays a separate, post-chapter
       // continue-prompt mechanism.
       if (
         state.budgetCents !== null &&
@@ -423,9 +421,7 @@ async function runAutopilotLoop(state: AutopilotState, db: Db, actor: any) {
         }).catch(() => {});
         return;
       }
-      // Charge the review action exactly once, up front: the reservation
-      // covers whichever critic lane executes (live Ares OR model fallback),
-      // so one falling back to the other can never double-charge.
+      // Charge the Hades review action exactly once, up front.
       state.spendCents += AUTOPILOT_REVIEW_RESERVATION_CENTS;
       writeCheckpoint(state);
       try {

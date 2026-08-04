@@ -136,8 +136,8 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
               </select>
             )}
             <p className="text-[10px] text-gray-600">
-              The critic (a different model than the writer) scores the rubric and fact-checks against the bible.
-              It annotates only — it never rewrites.
+              Hades (Kimi K3) scores the rubric and fact-checks against the bible.
+              Hades annotates only — it never rewrites, and no model fallback is used.
             </p>
           </div>
 
@@ -181,7 +181,7 @@ export function ReviewDialog({ bookId, companySlug, chaptersWithProse, currentCh
                     {r.summary && <p className="text-[11px] leading-relaxed text-gray-400">{r.summary}</p>}
                     <p className="text-[10px] text-gray-600">
                       {r.findings.length} finding{r.findings.length === 1 ? "" : "s"} → {r.stored === "annotations" ? "annotations" : "review notes"}
-                      {" · "}critic: {r.criticProvider}{r.criticDegraded ? " (fallback)" : ""}
+                      {" · "}reviewer: {r.criticProvider || "Hades / Kimi K3"}
                     </p>
                   </div>
                 );
