@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# build-npm.sh — Build the paperclipai CLI package for npm publishing.
+# build-npm.sh — Build the paperclipai and olympus CLI entrypoints for npm publishing.
 #
 # Uses esbuild to bundle all workspace code into a single file,
 # keeping external npm dependencies as regular package dependencies.
@@ -23,14 +23,14 @@ for arg in "$@"; do
   esac
 done
 
-echo "==> Building paperclipai for npm"
+echo "==> Building paperclipai and olympus for npm"
 
 # ── Step 1: Forbidden token check ──────────────────────────────────────────────
 if [ "$skip_checks" = false ]; then
-  echo "  [1/5] Running forbidden token check..."
+  echo "  [1/6] Running forbidden token check..."
   node "$REPO_ROOT/scripts/check-forbidden-tokens.mjs"
 else
-  echo "  [1/5] Skipping forbidden token check (--skip-checks)"
+  echo "  [1/6] Skipping forbidden token check (--skip-checks)"
 fi
 
 # ── Step 2: TypeScript type-check ──────────────────────────────────────────────
@@ -53,11 +53,12 @@ import config from './esbuild.config.mjs';
 await esbuild.build(config);
 "
 
-chmod +x dist/index.js
+chmod +x dist/index.js dist/olympus.js
 
 # ── Step 4: Validate bundled entrypoint syntax ─────────────────────────────────
 echo "  [4/6] Verifying bundled entrypoint syntax..."
 node --check "$DIST_DIR/index.js"
+node --check "$DIST_DIR/olympus.js"
 
 # ── Step 5: Back up dev package.json, generate publishable one ─────────────────
 echo "  [5/6] Generating publishable package.json..."
@@ -68,12 +69,15 @@ node "$REPO_ROOT/scripts/generate-npm-package-json.mjs"
 cp "$REPO_ROOT/README.md" "$CLI_DIR/README.md"
 
 # ── Step 6: Summary ───────────────────────────────────────────────────────────
-BUNDLE_SIZE=$(wc -c < "$DIST_DIR/index.js" | xargs)
+PAPERCLIP_BUNDLE_SIZE=$(wc -c < "$DIST_DIR/index.js" | xargs)
+OLYMPUS_BUNDLE_SIZE=$(wc -c < "$DIST_DIR/olympus.js" | xargs)
 echo "  [6/6] Build verification..."
 echo ""
 echo "Build complete."
-echo "  Bundle: cli/dist/index.js (${BUNDLE_SIZE} bytes)"
-echo "  Source map: cli/dist/index.js.map"
+echo "  paperclipai bundle: cli/dist/index.js (${PAPERCLIP_BUNDLE_SIZE} bytes)"
+echo "  paperclipai source map: cli/dist/index.js.map"
+echo "  olympus bundle: cli/dist/olympus.js (${OLYMPUS_BUNDLE_SIZE} bytes)"
+echo "  olympus source map: cli/dist/olympus.js.map"
 echo ""
 echo "To preview:   cd cli && npm pack --dry-run"
 echo "To publish:   cd cli && npm publish --access public"
