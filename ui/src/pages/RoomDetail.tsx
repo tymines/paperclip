@@ -224,6 +224,29 @@ function MemberSidebar({
   );
 }
 
+export function RoomMessageComposer({ value, pending, onChange, onSend }: { value: string; pending: boolean; onChange: (value: string) => void; onSend: () => void }) {
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        placeholder="Type a message..."
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            onSend();
+          }
+        }}
+        disabled={pending}
+        className="h-11 min-w-0 flex-1 sm:h-9"
+      />
+      <Button size="icon" className="h-11 w-11 sm:h-9 sm:w-9" onClick={onSend} disabled={!value.trim() || pending} aria-label="Send message">
+        <Send className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+}
+
 export function RoomDetail() {
   const { roomId } = useParams<{ roomId: string }>();
   const { selectedCompanyId } = useCompany();
@@ -330,16 +353,6 @@ export function RoomDetail() {
     sendMutation.mutate(trimmed);
   }, [messageInput, sendMutation]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend],
-  );
-
   function handleAddMember() {
     if (memberType === "agent" && selectedAgentId) {
       addMemberMutation.mutate({ agentId: selectedAgentId });
@@ -362,9 +375,9 @@ export function RoomDetail() {
   const messages = messagesData?.messages ?? [];
 
   return (
-    <div className="flex h-[calc(100dvh-7rem)] flex-col md:h-[calc(100vh-8rem)]">
+    <div className="flex h-[calc(100dvh-7rem)] min-w-0 flex-col overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 md:h-[calc(100vh-8rem)]" data-testid="room-detail-responsive-root">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-3 py-2 md:px-4">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 md:flex-nowrap md:gap-3 md:px-4">
         <DetailBackButton fallbackTo="/rooms" />
         <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h1 className="truncate text-sm font-semibold">{room.name}</h1>
@@ -390,7 +403,7 @@ export function RoomDetail() {
           <Button
             size="icon"
             variant="ghost"
-            className="h-9 w-9 md:h-7 md:w-7"
+            className="h-11 w-11 md:h-7 md:w-7"
             onClick={() => setSidebarOpen((v) => !v)}
             title={sidebarOpen ? "Hide members" : "Show members"}
             aria-label={sidebarOpen ? "Hide members" : "Show members"}
@@ -427,24 +440,7 @@ export function RoomDetail() {
 
           {/* Input */}
           <div className="border-t border-border p-3">
-            <div className="flex items-center gap-2">
-              <Input
-                placeholder="Type a message..."
-                value={messageInput}
-                onChange={(e) => setMessageInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={sendMutation.isPending}
-                className="flex-1"
-              />
-              <Button
-                size="icon"
-                onClick={handleSend}
-                disabled={!messageInput.trim() || sendMutation.isPending}
-                aria-label="Send message"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
-            </div>
+            <RoomMessageComposer value={messageInput} pending={sendMutation.isPending} onChange={setMessageInput} onSend={handleSend} />
           </div>
         </div>
 
@@ -478,7 +474,7 @@ export function RoomDetail() {
 
       {/* Add member dialog */}
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0">
           <DialogHeader>
             <DialogTitle>Add Member</DialogTitle>
           </DialogHeader>
@@ -489,12 +485,12 @@ export function RoomDetail() {
                 value={selectedAgentId}
                 onValueChange={setSelectedAgentId}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-11 sm:h-9">
                   <SelectValue placeholder="Select an agent" />
                 </SelectTrigger>
                 <SelectContent>
                   {(agents ?? []).map((agent: { id: string; name: string }) => (
-                    <SelectItem key={agent.id} value={agent.id}>
+                    <SelectItem className="min-h-11 sm:min-h-0" key={agent.id} value={agent.id}>
                       {agent.name}
                     </SelectItem>
                   ))}

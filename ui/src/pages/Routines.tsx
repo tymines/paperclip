@@ -34,7 +34,7 @@ import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/Rout
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -88,6 +88,101 @@ const defaultRoutineViewState: RoutineViewState = {
   groupBy: "none",
   collapsedGroups: [],
 };
+
+export function RoutineSortMenu({
+  sortField,
+  sortDir,
+  onChange,
+}: {
+  sortField: RoutineSortField;
+  sortDir: RoutineSortDir;
+  onChange: (patch: Partial<RoutineViewState>) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="text-xs" title="Sort">
+          <ArrowUpDown className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
+          <span className="hidden sm:inline">Sort</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-44 p-0">
+        <div className="p-2 space-y-0.5">
+          {([
+            ["updated", "Updated"],
+            ["created", "Created"],
+            ["lastRun", "Last run"],
+            ["title", "Title"],
+          ] as const).map(([field, label]) => (
+            <button
+              key={field}
+              className={`flex min-h-11 w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm sm:min-h-0 ${
+                sortField === field
+                  ? "bg-accent/50 text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50"
+              }`}
+              onClick={() => {
+                onChange(
+                  sortField === field
+                    ? { sortDir: sortDir === "asc" ? "desc" : "asc" }
+                    : { sortField: field, sortDir: field === "title" ? "asc" : "desc" },
+                );
+              }}
+            >
+              <span>{label}</span>
+              {sortField === field ? (
+                <span className="text-xs text-muted-foreground">
+                  {sortDir === "asc" ? "Asc" : "Desc"}
+                </span>
+              ) : null}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+export function RoutineGroupMenu({
+  groupBy,
+  onChange,
+}: {
+  groupBy: RoutineGroupBy;
+  onChange: (patch: Partial<RoutineViewState>) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="text-xs" title="Group">
+          <Layers className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
+          <span className="hidden sm:inline">Group</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-44 p-0">
+        <div className="p-2 space-y-0.5">
+          {([
+            ["project", "Project"],
+            ["assignee", "Agent"],
+            ["none", "None"],
+          ] as const).map(([value, label]) => (
+            <button
+              key={value}
+              className={`flex min-h-11 w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm sm:min-h-0 ${
+                groupBy === value
+                  ? "bg-accent/50 text-foreground"
+                  : "text-muted-foreground hover:bg-accent/50"
+              }`}
+              onClick={() => onChange({ groupBy: value, collapsedGroups: [] })}
+            >
+              <span>{label}</span>
+              {groupBy === value ? <Check className="h-3.5 w-3.5" /> : null}
+            </button>
+          ))}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 function getRoutineViewState(key: string): RoutineViewState {
   try {
@@ -488,7 +583,7 @@ export function Routines() {
 
   return (
     <div
-      className="flex flex-col gap-6 bg-gradient-to-b from-background via-background to-primary/[0.03]"
+      className="flex min-w-0 flex-col gap-6 overflow-x-hidden bg-gradient-to-b from-background via-background to-primary/[0.03] [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0"
       data-pp-page-v2="routines"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -500,7 +595,7 @@ export function Routines() {
             Recurring work definitions that materialize into auditable execution issues.
           </p>
         </div>
-        <Button onClick={() => setComposerOpen(true)}>
+        <Button className="h-11 w-full sm:w-auto" onClick={() => setComposerOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           Create routine
         </Button>
@@ -522,77 +617,12 @@ export function Routines() {
               <span className="font-mono tabular-nums text-foreground/80">{(routines ?? []).length}</span> routine{(routines ?? []).length === 1 ? "" : "s"}
             </p>
             <div className="flex items-center gap-1">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="sm" className="text-xs" title="Sort">
-                    <ArrowUpDown className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
-                    <span className="hidden sm:inline">Sort</span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="w-44 p-0">
-                  <div className="p-2 space-y-0.5">
-                    {([
-                      ["updated", "Updated"],
-                      ["created", "Created"],
-                      ["lastRun", "Last run"],
-                      ["title", "Title"],
-                    ] as const).map(([field, label]) => (
-                      <button
-                        key={field}
-                        className={`flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm ${
-                          routineViewState.sortField === field
-                            ? "bg-accent/50 text-foreground"
-                            : "text-muted-foreground hover:bg-accent/50"
-                        }`}
-                        onClick={() => {
-                          updateRoutineView(
-                            routineViewState.sortField === field
-                              ? { sortDir: routineViewState.sortDir === "asc" ? "desc" : "asc" }
-                              : { sortField: field, sortDir: field === "title" ? "asc" : "desc" },
-                          );
-                        }}
-                      >
-                        <span>{label}</span>
-                        {routineViewState.sortField === field ? (
-                          <span className="text-xs text-muted-foreground">
-                            {routineViewState.sortDir === "asc" ? "Asc" : "Desc"}
-                          </span>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="sm" className="text-xs" title="Group">
-                    <Layers className="h-3.5 w-3.5 sm:h-3 sm:w-3 sm:mr-1" />
-                    <span className="hidden sm:inline">Group</span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" className="w-44 p-0">
-                  <div className="p-2 space-y-0.5">
-                    {([
-                      ["project", "Project"],
-                      ["assignee", "Agent"],
-                      ["none", "None"],
-                    ] as const).map(([value, label]) => (
-                      <button
-                        key={value}
-                        className={`flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm ${
-                          routineViewState.groupBy === value
-                            ? "bg-accent/50 text-foreground"
-                            : "text-muted-foreground hover:bg-accent/50"
-                        }`}
-                        onClick={() => updateRoutineView({ groupBy: value, collapsedGroups: [] })}
-                      >
-                        <span>{label}</span>
-                        {routineViewState.groupBy === value ? <Check className="h-3.5 w-3.5" /> : null}
-                      </button>
-                    ))}
-                  </div>
-                </PopoverContent>
-              </Popover>
+              <RoutineSortMenu
+                sortField={routineViewState.sortField}
+                sortDir={routineViewState.sortDir}
+                onChange={updateRoutineView}
+              />
+              <RoutineGroupMenu groupBy={routineViewState.groupBy} onChange={updateRoutineView} />
             </div>
           </div>
         </TabsContent>
@@ -621,8 +651,10 @@ export function Routines() {
       >
         <DialogContent
           showCloseButton={false}
-          className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0"
+          className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0"
         >
+          <DialogTitle className="sr-only">Create routine</DialogTitle>
+          <DialogDescription className="sr-only">Define recurring work, assignment, schedule, and execution settings.</DialogDescription>
           <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">New routine</p>
@@ -647,7 +679,7 @@ export function Routines() {
             <div className="px-5 pt-5 pb-3">
               <textarea
                 ref={titleInputRef}
-                className="w-full resize-none overflow-hidden bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground/50"
+                className="min-h-11 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground/50 sm:min-h-0"
                 placeholder="Routine title"
                 rows={1}
                 value={draft.title}
@@ -812,7 +844,7 @@ export function Routines() {
                         </SelectTrigger>
                         <SelectContent>
                           {concurrencyPolicies.map((value) => (
-                            <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                            <SelectItem className="min-h-11 sm:min-h-0" key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -829,7 +861,7 @@ export function Routines() {
                         </SelectTrigger>
                         <SelectContent>
                           {catchUpPolicies.map((value) => (
-                            <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                            <SelectItem className="min-h-11 sm:min-h-0" key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

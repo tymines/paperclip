@@ -44,6 +44,17 @@ const surfaceCard: CSSProperties = {
   boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
 };
 
+export function ApprovalStatusFilter({ value, pendingCount, onValueChange }: { value: StatusFilter; pendingCount: number; onValueChange: (value: string) => void }) {
+  return (
+    <Tabs value={value} onValueChange={onValueChange}>
+      <PageTabBar items={[
+        { value: "pending", label: <>Pending{pendingCount > 0 && <span className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ background: `${DS.warning}22`, color: DS.warning }}>{pendingCount}</span>}</> },
+        { value: "all", label: "All" },
+      ]} />
+    </Tabs>
+  );
+}
+
 export function Approvals() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -113,7 +124,7 @@ export function Approvals() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="approvals"
     >
@@ -127,20 +138,8 @@ export function Approvals() {
         </p>
       </div>
 
-      <div className="flex items-center justify-between">
-        <Tabs value={statusFilter} onValueChange={(v) => navigate(`/approvals/${v}`)}>
-          <PageTabBar items={[
-            { value: "pending", label: <>Pending{pendingCount > 0 && (
-              <span
-                className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                style={{ background: `${DS.warning}22`, color: DS.warning }}
-              >
-                {pendingCount}
-              </span>
-            )}</> },
-            { value: "all", label: "All" },
-          ]} />
-        </Tabs>
+      <div className="min-w-0">
+        <ApprovalStatusFilter value={statusFilter} pendingCount={pendingCount} onValueChange={(v) => navigate(`/approvals/${v}`)} />
       </div>
 
       {error && <p className="text-sm" style={{ color: DS.critical }}>{error.message}</p>}

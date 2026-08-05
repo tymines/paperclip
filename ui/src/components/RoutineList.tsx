@@ -164,10 +164,11 @@ export function RoutineListRow<TRoutine extends RoutineListRowItem>({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem asChild>
+            <DropdownMenuItem className="min-h-11 sm:min-h-0" asChild>
               <Link to={href}>{configureLabel}</Link>
             </DropdownMenuItem>
             <DropdownMenuItem
+              className="min-h-11 sm:min-h-0"
               disabled={runDisabled}
               onClick={() => onRunNow(routine)}
             >
@@ -175,6 +176,7 @@ export function RoutineListRow<TRoutine extends RoutineListRowItem>({
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
+              className="min-h-11 sm:min-h-0"
               onClick={() => onToggleEnabled(routine, enabled)}
               disabled={isStatusPending || isArchived || disableToggle}
             >
@@ -182,6 +184,7 @@ export function RoutineListRow<TRoutine extends RoutineListRowItem>({
             </DropdownMenuItem>
             {!hideArchiveAction && onToggleArchived ? (
               <DropdownMenuItem
+                className="min-h-11 sm:min-h-0"
                 onClick={() => onToggleArchived(routine)}
                 disabled={isStatusPending}
               >

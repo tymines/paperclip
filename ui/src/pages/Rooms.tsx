@@ -89,7 +89,25 @@ const ROOM_TYPE_LABELS: Record<string, string> = {
   council: "Council",
 };
 
-function RoomCard({ room, onClick }: { room: Room; onClick: () => void }) {
+export function RoomTypeSelect({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger id="room-type" className="h-11 sm:h-9">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem className="min-h-11 sm:min-h-0" value="collaboration">Collaboration</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="war-room">War Room</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="standup">Standup</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="brainstorm">Brainstorm</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="team">Team</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="council">Council</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
+export function RoomCard({ room, onClick }: { room: Room; onClick: () => void }) {
   const Icon = ROOM_TYPE_ICONS[room.type] ?? MessageSquare;
   const isActive = room.status === "active";
 
@@ -225,12 +243,12 @@ export function Rooms() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="rooms"
     >
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
             Rooms
@@ -240,7 +258,7 @@ export function Rooms() {
           </p>
         </div>
         {rooms && rooms.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+          <Button size="sm" variant="outline" className="h-11 w-full sm:h-8 sm:w-auto" onClick={() => setCreateOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
             New Room
           </Button>
@@ -271,7 +289,7 @@ export function Rooms() {
       )}
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0">
           <DialogHeader>
             <DialogTitle>Create Room</DialogTitle>
           </DialogHeader>
@@ -299,22 +317,7 @@ export function Rooms() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="room-type">Type</Label>
-              <Select
-                value={draft.type}
-                onValueChange={(value) => setDraft((d) => ({ ...d, type: value }))}
-              >
-                <SelectTrigger id="room-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="collaboration">Collaboration</SelectItem>
-                  <SelectItem value="war-room">War Room</SelectItem>
-                  <SelectItem value="standup">Standup</SelectItem>
-                  <SelectItem value="brainstorm">Brainstorm</SelectItem>
-                  <SelectItem value="team">Team</SelectItem>
-                  <SelectItem value="council">Council</SelectItem>
-                </SelectContent>
-              </Select>
+              <RoomTypeSelect value={draft.type} onValueChange={(value) => setDraft((d) => ({ ...d, type: value }))} />
             </div>
           </div>
           <DialogFooter>
@@ -333,7 +336,7 @@ export function Rooms() {
 
       {/* Delete confirmation */}
       <Dialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0">
           <DialogHeader>
             <DialogTitle>Delete Room</DialogTitle>
           </DialogHeader>

@@ -84,6 +84,27 @@ function activityEntityTitle(event: ActivityEvent) {
   return null;
 }
 
+export function ActivityTypeFilter({ value, entityTypes, onValueChange }: { value: string; entityTypes: string[]; onValueChange: (value: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger
+        className="h-11 w-full text-xs sm:h-9 sm:w-[160px]"
+        style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.text }}
+      >
+        <SelectValue placeholder="Filter by type" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem className="min-h-11 sm:min-h-0" value="all">All types</SelectItem>
+        {entityTypes.map((type) => (
+          <SelectItem className="min-h-11 sm:min-h-0" key={type} value={type}>
+            {type.charAt(0).toUpperCase() + type.slice(1)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function Activity() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -161,12 +182,12 @@ export function Activity() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="activity-feed"
     >
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
             Activity
@@ -176,26 +197,7 @@ export function Activity() {
           </p>
         </div>
 
-        <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger
-            className="w-[160px] h-9 text-xs"
-            style={{
-              background: DS.surface3,
-              border: `1px solid ${DS.border2}`,
-              color: DS.text,
-            }}
-          >
-            <SelectValue placeholder="Filter by type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            {entityTypes.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type.charAt(0).toUpperCase() + type.slice(1)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ActivityTypeFilter value={filter} entityTypes={entityTypes} onValueChange={setFilter} />
       </div>
 
       <MlflowObservabilityCard variant="activity" />
