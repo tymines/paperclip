@@ -55,6 +55,52 @@ function createValuesForAdapterType(
   return nextValues;
 }
 
+export function NewAgentFooterActions({
+  name,
+  creating,
+  testDisabled,
+  testPending,
+  onCancel,
+  onTest,
+  onCreate,
+}: {
+  name: string;
+  creating: boolean;
+  testDisabled: boolean;
+  testPending: boolean;
+  onCancel: () => void;
+  onTest: () => void;
+  onCreate: () => void;
+}) {
+  return (
+    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <Button className="h-11 w-full sm:h-8 sm:w-auto" variant="outline" size="sm" onClick={onCancel}>
+        Cancel
+      </Button>
+      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
+        <Button
+          className="h-11 w-full sm:h-8 sm:w-auto"
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={testDisabled}
+          onClick={onTest}
+        >
+          {testPending ? "Testing..." : "Test Agent"}
+        </Button>
+        <Button
+          className="h-11 w-full sm:h-8 sm:w-auto"
+          size="sm"
+          disabled={!name.trim() || creating}
+          onClick={onCreate}
+        >
+          {creating ? "Creating…" : "Create agent"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function NewAgent() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -187,7 +233,7 @@ export function NewAgent() {
   }, []);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="mx-auto max-w-2xl min-w-0 space-y-6 overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0" data-testid="new-agent-responsive-root">
       <div>
         <h1 className="text-lg font-semibold">New Agent</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -237,7 +283,7 @@ export function NewAgent() {
                 <button
                   key={r}
                   className={cn(
-                    "flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50",
+                    "flex min-h-11 w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent/50 sm:min-h-0",
                     r === role && "bg-accent"
                   )}
                   onClick={() => { setRole(r); setRoleOpen(false); }}
@@ -284,13 +330,13 @@ export function NewAgent() {
                   const inputId = `skill-${skill.id}`;
                   const checked = selectedSkillKeys.includes(skill.key);
                   return (
-                    <div key={skill.id} className="flex items-start gap-3">
+                    <div key={skill.id} className="flex min-h-11 items-start gap-3">
                       <Checkbox
                         id={inputId}
                         checked={checked}
                         onCheckedChange={(next) => toggleSkill(skill.key, next === true)}
                       />
-                      <label htmlFor={inputId} className="grid gap-1 leading-none">
+                      <label htmlFor={inputId} className="grid min-h-11 min-w-0 flex-1 content-center gap-1 leading-none sm:min-h-0">
                         <span className="text-sm font-medium">{skill.name}</span>
                         <span className="text-xs text-muted-foreground">
                           {skill.description ?? skill.key}
@@ -321,29 +367,15 @@ export function NewAgent() {
             {testAgentFeedback.result && (
               <AdapterEnvironmentResult result={testAgentFeedback.result} />
             )}
-            <div className="flex items-center justify-between gap-2">
-              <Button variant="outline" size="sm" onClick={() => navigate("/agents")}>
-                Cancel
-              </Button>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={testAgentState.disabled}
-                  onClick={() => testAgentAction?.()}
-                >
-                  {testAgentState.pending ? "Testing..." : "Test Agent"}
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={!name.trim() || createAgent.isPending}
-                  onClick={handleSubmit}
-                >
-                  {createAgent.isPending ? "Creating…" : "Create agent"}
-                </Button>
-              </div>
-            </div>
+            <NewAgentFooterActions
+              name={name}
+              creating={createAgent.isPending}
+              testDisabled={testAgentState.disabled}
+              testPending={testAgentState.pending}
+              onCancel={() => navigate("/agents")}
+              onTest={() => testAgentAction?.()}
+              onCreate={handleSubmit}
+            />
           </div>
         </div>
       </div>

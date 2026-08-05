@@ -28,6 +28,7 @@ const mockLocation = vi.hoisted(() => ({ pathname: "/agents/all", search: "", ha
 
 const mockOpenNewAgent = vi.hoisted(() => vi.fn());
 const mockSetBreadcrumbs = vi.hoisted(() => vi.fn());
+const mockSidebar = vi.hoisted(() => ({ isMobile: false }));
 
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to, ...props }: { children: ReactNode; to: string }) => (
@@ -50,7 +51,7 @@ vi.mock("../context/BreadcrumbContext", () => ({
 }));
 
 vi.mock("../context/SidebarContext", () => ({
-  useSidebar: () => ({ isMobile: false }),
+  useSidebar: () => mockSidebar,
 }));
 
 vi.mock("../api/agents", () => ({
@@ -281,6 +282,7 @@ describe("Agents", () => {
 
     mockLocation.pathname = "/agents/all";
     mockLocation.search = "";
+    mockSidebar.isMobile = false;
     const registeredAgents = registeredAgentsFixture();
     mockAgentsApi.list.mockResolvedValue(registeredAgents);
     mockAgentsApi.get.mockImplementation((id: string) => Promise.resolve(registeredAgents.find((agent) => agent.id === id)));
@@ -427,5 +429,30 @@ describe("Agents", () => {
     expect(calliope.tagName).toBe("DIV");
     expect(calliope.textContent).toContain("Not registered");
     expect(calliope.querySelector('a[href="/book-writing"]')).not.toBeNull();
+  });
+
+  it("keeps phone Fleet controls reachable and opens and closes the agent drawer", async () => {
+    mockSidebar.isMobile = true;
+    root = await renderAgents(container, queryClient);
+
+    const page = container.querySelector<HTMLElement>('[data-pp-page-v2="fleet"]')!;
+    expect(page.className).toContain("p-4");
+    expect(page.className).toContain("sm:p-8");
+
+    const newAgent = Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("New Agent"))!;
+    expect(newAgent.className).toContain("min-h-11");
+    await act(async () => newAgent.click());
+    expect(mockOpenNewAgent).toHaveBeenCalledOnce();
+
+    const athena = container.querySelector<HTMLElement>('[data-pp-fleet-position="Athena"]')!;
+    await act(async () => athena.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flushReact();
+    const drawer = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(drawer.className).toContain("w-full");
+    const close = drawer.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
+    expect(close.className).toContain("h-11");
+    await act(async () => close.click());
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 });
