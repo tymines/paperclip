@@ -496,8 +496,14 @@ export function Layout() {
       >
         Skip to Main Content
       </a>
-      <WorktreeBanner />
-      <DevRestartBanner devServer={health?.devServer} />
+      <div
+        className="contents"
+        aria-hidden={isMobile && sidebarOpen ? true : undefined}
+        inert={isMobile && sidebarOpen ? true : undefined}
+      >
+        <WorktreeBanner />
+        <DevRestartBanner devServer={health?.devServer} />
+      </div>
       <div className="flex min-h-0 flex-1 overflow-hidden">
         {isMobile && sidebarOpen && (
           <button

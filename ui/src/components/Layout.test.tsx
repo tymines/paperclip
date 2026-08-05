@@ -100,7 +100,7 @@ vi.mock("./MobileBottomNav", () => ({
 }));
 
 vi.mock("./WorktreeBanner", () => ({
-  WorktreeBanner: () => null,
+  WorktreeBanner: () => <button type="button">Copy worktree path</button>,
 }));
 
 vi.mock("./DevRestartBanner", () => ({
@@ -559,8 +559,14 @@ describe("Layout", () => {
     });
 
     const drawer = container.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]')!;
+    const bannerButton = Array.from(container.querySelectorAll("button")).find(
+      (element) => element.textContent === "Copy worktree path",
+    )!;
+    const bannerBackground = bannerButton.parentElement!;
     expect(drawer.getAttribute("aria-label")).toBe("Mobile sidebar");
     expect(document.activeElement?.textContent).toBe("Main company nav");
+    expect(bannerButton.closest("[inert]")).toBe(bannerBackground);
+    expect(bannerButton.closest('[aria-hidden="true"]')).toBe(bannerBackground);
     expect(container.querySelector("main")?.parentElement?.parentElement?.hasAttribute("inert")).toBe(true);
     expect(container.querySelector<HTMLButtonElement>('button[aria-label="Close sidebar"]')?.tabIndex).toBe(-1);
     expect(container.querySelector('[data-testid="mobile-bottom-nav"]')?.getAttribute("data-disabled")).toBe("true");
@@ -574,6 +580,8 @@ describe("Layout", () => {
       <QueryClientProvider client={queryClient}><Layout /></QueryClientProvider>,
     ));
     expect(document.activeElement).toBe(opener);
+    expect(bannerButton.closest("[inert]")).toBeNull();
+    expect(bannerButton.closest('[aria-hidden="true"]')).toBeNull();
 
     await act(async () => root.unmount());
     opener.remove();
