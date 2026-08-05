@@ -107,6 +107,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
   it("renders a stacked mobile-friendly summary with metadata labels and compact issue pills", () => {
     const root = createRoot(container);
+    const runtimeSpy = vi.fn();
     act(() => {
       root.render(
         <ProjectWorkspaceSummaryCard
@@ -114,7 +115,7 @@ describe("ProjectWorkspaceSummaryCard", () => {
           summary={createSummary()}
           runtimeActionKey={null}
           runtimeActionPending={false}
-          onRuntimeAction={() => {}}
+          onRuntimeAction={runtimeSpy}
           onCloseWorkspace={() => {}}
         />,
       );
@@ -131,6 +132,23 @@ describe("ProjectWorkspaceSummaryCard", () => {
 
     const actions = container.querySelector('[data-testid="workspace-summary-actions"]');
     expect(actions?.className).toContain("flex-col");
+    const titleLink = container.querySelector<HTMLAnchorElement>("a[href='/execution-workspaces/workspace-1']");
+    const serviceLink = container.querySelector<HTMLAnchorElement>("a[href='http://127.0.0.1:62474']");
+    const issueLink = container.querySelector<HTMLAnchorElement>("a[href='/issues/PAP-1364']");
+    const startButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Start services"));
+    expect(titleLink?.className).toContain("min-h-11");
+    expect(titleLink?.className).toContain("sm:min-h-0");
+    expect(serviceLink?.className).toContain("min-h-11");
+    expect(issueLink?.className).toContain("min-h-11");
+    expect(startButton?.className).toContain("h-11");
+    expect(startButton?.className).toContain("sm:h-9");
+    act(() => startButton?.click());
+    expect(runtimeSpy).toHaveBeenCalledWith({
+      key: "execution:workspace-1",
+      kind: "execution_workspace",
+      workspaceId: "workspace-1",
+      action: "start",
+    });
     const card = container.firstElementChild;
     expect(card?.className).toContain("rounded-lg");
     expect(card?.className).toContain("border");

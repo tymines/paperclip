@@ -36,6 +36,9 @@ type WorkspaceFormState = {
 type ProjectWorkspaceSourceType = ProjectWorkspace["sourceType"];
 type ProjectWorkspaceVisibility = ProjectWorkspace["visibility"];
 
+export const PROJECT_WORKSPACE_RESPONSIVE_CLASS =
+  "mx-auto max-w-5xl min-w-0 space-y-6 overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0";
+
 const SOURCE_TYPE_OPTIONS: Array<{ value: ProjectWorkspaceSourceType; label: string; description: string }> = [
   { value: "local_path", label: "Local git checkout", description: "A local path Paperclip can use directly." },
   { value: "non_git_path", label: "Local non-git path", description: "A local folder without git semantics." },
@@ -115,7 +118,7 @@ function parseRuntimeConfigJson(value: string) {
   }
 }
 
-function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
+export function buildProjectWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
   const patch: Record<string, unknown> = {};
   const maybeAssign = (key: keyof WorkspaceFormState, transform?: (value: string) => unknown) => {
     const initialValue = initialState[key];
@@ -147,7 +150,7 @@ function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: Worksp
   return patch;
 }
 
-function validateWorkspaceForm(form: WorkspaceFormState) {
+export function validateProjectWorkspaceForm(form: WorkspaceFormState) {
   const cwd = normalizeText(form.cwd);
   const repoUrl = normalizeText(form.repoUrl);
   const remoteWorkspaceRef = normalizeText(form.remoteWorkspaceRef);
@@ -197,6 +200,35 @@ function Field({
       </div>
       {children}
     </label>
+  );
+}
+
+export function ProjectWorkspaceRuntimeConfigControl({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <details className="rounded-xl border border-dashed border-border/70 bg-background px-3 py-3">
+      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium sm:min-h-0">
+        Advanced runtime JSON
+      </summary>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Paperclip derives Services and Jobs from this JSON. Prefer editing named commands first; use raw JSON for advanced lifecycle, port, readiness, or environment settings.
+      </p>
+      <div className="mt-3">
+        <Field label="Workspace commands JSON" hint="Execution workspaces inherit this config unless they override it. Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+          <textarea
+            className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+            placeholder={"{\n  \"commands\": [\n    {\n      \"id\": \"web\",\n      \"name\": \"web\",\n      \"kind\": \"service\",\n      \"command\": \"pnpm dev\",\n      \"cwd\": \".\",\n      \"port\": { \"type\": \"auto\" },\n      \"readiness\": {\n        \"type\": \"http\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"expose\": {\n        \"type\": \"url\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"lifecycle\": \"shared\",\n      \"reuseScope\": \"project_workspace\"\n    },\n    {\n      \"id\": \"db-migrate\",\n      \"name\": \"db:migrate\",\n      \"kind\": \"job\",\n      \"command\": \"pnpm db:migrate\",\n      \"cwd\": \".\"\n    }\n  ]\n}"}
+          />
+        </Field>
+      </div>
+    </details>
   );
 }
 
@@ -352,12 +384,12 @@ export function ProjectWorkspaceDetail() {
   const pendingRuntimeAction = controlRuntimeServices.isPending ? controlRuntimeServices.variables ?? null : null;
 
   const saveChanges = () => {
-    const validationError = validateWorkspaceForm(form);
+    const validationError = validateProjectWorkspaceForm(form);
     if (validationError) {
       setErrorMessage(validationError);
       return;
     }
-    const patch = buildWorkspacePatch(initialState, form);
+    const patch = buildProjectWorkspacePatch(initialState, form);
     if (Object.keys(patch).length === 0) return;
     updateWorkspace.mutate(patch);
   };
@@ -365,9 +397,9 @@ export function ProjectWorkspaceDetail() {
   const sourceTypeDescription = SOURCE_TYPE_OPTIONS.find((option) => option.value === form.sourceType)?.description ?? null;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className={PROJECT_WORKSPACE_RESPONSIVE_CLASS} data-testid="project-workspace-responsive-root">
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="sm" asChild>
+        <Button variant="ghost" size="sm" className="h-11 sm:h-8" asChild>
           <Link to={`/projects/${canonicalProjectRef}/workspaces`}>
             <ArrowLeft className="mr-1 h-4 w-4" />
             Back to workspaces
@@ -545,22 +577,10 @@ export function ProjectWorkspaceDetail() {
                 </Field>
               </div>
 
-              <details className="rounded-xl border border-dashed border-border/70 bg-background px-3 py-3">
-                <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Paperclip derives Services and Jobs from this JSON. Prefer editing named commands first; use raw JSON for advanced lifecycle, port, readiness, or environment settings.
-                </p>
-                <div className="mt-3">
-                  <Field label="Workspace commands JSON" hint="Execution workspaces inherit this config unless they override it. Legacy `services` arrays still work, but `commands` supports both services and jobs.">
-                    <textarea
-                      className="min-h-96 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none"
-                      value={form.runtimeConfig}
-                      onChange={(event) => setForm((current) => current ? { ...current, runtimeConfig: event.target.value } : current)}
-                      placeholder={"{\n  \"commands\": [\n    {\n      \"id\": \"web\",\n      \"name\": \"web\",\n      \"kind\": \"service\",\n      \"command\": \"pnpm dev\",\n      \"cwd\": \".\",\n      \"port\": { \"type\": \"auto\" },\n      \"readiness\": {\n        \"type\": \"http\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"expose\": {\n        \"type\": \"url\",\n        \"urlTemplate\": \"http://127.0.0.1:${port}\"\n      },\n      \"lifecycle\": \"shared\",\n      \"reuseScope\": \"project_workspace\"\n    },\n    {\n      \"id\": \"db-migrate\",\n      \"name\": \"db:migrate\",\n      \"kind\": \"job\",\n      \"command\": \"pnpm db:migrate\",\n      \"cwd\": \".\"\n    }\n  ]\n}"}
-                    />
-                  </Field>
-                </div>
-              </details>
+              <ProjectWorkspaceRuntimeConfigControl
+                value={form.runtimeConfig}
+                onChange={(runtimeConfig) => setForm((current) => current ? { ...current, runtimeConfig } : current)}
+              />
             </div>
 
             <div className="mt-5 flex flex-col items-stretch gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -594,7 +614,7 @@ export function ProjectWorkspaceDetail() {
             </div>
             <Separator className="my-4" />
             <DetailRow label="Project">
-              <Link to={`/projects/${canonicalProjectRef}`} className="hover:underline">{project.name}</Link>
+              <Link to={`/projects/${canonicalProjectRef}`} className="inline-flex min-h-11 items-center hover:underline sm:min-h-0">{project.name}</Link>
             </DetailRow>
             <DetailRow label="Workspace ID">
               <span className="break-all font-mono text-xs">{workspace.id}</span>
@@ -604,7 +624,7 @@ export function ProjectWorkspaceDetail() {
             </DetailRow>
             <DetailRow label="Repo">
               {workspace.repoUrl && isSafeExternalUrl(workspace.repoUrl) ? (
-                <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
+                <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-1 break-all hover:underline sm:min-h-0">
                   {workspace.repoUrl}
                   <ExternalLink className="h-3 w-3" />
                 </a>

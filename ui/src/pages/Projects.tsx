@@ -68,9 +68,9 @@ export function Projects() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4 overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0" data-testid="projects-responsive-root">
       <div className="flex items-center justify-end">
-        <Button size="sm" variant="outline" onClick={openNewProject}>
+        <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={openNewProject}>
           <Plus className="h-4 w-4 mr-1" />
           Add Project
         </Button>

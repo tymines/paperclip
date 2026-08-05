@@ -164,7 +164,7 @@ function ColorPicker({
     <div className="relative" ref={ref}>
       <button
         onClick={() => setOpen(!open)}
-        className="shrink-0 h-5 w-5 rounded-md cursor-pointer hover:ring-2 hover:ring-foreground/20 transition-[box-shadow]"
+        className="h-11 w-11 shrink-0 rounded-md cursor-pointer transition-[box-shadow] hover:ring-2 hover:ring-foreground/20 sm:h-5 sm:w-5"
         style={{ backgroundColor: currentColor }}
         aria-label="Change project color"
       />
@@ -178,7 +178,7 @@ function ColorPicker({
                   onSelect(color);
                   setOpen(false);
                 }}
-                className={`h-6 w-6 rounded-md cursor-pointer transition-[transform,box-shadow] duration-150 hover:scale-110 ${
+                className={`h-11 w-11 rounded-md cursor-pointer transition-[transform,box-shadow] duration-150 hover:scale-110 sm:h-6 sm:w-6 ${
                   color === currentColor
                     ? "ring-2 ring-foreground ring-offset-1 ring-offset-background"
                     : "hover:ring-2 hover:ring-foreground/30"
@@ -695,12 +695,12 @@ export function ProjectDetail() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0" data-testid="project-detail-responsive-root">
       <div className="flex items-start gap-3">
-        <div className="h-7 flex items-center">
+        <div className="flex min-h-11 items-center sm:h-7 sm:min-h-0">
           <DetailBackButton fallbackTo="/projects" />
         </div>
-        <div className="h-7 flex items-center">
+        <div className="flex min-h-11 items-center sm:h-7 sm:min-h-0">
           <ColorPicker
             currentColor={project.color ?? "#6366f1"}
             onSelect={(color) => updateProject.mutate({ color })}
