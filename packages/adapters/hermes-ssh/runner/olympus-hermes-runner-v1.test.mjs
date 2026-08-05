@@ -8,6 +8,7 @@ import {
   PROFILES,
   cancelRunState,
   claimRun,
+  coordinateRunStart,
   deadlineDelayMs,
   parseRequest,
   parseRunnerArgs,
@@ -124,6 +125,49 @@ describe("versioned Hermes runner", () => {
     const completed = { ...cancelled, status: "completed", result: "late" };
     expect(terminated).toEqual([4343]);
     expect(await persistTerminal(prepared.paths.resultPath, completed)).toEqual(cancelled);
+  });
+
+  it("lets an in-process signal own terminal emission when it lands during PID registration", async () => {
+    let locallyTerminal = false;
+    const stored = { protocol: PROTOCOL, runId: request.runId, profile: "atlas", status: "cancelled", result: "signal" };
+    const outcome = await coordinateRunStart(
+      { pidPath: "unused", resultPath: "unused", lockPath: "unused" },
+      4444,
+      () => locallyTerminal,
+      async () => {
+        locallyTerminal = true;
+        return stored;
+      },
+    );
+    expect(outcome).toEqual({ kind: "local-terminal" });
+  });
+
+  it("never reaches prompt readiness when a signal lands after the PID check", async () => {
+    let locallyTerminal = false;
+    const outcome = await coordinateRunStart(
+      { pidPath: "unused", resultPath: "unused", lockPath: "unused" },
+      4545,
+      () => locallyTerminal,
+      async () => {
+        locallyTerminal = true;
+        return null;
+      },
+    );
+    expect(outcome).toEqual({ kind: "local-terminal" });
+  });
+
+  it("suppresses setup failure output when a signal owns the terminal transition", async () => {
+    let locallyTerminal = false;
+    const outcome = await coordinateRunStart(
+      { pidPath: "unused", resultPath: "unused", lockPath: "unused" },
+      4646,
+      () => locallyTerminal,
+      async () => {
+        locallyTerminal = true;
+        throw new Error("registration failed after signal");
+      },
+    );
+    expect(outcome).toEqual({ kind: "local-terminal" });
   });
 
   it("computes a bounded deadline delay and rejects malformed deadlines", () => {

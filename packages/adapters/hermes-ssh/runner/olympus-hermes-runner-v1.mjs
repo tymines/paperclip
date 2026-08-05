@@ -179,6 +179,18 @@ export async function registerRunProcess(paths, pid, terminate = terminateProces
   return terminal;
 }
 
+export async function coordinateRunStart(paths, pid, isLocallyTerminal, register = registerRunProcess) {
+  let stored;
+  try {
+    stored = await register(paths, pid);
+  } catch (error) {
+    if (isLocallyTerminal()) return { kind: "local-terminal" };
+    throw error;
+  }
+  if (isLocallyTerminal()) return { kind: "local-terminal" };
+  return stored ? { kind: "stored-terminal", envelope: stored } : { kind: "ready" };
+}
+
 export async function cancelRunState(profile, runId, stateRoot = STATE_ROOT, terminate = terminateProcessTree) {
   const { profileDir, resultPath, pidPath } = runStatePaths(profile, runId, stateRoot);
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
@@ -264,20 +276,30 @@ async function run() {
     child.once("close", (code) => resolve({ error: null, code }));
   });
   if (!child.pid) {
+    if (terminal) return;
     const failed = await persist(envelope(request.runId, profile, "failed", "Hermes wrapper failed to start"));
+    if (!failed) return;
     return emit(failed, 1);
   }
   try {
-    const cancelledAfterSpawn = await registerRunProcess(prepared.paths, child.pid);
-    if (cancelledAfterSpawn) return emit(cancelledAfterSpawn, cancelledAfterSpawn.status === "completed" ? 0 : 1);
+    const startState = await coordinateRunStart(prepared.paths, child.pid, () => terminal);
+    if (startState.kind === "local-terminal") return;
+    if (startState.kind === "stored-terminal") {
+      return emit(startState.envelope, startState.envelope.status === "completed" ? 0 : 1);
+    }
   } catch {
+    if (terminal) return;
     const failed = await persist(envelope(request.runId, profile, "failed", "Hermes runner could not record the wrapper process"));
+    if (!failed) return;
     return emit(failed, 1);
   }
+  if (terminal) return;
   if (earlyChildError) {
     const failed = await persist(envelope(request.runId, profile, "failed", "Hermes wrapper failed to start"));
+    if (!failed) return;
     return emit(failed, 1);
   }
+  if (terminal) return;
   child.stdin.end(request.prompt);
   let stdout = "";
   let stdoutBytes = 0;
