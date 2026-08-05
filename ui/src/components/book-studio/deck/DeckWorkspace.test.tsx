@@ -112,6 +112,18 @@ describe("DeckWorkspace — beat delete control", () => {
     expect(deleteButtons()).toHaveLength(3);
   });
 
+  it("contains phone overflow while retaining desktop padding and action geometry", async () => {
+    stubFetch(); const r = renderWorkspace(); container = r.container; root = r.root; await flush();
+    const title = Array.from(container!.querySelectorAll("h1")).find((node) => node.textContent === "Chapter 1")!;
+    expect(title.className).toContain("break-words");
+    const stage = Array.from(container!.querySelectorAll("span")).find((node) => node.textContent?.includes("Compile"))!.parentElement!;
+    expect(stage.className).toContain("overflow-x-auto");
+    const tabs = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Beats")!.parentElement!;
+    expect(tabs.className).toContain("overflow-x-auto"); expect(tabs.className).toContain("sm:px-5");
+    const actions = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Your call")!.parentElement!;
+    expect(actions.className).toContain("flex-wrap"); expect(actions.className).toContain("sm:px-5");
+  });
+
   it("deleting the middle beat splices index 1 and persists the remaining beats via PATCH /outline/:id", async () => {
     const calls = stubFetch();
     const r = renderWorkspace();

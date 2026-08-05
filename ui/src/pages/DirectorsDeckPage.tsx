@@ -42,6 +42,33 @@ interface ChapterRow { id: string; chapterNumber: number; title: string; content
 
 const CODEX_TYPES = new Set(["lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"]);
 
+function MobileSheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusable = () => Array.from(dialogRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); }
+      if (event.key !== "Tab") return;
+      const items = focusable(); if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    requestAnimationFrame(() => (focusable()[0] ?? dialogRef.current)?.focus());
+    return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
+  }, [onClose]);
+  return <div className="fixed inset-0 z-[70] md:hidden" role="presentation">
+    <button className="absolute inset-0 h-full w-full bg-black/65" aria-label={`Close ${title}`} onClick={onClose} />
+    <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="absolute inset-x-0 bottom-0 max-h-[88dvh] overflow-y-auto rounded-t-2xl border border-white/15 bg-[#0d1016] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl">
+      <header className="sticky top-0 z-10 flex min-h-12 items-center justify-between border-b border-white/10 bg-[#0d1016] px-4"><h2 className="font-serif text-lg">{title}</h2><button className="grid h-11 w-11 place-items-center rounded-md border border-white/15" onClick={onClose} aria-label={`Close ${title}`}>×</button></header>
+      {children}
+    </div>
+  </div>;
+}
+
 export function DirectorsDeckPage() {
   const { selectedCompanyId } = useCompany();
   const companySlug = selectedCompanyId ?? "";
@@ -64,6 +91,7 @@ export function DirectorsDeckPage() {
   });
   const [mediaOpen, setMediaOpen] = useState(false);
   const [newBookOpen, setNewBookOpen] = useState(false);
+  const [mobileSheet, setMobileSheet] = useState<"chapters" | "bible" | "inspect" | "tools" | null>(null);
   const [proseRefreshKey, setProseRefreshKey] = useState(0);
   const activeBookRequestRef = useRef<string | null>(null);
 
@@ -237,7 +265,7 @@ export function DirectorsDeckPage() {
   const chapterStatusMap = (activeBook?.metadata?.chapterStatus ?? {}) as Record<string, string>;
 
   return (
-    <div className="grid grid-rows-[52px_1fr] h-full bg-[#0a0c10] text-[#ece9e2] font-sans">
+    <div className="grid h-full grid-rows-[52px_auto_1fr] md:grid-rows-[52px_1fr] bg-[#0a0c10] text-[#ece9e2] font-sans">
       <DeckTopBar
         books={books.map(({ id, slug, title }) => ({ id, slug, title }))}
         activeBookId={activeBookId}
@@ -258,6 +286,9 @@ export function DirectorsDeckPage() {
         onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
+      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] md:hidden" aria-label="Book tools">
+        {(["chapters", "bible", "inspect", "tools"] as const).map((sheet) => <button key={sheet} className="min-h-11 px-1 text-[11px] font-semibold" onClick={() => setMobileSheet(sheet)}>{sheet === "bible" ? "Story Bible" : sheet[0].toUpperCase() + sheet.slice(1)}</button>)}
+      </nav>
       <div className="grid grid-cols-1 lg:grid-cols-[272px_minmax(460px,1fr)_322px] md:grid-cols-[240px_minmax(0,1fr)] min-h-0">
         <div className="hidden md:block min-h-0">
           <DeckRail
@@ -352,6 +383,10 @@ export function DirectorsDeckPage() {
         />
       )}
       {activeBook && <BookMediaPanel bookId={activeBook.id} bookTitle={activeBook.title} open={mediaOpen} onOpenChange={setMediaOpen} showLauncher={false} />}
+      {mobileSheet === "chapters" && <MobileSheet title="Chapters" onClose={() => setMobileSheet(null)}><DeckRail chapters={deckChapters} activeChapter={activeChapter} onSelectChapter={(n) => { setActiveChapter(n); setCenterMode("chapter"); setMobileSheet(null); }} onUnlockChapter={handleUnlockChapter} sections={deckSections} activeSection={activeSection} onSelectSection={() => {}} reviewCount={reviewCount} onOpenReviewQueue={() => {}} mobileSection="chapters" /></MobileSheet>}
+      {mobileSheet === "bible" && <MobileSheet title="Story Bible" onClose={() => setMobileSheet(null)}><DeckRail chapters={deckChapters} activeChapter={activeChapter} onSelectChapter={() => {}} onUnlockChapter={handleUnlockChapter} sections={deckSections} activeSection={activeSection} onSelectSection={(id) => { setActiveSection(id as StoryBibleSectionId); setCenterMode("bible"); setMobileSheet(null); }} reviewCount={reviewCount} onOpenReviewQueue={() => { setActiveSection("review-queue"); setCenterMode("bible"); setMobileSheet(null); }} mobileSection="bible" /></MobileSheet>}
+      {mobileSheet === "inspect" && activeBook && <MobileSheet title="Inspect" onClose={() => setMobileSheet(null)}><div className="h-[70dvh]"><DeckInspector bookId={activeBook.id} companySlug={companySlug} chapterNumber={activeChapter} chapterStatus={activeChapter != null ? chapterStatusMap[String(activeChapter)] ?? null : null} onJumpToBeats={() => { setCenterMode("chapter"); setMobileSheet(null); }} onOpenDecisionInbox={() => { setMobileSheet(null); setOverlay("inbox"); }} onSelectChapter={(n) => { setActiveChapter(n); setCenterMode("chapter"); setMobileSheet(null); }} onHighlightOffset={() => {}} onRevisionAccepted={() => { setProseRefreshKey((k) => k + 1); void loadBookData(activeBook.id); }} /></div></MobileSheet>}
+      {mobileSheet === "tools" && <MobileSheet title="Tools" onClose={() => setMobileSheet(null)}><div className="grid gap-2 p-4"><button className="min-h-11 rounded border border-white/15" onClick={() => { setNewBookOpen(true); setMobileSheet(null); }}>New Book</button><select className="min-h-11 rounded bg-[#171b24] px-3" value={mode} onChange={(e) => void handleModeChange(e.target.value as DirectorMode)} aria-label="Director mode"><option value="co">Co-writer</option><option value="chapter">Chapter</option><option value="act">Act</option></select><button className="min-h-11 rounded border border-white/15" onClick={() => { setOverlay("taste"); setMobileSheet(null); }}>Taste</button><button className="min-h-11 rounded border border-white/15" onClick={() => { setOverlay("runplan"); setMobileSheet(null); }}>Run Plan</button><button className="min-h-11 rounded border border-white/15" onClick={() => { setOverlay("export"); setMobileSheet(null); }}>Export</button><button className="min-h-11 rounded border border-white/15" onClick={() => { setChatOpen(true); setMobileSheet(null); }}>Brainstorm</button><button className="min-h-11 rounded border border-white/15" onClick={() => { setMediaOpen(true); setMobileSheet(null); }}>Media</button></div></MobileSheet>}
     </div>
   );
 }

@@ -3,7 +3,7 @@
 // slide-over drawer: BookWritingPage integration is one import + one JSX line, keeping
 // the diff additive vs fable-book-build. Data-honest amber states when providers are
 // keyed off — no mock output, ever.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clapperboard, ImageIcon, Film, Mic, RefreshCw, AlertTriangle, X, Download, Sparkles,
@@ -17,6 +17,19 @@ import { useToast } from "../../context/ToastContext";
 
 const AMBER = "#F4B940";
 
+function usePhoneViewport() {
+  const [isPhone, setIsPhone] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsPhone(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  return isPhone;
+}
+
 export interface BookMediaPanelProps {
   bookId: string;
   bookTitle?: string;
@@ -26,11 +39,14 @@ export interface BookMediaPanelProps {
 }
 
 export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpenChange, showLauncher = true }: BookMediaPanelProps) {
+  const isPhone = usePhoneViewport();
   const { selectedCompanyId: cid } = useCompany();
   const { pushToast } = useToast();
   const qc = useQueryClient();
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const setOpen = (next: boolean) => {
     if (controlledOpen === undefined) setInternalOpen(next);
     onOpenChange?.(next);
@@ -54,6 +70,22 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
     setIconTarget({});
     setLocTarget({});
   }, [bookId]);
+
+  useEffect(() => {
+    if (!open || !isPhone) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const items = () => Array.from(panelRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
+    requestAnimationFrame(() => items()[0]?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setOpen(false); return; }
+      if (event.key !== "Tab") return;
+      const controls = items(); if (!controls.length) return;
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
+  }, [open, isPhone]);
 
   const overviewQ = useQuery({
     queryKey: ["book-media", cid, bookId],
@@ -149,13 +181,13 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
       </button>}
 
       {open && (
-        <div className="fixed z-50 flex flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
+        <div className="fixed inset-0 z-50 md:inset-auto" role="presentation">{isPhone && <button className="absolute inset-0 h-full w-full bg-black/65" aria-label="Close media" onClick={() => setOpen(false)} data-media-backdrop />}<div ref={panelRef} {...(isPhone ? { role: "dialog", "aria-modal": true } : {})} aria-label="Book Media" className="fixed z-50 flex max-h-[90dvh] flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
           <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-gray-100">
               <Clapperboard size={15} className="text-blue-400" /> Book Media
               <span className="max-w-[180px] truncate text-xs font-normal text-gray-500">{bookTitle ?? ov?.book.title ?? ""}</span>
             </div>
-            <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-gray-200"><X size={16} /></button>
+            <button onClick={() => setOpen(false)} className="grid h-11 w-11 place-items-center text-gray-500 hover:text-gray-200 md:h-auto md:w-auto" aria-label="Close media panel"><X size={16} /></button>
           </div>
 
           {ps && !imageProviderConfigured && (
@@ -168,7 +200,7 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
           <div className="flex gap-1 border-b border-gray-800 px-3 py-2 overflow-x-auto">
             {([["cover", ImageIcon, "Cover"], ["illustrations", Sparkles, "Illustrations"], ["trailer", Film, "Trailer"], ["narration", Mic, "Narration"], ["library", FolderOpen, "Library"]] as const).map(([key, Icon, label]) => (
               <button key={key} onClick={() => setSection(key)}
-                className={`flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${section === key ? "bg-gray-800 text-gray-100" : "text-gray-500 hover:text-gray-300"}`}>
+                className={`flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs md:min-h-0 ${section === key ? "bg-gray-800 text-gray-100" : "text-gray-500 hover:text-gray-300"}`}>
                 <Icon size={12} /> {label}
               </button>
             ))}
@@ -432,7 +464,7 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
               </div>
             )}
           </div>
-        </div>
+        </div></div>
       )}
     </>
   );
