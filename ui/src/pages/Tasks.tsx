@@ -186,7 +186,7 @@ export function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="flex h-11 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors sm:h-auto sm:py-1.5"
+      className="flex h-11 min-w-11 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors sm:h-auto sm:min-w-0 sm:py-1.5"
       style={{
         color: active ? accent : DS.textMuted,
         background: active ? `${accent}1F` : "transparent",

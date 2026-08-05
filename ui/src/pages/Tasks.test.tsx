@@ -13,7 +13,7 @@ describe("Tasks phone controls", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps a 44px phone lens target, restores compact desktop spacing, and activates the lens", () => {
+  it("keeps the shortest phone lens at least 44px square, restores compact desktop spacing, and activates it", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
@@ -21,13 +21,15 @@ describe("Tasks phone controls", () => {
 
     act(() => {
       root.render(
-        <FilterChip label="Blocked" count={2} active={false} tone="danger" onClick={onClick} />,
+        <FilterChip label="All" active={false} onClick={onClick} />,
       );
     });
 
     const button = container.querySelector("button");
     expect(button?.className).toContain("h-11");
+    expect(button?.className).toContain("min-w-11");
     expect(button?.className).toContain("sm:h-auto");
+    expect(button?.className).toContain("sm:min-w-0");
     expect(button?.className).toContain("sm:py-1.5");
 
     act(() => button?.click());

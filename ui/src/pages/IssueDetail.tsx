@@ -216,6 +216,9 @@ function treeControlPreviewErrorCopy(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to load preview.";
 }
 
+export const ISSUE_DETAIL_TABS_LIST_CLASS =
+  "h-auto min-h-[50px] w-full justify-start gap-1 overflow-x-auto overscroll-x-contain sm:h-9 sm:min-h-0";
+
 export function canBoardResolveRecoveryAction(
   companyId: string | null | undefined,
   boardAccess: CurrentBoardAccess | undefined,
@@ -3966,7 +3969,7 @@ export function IssueDetail() {
           for <textarea> miss it because the composer is a contenteditable
           MarkdownEditor; use [data-pp-comment-input] or [data-testid="issue-chat-composer"]. */}
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1 overflow-x-auto overscroll-x-contain" data-testid="issue-detail-tabs">
+        <TabsList variant="line" className={ISSUE_DETAIL_TABS_LIST_CLASS} data-testid="issue-detail-tabs">
           <TabsTrigger value="chat" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-chat">
             <MessageSquare className="h-3.5 w-3.5" />
             Chat
