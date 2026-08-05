@@ -30,9 +30,10 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { execSync } from "node:child_process";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
-import { badRequest, notFound, serviceUnavailable } from "../errors.js";
+import { badRequest, conflict, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { buildSystemPrompt, normalizeBrainstormTurns } from "../services/brainstorm-chat.js";
+import { applyBookChatAuthorization, deriveBookChatAuthorization, resolveBookChatAuthorization, type BookChatAuthorization } from "../services/book-chat-actions.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
@@ -117,6 +118,16 @@ function deleteVaultFile(bookSlug: string, entityType: string, entityName: strin
   }
 }
 
+async function requireCompanyBook(db: Db, companyId: string, bookId: string) {
+  const [book] = await db
+    .select()
+    .from(books)
+    .where(and(eq(books.id, bookId), eq(books.companyId, companyId)))
+    .limit(1);
+  if (!book) throw notFound("Book not found");
+  return book;
+}
+
 // ── Helper: create entity routes ─────────────────────────────────────────────
 
 interface EntityRouteConfig {
@@ -139,6 +150,7 @@ function entityRoutes(
   router.get("/", async (req, res) => {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
     assertCompanyAccess(req, companyId);
+    await requireCompanyBook(db, companyId, bookId);
 
     const rows = await db
       .select()
@@ -152,6 +164,7 @@ function entityRoutes(
   router.post("/", async (req, res) => {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
     assertCompanyAccess(req, companyId);
+    await requireCompanyBook(db, companyId, bookId);
 
     const parsed = createSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -210,6 +223,7 @@ function entityRoutes(
   router.patch("/:id", async (req, res) => {
     const { companyId, bookId, id } = req.params as { companyId: string; bookId: string; id: string };
     assertCompanyAccess(req, companyId);
+    await requireCompanyBook(db, companyId, bookId);
 
     const parsed = updateSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -287,6 +301,7 @@ function entityRoutes(
   router.delete("/:id", async (req, res) => {
     const { companyId, bookId, id } = req.params as { companyId: string; bookId: string; id: string };
     assertCompanyAccess(req, companyId);
+    await requireCompanyBook(db, companyId, bookId);
 
     const existing = await db
       .select()
@@ -449,13 +464,15 @@ export function bookStudioRoutes(db: Db) {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
     assertCompanyAccess(req, companyId);
 
+    const existing = await requireCompanyBook(db, companyId, bookId);
     const { title, metadata } = req.body ?? {};
     const updates: Record<string, unknown> = { updatedAt: new Date() };
-    if (typeof title === "string" && title.trim()) updates.title = title.trim();
+    if (title !== undefined) {
+      if (typeof title !== "string" || !title.trim()) throw badRequest("title cannot be empty");
+      updates.title = title.trim();
+    }
     if (typeof metadata === "object" && metadata !== null) {
       // ponytail: shallow-merge metadata to preserve reviewNotes etc.
-      const [existing] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
-      if (!existing) throw notFound("Book not found");
       updates.metadata = { ...(existing.metadata as Record<string, unknown>), ...(metadata as Record<string, unknown>) };
     }
 
@@ -464,10 +481,26 @@ export function bookStudioRoutes(db: Db) {
     const [updated] = await db
       .update(books)
       .set(updates)
-      .where(eq(books.id, bookId))
+      .where(and(eq(books.id, bookId), eq(books.companyId, companyId)))
       .returning();
 
     if (!updated) throw notFound("Book not found");
+
+    const actor = getActorInfo(req);
+    await logActivity(db, {
+      companyId,
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      agentId: actor.agentId,
+      runId: actor.runId,
+      action: updates.title ? "book.renamed" : "book.updated",
+      entityType: "book",
+      entityId: updated.id,
+      details: {
+        ...(updates.title ? { previousTitle: existing.title, title: updated.title } : {}),
+        metadataKeys: metadata && typeof metadata === "object" ? Object.keys(metadata) : [],
+      },
+    });
 
     res.json({ book: updated });
   });
@@ -1237,15 +1270,22 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       .limit(50);
 
     const turnId = randomUUID();
+    const conversationId = `book-studio:${companyId}:${bookId}`;
+    const actor = getActorInfo(req);
+    const authorization = actor.actorType === "user" ? resolveBookChatAuthorization(deriveBookChatAuthorization(message), {
+      book: { id: book.id, locked: false, updatedAt: book.updatedAt.toISOString() },
+      characters: characters.map((item) => ({ id: item.id, name: item.name, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
+      locations: locations.map((item) => ({ id: item.id, name: item.name, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
+      styles: styles.map((item) => ({ id: item.id, pov: item.pov, tense: item.tense, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
+      outlines: outlines.map((item) => ({ id: item.id, chapterNumber: item.chapterNumber, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
+    }) : null;
 
     // Persist pending user state before dispatch so an interrupted turn remains visible.
-    const [userMsg] = await db.insert(storyBibleChatMessages).values({
-      bookId,
-      turnId,
-      role: "user",
-      content: message,
-      status: "pending",
-    }).returning();
+    const userMsg = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${bookId}`}))`);
+      const [inserted] = await tx.insert(storyBibleChatMessages).values({ bookId, turnId, role: "user", content: message, status: "pending", conversationId, authorization }).returning();
+      return inserted;
+    });
 
     // Build the complete book brief for Calliope.
     const bibleContext = {
@@ -1260,7 +1300,6 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
 
     // This window is Calliope. The live agent lane is the only execution path;
     // failures are surfaced honestly and never fabricate an assistant reply.
-    const actor = getActorInfo(req);
     let reply: string;
     let delegationId: string | undefined;
     try {
@@ -1274,13 +1313,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
           ...historyEntries.map((h) => `${h.role.toUpperCase()}: ${h.content}`),
           "",
           "Reply as Calliope to Baily's latest message.",
+          authorization
+            ? `Paperclip has independently authorized exactly one operation from Baily's latest message: ${authorization.operation} at ${authorization.destination}. Discuss it naturally; do not add, widen, or substitute any action.`
+            : "Paperclip found no unambiguous direct Book Studio mutation authorization in the latest human message. If Baily appears to want a change, ask for the missing operation, destination, or content. Do not claim anything was changed.",
         ].join("\n"),
         metadata: {
           bookId,
           turnId,
-          conversationId: `book-studio:${companyId}:${bookId}`,
+          conversationId,
           operation: "brainstorm-chat",
         },
+        conversationId,
         requestedByActorId: actor.actorId,
       });
       reply = lane.text;
@@ -1289,7 +1332,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
       await db
         .update(storyBibleChatMessages)
-        .set({ status: "failed", via: "none", error: laneErr.message.slice(0, 2000) })
+        .set({ status: "failed", via: "none", error: laneErr.message.slice(0, 2000), retryable: laneErr.fallbackSafe, delegationId: laneErr.delegationId ?? null })
         .where(eq(storyBibleChatMessages.id, userMsg.id));
       res.status(laneErr.fallbackSafe ? 503 : 502).json({
         error: "Calliope is unavailable. Your message was saved, but no reply was generated.",
@@ -1297,10 +1340,19 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         messageId: userMsg.id,
         via: "none",
         status: "failed",
+        retryable: laneErr.fallbackSafe,
         agentLane: laneErr.fallbackSafe ? "unavailable" : "indeterminate",
         agentLaneError: laneErr.message,
       });
       return;
+    }
+
+    let actionResult: Awaited<ReturnType<typeof applyBookChatAuthorization>> | undefined;
+    if (authorization) {
+      actionResult = await applyBookChatAuthorization(db, { companyId, bookId, turnId, actor, authorization });
+      reply = actionResult.status === "applied"
+        ? `${reply}\n\nSaved to ${actionResult.destination}.`
+        : `${reply}\n\nNothing changed. ${actionResult.error ?? "The authorized addition could not be applied."}`;
     }
 
     // Persist assistant reply
@@ -1312,6 +1364,8 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       status: "completed",
       via: "calliope",
       delegationId: delegationId ?? null,
+      conversationId,
+      actionResult: actionResult ?? null,
     }).returning();
     await db
       .update(storyBibleChatMessages)
@@ -1320,6 +1374,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
         via: "calliope",
         delegationId: delegationId ?? null,
         error: null,
+        actionResult: actionResult ?? null,
       })
       .where(eq(storyBibleChatMessages.id, userMsg.id));
 
@@ -1331,6 +1386,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       via: "calliope",
       status: "completed",
       ...(delegationId ? { delegationId } : {}),
+      ...(actionResult ? { action: actionResult } : {}),
     });
   });
 
@@ -1354,6 +1410,31 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     res.json({ messages: normalizeBrainstormTurns([...rows].reverse()) });
   });
 
+  // GET /chat/archives — book-scoped, read-only transcript groups.
+  bookBibleRouter.get("/chat/archives", async (req, res) => {
+    const { companyId, bookId } = req.params as { companyId: string; bookId: string };
+    assertCompanyAccess(req, companyId);
+    await requireCompanyBook(db, companyId, bookId);
+
+    const rows = await db.select()
+      .from(storyBibleChatMessages)
+      .where(and(eq(storyBibleChatMessages.bookId, bookId), sql`${storyBibleChatMessages.archivedAt} is not null`))
+      .orderBy(desc(storyBibleChatMessages.createdAt))
+      .limit(1000);
+    const grouped = new Map<string, typeof rows>();
+    for (const row of [...rows].reverse()) {
+      if (!row.archivedAt) continue;
+      const key = row.archivedAt.toISOString();
+      const group = grouped.get(key) ?? [];
+      group.push(row);
+      grouped.set(key, group);
+    }
+    const archives = [...grouped.entries()]
+      .map(([archivedAt, group]) => ({ archivedAt, messages: normalizeBrainstormTurns(group) }))
+      .sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
+    res.json({ archives });
+  });
+
   // POST /chat/reset — archive the active transcript; never delete history.
   bookBibleRouter.post("/chat/reset", async (req, res) => {
     const { companyId, bookId } = req.params as { companyId: string; bookId: string };
@@ -1362,30 +1443,103 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const [book] = await db.select().from(books).where(eq(books.id, bookId)).limit(1);
     if (!book || book.companyId !== companyId) throw notFound("Book not found");
 
-    const archivedAt = new Date();
-    const archived = await db
-      .update(storyBibleChatMessages)
-      .set({ archivedAt })
-      .where(and(
-        eq(storyBibleChatMessages.bookId, bookId),
-        isNull(storyBibleChatMessages.archivedAt),
-      ))
-      .returning({ id: storyBibleChatMessages.id });
-
     const actor = getActorInfo(req);
-    await logActivity(db, {
-      companyId,
-      actorType: actor.actorType,
-      actorId: actor.actorId,
-      agentId: actor.agentId,
-      runId: actor.runId,
-      action: "book.brainstorm_chat_reset",
-      entityType: "book",
-      entityId: bookId,
-      details: { bookId, archivedCount: archived.length, archivedAt: archivedAt.toISOString() },
-    }).catch(() => {});
+    const { archived, archivedAt } = await db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${bookId}`}))`);
+      const [pending] = await tx.select({ id: storyBibleChatMessages.id }).from(storyBibleChatMessages).where(and(eq(storyBibleChatMessages.bookId, bookId), isNull(storyBibleChatMessages.archivedAt), eq(storyBibleChatMessages.status, "pending"))).limit(1);
+      if (pending) throw conflict("Wait for the active Calliope turn to finish before starting a new conversation.");
+      const archivedAt = new Date();
+      const archived = await tx.update(storyBibleChatMessages).set({ archivedAt }).where(and(eq(storyBibleChatMessages.bookId, bookId), isNull(storyBibleChatMessages.archivedAt))).returning({ id: storyBibleChatMessages.id });
+      await logActivity(tx as unknown as Db, { companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId, runId: actor.runId, action: "book.brainstorm_chat_reset", entityType: "book", entityId: bookId, details: { bookId, archivedCount: archived.length, archivedAt: archivedAt.toISOString() } });
+      return { archived, archivedAt };
+    });
 
     res.json({ messages: [], archivedCount: archived.length, activeCount: 0 });
+  });
+
+  // POST /chat/:turnId/retry — conditionally claim one failed durable turn.
+  bookBibleRouter.post("/chat/:turnId/retry", async (req, res) => {
+    const { companyId, bookId, turnId } = req.params as { companyId: string; bookId: string; turnId: string };
+    assertCompanyAccess(req, companyId);
+    const book = await requireCompanyBook(db, companyId, bookId);
+
+    const activeRows = await db.select().from(storyBibleChatMessages)
+      .where(and(eq(storyBibleChatMessages.bookId, bookId), isNull(storyBibleChatMessages.archivedAt)))
+      .orderBy(desc(storyBibleChatMessages.createdAt))
+      .limit(200);
+    const userMsg = activeRows.find((row) => row.turnId === turnId && row.role === "user");
+    if (!userMsg) throw notFound("Failed turn not found");
+    const existingAssistant = activeRows.find((row) => row.turnId === turnId && row.role === "assistant");
+    if (existingAssistant) {
+      res.json(normalizeBrainstormTurns(activeRows.filter((row) => row.turnId === turnId).reverse())[0]);
+      return;
+    }
+    if (userMsg.status === "pending") throw conflict("This Calliope turn is still working; it will reconcile without another dispatch.");
+    if (userMsg.status !== "failed") throw conflict("Only a failed Calliope turn can be retried.");
+    if (!userMsg.retryable) throw conflict("This turn has an indeterminate delegation and cannot be safely retried; no duplicate work was launched.");
+    const laterHuman = activeRows.find((row) => row.role === "user" && row.createdAt > userMsg.createdAt);
+    if (laterHuman) throw conflict("This is no longer the latest human instruction; retry would be ambiguous. Send a new explicit instruction instead.");
+
+    // Real conditional transition: only one concurrent caller can claim failed -> pending.
+    const [claimed] = await db.update(storyBibleChatMessages)
+      .set({ status: "pending", error: null, retryCount: sql`${storyBibleChatMessages.retryCount} + 1` })
+      .where(and(
+        eq(storyBibleChatMessages.id, userMsg.id),
+        eq(storyBibleChatMessages.bookId, bookId),
+        eq(storyBibleChatMessages.status, "failed"),
+        isNull(storyBibleChatMessages.archivedAt),
+      ))
+      .returning();
+    if (!claimed) throw conflict("This turn was already claimed for retry; no duplicate work was launched.");
+
+    const characters = await db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId));
+    const locations = await db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId));
+    const styles = await db.select().from(storyBibleStyle).where(eq(storyBibleStyle.bookId, bookId));
+    const outlines = await db.select().from(storyBibleOutline).where(eq(storyBibleOutline.bookId, bookId));
+    const bibleContext = {
+      bookTitle: book.title,
+      characters: characters.map((item) => ({ name: item.name, role: item.role, description: item.description })),
+      locations: locations.map((item) => ({ name: item.name, description: item.description })),
+      styles: styles.map((item) => ({ pov: item.pov, tense: item.tense, comps: item.comps, sampleParagraph: item.sampleParagraph })),
+      outlines: outlines.map((item) => ({ chapterNumber: item.chapterNumber, title: item.title, beats: item.beats as Record<string, unknown>[] })),
+    };
+    const chronological = [...activeRows].reverse()
+      .filter((row) => row.turnId !== turnId && (row.role === "user" || row.role === "assistant"))
+      .map((row) => ({ role: row.role, content: row.content }));
+    chronological.push({ role: "user", content: userMsg.content });
+    const conversationId = userMsg.conversationId ?? `book-studio:${companyId}:${bookId}`;
+    const authorization = (userMsg.authorization ?? null) as BookChatAuthorization | null;
+    const actor = getActorInfo(req);
+
+    let reply: string;
+    let delegationId: string | undefined;
+    try {
+      const lane = await callAgentLane(db, {
+        lane: "calliope", companyId, conversationId, requestedByActorId: actor.actorId,
+        task: [buildSystemPrompt(bibleContext), "", "--- CONVERSATION (oldest first) ---", ...chronological.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`), "", "Reply as Calliope to Baily's latest message. This is an idempotent retry of the same durable turn.", authorization ? `Paperclip authorized exactly ${authorization.operation} at ${authorization.destination}; do not broaden it.` : "No Book Studio mutation is authorized; do not claim a change."].join("\n"),
+        metadata: { bookId, turnId, conversationId, operation: "brainstorm-chat-retry", retryCount: claimed.retryCount },
+      });
+      reply = lane.text; delegationId = lane.delegationId;
+    } catch (laneErr) {
+      const reason = laneErr instanceof Error ? laneErr.message : String(laneErr);
+      const retryable = laneErr instanceof AgentLaneUnavailableError ? laneErr.fallbackSafe : false;
+      const failedDelegationId = laneErr instanceof AgentLaneUnavailableError ? laneErr.delegationId ?? null : null;
+      await db.update(storyBibleChatMessages).set({ status: "failed", via: "none", error: reason.slice(0, 2000), retryable, delegationId: failedDelegationId }).where(and(eq(storyBibleChatMessages.id, claimed.id), eq(storyBibleChatMessages.status, "pending")));
+      if (laneErr instanceof AgentLaneUnavailableError) {
+        res.status(laneErr.fallbackSafe ? 503 : 502).json({ error: "Calliope is unavailable. The same turn remains saved and failed.", turnId, status: "failed", via: "none", retryable: laneErr.fallbackSafe });
+        return;
+      }
+      throw laneErr;
+    }
+
+    let actionResult: Awaited<ReturnType<typeof applyBookChatAuthorization>> | undefined;
+    if (authorization) {
+      actionResult = await applyBookChatAuthorization(db, { companyId, bookId, turnId, actor, authorization });
+      reply = actionResult.status === "applied" ? `${reply}\n\nSaved to ${actionResult.destination}.` : `${reply}\n\nNothing changed. ${actionResult.error ?? "The authorized addition could not be applied."}`;
+    }
+    const [assistantMsg] = await db.insert(storyBibleChatMessages).values({ bookId, turnId, role: "assistant", content: reply, status: "completed", via: "calliope", delegationId: delegationId ?? null, conversationId, actionResult: actionResult ?? null }).returning();
+    await db.update(storyBibleChatMessages).set({ status: "completed", via: "calliope", delegationId: delegationId ?? null, error: null, actionResult: actionResult ?? null }).where(and(eq(storyBibleChatMessages.id, claimed.id), eq(storyBibleChatMessages.status, "pending")));
+    res.json({ reply, turnId, messageId: assistantMsg.id, userMessageId: claimed.id, via: "calliope", status: "completed", ...(delegationId ? { delegationId } : {}), ...(actionResult ? { action: actionResult } : {}) });
   });
 
   // POST /chat/:messageId/to-draft — convert an assistant message into a draft entity

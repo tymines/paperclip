@@ -11,9 +11,11 @@ vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/book-agent-lanes.js")>();
   return { ...mod, callAgentLane: vi.fn() };
 });
+vi.mock("../services/index.js", () => ({ logActivity: vi.fn().mockResolvedValue(undefined) }));
 
 import { bookStudioRoutes } from "../routes/book-studio.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
+import { logActivity } from "../services/index.js";
 
 /**
  * Build a mock DB that returns a query builder from .select().
@@ -53,9 +55,14 @@ function createApp() {
     select: vi.fn(),
     insert: vi.fn(),
     update: vi.fn(),
+    execute: vi.fn().mockResolvedValue([]),
+    transaction: vi.fn(),
     values: vi.fn(),
     returning: vi.fn(),
+    onConflictDoUpdate: vi.fn(),
   } as unknown as Db;
+
+  mockDb.transaction.mockImplementation(async (callback: (tx: Db) => unknown) => callback(mockDb));
 
   // Wire .select() to return a fresh query builder by default
   mockDb.select.mockReturnValue(mockQuery([]));
@@ -63,6 +70,7 @@ function createApp() {
   // Wire .insert().values().returning() chain
   mockDb.insert.mockReturnValue(mockDb);
   mockDb.values.mockReturnValue(mockDb);
+  mockDb.onConflictDoUpdate.mockReturnValue(mockDb);
   mockDb.update.mockImplementation(() => ({
     set: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({
@@ -85,6 +93,7 @@ function createApp() {
 describe("Book Studio Brainstorm Chat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(logActivity).mockResolvedValue(undefined);
     // Default: the live Calliope lane returns an honest unavailable response
     // unless a test opts the agent lane back in.
     vi.mocked(callAgentLane).mockRejectedValue(

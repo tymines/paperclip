@@ -63,6 +63,7 @@ describe("book-agent-lanes.callAgentLane", () => {
       companyId: "co-1",
       task: "SYSTEM…\nUSER: hello",
       metadata: { bookId: "book-1" },
+      conversationId: "book-studio:co-1:book-1",
       requestedByActorId: "user-1",
       timeoutMs: 500,
       pollIntervalMs: 1,
@@ -79,6 +80,7 @@ describe("book-agent-lanes.callAgentLane", () => {
     expect(call.companyId).toBe("co-1");
     expect(call.task).toContain("USER: hello");
     expect(call.metadata).toMatchObject({ kind: "book-studio-brainstorm", bookId: "book-1" });
+    expect(call.conversationId).toBe("book-studio:co-1:book-1");
     expect(call.requestedByActorId).toBe("user-1");
   });
 
