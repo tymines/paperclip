@@ -40,6 +40,11 @@
     "publishFromCi": true
   },
   {
+    "dir": "packages/adapters/hermes-ssh",
+    "name": "@paperclipai/adapter-hermes-ssh",
+    "publishFromCi": false
+  },
+  {
     "dir": "packages/adapters/opencode-local",
     "name": "@paperclipai/adapter-opencode-local",
     "publishFromCi": true
