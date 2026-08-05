@@ -36,6 +36,17 @@ describe("BookMediaPanel controlled mode", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("keeps the controlled panel a modal dialog with a phone scrim", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
+    act(() => root!.render(<QueryClientProvider client={client}><BookMediaPanel bookId="book-1" open onOpenChange={vi.fn()} showLauncher={false} /></QueryClientProvider>));
+    await flush();
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    expect(container.querySelector('[aria-label="Close media"]')?.className).toContain("md:hidden");
+    expect(dialog.className).toContain("max-h-[90dvh]");
+  });
+
   it("switching books while open requests the new book and renders the new title immediately", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);

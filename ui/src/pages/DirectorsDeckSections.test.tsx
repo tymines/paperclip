@@ -79,4 +79,22 @@ describe("Director's Deck Story Bible routing", () => {
     expect((container!.querySelector('[data-testid="legacy-center"]') as HTMLElement).dataset.section).toBe("characters");
     await flush();
   });
+
+  it("exposes all four labelled phone entry paths and routes every Story Bible section plus Review Queue through the page-owned sheet", async () => {
+    await renderPage();
+    for (const label of ["Chapters", "Story Bible", "Inspect", "Tools"]) expect(Array.from(container!.querySelectorAll("button")).some((button) => button.textContent === label)).toBe(true);
+    click(Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Story Bible")!);
+    for (const definition of STORY_BIBLE_SECTIONS.filter((section) => section.id !== "review-queue")) {
+      const dialog = container!.querySelector('[role="dialog"][aria-label="Story Bible"]')!;
+      expect(dialog).not.toBeNull();
+      const button = dialog.querySelector(`button[data-section-id="${definition.id}"]`)!;
+      expect(button).not.toBeNull(); click(button); await flush();
+      const center = container!.querySelectorAll<HTMLElement>('[data-testid$="-center"]').item(container!.querySelectorAll('[data-testid$="-center"]').length - 1);
+      expect(center.dataset.section).toBe(definition.id);
+      click(Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Story Bible")!);
+    }
+    const review = container!.querySelector('[role="dialog"] button[data-section-id="review-queue"]')!;
+    click(review); await flush();
+    expect((container!.querySelector('[data-testid="codex-center"]') as HTMLElement).dataset.section).toBe("review-queue");
+  });
 });

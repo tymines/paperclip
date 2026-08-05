@@ -37,6 +37,28 @@ async function send(value: string) {
 }
 
 describe("ChatDrawer v4", () => {
+  it("renders one honest loading status before a successful empty history, never blank reply cards", async () => {
+    let resolveHistory!: (value: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((resolve) => { resolveHistory = resolve; }));
+    await render();
+    expect(container.textContent).toContain("Loading conversation");
+    expect(container.querySelectorAll(".bg-gray-800")).toHaveLength(0);
+    await act(async () => resolveHistory(response({ messages: [] })));
+    await flush();
+    expect(container.textContent).toContain("Ask Calliope about this book");
+    expect(container.textContent).not.toContain("Loading conversation");
+  });
+
+  it("uses dialog semantics and closes on Escape while returning focus", async () => {
+    fetchMock.mockResolvedValue(response({ messages: [] }));
+    const trigger = document.createElement("button"); document.body.appendChild(trigger); trigger.focus();
+    const onClose = vi.fn(); await render({ onClose }); await flush();
+    expect(container.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("true");
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    trigger.remove();
+  });
+
   it("is docked without a backdrop and keeps the editor outside the panel interactive", async () => {
     fetchMock.mockResolvedValue(response({ messages: [] })); await render();
     const panel = container.querySelector("[data-docked-chat]")!;

@@ -56,6 +56,13 @@ describe("DeckTopBar", () => {
     expect(select.textContent).toContain("No books yet");
   });
 
+  it("keeps the active book selector and exposes 44px phone-safe Brainstorm and Media controls", () => {
+    const rendered = renderTopBar(); root = rendered.root; container = rendered.container;
+    expect(container.querySelector('[aria-label="Active book"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Brainstorm"]')?.className).toContain("w-11");
+    expect(container.querySelector('[aria-label="Media"]')?.className).toContain("h-11");
+  });
+
   it("prefills rename, rejects whitespace, and submits the trimmed display title", async () => {
     const rendered = renderTopBar(); root = rendered.root; container = rendered.container;
     click(container.querySelector('[aria-label="Rename active book"]')!);
