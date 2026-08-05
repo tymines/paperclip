@@ -152,9 +152,9 @@ export function WarRoom() {
   const showDetail = !isMobile || !!selectedRunId;
 
   return (
-    <div style={{ background: DS.canvas, minHeight: "100vh", display: "flex", flexDirection: "column", color: DS.text }}>
+    <div className="min-w-0 overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0" style={{ background: DS.canvas, minHeight: "100vh", display: "flex", flexDirection: "column", color: DS.text }} data-testid="war-room-responsive-root">
       {/* View toggle: the phased Pipeline surface vs the Hermes direct-line chat */}
-      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 20px", borderBottom: `1px solid ${DS.border}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, padding: isMobile ? "10px 12px" : "12px 20px", borderBottom: `1px solid ${DS.border}`, flexWrap: "wrap" }}>
         <div style={{ fontSize: 15, fontWeight: 600, marginRight: 10 }}>War Room</div>
         {([["pipeline", "Pipeline", GitBranch], ["hermes", "Hermes", MessageSquare]] as const).map(([v, label, Icon]) => (
           <button key={v} onClick={() => setView(v)}
@@ -198,9 +198,15 @@ export function WarRoom() {
             <div style={{ color: DS.textFaint, fontSize: 13, padding: "8px 0" }}>No runs yet. Start one with “New”.</div>
           )}
           {runs.map((r: any) => (
-            <div key={r.id} onClick={() => setSelectedRunId(r.id)}
+            <div key={r.id} role="button" tabIndex={0} onClick={() => setSelectedRunId(r.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelectedRunId(r.id);
+                }
+              }}
               style={{
-                padding: "10px 12px", borderRadius: 10, cursor: "pointer", marginBottom: 6,
+                padding: "10px 12px", borderRadius: 10, cursor: "pointer", marginBottom: 6, minHeight: 44,
                 background: selectedRunId === r.id ? DS.surface3 : DS.surface,
                 border: `1px solid ${selectedRunId === r.id ? DS.primary : DS.border}`,
               }}>
@@ -253,7 +259,7 @@ export function WarRoom() {
               </div>
 
               {/* Horizontal 8-stage tracker (scrolls on narrow screens) */}
-              <div style={{ overflowX: "auto", marginBottom: 8 }}>
+              <div style={{ overflowX: "auto", overscrollBehaviorX: "contain", marginBottom: 8 }} tabIndex={0} aria-label="Pipeline stages; scroll horizontally to view all eight stages">
                 <div style={{ position: "relative", padding: "6px 8px 20px", minWidth: 520 }}>
                   <div style={{ position: "absolute", left: 22, right: 22, top: 20, height: 2, background: DS.border }} />
                   <div style={{ position: "relative", display: "flex", justifyContent: "space-between" }}>
@@ -390,7 +396,7 @@ export function WarRoom() {
 
       {/* New project dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0">
           <DialogHeader><DialogTitle>New Project</DialogTitle></DialogHeader>
           <div className="space-y-2">
             <Label>Name</Label>
@@ -407,7 +413,7 @@ export function WarRoom() {
 
       {/* New council dialog */}
       <Dialog open={councilOpen} onOpenChange={setCouncilOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0">
           <DialogHeader><DialogTitle>New Council</DialogTitle></DialogHeader>
           <div className="space-y-2">
             <Label>Name</Label>
@@ -424,7 +430,7 @@ export function WarRoom() {
 
       {/* Kill run — confirm + optional reason */}
       <Dialog open={killOpen} onOpenChange={setKillOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0">
           <DialogHeader><DialogTitle>Kill this run?</DialogTitle></DialogHeader>
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">This stops the run. It can't advance further. Recorded on the run log.</p>

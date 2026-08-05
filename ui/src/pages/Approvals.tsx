@@ -113,7 +113,7 @@ export function Approvals() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="approvals"
     >
@@ -127,7 +127,7 @@ export function Approvals() {
         </p>
       </div>
 
-      <div className="flex items-center justify-between">
+      <div className="min-w-0">
         <Tabs value={statusFilter} onValueChange={(v) => navigate(`/approvals/${v}`)}>
           <PageTabBar items={[
             { value: "pending", label: <>Pending{pendingCount > 0 && (

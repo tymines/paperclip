@@ -775,9 +775,9 @@ export function RoutineDetail() {
       : "text-muted-foreground";
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-2xl min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 [&_textarea]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0 sm:[&_textarea]:min-h-0" data-testid="routine-detail-responsive-root">
       {/* Header: editable title + actions */}
-      <div className="flex items-start gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
         <div className="min-w-0 flex-1 space-y-2">
           <textarea
             ref={titleInputRef}
@@ -816,7 +816,7 @@ export function RoutineDetail() {
             </Badge>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-3 pt-1">
+        <div className="flex flex-wrap items-center gap-3 pt-1 sm:shrink-0">
           <RunButton
             onClick={() => {
               setRunVariablesOpen(true);
@@ -1100,25 +1100,25 @@ export function RoutineDetail() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1">
-          <TabsTrigger value="triggers" className="gap-1.5">
+        <TabsList variant="line" className="h-auto min-h-[50px] w-full justify-start gap-1 overflow-x-auto overscroll-x-contain sm:h-9 sm:min-h-0">
+          <TabsTrigger value="triggers" className="min-h-11 shrink-0 gap-1.5 sm:min-h-0">
             <Clock3 className="h-3.5 w-3.5" />
             Triggers
           </TabsTrigger>
-          <TabsTrigger value="runs" className="gap-1.5">
+          <TabsTrigger value="runs" className="min-h-11 shrink-0 gap-1.5 sm:min-h-0">
             <Play className="h-3.5 w-3.5" />
             Runs
             {hasLiveRun && <span className="h-2 w-2 rounded-full bg-blue-500 animate-pulse" />}
           </TabsTrigger>
-<TabsTrigger value="activity" className="gap-1.5">
+          <TabsTrigger value="activity" className="min-h-11 shrink-0 gap-1.5 sm:min-h-0">
             <ActivityIcon className="h-3.5 w-3.5" />
             Activity
           </TabsTrigger>
-          <TabsTrigger value="secrets" className="gap-1.5">
+          <TabsTrigger value="secrets" className="min-h-11 shrink-0 gap-1.5 sm:min-h-0">
             <KeyRound className="h-3.5 w-3.5" />
             Secrets
           </TabsTrigger>
-          <TabsTrigger value="history" className="gap-1.5">
+          <TabsTrigger value="history" className="min-h-11 shrink-0 gap-1.5 sm:min-h-0">
             <HistoryIcon className="h-3.5 w-3.5" />
             History
           </TabsTrigger>

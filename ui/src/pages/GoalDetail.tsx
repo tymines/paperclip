@@ -46,6 +46,19 @@ export function GoalPropertiesToggleButton({
   );
 }
 
+export function GoalDetailTabList({ childCount, projectCount }: { childCount: number; projectCount: number }) {
+  return (
+    <TabsList className="h-auto min-h-[50px] w-full justify-start gap-1 overflow-x-auto overscroll-x-contain sm:h-9 sm:min-h-0">
+      <TabsTrigger value="children" className="min-h-11 shrink-0 sm:min-h-0">
+        Sub-Goals ({childCount})
+      </TabsTrigger>
+      <TabsTrigger value="projects" className="min-h-11 shrink-0 sm:min-h-0">
+        Projects ({projectCount})
+      </TabsTrigger>
+    </TabsList>
+  );
+}
+
 export function GoalDetail() {
   const { goalId } = useParams<{ goalId: string }>();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -140,7 +153,7 @@ export function GoalDetail() {
   if (!goal) return null;
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0" data-testid="goal-detail-responsive-root">
       <div className="space-y-3">
         <div className="flex items-center gap-2">
           <span className="text-xs uppercase text-muted-foreground">
@@ -177,19 +190,13 @@ export function GoalDetail() {
       </div>
 
       <Tabs defaultValue="children">
-        <TabsList>
-          <TabsTrigger value="children">
-            Sub-Goals ({childGoals.length})
-          </TabsTrigger>
-          <TabsTrigger value="projects">
-            Projects ({linkedProjects.length})
-          </TabsTrigger>
-        </TabsList>
+        <GoalDetailTabList childCount={childGoals.length} projectCount={linkedProjects.length} />
 
         <TabsContent value="children" className="mt-4 space-y-3">
           <div className="flex items-center justify-start">
             <Button
               size="sm"
+              className="h-11 sm:h-8"
               variant="outline"
               onClick={() => openNewGoal({ parentId: goalId })}
             >

@@ -362,9 +362,9 @@ export function RoomDetail() {
   const messages = messagesData?.messages ?? [];
 
   return (
-    <div className="flex h-[calc(100dvh-7rem)] flex-col md:h-[calc(100vh-8rem)]">
+    <div className="flex h-[calc(100dvh-7rem)] min-w-0 flex-col overflow-x-hidden [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 md:h-[calc(100vh-8rem)]" data-testid="room-detail-responsive-root">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-3 py-2 md:px-4">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 md:flex-nowrap md:gap-3 md:px-4">
         <DetailBackButton fallbackTo="/rooms" />
         <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" />
         <h1 className="truncate text-sm font-semibold">{room.name}</h1>
@@ -390,7 +390,7 @@ export function RoomDetail() {
           <Button
             size="icon"
             variant="ghost"
-            className="h-9 w-9 md:h-7 md:w-7"
+            className="h-11 w-11 md:h-7 md:w-7"
             onClick={() => setSidebarOpen((v) => !v)}
             title={sidebarOpen ? "Hide members" : "Show members"}
             aria-label={sidebarOpen ? "Hide members" : "Show members"}
@@ -434,10 +434,11 @@ export function RoomDetail() {
                 onChange={(e) => setMessageInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 disabled={sendMutation.isPending}
-                className="flex-1"
+                className="h-11 min-w-0 flex-1 sm:h-9"
               />
               <Button
                 size="icon"
+                className="h-11 w-11 sm:h-9 sm:w-9"
                 onClick={handleSend}
                 disabled={!messageInput.trim() || sendMutation.isPending}
                 aria-label="Send message"
@@ -478,7 +479,7 @@ export function RoomDetail() {
 
       {/* Add member dialog */}
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
-        <DialogContent>
+        <DialogContent className="[&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0">
           <DialogHeader>
             <DialogTitle>Add Member</DialogTitle>
           </DialogHeader>
@@ -489,7 +490,7 @@ export function RoomDetail() {
                 value={selectedAgentId}
                 onValueChange={setSelectedAgentId}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-11 sm:h-9">
                   <SelectValue placeholder="Select an agent" />
                 </SelectTrigger>
                 <SelectContent>

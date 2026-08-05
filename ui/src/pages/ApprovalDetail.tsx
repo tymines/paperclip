@@ -16,6 +16,35 @@ import { CheckCircle2, ChevronRight, Sparkles } from "lucide-react";
 import type { ApprovalComment } from "@paperclipai/shared";
 import { MarkdownBody } from "../components/MarkdownBody";
 
+export function ApprovalPayloadDisclosure({
+  type,
+  payload,
+}: {
+  type: string;
+  payload: Record<string, unknown>;
+}) {
+  const [showRawPayload, setShowRawPayload] = useState(false);
+  return (
+    <>
+      <ApprovalPayloadRenderer type={type} payload={payload} />
+      <button
+        type="button"
+        className="mt-2 flex min-h-11 min-w-11 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:min-h-0 sm:min-w-0"
+        onClick={() => setShowRawPayload((visible) => !visible)}
+        aria-expanded={showRawPayload}
+      >
+        <ChevronRight className={`h-3 w-3 transition-transform ${showRawPayload ? "rotate-90" : ""}`} />
+        See full request
+      </button>
+      {showRawPayload ? (
+        <pre className="overflow-x-auto overscroll-x-contain rounded-md bg-muted/40 p-3 text-xs" tabIndex={0} aria-label="Full approval request payload; scroll horizontally for long lines">
+          {JSON.stringify(payload, null, 2)}
+        </pre>
+      ) : null}
+    </>
+  );
+}
+
 export function ApprovalDetail() {
   const { approvalId } = useParams<{ approvalId: string }>();
   const { selectedCompanyId, setSelectedCompanyId } = useCompany();
@@ -25,7 +54,6 @@ export function ApprovalDetail() {
   const queryClient = useQueryClient();
   const [commentBody, setCommentBody] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [showRawPayload, setShowRawPayload] = useState(false);
   const [revisionNote, setRevisionNote] = useState("");
   const [showRevisionDialog, setShowRevisionDialog] = useState(false);
 
@@ -173,10 +201,10 @@ export function ApprovalDetail() {
           };
 
   return (
-    <div className="space-y-6 max-w-3xl">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_textarea]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_textarea]:min-h-0" data-testid="approval-detail-responsive-root">
       {showApprovedBanner && (
         <div className="border border-green-300 dark:border-green-700/40 bg-green-50 dark:bg-green-900/20 rounded-lg px-4 py-3 animate-in fade-in zoom-in-95 duration-300">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-2">
               <div className="relative mt-0.5">
                 <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-300" />
@@ -192,7 +220,7 @@ export function ApprovalDetail() {
             <Button
               size="sm"
               variant="outline"
-              className="border-green-400 dark:border-green-600/50 text-green-800 dark:text-green-100 hover:bg-green-100 dark:hover:bg-green-900/30"
+              className="h-11 w-full border-green-400 text-green-800 hover:bg-green-100 dark:border-green-600/50 dark:text-green-100 dark:hover:bg-green-900/30 sm:h-8 sm:w-auto"
               onClick={() => navigate(resolvedCta.to)}
             >
               {resolvedCta.label}
@@ -201,7 +229,7 @@ export function ApprovalDetail() {
         </div>
       )}
       <div className="border border-border rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <TypeIcon className="h-5 w-5 text-muted-foreground shrink-0" />
             <div>
@@ -221,20 +249,7 @@ export function ApprovalDetail() {
               />
             </div>
           )}
-          <ApprovalPayloadRenderer type={approval.type} payload={payload} />
-          <button
-            type="button"
-            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mt-2"
-            onClick={() => setShowRawPayload((v) => !v)}
-          >
-            <ChevronRight className={`h-3 w-3 transition-transform ${showRawPayload ? "rotate-90" : ""}`} />
-            See full request
-          </button>
-          {showRawPayload && (
-            <pre className="text-xs bg-muted/40 rounded-md p-3 overflow-x-auto">
-              {JSON.stringify(payload, null, 2)}
-            </pre>
-          )}
+          <ApprovalPayloadDisclosure type={approval.type} payload={payload} />
           {approval.decisionNote && (
             <p className="text-xs text-muted-foreground">Decision note: {approval.decisionNote}</p>
           )}
@@ -248,7 +263,7 @@ export function ApprovalDetail() {
                 <Link
                   key={issue.id}
                   to={`/issues/${issue.identifier ?? issue.id}`}
-                  className="block text-xs rounded border border-border/70 px-2 py-1.5 hover:bg-accent/20"
+                  className="flex min-h-11 items-center rounded border border-border/70 px-2 py-1.5 text-xs hover:bg-accent/20 sm:min-h-0"
                 >
                   <span className="font-mono text-muted-foreground mr-2">
                     {issue.identifier ?? issue.id.slice(0, 8)}
@@ -311,7 +326,7 @@ export function ApprovalDetail() {
                       rows={4}
                       autoFocus
                     />
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
                       <Button
                         size="sm"
                         variant="ghost"
@@ -367,7 +382,7 @@ export function ApprovalDetail() {
         <div className="space-y-2">
           {(comments ?? []).map((comment: ApprovalComment) => (
             <div key={comment.id} className="border border-border/60 rounded-md p-3">
-              <div className="flex items-center justify-between mb-1">
+              <div className="mb-1 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 {comment.authorAgentId ? (
                   <Link to={`/agents/${comment.authorAgentId}`} className="hover:underline">
                     <Identity

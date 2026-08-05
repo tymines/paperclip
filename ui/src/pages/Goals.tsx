@@ -64,12 +64,12 @@ export function Goals() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="goals"
     >
       {/* Page header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-[32px] font-semibold leading-tight" style={{ color: DS.text }}>
             Goals
@@ -79,7 +79,7 @@ export function Goals() {
           </p>
         </div>
         {goals && goals.length > 0 && (
-          <Button size="sm" variant="outline" onClick={() => openNewGoal()}>
+          <Button size="sm" variant="outline" className="h-11 w-full sm:h-8 sm:w-auto" onClick={() => openNewGoal()}>
             <Plus className="h-3.5 w-3.5 mr-1.5" />
             New Goal
           </Button>
