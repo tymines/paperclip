@@ -103,8 +103,8 @@ export function DeckTopBar({ books, activeBookId, booksLoading = false, onSelect
       </div>
       <button className="hidden md:inline-flex px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide border border-white/15 rounded-md hover:bg-white/5" onClick={onTaste} title="Taste profile — standing generation rules (visible, editable)">Taste</button>
       <button className="hidden md:inline-flex px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-md bg-[#e0955a] text-[#181008] hover:bg-[#eaa96f]" onClick={onRunPlan} title="Run Plan — approve before any autonomous drafting">Run Plan</button>
-      <button className="w-[30px] h-[30px] grid place-items-center border border-white/15 rounded-md hover:bg-white/5" onClick={onBrainstorm} title="Brainstorm chat"><Sparkles className="w-3.5 h-3.5" /></button>
-      <button className="w-[30px] h-[30px] grid place-items-center border border-white/15 rounded-md hover:bg-white/5" onClick={onMedia} title="Book media — cover, illustrations, trailer, narration, library"><Film className="w-3.5 h-3.5" /></button>
+      <button className="w-11 h-11 md:w-[30px] md:h-[30px] grid place-items-center border border-white/15 rounded-md hover:bg-white/5" onClick={onBrainstorm} title="Brainstorm chat" aria-label="Brainstorm"><Sparkles className="w-3.5 h-3.5" /></button>
+      <button className="w-11 h-11 md:w-[30px] md:h-[30px] grid place-items-center border border-white/15 rounded-md hover:bg-white/5" onClick={onMedia} title="Book media — cover, illustrations, trailer, narration, library" aria-label="Media"><Film className="w-3.5 h-3.5" /></button>
       <button className="hidden md:inline-flex px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide border border-white/15 rounded-md hover:bg-white/5" onClick={onExport} title="Export — Markdown · EPUB · PDF · Audiobook">Export</button>
       {renaming && activeBook && (
         <div className="fixed inset-0 z-[80] grid place-items-center bg-black/55 p-4" role="dialog" aria-modal="true" aria-labelledby="rename-book-title">

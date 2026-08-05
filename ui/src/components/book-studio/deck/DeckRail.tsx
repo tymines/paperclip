@@ -29,7 +29,7 @@ const DOT: Record<DeckChapter["state"], string> = {
   idle: "bg-white/20",
 };
 
-export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockChapter, sections, activeSection, onSelectSection, reviewCount, onOpenReviewQueue }: {
+export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockChapter, sections, activeSection, onSelectSection, reviewCount, onOpenReviewQueue, mobileSection }: {
   chapters: DeckChapter[];
   activeChapter: number | null;
   onSelectChapter: (n: number) => void;
@@ -39,13 +39,14 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
   onSelectSection: (id: string) => void;
   reviewCount: number;
   onOpenReviewQueue: () => void;
+  mobileSection?: "chapters" | "bible";
 }) {
   const ready = chapters.filter((c) => c.state === "pass").length;
   const working = chapters.filter((c) => c.state === "run").length;
   const exceptions = chapters.filter((c) => c.state === "fail").length;
   return (
     <aside className="bg-[#0d1016] border-r border-white/5 min-w-0 overflow-auto" aria-label="Chapter queue and story bible">
-      <div className="sticky top-0 bg-[#0d1016] px-4 pt-3.5 pb-2.5 border-b border-white/5 z-10">
+      {mobileSection !== "bible" && <><div className="sticky top-0 bg-[#0d1016] px-4 pt-3.5 pb-2.5 border-b border-white/5 z-10">
         <div className="text-[9.5px] uppercase tracking-[0.16em] text-gray-500 font-bold">Manuscript queue</div>
         <div className="flex items-baseline justify-between mt-1">
           <strong className="font-serif text-base font-semibold">Chapters</strong>
@@ -83,8 +84,8 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
             </span>
           </button>
         ))}
-      </nav>
-      <div className="border-t border-white/10 mt-1.5">
+      </nav></>}
+      {mobileSection !== "chapters" && <div className="border-t border-white/10 mt-1.5">
         <div className="px-4 pt-3.5 pb-2.5 border-b border-white/5">
           <div className="text-[9.5px] uppercase tracking-[0.16em] text-gray-500 font-bold">Story bible · codex</div>
           <div className="flex items-baseline justify-between mt-1">
@@ -117,7 +118,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
           <Inbox className="w-3.5 h-3.5" /> Review queue
           <span className="ml-auto border border-amber-400 rounded-lg px-1.5 text-[10px] font-bold">{reviewCount}</span>
         </button>
-      </div>
+      </div>}
     </aside>
   );
 }

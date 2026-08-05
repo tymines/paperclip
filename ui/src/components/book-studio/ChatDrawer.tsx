@@ -50,6 +50,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
   scopeRef.current = scope;
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadedScope, setLoadedScope] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [input, setInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -60,6 +61,8 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const historyAbortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const visibleMessages = loadedScope === scope ? messages : [];
   const hasPending = visibleMessages.some((message) => message.status === "pending");
 
@@ -81,7 +84,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
     const controller = new AbortController();
     historyAbortRef.current?.abort();
     historyAbortRef.current = controller;
-    if (!quiet) { setLoadedScope(requestedScope); setMessages([]); setError(null); }
+    if (!quiet) { setLoadedScope(""); setMessages([]); setError(null); setHistoryLoading(true); }
     try {
       const result = await apiFetch<{ messages: ChatMessage[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/chat`, { signal: controller.signal });
       if (!controller.signal.aborted && scopeRef.current === requestedScope) {
@@ -91,7 +94,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       if (!quiet && scopeRef.current === requestedScope) setError(err instanceof Error ? err.message : String(err));
-    }
+    } finally { if (!quiet && !controller.signal.aborted && scopeRef.current === requestedScope) setHistoryLoading(false); }
   }, [bookId, companySlug]);
 
   useEffect(() => {
@@ -105,6 +108,22 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
     const timer = window.setInterval(() => void loadHistory(true), 2000);
     return () => window.clearInterval(timer);
   }, [isOpen, hasPending, loadHistory]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const items = () => Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled])') ?? []);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
+      if (event.key !== "Tab") return;
+      const controls = items(); if (!controls.length) return;
+      if (event.shiftKey && document.activeElement === controls[0]) { event.preventDefault(); controls[controls.length - 1].focus(); }
+      else if (!event.shiftKey && document.activeElement === controls[controls.length - 1]) { event.preventDefault(); controls[0].focus(); }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    requestAnimationFrame(() => items()[0]?.focus());
+    return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
+  }, [isOpen, onClose]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [visibleMessages]);
 
@@ -186,7 +205,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
   if (!isOpen) return null;
 
   return (
-    <aside aria-label="Calliope brainstorm" className="fixed inset-x-0 bottom-0 z-50 flex h-[82dvh] flex-col rounded-t-xl border-t border-gray-800 bg-gray-950 shadow-2xl md:inset-y-[52px] md:left-auto md:right-0 md:h-auto md:w-[400px] md:rounded-none md:border-l md:border-t-0" data-docked-chat>
+    <div className="fixed inset-0 z-50 md:inset-auto" role="presentation"><button className="absolute inset-0 h-full w-full bg-black/65 md:hidden" onClick={onClose} aria-label="Close brainstorm" /><aside ref={drawerRef} role="dialog" aria-modal="true" aria-label="Calliope brainstorm" className="fixed inset-x-0 bottom-0 flex h-[82dvh] max-h-[calc(100dvh-env(safe-area-inset-top))] flex-col rounded-t-xl border-t border-gray-800 bg-gray-950 pb-[env(safe-area-inset-bottom)] shadow-2xl md:inset-y-[52px] md:left-auto md:right-0 md:h-auto md:w-[400px] md:rounded-none md:border-l md:border-t-0 md:pb-0" data-docked-chat>
       <header className="flex shrink-0 items-center justify-between border-b border-gray-800 px-4 py-3">
         <div><h3 className="flex items-center gap-2 text-sm font-semibold text-gray-200"><Sparkles className="h-3.5 w-3.5 text-purple-400" />Calliope — Brainstorm</h3>{activeBookTitle && <p className="mt-0.5 text-[10px] text-gray-500">{activeBookTitle}</p>}</div>
         <div className="flex items-center gap-1">
@@ -207,7 +226,8 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
           </div>
         ) : (
           <div className="space-y-3">
-            {visibleMessages.length === 0 && <div className="py-12 text-center text-xs text-gray-500">Ask Calliope about this book. Each book keeps its own durable conversation.</div>}
+            {historyLoading && <div className="py-12 text-center text-xs text-gray-500">Loading conversation...</div>}
+            {!historyLoading && loadedScope === scope && visibleMessages.length === 0 && <div className="py-12 text-center text-xs text-gray-500">Ask Calliope about this book. Each book keeps its own durable conversation.</div>}
             {visibleMessages.map((message) => <div key={message.turnId} className="space-y-2"><div className="flex justify-end"><div className="max-w-[88%] rounded-lg border border-blue-500/30 bg-blue-600/20 px-3 py-2"><p className="whitespace-pre-wrap text-xs text-blue-100">{message.userMessage}</p></div></div>{message.reply && <div className="flex justify-start"><div className="max-w-[88%] rounded-lg border border-gray-700 bg-gray-800 px-3 py-2"><p className="whitespace-pre-wrap text-xs text-gray-300">{message.reply}</p>{message.via === "calliope" && <p className="mt-1.5 text-[9px] text-purple-400/80">via Calliope ✦ live agent</p>}{message.action && <p className={`mt-1.5 text-[10px] ${message.action.status === "applied" ? "text-emerald-400" : "text-amber-400"}`}>{message.action.status === "applied" ? `Saved to ${message.action.destination}` : "No book content changed"}</p>}</div></div>}{message.status === "pending" && !message.reply && <p className="text-[10px] text-gray-500">Waiting for Calliope… This turn will reconcile here after refresh.</p>}{message.status === "failed" && <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300"><span>{message.error || "Calliope is unavailable. No reply was generated."}{message.retryable === false && " This turn may already have reached Calliope, so it cannot be retried safely."}</span>{message.retryable !== false && <button onClick={() => void retry(message.turnId)} disabled={submitting} className="flex shrink-0 items-center gap-1 rounded border border-amber-500/40 px-2 py-1 hover:bg-amber-500/10 disabled:opacity-40"><RefreshCw className="h-3 w-3" />Retry</button>}</div>}</div>)}
             <div ref={endRef} />
           </div>
@@ -215,7 +235,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
       </div>
 
       {!archiveOpen && <div className="shrink-0 border-t border-gray-800 px-4 py-3"><div className="flex items-end gap-2"><textarea ref={textareaRef} rows={3} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="Ask about your book…" aria-label="Message Calliope" className="max-h-[200px] min-h-[60px] flex-1 resize-none overflow-y-auto rounded border border-gray-700 bg-gray-800/50 px-3 py-2 text-xs leading-5 text-gray-200 outline-none placeholder:text-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20" /><button onClick={() => void send()} disabled={!input.trim() || submitting} aria-label="Send message" className="rounded bg-purple-600 p-2 text-white hover:bg-purple-500 disabled:opacity-40">{submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button></div></div>}
-    </aside>
+    </aside></div>
   );
 }
 

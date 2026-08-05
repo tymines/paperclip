@@ -160,11 +160,11 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
   return (
     <div className="flex flex-col h-full min-h-0">
       {/* header */}
-      <div className="sticky top-0 bg-[#0a0c10] z-10 px-5 pt-4 pb-3 border-b border-white/5">
+      <div className="sticky top-0 bg-[#0a0c10] z-10 px-3 pt-4 pb-3 border-b border-white/5 sm:px-5">
         <div className="text-[9.5px] uppercase tracking-[0.16em] text-gray-500 font-bold">
           Chapter {chapterNumber} · {beats.length} beats{chapterStatus ? ` · ${chapterStatus}` : ""}
         </div>
-        <h1 className="font-serif text-2xl font-semibold mt-1 inline">{chapterTitle}</h1>
+        <h1 className="font-serif text-2xl font-semibold mt-1 break-words">{chapterTitle}</h1>
         <button
           className={`ml-2 align-middle ${locked ? "opacity-100" : "opacity-50 hover:opacity-90"}`}
           onClick={onLockToggle}
@@ -177,7 +177,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
           {chapterStatus === "exception" ? "1 exception requires a decision" : chapterStatus === "queued" ? "Passed the gate · queued for manuscript" : "Beat plan"}
         </p>
         {/* stage spine */}
-        <div className="flex items-center mt-3.5">
+        <div className="flex items-center gap-2 mt-3.5 overflow-x-auto pb-1">
           {STAGES.map((s, i) => (
             <React.Fragment key={s}>
               {i > 0 && <div className={`flex-1 h-px mx-2 min-w-2 ${stageStates[i] === "done" || stageStates[i - 1] === "done" ? "bg-emerald-400/30" : "bg-white/10"}`} />}
@@ -193,7 +193,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
       </div>
 
       {/* view tabs */}
-      <div className="flex gap-5 border-b border-white/5 px-5 bg-[#0a0c10] sticky top-0 z-[9]">
+      <div className="flex gap-5 overflow-x-auto border-b border-white/5 px-3 sm:px-5 bg-[#0a0c10] sticky top-0 z-[9]">
         {(["beats", "prose", "context", "bible"] as const).map((v) => (
           <button
             key={v}
@@ -206,7 +206,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
       </div>
 
       {/* views */}
-      <div className="flex-1 overflow-auto px-5 py-4 min-h-0">
+      <div className="flex-1 overflow-auto px-3 py-4 min-h-0 sm:px-5">
         {view === "beats" && (
           <div>
             <div className="flex items-baseline justify-between border-b border-white/5 pb-2 mb-3">
@@ -306,7 +306,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
       </div>
 
       {/* bottom bar */}
-      <div className="sticky bottom-0 flex gap-2 px-5 py-3 bg-gradient-to-b from-transparent to-[#0a0c10] z-[8]">
+      <div className="sticky bottom-0 flex flex-wrap gap-2 px-3 py-3 sm:px-5 bg-gradient-to-b from-transparent to-[#0a0c10] z-[8]">
         <button className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide border border-white/15 rounded-md hover:bg-white/5" onClick={onOpenDecisionInbox} title="Open your pending decisions">Your call</button>
         <div className="relative">
           <button className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide rounded-md bg-[#e0955a] text-[#181008] hover:bg-[#eaa96f] disabled:opacity-40" disabled={busy != null} onClick={(e) => { e.stopPropagation(); setDraftMenu((v) => !v); }}>

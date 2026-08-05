@@ -3,7 +3,7 @@
 // slide-over drawer: BookWritingPage integration is one import + one JSX line, keeping
 // the diff additive vs fable-book-build. Data-honest amber states when providers are
 // keyed off — no mock output, ever.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Clapperboard, ImageIcon, Film, Mic, RefreshCw, AlertTriangle, X, Download, Sparkles,
@@ -31,6 +31,8 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
   const qc = useQueryClient();
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const setOpen = (next: boolean) => {
     if (controlledOpen === undefined) setInternalOpen(next);
     onOpenChange?.(next);
@@ -54,6 +56,16 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
     setIconTarget({});
     setLocTarget({});
   }, [bookId]);
+
+  useEffect(() => {
+    if (!open) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const first = panelRef.current?.querySelector<HTMLElement>("button:not([disabled]), select:not([disabled]), input:not([disabled])");
+    requestAnimationFrame(() => first?.focus());
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); setOpen(false); } };
+    document.addEventListener("keydown", onKeyDown);
+    return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
+  }, [open]);
 
   const overviewQ = useQuery({
     queryKey: ["book-media", cid, bookId],
@@ -149,7 +161,7 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
       </button>}
 
       {open && (
-        <div className="fixed z-50 flex flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
+        <div className="fixed inset-0 z-50 md:inset-auto" role="presentation"><button className="absolute inset-0 h-full w-full bg-black/65 md:hidden" aria-label="Close media" onClick={() => setOpen(false)} /><div ref={panelRef} role="dialog" aria-modal="true" aria-label="Book Media" className="fixed z-50 flex max-h-[90dvh] flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
           <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-gray-100">
               <Clapperboard size={15} className="text-blue-400" /> Book Media
@@ -432,7 +444,7 @@ export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpen
               </div>
             )}
           </div>
-        </div>
+        </div></div>
       )}
     </>
   );
