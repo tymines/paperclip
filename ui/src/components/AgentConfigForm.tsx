@@ -1407,7 +1407,7 @@ function ExperimentalBadge() {
   );
 }
 
-function ModelDropdown({
+export function ModelDropdown({
   models,
   value,
   onChange,
@@ -1538,7 +1538,7 @@ function ModelDropdown({
         <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-1" align="start">
           <div className="relative mb-1">
             <input
-              className="w-full px-2 py-1.5 pr-6 text-xs bg-transparent outline-none border-b border-border placeholder:text-muted-foreground/50"
+              className="min-h-11 w-full bg-transparent px-2 py-1.5 pr-12 text-xs outline-none border-b border-border placeholder:text-muted-foreground/50 sm:min-h-0 sm:pr-8"
               placeholder={creatable ? "Search models... (type to create)" : "Search models..."}
               value={modelSearch}
               onChange={(e) => setModelSearch(e.target.value)}
@@ -1547,7 +1547,8 @@ function ModelDropdown({
             {modelSearch && (
               <button
                 type="button"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                aria-label="Clear model search"
+                className="absolute right-0 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center text-muted-foreground hover:text-foreground sm:right-1 sm:h-7 sm:w-7"
                 onClick={() => setModelSearch("")}
               >
                 <svg aria-hidden="true" focusable="false" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

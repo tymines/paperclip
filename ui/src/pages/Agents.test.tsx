@@ -446,6 +446,12 @@ describe("Agents", () => {
     expect(mockOpenNewAgent).toHaveBeenCalledOnce();
 
     const athena = container.querySelector<HTMLElement>('[data-pp-fleet-position="Athena"]')!;
+    expect(athena.className).toContain("grid-cols-[1fr_auto]");
+    expect(athena.className).toContain("lg:grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]");
+    expect(athena.className).not.toContain(" grid-cols-[minmax(200px,1.5fr)");
+    const canonicalConfigure = athena.querySelector<HTMLAnchorElement>('a[aria-label="Configure agent"]')!;
+    expect(canonicalConfigure.className).toContain("h-11");
+    expect(canonicalConfigure.className).toContain("sm:h-8");
     await act(async () => athena.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     await flushReact();
     const drawer = container.querySelector<HTMLElement>('[role="dialog"]')!;
@@ -454,5 +460,18 @@ describe("Agents", () => {
     expect(close.className).toContain("h-11");
     await act(async () => close.click());
     expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    mockLocation.search = "?view=other";
+    await act(async () => root?.unmount());
+    root = await renderAgents(container, queryClient);
+    const otherRow = container.querySelector<HTMLElement>('[data-pp-fleet-row="db-baily"]')!;
+    expect(otherRow.className).toContain("grid-cols-[1fr_auto]");
+    expect(otherRow.className).toContain("lg:grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]");
+    const otherConfigure = otherRow.querySelector<HTMLAnchorElement>('a[aria-label="Configure agent"]')!;
+    expect(otherConfigure.className).toContain("w-11");
+    expect(otherConfigure.getAttribute("href")).toBe("/agents/baily-ai/configuration");
+    await act(async () => otherRow.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    await flushReact();
+    expect(container.querySelector('[role="dialog"] a[href="/agents/baily-ai"]')).not.toBeNull();
   });
 });

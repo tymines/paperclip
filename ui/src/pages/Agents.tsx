@@ -359,7 +359,7 @@ function RowControls({
 /* List row                                                                   */
 /* -------------------------------------------------------------------------- */
 const GRID_COLS =
-  "grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]";
+  "lg:grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]";
 
 function ColumnHeader() {
   return (
