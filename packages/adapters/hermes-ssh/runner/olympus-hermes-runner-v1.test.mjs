@@ -10,6 +10,7 @@ import {
   claimRun,
   coordinateRunStart,
   deadlineDelayMs,
+  emitStoredStartTerminal,
   parseRequest,
   parseRunnerArgs,
   persistTerminal,
@@ -168,6 +169,25 @@ describe("versioned Hermes runner", () => {
       },
     );
     expect(outcome).toEqual({ kind: "local-terminal" });
+  });
+
+  it("emits a stored start terminal exactly once when a later signal arrives", async () => {
+    let locallyTerminal = false;
+    let signalsArmed = true;
+    const emissions = [];
+    const stored = { protocol: PROTOCOL, runId: request.runId, profile: "atlas", status: "cancelled", result: "external cancel" };
+    await emitStoredStartTerminal(
+      { kind: "stored-terminal", envelope: stored },
+      {
+        claimLocalTerminal: () => { locallyTerminal = true; },
+        disarmSignals: () => { signalsArmed = false; },
+        emit: async (value) => { emissions.push(value); },
+      },
+    );
+    if (signalsArmed && !locallyTerminal) emissions.push(stored);
+    expect(locallyTerminal).toBe(true);
+    expect(signalsArmed).toBe(false);
+    expect(emissions).toEqual([stored]);
   });
 
   it("computes a bounded deadline delay and rejects malformed deadlines", () => {

@@ -191,6 +191,14 @@ export async function coordinateRunStart(paths, pid, isLocallyTerminal, register
   return stored ? { kind: "stored-terminal", envelope: stored } : { kind: "ready" };
 }
 
+export async function emitStoredStartTerminal(startState, controls) {
+  if (startState.kind !== "stored-terminal") return false;
+  controls.claimLocalTerminal();
+  controls.disarmSignals();
+  await controls.emit(startState.envelope, startState.envelope.status === "completed" ? 0 : 1);
+  return true;
+}
+
 export async function cancelRunState(profile, runId, stateRoot = STATE_ROOT, terminate = terminateProcessTree) {
   const { profileDir, resultPath, pidPath } = runStatePaths(profile, runId, stateRoot);
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
@@ -255,9 +263,15 @@ async function run() {
     const stored = await persist(value);
     if (stored) await emit(stored, stored.status === "completed" ? 0 : 1);
   };
-  process.once("SIGTERM", () => { void cancel(); });
-  process.once("SIGHUP", () => { void cancel(); });
-  process.once("SIGINT", () => { void cancel(); });
+  const handleSignal = () => { void cancel(); };
+  const disarmSignals = () => {
+    process.removeListener("SIGTERM", handleSignal);
+    process.removeListener("SIGHUP", handleSignal);
+    process.removeListener("SIGINT", handleSignal);
+  };
+  process.once("SIGTERM", handleSignal);
+  process.once("SIGHUP", handleSignal);
+  process.once("SIGINT", handleSignal);
 
   const wrapper = PROFILES[profile].wrapper;
   child = spawn(wrapper, [], {
@@ -284,9 +298,11 @@ async function run() {
   try {
     const startState = await coordinateRunStart(prepared.paths, child.pid, () => terminal);
     if (startState.kind === "local-terminal") return;
-    if (startState.kind === "stored-terminal") {
-      return emit(startState.envelope, startState.envelope.status === "completed" ? 0 : 1);
-    }
+    if (await emitStoredStartTerminal(startState, {
+      claimLocalTerminal: () => { terminal = true; },
+      disarmSignals,
+      emit,
+    })) return;
   } catch {
     if (terminal) return;
     const failed = await persist(envelope(request.runId, profile, "failed", "Hermes runner could not record the wrapper process"));
