@@ -44,23 +44,6 @@ export function BreadcrumbBar() {
   );
 
   const globalToolbarSlots = <GlobalToolbarPlugins context={globalToolbarSlotContext} />;
-
-  if (isMobile && mobileToolbar) {
-    return (
-      <div className="border-b border-border px-2 h-12 shrink-0 flex items-center" data-pp-topbar="true">
-        {mobileToolbar}
-      </div>
-    );
-  }
-
-  if (breadcrumbs.length === 0) {
-    return (
-      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end" data-pp-topbar="true">
-        {globalToolbarSlots}
-      </div>
-    );
-  }
-
   const menuButton = isMobile && (
     <Button
       variant="ghost"
@@ -72,6 +55,25 @@ export function BreadcrumbBar() {
       <Menu className="h-5 w-5" />
     </Button>
   );
+
+  if (isMobile && mobileToolbar) {
+    return (
+      <div className="border-b border-border px-2 h-12 shrink-0 flex items-center" data-pp-topbar="true">
+        {menuButton}
+        <div className="min-w-0 flex-1 overflow-x-auto">{mobileToolbar}</div>
+      </div>
+    );
+  }
+
+  if (breadcrumbs.length === 0) {
+    return (
+      <div className="border-b border-border px-4 md:px-6 h-12 shrink-0 flex items-center justify-end" data-pp-topbar="true">
+        {menuButton}
+        <div className="flex-1" />
+        {globalToolbarSlots}
+      </div>
+    );
+  }
 
   // Single breadcrumb = page title (uppercase)
   if (breadcrumbs.length === 1) {

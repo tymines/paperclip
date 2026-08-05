@@ -17,12 +17,14 @@ interface PageTabBarProps {
 export function PageTabBar({ items, value, onValueChange, align = "center" }: PageTabBarProps) {
   const { isMobile } = useSidebar();
 
-  if (isMobile && value !== undefined && onValueChange) {
+  if (isMobile && value !== undefined) {
     return (
       <select
         value={value}
-        onChange={(e) => onValueChange(e.target.value)}
-        className="h-9 rounded-md border border-border bg-background px-2 py-1 text-base focus:outline-none focus:ring-1 focus:ring-ring"
+        onChange={(e) => onValueChange?.(e.target.value)}
+        disabled={!onValueChange}
+        aria-label="Page section"
+        className="h-11 w-full max-w-full rounded-md border border-border bg-background px-3 py-1 text-base focus:outline-none focus:ring-1 focus:ring-ring"
       >
         {items.map((item) => (
           <option key={item.value} value={item.value}>
@@ -30,6 +32,20 @@ export function PageTabBar({ items, value, onValueChange, align = "center" }: Pa
           </option>
         ))}
       </select>
+    );
+  }
+
+  if (isMobile) {
+    return (
+      <div className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain" data-pp-page-tabs-scroll>
+        <TabsList variant="line" className="min-w-max justify-start">
+          {items.map((item) => (
+            <TabsTrigger key={item.value} value={item.value} className="min-h-11 shrink-0">
+              {item.label}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </div>
     );
   }
 
