@@ -12,6 +12,7 @@ import { GoalsCreateAction } from "./Goals";
 import { RoomMessageComposer } from "./RoomDetail";
 import { RoomTypeSelect } from "./Rooms";
 import { RoutineDetailTabList } from "./RoutineDetail";
+import { RoutineGroupMenu, RoutineSortMenu } from "./Routines";
 import { RoutineListRow } from "../components/RoutineList";
 
 vi.mock("../components/MarkdownEditor", () => ({ MarkdownEditor: () => null }));
@@ -128,6 +129,36 @@ describe("Collaboration responsive workflows", () => {
     const items = Array.from(document.body.querySelectorAll<HTMLElement>("[role='menuitem']"));
     expect(items.length).toBeGreaterThan(2);
     expect(items.every((item) => item.className.includes("min-h-11") && item.className.includes("sm:min-h-0"))).toBe(true);
+    act(() => root.unmount());
+  });
+
+  it("opens the page-level Routine Sort portal and selects a phone-sized option", () => {
+    const onChange = vi.fn();
+    const { container, root } = mount(
+      <RoutineSortMenu sortField="updated" sortDir="desc" onChange={onChange} />,
+    );
+    act(() => container.querySelector<HTMLButtonElement>('button[title="Sort"]')!.click());
+    const title = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Title",
+    )!;
+    expect(title.className).toContain("min-h-11");
+    expect(title.className).toContain("sm:min-h-0");
+    act(() => title.click());
+    expect(onChange).toHaveBeenCalledWith({ sortField: "title", sortDir: "asc" });
+    act(() => root.unmount());
+  });
+
+  it("opens the page-level Routine Group portal and selects a phone-sized option", () => {
+    const onChange = vi.fn();
+    const { container, root } = mount(<RoutineGroupMenu groupBy="none" onChange={onChange} />);
+    act(() => container.querySelector<HTMLButtonElement>('button[title="Group"]')!.click());
+    const agent = Array.from(document.body.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Agent",
+    )!;
+    expect(agent.className).toContain("min-h-11");
+    expect(agent.className).toContain("sm:min-h-0");
+    act(() => agent.click());
+    expect(onChange).toHaveBeenCalledWith({ groupBy: "assignee", collapsedGroups: [] });
     act(() => root.unmount());
   });
 
