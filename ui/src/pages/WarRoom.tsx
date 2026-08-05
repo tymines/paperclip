@@ -368,7 +368,7 @@ export function WarRoom() {
                           </SelectTrigger>
                           <SelectContent>
                             {STAGES.filter((_, i) => i < currentIdx).map((s) => (
-                              <SelectItem key={s} value={s}>{STAGE_LABEL[s]}</SelectItem>
+                              <SelectItem className="min-h-11 sm:min-h-0" key={s} value={s}>{STAGE_LABEL[s]}</SelectItem>
                             ))}
                           </SelectContent>
                         </Select>

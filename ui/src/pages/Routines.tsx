@@ -34,7 +34,7 @@ import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/Rout
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -488,7 +488,7 @@ export function Routines() {
 
   return (
     <div
-      className="flex min-w-0 flex-col gap-6 overflow-x-hidden bg-gradient-to-b from-background via-background to-primary/[0.03] [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 [&_textarea]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0 sm:[&_textarea]:min-h-0"
+      className="flex min-w-0 flex-col gap-6 overflow-x-hidden bg-gradient-to-b from-background via-background to-primary/[0.03] [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0"
       data-pp-page-v2="routines"
     >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -621,8 +621,10 @@ export function Routines() {
       >
         <DialogContent
           showCloseButton={false}
-          className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 [&_textarea]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0 sm:[&_textarea]:min-h-0"
+          className="flex max-h-[calc(100dvh-2rem)] max-w-3xl flex-col gap-0 overflow-hidden p-0 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_select]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0"
         >
+          <DialogTitle className="sr-only">Create routine</DialogTitle>
+          <DialogDescription className="sr-only">Define recurring work, assignment, schedule, and execution settings.</DialogDescription>
           <div className="shrink-0 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.2em] text-muted-foreground">New routine</p>
@@ -647,7 +649,7 @@ export function Routines() {
             <div className="px-5 pt-5 pb-3">
               <textarea
                 ref={titleInputRef}
-                className="w-full resize-none overflow-hidden bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground/50"
+                className="min-h-11 w-full resize-none overflow-hidden bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground/50 sm:min-h-0"
                 placeholder="Routine title"
                 rows={1}
                 value={draft.title}
@@ -812,7 +814,7 @@ export function Routines() {
                         </SelectTrigger>
                         <SelectContent>
                           {concurrencyPolicies.map((value) => (
-                            <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                            <SelectItem className="min-h-11 sm:min-h-0" key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -829,7 +831,7 @@ export function Routines() {
                         </SelectTrigger>
                         <SelectContent>
                           {catchUpPolicies.map((value) => (
-                            <SelectItem key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
+                            <SelectItem className="min-h-11 sm:min-h-0" key={value} value={value}>{value.replaceAll("_", " ")}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>

@@ -39,6 +39,15 @@ const surfaceCard: CSSProperties = {
   boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
 };
 
+export function GoalsCreateAction({ onCreate }: { onCreate: () => void }) {
+  return (
+    <Button size="sm" variant="outline" className="h-11 w-full sm:h-8 sm:w-auto" onClick={onCreate}>
+      <Plus className="h-3.5 w-3.5 mr-1.5" />
+      New Goal
+    </Button>
+  );
+}
+
 export function Goals() {
   const { selectedCompanyId } = useCompany();
   const { openNewGoal } = useDialogActions();
@@ -79,10 +88,7 @@ export function Goals() {
           </p>
         </div>
         {goals && goals.length > 0 && (
-          <Button size="sm" variant="outline" className="h-11 w-full sm:h-8 sm:w-auto" onClick={() => openNewGoal()}>
-            <Plus className="h-3.5 w-3.5 mr-1.5" />
-            New Goal
-          </Button>
+          <GoalsCreateAction onCreate={() => openNewGoal()} />
         )}
       </div>
 

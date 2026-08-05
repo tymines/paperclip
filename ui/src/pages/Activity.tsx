@@ -84,6 +84,27 @@ function activityEntityTitle(event: ActivityEvent) {
   return null;
 }
 
+export function ActivityTypeFilter({ value, entityTypes, onValueChange }: { value: string; entityTypes: string[]; onValueChange: (value: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger
+        className="h-11 w-full text-xs sm:h-9 sm:w-[160px]"
+        style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.text }}
+      >
+        <SelectValue placeholder="Filter by type" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem className="min-h-11 sm:min-h-0" value="all">All types</SelectItem>
+        {entityTypes.map((type) => (
+          <SelectItem className="min-h-11 sm:min-h-0" key={type} value={type}>
+            {type.charAt(0).toUpperCase() + type.slice(1)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function Activity() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -176,26 +197,7 @@ export function Activity() {
           </p>
         </div>
 
-        <Select value={filter} onValueChange={setFilter}>
-          <SelectTrigger
-            className="h-11 w-full text-xs sm:h-9 sm:w-[160px]"
-            style={{
-              background: DS.surface3,
-              border: `1px solid ${DS.border2}`,
-              color: DS.text,
-            }}
-          >
-            <SelectValue placeholder="Filter by type" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            {entityTypes.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type.charAt(0).toUpperCase() + type.slice(1)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ActivityTypeFilter value={filter} entityTypes={entityTypes} onValueChange={setFilter} />
       </div>
 
       <MlflowObservabilityCard variant="activity" />

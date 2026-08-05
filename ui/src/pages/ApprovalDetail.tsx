@@ -26,7 +26,9 @@ export function ApprovalPayloadDisclosure({
   const [showRawPayload, setShowRawPayload] = useState(false);
   return (
     <>
-      <ApprovalPayloadRenderer type={type} payload={payload} />
+      <div className="min-w-0 max-w-full overflow-x-auto overscroll-x-contain [overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_pre]:overscroll-x-contain" tabIndex={0} aria-label="Approval request summary; scroll horizontally if needed">
+        <ApprovalPayloadRenderer type={type} payload={payload} />
+      </div>
       <button
         type="button"
         className="mt-2 flex min-h-11 min-w-11 items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:min-h-0 sm:min-w-0"
@@ -42,6 +44,26 @@ export function ApprovalPayloadDisclosure({
         </pre>
       ) : null}
     </>
+  );
+}
+
+export function ApprovalHeading({ label, id }: { label: string; id: string }) {
+  return (
+    <div className="min-w-0">
+      <h2 className="break-words text-lg font-semibold [overflow-wrap:anywhere]">{label}</h2>
+      <p className="break-all text-xs text-muted-foreground font-mono">{id}</p>
+    </div>
+  );
+}
+
+export function ApprovalCommentInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <Textarea
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder="Add a comment..."
+      rows={3}
+    />
   );
 }
 
@@ -201,7 +223,7 @@ export function ApprovalDetail() {
           };
 
   return (
-    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_textarea]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_textarea]:min-h-0" data-testid="approval-detail-responsive-root">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0" data-testid="approval-detail-responsive-root">
       {showApprovedBanner && (
         <div className="border border-green-300 dark:border-green-700/40 bg-green-50 dark:bg-green-900/20 rounded-lg px-4 py-3 animate-in fade-in zoom-in-95 duration-300">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -230,12 +252,9 @@ export function ApprovalDetail() {
       )}
       <div className="border border-border rounded-lg p-4 space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 items-center gap-2">
             <TypeIcon className="h-5 w-5 text-muted-foreground shrink-0" />
-            <div>
-              <h2 className="text-lg font-semibold">{approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)}</h2>
-              <p className="text-xs text-muted-foreground font-mono">{approval.id}</p>
-            </div>
+            <ApprovalHeading label={approvalLabel(approval.type, approval.payload as Record<string, unknown> | null)} id={approval.id} />
           </div>
           <StatusBadge status={approval.status} />
         </div>
@@ -401,12 +420,7 @@ export function ApprovalDetail() {
             </div>
           ))}
         </div>
-        <Textarea
-          value={commentBody}
-          onChange={(e) => setCommentBody(e.target.value)}
-          placeholder="Add a comment..."
-          rows={3}
-        />
+        <ApprovalCommentInput value={commentBody} onChange={setCommentBody} />
         <div className="flex justify-end">
           <Button
             size="sm"

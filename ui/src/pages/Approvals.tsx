@@ -44,6 +44,17 @@ const surfaceCard: CSSProperties = {
   boxShadow: "0 1px 0 rgba(255,255,255,0.02), 0 8px 24px -16px rgba(0,0,0,0.8)",
 };
 
+export function ApprovalStatusFilter({ value, pendingCount, onValueChange }: { value: StatusFilter; pendingCount: number; onValueChange: (value: string) => void }) {
+  return (
+    <Tabs value={value} onValueChange={onValueChange}>
+      <PageTabBar items={[
+        { value: "pending", label: <>Pending{pendingCount > 0 && <span className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium" style={{ background: `${DS.warning}22`, color: DS.warning }}>{pendingCount}</span>}</> },
+        { value: "all", label: "All" },
+      ]} />
+    </Tabs>
+  );
+}
+
 export function Approvals() {
   const { selectedCompanyId } = useCompany();
   const { setBreadcrumbs } = useBreadcrumbs();
@@ -128,19 +139,7 @@ export function Approvals() {
       </div>
 
       <div className="min-w-0">
-        <Tabs value={statusFilter} onValueChange={(v) => navigate(`/approvals/${v}`)}>
-          <PageTabBar items={[
-            { value: "pending", label: <>Pending{pendingCount > 0 && (
-              <span
-                className="ml-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                style={{ background: `${DS.warning}22`, color: DS.warning }}
-              >
-                {pendingCount}
-              </span>
-            )}</> },
-            { value: "all", label: "All" },
-          ]} />
-        </Tabs>
+        <ApprovalStatusFilter value={statusFilter} pendingCount={pendingCount} onValueChange={(v) => navigate(`/approvals/${v}`)} />
       </div>
 
       {error && <p className="text-sm" style={{ color: DS.critical }}>{error.message}</p>}

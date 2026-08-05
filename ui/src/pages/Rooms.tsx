@@ -89,6 +89,24 @@ const ROOM_TYPE_LABELS: Record<string, string> = {
   council: "Council",
 };
 
+export function RoomTypeSelect({ value, onValueChange }: { value: string; onValueChange: (value: string) => void }) {
+  return (
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger id="room-type" className="h-11 sm:h-9">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem className="min-h-11 sm:min-h-0" value="collaboration">Collaboration</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="war-room">War Room</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="standup">Standup</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="brainstorm">Brainstorm</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="team">Team</SelectItem>
+        <SelectItem className="min-h-11 sm:min-h-0" value="council">Council</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 export function RoomCard({ room, onClick }: { room: Room; onClick: () => void }) {
   const Icon = ROOM_TYPE_ICONS[room.type] ?? MessageSquare;
   const isActive = room.status === "active";
@@ -299,22 +317,7 @@ export function Rooms() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="room-type">Type</Label>
-              <Select
-                value={draft.type}
-                onValueChange={(value) => setDraft((d) => ({ ...d, type: value }))}
-              >
-                <SelectTrigger id="room-type" className="h-11 sm:h-9">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="collaboration">Collaboration</SelectItem>
-                  <SelectItem value="war-room">War Room</SelectItem>
-                  <SelectItem value="standup">Standup</SelectItem>
-                  <SelectItem value="brainstorm">Brainstorm</SelectItem>
-                  <SelectItem value="team">Team</SelectItem>
-                  <SelectItem value="council">Council</SelectItem>
-                </SelectContent>
-              </Select>
+              <RoomTypeSelect value={draft.type} onValueChange={(value) => setDraft((d) => ({ ...d, type: value }))} />
             </div>
           </div>
           <DialogFooter>
