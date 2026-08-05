@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 
 export interface Breadcrumb {
   label: string;
@@ -18,6 +19,7 @@ interface BreadcrumbProviderProps {
 }
 
 const BreadcrumbContext = createContext<BreadcrumbContextValue | null>(null);
+const DISPLAY_NAME = PRODUCT_IDENTIFIERS.canonical.displayName;
 
 function breadcrumbsEqual(left: Breadcrumb[], right: Breadcrumb[]) {
   if (left === right) return true;
@@ -35,7 +37,7 @@ export function buildDocumentTitle(breadcrumbs: Breadcrumb[], companyName?: stri
     ? []
     : [...breadcrumbs].reverse().map((breadcrumb) => breadcrumb.label);
   const companyPart = companyName?.trim() ? [companyName.trim()] : [];
-  const parts = [...pageParts, ...companyPart, "Paperclip"];
+  const parts = [...pageParts, ...companyPart, DISPLAY_NAME];
   return parts.join(" • ");
 }
 

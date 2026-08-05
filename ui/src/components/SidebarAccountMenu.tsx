@@ -11,6 +11,7 @@ import {
   UserRoundPen,
 } from "lucide-react";
 import type { DeploymentMode } from "@paperclipai/shared";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 import { Link } from "@/lib/router";
 import { authApi } from "@/api/auth";
 import { queryKeys } from "@/lib/queryKeys";
@@ -22,6 +23,7 @@ import { cn } from "../lib/utils";
 
 const PROFILE_SETTINGS_PATH = "/instance/settings/profile";
 const DOCS_URL = "https://docs.paperclip.ing/";
+const DISPLAY_NAME = PRODUCT_IDENTIFIERS.canonical.displayName;
 
 interface SidebarAccountMenuProps {
   deploymentMode?: DeploymentMode;
@@ -181,7 +183,7 @@ export function SidebarAccountMenu({
                 </div>
                 <p className="truncate text-sm text-muted-foreground">{secondaryLabel}</p>
                 {version ? (
-                  <p className="mt-1 text-xs text-muted-foreground">Paperclip v{version}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{DISPLAY_NAME} v{version}</p>
                 ) : null}
               </div>
             </div>
@@ -210,7 +212,7 @@ export function SidebarAccountMenu({
               />
               <MenuAction
                 label="Documentation"
-                description="Open Paperclip docs in a new tab."
+                description={`Open ${DISPLAY_NAME} docs in a new tab.`}
                 icon={BookOpen}
                 href={DOCS_URL}
                 external

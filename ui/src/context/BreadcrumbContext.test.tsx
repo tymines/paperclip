@@ -59,20 +59,20 @@ describe("BreadcrumbContext", () => {
     expect(renderCounts).toHaveLength(2);
   });
 
-  it("builds page titles with the selected company name before Paperclip", () => {
+  it("builds page titles with the selected company name before Olympus", () => {
     expect(buildDocumentTitle([{ label: "Action Queue" }], "Anachronist Wiki")).toBe(
-      "Action Queue • Anachronist Wiki • Paperclip",
+      "Action Queue • Anachronist Wiki • Olympus",
     );
     expect(
       buildDocumentTitle(
         [{ label: "Issues", href: "/issues" }, { label: "PAP-3515" }],
         "Anachronist Wiki",
       ),
-    ).toBe("PAP-3515 • Issues • Anachronist Wiki • Paperclip");
+    ).toBe("PAP-3515 • Issues • Anachronist Wiki • Olympus");
   });
 
   it("omits blank company names from page titles", () => {
-    expect(buildDocumentTitle([{ label: "Action Queue" }], "  ")).toBe("Action Queue • Paperclip");
-    expect(buildDocumentTitle([], null)).toBe("Paperclip");
+    expect(buildDocumentTitle([{ label: "Action Queue" }], "  ")).toBe("Action Queue • Olympus");
+    expect(buildDocumentTitle([], null)).toBe("Olympus");
   });
 });
