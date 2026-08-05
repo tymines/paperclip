@@ -20,6 +20,40 @@ function transportError(stderr: string, exitCode: number | null): string {
   return `Hermes SSH transport exited with code ${exitCode ?? -1}`;
 }
 
+const discardTransportLog = async () => undefined;
+
+async function bestEffortCancel(ctx: AdapterExecutionContext, profile: string): Promise<void> {
+  const args = [
+    "-T",
+    "-o", "BatchMode=yes",
+    "-o", "StrictHostKeyChecking=yes",
+    "-o", "ClearAllForwardings=yes",
+    "-o", "ForwardAgent=no",
+    "-o", "ForwardX11=no",
+    "-o", "PermitLocalCommand=no",
+    "-o", "RequestTTY=no",
+    "augi-mac-1",
+    REMOTE_RUNNER,
+    "--cancel",
+    "--profile",
+    profile,
+    "--run-id",
+    ctx.runId,
+  ];
+  try {
+    await runChildProcess(`${ctx.runId}:cancel`, "ssh", args, {
+      cwd: process.cwd(),
+      env: {},
+      timeoutSec: 10,
+      graceSec: 2,
+      onLog: discardTransportLog,
+    });
+  } catch {
+    // Cancellation is deliberately best effort. The remote deadline remains
+    // authoritative if this second strict SSH connection cannot be opened.
+  }
+}
+
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   let config;
   try {
@@ -85,13 +119,17 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     timeoutSec: config.timeoutSec,
     graceSec: 5,
     onSpawn: ctx.onSpawn,
-    onLog: ctx.onLog,
+    // stdout is the terminal protocol envelope and stderr may contain provider
+    // details. Neither stream is safe for ordinary run logs.
+    onLog: discardTransportLog,
     stdin: `${JSON.stringify(request)}\n`,
   });
 
   if (proc.timedOut) {
-    return { exitCode: proc.exitCode, signal: proc.signal, timedOut: true, errorMessage: `Hermes SSH timed out after ${config.timeoutSec}s` };
+    await bestEffortCancel(ctx, config.profile);
+    return { exitCode: (proc.exitCode ?? 1) === 0 ? 1 : proc.exitCode ?? 1, signal: proc.signal, timedOut: true, errorMessage: `Hermes SSH timed out after ${config.timeoutSec}s` };
   }
+  if (proc.signal) await bestEffortCancel(ctx, config.profile);
 
   let envelope;
   try {
@@ -112,7 +150,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   }
   const succeeded = envelope.status === "completed" && (proc.exitCode ?? 0) === 0;
   return {
-    exitCode: succeeded ? 0 : proc.exitCode ?? 1,
+    exitCode: succeeded ? 0 : ((proc.exitCode ?? 1) === 0 ? 1 : proc.exitCode ?? 1),
     signal: proc.signal,
     timedOut: false,
     errorMessage: succeeded ? null : envelope.result || `Hermes run ${envelope.status}`,

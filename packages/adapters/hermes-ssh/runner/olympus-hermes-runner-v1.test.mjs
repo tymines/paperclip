@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,10 +7,13 @@ import {
   PROTOCOL,
   PROFILES,
   claimRun,
+  deadlineDelayMs,
   parseRequest,
   parseRunnerArgs,
+  persistTerminal,
   readStoredEnvelope,
   runStatePaths,
+  terminateProcessTree,
 } from "./olympus-hermes-runner-v1.mjs";
 
 const temporaryDirs = [];
@@ -39,10 +43,13 @@ describe("versioned Hermes runner", () => {
   });
 
   it("accepts only fixed bounded runner arguments", () => {
-    expect(parseRunnerArgs(["--profile", "atlas", "--max-turns", "10"])).toEqual({ profile: "atlas", maxTurns: 10 });
+    expect(parseRunnerArgs(["--profile", "atlas", "--max-turns", "10"])).toEqual({ operation: "run", profile: "atlas", maxTurns: 10 });
+    expect(parseRunnerArgs(["--cancel", "--profile", "atlas", "--run-id", request.runId])).toEqual({ operation: "cancel", profile: "atlas", runId: request.runId });
     expect(() => parseRunnerArgs(["--profile", "other", "--max-turns", "10"])).toThrow(/not allowlisted/);
     expect(() => parseRunnerArgs(["--profile", "atlas", "--max-turns", "26"])).toThrow(/out of bounds/);
     expect(() => parseRunnerArgs(["--profile", "atlas", "--command", "sh"])).toThrow(/fixed/);
+    expect(() => parseRunnerArgs(["--cancel", "--profile", "other", "--run-id", request.runId])).toThrow(/not allowlisted/);
+    expect(() => parseRunnerArgs(["--cancel", "--profile", "atlas", "--run-id", "not-a-run-id"])).toThrow(/UUID/);
   });
 
   it("independently validates request protocol, role, fields, and size", () => {
@@ -63,5 +70,38 @@ describe("versioned Hermes runner", () => {
     const terminal = { protocol: PROTOCOL, runId: request.runId, profile: "atlas", status: "completed", result: "stored" };
     await writeFile(paths.resultPath, JSON.stringify(terminal));
     expect(await readStoredEnvelope(paths.resultPath)).toEqual(terminal);
+  });
+
+  it("keeps the first terminal result when cancellation races late completion", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "hermes-runner-terminal-test-"));
+    temporaryDirs.push(stateRoot);
+    const paths = runStatePaths("atlas", request.runId, stateRoot);
+    await mkdir(paths.profileDir, { recursive: true });
+    expect(await claimRun(paths.lockPath)).toBe(true);
+    const cancelled = { protocol: PROTOCOL, runId: request.runId, profile: "atlas", status: "cancelled", result: "deadline" };
+    const completed = { ...cancelled, status: "completed", result: "late" };
+    expect(await persistTerminal(paths.resultPath, paths.lockPath, cancelled)).toEqual(cancelled);
+    expect(await persistTerminal(paths.resultPath, paths.lockPath, completed)).toEqual(cancelled);
+    expect(await readStoredEnvelope(paths.resultPath)).toEqual(cancelled);
+  });
+
+  it("computes a bounded deadline delay and rejects malformed deadlines", () => {
+    expect(deadlineDelayMs("2026-08-05T12:00:01.000Z", Date.parse("2026-08-05T12:00:00.000Z"))).toBe(1_000);
+    expect(deadlineDelayMs("2026-08-05T11:59:00.000Z", Date.parse("2026-08-05T12:00:00.000Z"))).toBe(1);
+    expect(() => deadlineDelayMs("invalid", 0)).toThrow(/invalid/);
+  });
+
+  it("escalates cancellation when a child ignores SIGTERM", async () => {
+    const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    terminateProcessTree(child.pid, 50);
+    const outcome = await Promise.race([
+      new Promise((resolve) => child.once("close", (code, signal) => resolve({ code, signal }))),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("child was not cancelled")), 2_000)),
+    ]);
+    expect(outcome.code).not.toBe(0);
   });
 });

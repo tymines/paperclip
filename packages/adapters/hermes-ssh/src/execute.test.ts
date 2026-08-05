@@ -102,6 +102,18 @@ describe("hermes_ssh execution", () => {
     expect(serializedMeta).not.toContain(prompt);
     expect(serializedMeta).not.toContain(secret);
     expect(options.env).toEqual({});
+    expect(vi.mocked(ctx.onLog!)).not.toHaveBeenCalled();
+  });
+
+  it("never forwards a terminal result that echoes the private prompt to ordinary logs", async () => {
+    vi.mocked(runChildProcess).mockResolvedValue(processResult({ stdout: terminal("completed", prompt) }));
+    const ctx = context();
+    const result = await createServerAdapter().execute(ctx);
+    expect(result.summary).toBe(prompt);
+    expect(ctx.onLog).not.toHaveBeenCalled();
+    const options = vi.mocked(runChildProcess).mock.calls[0][3];
+    await options.onLog("stdout", terminal("completed", prompt));
+    expect(ctx.onLog).not.toHaveBeenCalled();
   });
 
   it("rejects session resume before spawning", async () => {
@@ -117,11 +129,25 @@ describe("hermes_ssh execution", () => {
     expect((await createServerAdapter().execute(context())).errorMessage).toBe("cancelled");
   });
 
+  it.each(["failed", "cancelled"] as const)("normalizes a %s envelope with transport exit zero to failure", async (status) => {
+    vi.mocked(runChildProcess).mockResolvedValue(processResult({ exitCode: 0, stdout: terminal(status, status) }));
+    const result = await createServerAdapter().execute(context());
+    expect(result.exitCode).not.toBe(0);
+    expect(result.errorMessage).toBe(status);
+  });
+
   it("handles timeout without accepting late output", async () => {
-    vi.mocked(runChildProcess).mockResolvedValue(processResult({ timedOut: true, stdout: terminal("completed", "late") }));
+    vi.mocked(runChildProcess)
+      .mockResolvedValueOnce(processResult({ timedOut: true, stdout: terminal("completed", "late") }))
+      .mockResolvedValueOnce(processResult({ exitCode: 0, stdout: terminal("cancelled") }));
     const result = await createServerAdapter().execute(context());
     expect(result.timedOut).toBe(true);
     expect(result.summary).toBeUndefined();
+    expect(runChildProcess).toHaveBeenCalledTimes(2);
+    const [, command, args, options] = vi.mocked(runChildProcess).mock.calls[1];
+    expect(command).toBe("ssh");
+    expect(args).toEqual(expect.arrayContaining(["--cancel", "--profile", "atlas", "--run-id", ids.runId]));
+    expect(options.stdin).toBeUndefined();
   });
 
   it.each([

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,14 +25,21 @@ function fail(message) {
 }
 
 export function parseRunnerArgs(argv) {
+  if (argv.length === 5 && argv[0] === "--cancel" && argv[1] === "--profile" && argv[3] === "--run-id") {
+    const profile = argv[2];
+    const runId = argv[4];
+    if (!Object.hasOwn(PROFILES, profile)) fail("profile is not allowlisted");
+    if (!UUID_RE.test(runId)) fail("runId must be a UUID");
+    return { operation: "cancel", profile, runId };
+  }
   if (argv.length !== 4 || argv[0] !== "--profile" || argv[2] !== "--max-turns") {
-    fail("runner requires fixed --profile and --max-turns arguments");
+    fail("runner requires fixed run or cancellation arguments");
   }
   const profile = argv[1];
   if (!Object.hasOwn(PROFILES, profile)) fail("profile is not allowlisted");
   const maxTurns = Number(argv[3]);
   if (!Number.isInteger(maxTurns) || maxTurns < 1 || maxTurns > 25) fail("max-turns is out of bounds");
-  return { profile, maxTurns };
+  return { operation: "run", profile, maxTurns };
 }
 
 export function parseRequest(raw, profile) {
@@ -77,6 +84,7 @@ export function runStatePaths(profile, runId, stateRoot = STATE_ROOT) {
     profileDir,
     resultPath: path.join(profileDir, `${runId}.json`),
     lockPath: path.join(profileDir, `${runId}.lock`),
+    pidPath: path.join(profileDir, `${runId}.lock`, "pid"),
   };
 }
 
@@ -93,6 +101,56 @@ export async function claimRun(lockPath) {
     if (error?.code === "EEXIST") return false;
     throw error;
   }
+}
+
+export async function persistTerminal(resultPath, lockPath, value) {
+  const temporary = `${resultPath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: "wx" });
+    await link(temporary, resultPath);
+    await rm(lockPath, { recursive: true, force: true });
+    return value;
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+    return readStoredEnvelope(resultPath);
+  } finally {
+    await rm(temporary, { force: true });
+  }
+}
+
+function signalProcessTree(pid, signal) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    process.kill(-pid, signal);
+    return;
+  } catch {
+    try { process.kill(pid, signal); } catch { /* already exited */ }
+  }
+}
+
+export function terminateProcessTree(pid, graceMs = 2_000) {
+  signalProcessTree(pid, "SIGTERM");
+  const timer = setTimeout(() => signalProcessTree(pid, "SIGKILL"), Math.max(1, graceMs));
+  return timer;
+}
+
+export function deadlineDelayMs(deadlineAt, now = Date.now()) {
+  const parsed = Date.parse(deadlineAt);
+  if (!Number.isFinite(parsed)) fail("deadlineAt is invalid");
+  return Math.max(1, parsed - now);
+}
+
+async function cancelRun(profile, runId) {
+  const { profileDir, resultPath, lockPath, pidPath } = runStatePaths(profile, runId);
+  await mkdir(profileDir, { recursive: true, mode: 0o700 });
+  const existing = await readStoredEnvelope(resultPath);
+  if (existing) return emit(existing, existing.status === "completed" ? 0 : 1);
+  const rawPid = await readFile(pidPath, "utf8").catch(() => "");
+  const pid = Number(rawPid.trim());
+  if (Number.isInteger(pid) && pid > 0) terminateProcessTree(pid);
+  const value = envelope(runId, profile, "cancelled", "Cancelled by Olympus");
+  const terminal = await persistTerminal(resultPath, lockPath, value);
+  return emit(terminal ?? value, terminal?.status === "completed" ? 0 : 1);
 }
 
 async function readStdin() {
@@ -112,10 +170,12 @@ async function emit(value, exitCode) {
 }
 
 async function run() {
-  const { profile, maxTurns } = parseRunnerArgs(process.argv.slice(2));
+  const parsedArgs = parseRunnerArgs(process.argv.slice(2));
+  if (parsedArgs.operation === "cancel") return cancelRun(parsedArgs.profile, parsedArgs.runId);
+  const { profile, maxTurns } = parsedArgs;
   const request = parseRequest(await readStdin(), profile);
   const cwd = await validateWorkspace(request.workspace.remoteCwd);
-  const { profileDir, resultPath, lockPath } = runStatePaths(profile, request.runId);
+  const { profileDir, resultPath, lockPath, pidPath } = runStatePaths(profile, request.runId);
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
 
   const stored = await readStoredEnvelope(resultPath);
@@ -127,16 +187,14 @@ async function run() {
   const persist = async (value) => {
     if (terminal) return false;
     terminal = true;
-    const temporary = `${resultPath}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: "wx" });
-    await rename(temporary, resultPath);
-    await rm(lockPath, { recursive: true, force: true });
-    return true;
+    const stored = await persistTerminal(resultPath, lockPath, value);
+    return stored ?? value;
   };
   const cancel = async () => {
-    child?.kill("SIGTERM");
+    if (child?.pid) terminateProcessTree(child.pid);
     const value = envelope(request.runId, profile, "cancelled", "Cancelled by Olympus");
-    if (await persist(value)) await emit(value, 1);
+    const stored = await persist(value);
+    if (stored) await emit(stored, stored.status === "completed" ? 0 : 1);
   };
   process.once("SIGTERM", () => { void cancel(); });
   process.once("SIGHUP", () => { void cancel(); });
@@ -147,8 +205,11 @@ async function run() {
     cwd,
     env: { ...process.env, OLYMPUS_HERMES_MAX_TURNS: String(maxTurns), OLYMPUS_HERMES_RUN_ID: request.runId },
     shell: false,
+    detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
+  if (!child.pid) fail("wrapper did not provide a process id");
+  await writeFile(pidPath, `${child.pid}\n`, { mode: 0o600, flag: "wx" });
   child.stdin.end(request.prompt);
   let stdout = "";
   let stdoutBytes = 0;
@@ -160,10 +221,20 @@ async function run() {
   });
   // Drain stderr without forwarding it; wrappers may include prompts or provider details.
   child.stderr.resume();
+  const deadlineDelay = deadlineDelayMs(request.deadlineAt);
+  const deadlineTimer = setTimeout(() => {
+    if (terminal) return;
+    terminateProcessTree(child.pid);
+    const value = envelope(request.runId, profile, "cancelled", "Hermes run deadline exceeded");
+    void persist(value).then((stored) => {
+      if (stored) return emit(stored, stored.status === "completed" ? 0 : 1);
+    });
+  }, deadlineDelay);
   const exitCode = await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code) => resolve(code));
   });
+  clearTimeout(deadlineTimer);
   if (terminal) return;
   const status = exitCode === 0 && !oversized ? "completed" : "failed";
   const result = oversized
@@ -172,8 +243,8 @@ async function run() {
       ? stdout.trim()
       : `Hermes wrapper exited with code ${exitCode ?? -1}`;
   const value = envelope(request.runId, profile, status, result);
-  await persist(value);
-  await emit(value, status === "completed" ? 0 : 1);
+  const terminalValue = await persist(value);
+  await emit(terminalValue || value, (terminalValue || value).status === "completed" ? 0 : 1);
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
