@@ -3967,20 +3967,20 @@ export function IssueDetail() {
           MarkdownEditor; use [data-pp-comment-input] or [data-testid="issue-chat-composer"]. */}
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
         <TabsList variant="line" className="w-full justify-start gap-1 overflow-x-auto overscroll-x-contain" data-testid="issue-detail-tabs">
-          <TabsTrigger value="chat" className="gap-1.5">
+          <TabsTrigger value="chat" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-chat">
             <MessageSquare className="h-3.5 w-3.5" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="activity" className="gap-1.5">
+          <TabsTrigger value="activity" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-activity">
             <ActivityIcon className="h-3.5 w-3.5" />
             Activity
           </TabsTrigger>
-          <TabsTrigger value="related-work" className="gap-1.5">
+          <TabsTrigger value="related-work" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-related-work">
             <ListTree className="h-3.5 w-3.5" />
             Related work
           </TabsTrigger>
           {issuePluginTabItems.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
+            <TabsTrigger key={item.value} value={item.value} className="min-h-11 sm:min-h-0">
               {item.label}
             </TabsTrigger>
           ))}

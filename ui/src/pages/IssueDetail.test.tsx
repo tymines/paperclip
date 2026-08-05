@@ -343,8 +343,10 @@ vi.mock("@/components/ui/skeleton", () => ({
 vi.mock("@/components/ui/tabs", () => ({
   Tabs: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   TabsContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsList: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
+  TabsList: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => <div {...props}>{children}</div>,
+  TabsTrigger: ({ children, value: _value, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { value?: string }) => (
+    <button type="button" {...props}>{children}</button>
+  ),
 }));
 
 vi.mock("@/components/ui/textarea", () => ({
@@ -857,6 +859,9 @@ describe("IssueDetail", () => {
     expect(container.textContent).toContain("Chat thread");
     expect(container.firstElementChild?.className).toContain("min-w-0");
     expect(container.firstElementChild?.className).toContain("overflow-x-hidden");
+    const chatTab = container.querySelector('[data-testid="issue-detail-tab-chat"]');
+    expect(chatTab?.className).toContain("min-h-11");
+    expect(chatTab?.className).toContain("sm:min-h-0");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 

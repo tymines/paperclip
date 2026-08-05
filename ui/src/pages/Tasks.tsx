@@ -167,7 +167,7 @@ const LENS_GROUPS: LensGroup[] = [
 /* -------------------------------------------------------------------------- */
 /* Small presentational helpers                                               */
 /* -------------------------------------------------------------------------- */
-function FilterChip({
+export function FilterChip({
   label,
   count,
   active,
@@ -186,7 +186,7 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="flex shrink-0 items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[13px] font-medium transition-colors"
+      className="flex h-11 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors sm:h-auto sm:py-1.5"
       style={{
         color: active ? accent : DS.textMuted,
         background: active ? `${accent}1F` : "transparent",

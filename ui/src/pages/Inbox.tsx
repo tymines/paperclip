@@ -402,7 +402,7 @@ export function FailedRunInboxRow({
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 shrink-0 px-2.5"
+          className="h-11 shrink-0 px-3 sm:h-8 sm:px-2.5"
           onClick={onRetry}
           disabled={isRetrying}
         >
@@ -413,7 +413,7 @@ export function FailedRunInboxRow({
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground sm:h-auto sm:w-auto sm:p-1"
             aria-label="Dismiss"
           >
             <X className="h-4 w-4" />
@@ -424,7 +424,7 @@ export function FailedRunInboxRow({
   );
 }
 
-function ApprovalInboxRow({
+export function ApprovalInboxRow({
   approval,
   requesterName,
   onApprove,
@@ -545,7 +545,7 @@ function ApprovalInboxRow({
         <div className="mt-3 flex gap-2 sm:hidden">
           <Button
             size="sm"
-            className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+            className="h-11 bg-green-700 px-4 text-white hover:bg-green-600 sm:h-8 sm:px-3"
             onClick={onApprove}
             disabled={isPending}
           >
@@ -554,7 +554,7 @@ function ApprovalInboxRow({
           <Button
             variant="destructive"
             size="sm"
-            className="h-8 px-3"
+            className="h-11 px-4 sm:h-8 sm:px-3"
             onClick={onReject}
             disabled={isPending}
           >
@@ -566,7 +566,7 @@ function ApprovalInboxRow({
   );
 }
 
-function JoinRequestInboxRow({
+export function JoinRequestInboxRow({
   joinRequest,
   onApprove,
   onReject,
@@ -671,7 +671,7 @@ function JoinRequestInboxRow({
       <div className="mt-3 flex gap-2 sm:hidden">
         <Button
           size="sm"
-          className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+          className="h-11 bg-green-700 px-4 text-white hover:bg-green-600 sm:h-8 sm:px-3"
           onClick={onApprove}
           disabled={isPending}
         >
@@ -680,7 +680,7 @@ function JoinRequestInboxRow({
         <Button
           variant="destructive"
           size="sm"
-          className="h-8 px-3"
+          className="h-11 px-4 sm:h-8 sm:px-3"
           onClick={onReject}
           disabled={isPending}
         >
@@ -2031,6 +2031,10 @@ export function Inbox() {
           </div>
           {tab === "blocked" ? (
             <>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-blocked-filter-target"
+              >
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
@@ -2045,6 +2049,7 @@ export function Inbox() {
                 iconOnly
                 workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace").map((w) => ({ id: w.id, name: w.name })) : undefined}
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -2076,6 +2081,10 @@ export function Inbox() {
                   </div>
                 </PopoverContent>
               </Popover>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-blocked-columns-target"
+              >
               <IssueColumnPicker
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
@@ -2084,6 +2093,7 @@ export function Inbox() {
                 title="Choose which inbox columns stay visible"
                 iconOnly
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -2128,6 +2138,10 @@ export function Inbox() {
               >
                 <ListTree className="h-3.5 w-3.5" />
               </Button>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-filter-target"
+              >
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
@@ -2142,6 +2156,7 @@ export function Inbox() {
                 iconOnly
                 workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace").map((w) => ({ id: w.id, name: w.name })) : undefined}
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
@@ -2179,6 +2194,10 @@ export function Inbox() {
                   </div>
                 </PopoverContent>
               </Popover>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-columns-target"
+              >
               <IssueColumnPicker
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
@@ -2187,6 +2206,7 @@ export function Inbox() {
                 title="Choose which inbox columns stay visible"
                 iconOnly
               />
+              </span>
               {canMarkAllRead && (
                 <>
                   <Button

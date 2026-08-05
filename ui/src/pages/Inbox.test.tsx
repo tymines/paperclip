@@ -4,7 +4,7 @@ import { act } from "react";
 import type { ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Issue } from "@paperclipai/shared";
+import type { Approval, Issue } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompanyJoinRequest } from "../api/access";
 
@@ -119,11 +119,13 @@ vi.mock("../hooks/useInboxBadge", () => ({
 }));
 
 import {
+  ApprovalInboxRow,
   FailedRunInboxRow,
   Inbox,
   InboxGroupHeader,
   InboxIssueMetaLeading,
   InboxIssueTrailingColumns,
+  JoinRequestInboxRow,
   formatJoinRequestInboxLabel,
 } from "./Inbox";
 
@@ -283,6 +285,8 @@ describe("Inbox toolbar", () => {
     expect(container.querySelector('button[title="Group"]')).not.toBeNull();
     expect(container.querySelector('button[title="Columns"]')).not.toBeNull();
     expect(container.querySelector('button[title="Sort"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="inbox-blocked-filter-target"]')?.className).toContain("[&>button]:h-11");
+    expect(container.querySelector('[data-testid="inbox-blocked-columns-target"]')?.className).toContain("[&>button]:w-11");
     expect(container.querySelector('button[title="Enable parent-child nesting"]')).toBeNull();
     expect(container.textContent).not.toContain("Mark all as read");
 
@@ -308,10 +312,14 @@ describe("Inbox toolbar", () => {
 
     const search = container.querySelector('[data-testid="inbox-mobile-search"]');
     const category = container.querySelector('[data-testid="inbox-all-category-filter"]');
+    const filterTarget = container.querySelector('[data-testid="inbox-filter-target"]');
+    const columnsTarget = container.querySelector('[data-testid="inbox-columns-target"]');
     expect(search?.className).toContain("h-11");
     expect(search?.className).toContain("sm:h-8");
     expect(category?.className).toContain("w-full");
     expect(category?.className).toContain("sm:w-[170px]");
+    expect(filterTarget?.className).toContain("[&>button]:h-11");
+    expect(columnsTarget?.className).toContain("sm:[&>button]:h-8");
 
     act(() => root.unmount());
   });
@@ -331,6 +339,8 @@ describe("FailedRunInboxRow", () => {
 
   it("suppresses accent hover styling when selected", () => {
     const root = createRoot(container);
+    const onRetry = vi.fn();
+    const onDismiss = vi.fn();
     const run = {
       id: "run-1",
       companyId: "company-1",
@@ -383,8 +393,8 @@ describe("FailedRunInboxRow", () => {
           issueById={new Map()}
           agentName="Agent"
           issueLinkState={null}
-          onDismiss={() => {}}
-          onRetry={() => {}}
+          onDismiss={onDismiss}
+          onRetry={onRetry}
           isRetrying={false}
           selected
         />,
@@ -395,10 +405,110 @@ describe("FailedRunInboxRow", () => {
     expect(link).not.toBeNull();
     expect(link?.className).toContain("hover:bg-transparent");
     expect(link?.className).not.toContain("hover:bg-accent/50");
+    const mobileRetry = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("Retry") && button.className.includes("h-11"),
+    );
+    const mobileDismiss = Array.from(container.querySelectorAll('button[aria-label="Dismiss"]')).find(
+      (button) => button.className.includes("h-11"),
+    );
+    expect(mobileRetry?.className).toContain("sm:h-8");
+    expect(mobileDismiss?.className).toContain("w-11");
+
+    act(() => {
+      mobileRetry?.click();
+      mobileDismiss?.click();
+    });
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledOnce();
 
     act(() => {
       root.unmount();
     });
+  });
+});
+
+describe("Inbox request row phone actions", () => {
+  let container: HTMLDivElement;
+
+  beforeEach(() => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+  });
+
+  afterEach(() => {
+    container.remove();
+  });
+
+  it("keeps approval actions at 44px on phones and dispatches both decisions", () => {
+    const root = createRoot(container);
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    const approval: Approval = {
+      id: "approval-1",
+      companyId: "company-1",
+      type: "task_completion",
+      requestedByAgentId: "agent-1",
+      requestedByUserId: null,
+      status: "pending",
+      payload: { summary: "Ready" },
+      decisionNote: null,
+      decidedByUserId: null,
+      decidedAt: null,
+      createdAt: new Date("2026-08-05T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-05T00:00:00.000Z"),
+    };
+
+    act(() => {
+      root.render(
+        <ApprovalInboxRow
+          approval={approval}
+          requesterName="Agent"
+          onApprove={onApprove}
+          onReject={onReject}
+          isPending={false}
+        />,
+      );
+    });
+
+    const mobileActions = Array.from(container.querySelectorAll("button")).filter(
+      (button) => button.className.includes("h-11"),
+    );
+    expect(mobileActions).toHaveLength(2);
+    expect(mobileActions.every((button) => button.className.includes("sm:h-8"))).toBe(true);
+
+    act(() => mobileActions.forEach((button) => button.click()));
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onReject).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
+  });
+
+  it("keeps join-request actions at 44px on phones and dispatches both decisions", () => {
+    const root = createRoot(container);
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+
+    act(() => {
+      root.render(
+        <JoinRequestInboxRow
+          joinRequest={createJoinRequest()}
+          onApprove={onApprove}
+          onReject={onReject}
+          isPending={false}
+        />,
+      );
+    });
+
+    const mobileActions = Array.from(container.querySelectorAll("button")).filter(
+      (button) => button.className.includes("h-11"),
+    );
+    expect(mobileActions).toHaveLength(2);
+
+    act(() => mobileActions.forEach((button) => button.click()));
+    expect(onApprove).toHaveBeenCalledOnce();
+    expect(onReject).toHaveBeenCalledOnce();
+
+    act(() => root.unmount());
   });
 });
 
