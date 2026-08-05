@@ -331,7 +331,7 @@ function RowControls({
             e.stopPropagation();
             if (!pending) onPauseResume(agent, isPaused ? "resume" : "pause");
           }}
-          className="flex h-8 w-8 items-center justify-center rounded-[9px] transition-colors disabled:opacity-40"
+          className="flex h-11 w-11 items-center justify-center rounded-[9px] transition-colors disabled:opacity-40 sm:h-8 sm:w-8"
           style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
           data-pp-fleet-pause-resume={isPaused ? "resume" : "pause"}
         >
@@ -343,7 +343,7 @@ function RowControls({
         title="Configure"
         aria-label="Configure agent"
         onClick={(e) => e.stopPropagation()}
-        className="flex h-8 w-8 items-center justify-center rounded-[9px] transition-colors no-underline"
+        className="flex h-11 w-11 items-center justify-center rounded-[9px] transition-colors no-underline sm:h-8 sm:w-8"
         style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
       >
         <Settings2 className="h-3.5 w-3.5" />
@@ -359,7 +359,7 @@ function RowControls({
 /* List row                                                                   */
 /* -------------------------------------------------------------------------- */
 const GRID_COLS =
-  "grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]";
+  "lg:grid-cols-[minmax(200px,1.5fr)_130px_minmax(150px,1.4fr)_150px_84px_96px_84px]";
 
 function ColumnHeader() {
   return (
@@ -455,7 +455,7 @@ function CanonicalAgentRow({
           <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>{role}</div>
           <div className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
             <Server className="h-3 w-3" />
-            <span>{definition.hostMachine}{definition.hostParent ? ` · under ${definition.hostParent}` : ""}</span>
+            <span className="min-w-0 truncate">{definition.hostMachine}{definition.hostParent ? ` · under ${definition.hostParent}` : ""}</span>
           </div>
           {definition.surfaceLinks.length > 0 ? (
             <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
@@ -920,13 +920,13 @@ function AgentDrawer({
         aria-hidden
       />
       <aside
-        className="fixed right-0 top-0 z-50 flex h-full w-full max-w-[440px] flex-col"
+        className="fixed right-0 top-0 z-50 flex h-full w-full min-w-0 max-w-[440px] flex-col overflow-x-hidden"
         style={{ background: DS.surface, borderLeft: `1px solid ${DS.border2}`, boxShadow: "-20px 0 50px -20px rgba(0,0,0,0.8)" }}
         role="dialog"
         aria-label={`${agent.name} detail`}
       >
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 p-6" style={{ borderBottom: `1px solid ${DS.border}` }}>
+        <div className="flex items-start justify-between gap-3 p-4 sm:p-6" style={{ borderBottom: `1px solid ${DS.border}` }}>
           <div className="flex min-w-0 items-center gap-3">
             <AgentAvatar agent={agent} size={44} />
             <div className="min-w-0">
@@ -942,14 +942,14 @@ function AgentDrawer({
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="flex h-8 w-8 items-center justify-center rounded-[9px]"
+            className="flex h-11 w-11 items-center justify-center rounded-[9px] sm:h-8 sm:w-8"
             style={{ background: DS.surface3, border: `1px solid ${DS.border2}`, color: DS.textMuted }}
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6">
           {/* Status + controls */}
           <div className="mb-5 flex items-center justify-between">
             <StatusPill status={agent.status} />
@@ -961,7 +961,7 @@ function AgentDrawer({
             <SectionLabel>Configuration</SectionLabel>
           </div>
           <div
-            className="mb-6 grid grid-cols-2 gap-x-4 gap-y-4 rounded-[12px] p-4"
+            className="mb-6 grid min-w-0 grid-cols-1 gap-x-4 gap-y-4 rounded-[12px] p-4 sm:grid-cols-2"
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <DetailField label="Model" value={model} mono />
@@ -1010,7 +1010,7 @@ function AgentDrawer({
                   key={run.id}
                   to={`/agents/${agentRouteRef(agent)}/runs/${run.id}`}
                   onClick={onClose}
-                  className="flex items-center gap-3 rounded-[10px] px-3 py-2.5 no-underline transition-colors"
+                  className="flex min-h-11 min-w-0 items-center gap-3 rounded-[10px] px-3 py-2.5 no-underline transition-colors sm:min-h-0"
                   style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
                 >
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: statusColor(run.status) }} />
@@ -1036,7 +1036,7 @@ function AgentDrawer({
           <Link
             to={agentUrl(agent)}
             onClick={onClose}
-            className="flex w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold no-underline"
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-[10px] py-2.5 text-[13px] font-semibold no-underline"
             style={{ background: DS.primary, color: "#fff" }}
           >
             Open full detail
@@ -1068,7 +1068,7 @@ function FilterPill({
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center gap-2 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+      className="flex min-h-11 items-center gap-2 rounded-[10px] px-3 py-1.5 text-[12px] font-medium transition-colors sm:min-h-0"
       style={{
         background: active ? `${DS.primary}1F` : DS.surface2,
         border: `1px solid ${active ? DS.primary : DS.border2}`,
@@ -1299,7 +1299,7 @@ export function Agents() {
 
   return (
     <div
-      className="flex min-h-full flex-col gap-5 p-8"
+      className="flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden p-4 [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 sm:p-8 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0"
       style={{ background: DS.canvas }}
       data-pp-page-v2="fleet"
     >
@@ -1320,13 +1320,13 @@ export function Agents() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
           {/* View toggle */}
-          <div className="flex items-center rounded-[10px] p-0.5" style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}>
+          <div className="flex w-full items-center rounded-[10px] p-0.5 sm:w-auto" style={{ background: DS.surface2, border: `1px solid ${DS.border2}` }}>
             <button
               type="button"
               onClick={() => setView("list")}
-              className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors sm:min-h-0"
               style={view === "list" ? { background: DS.surface3, color: DS.text } : { color: DS.textMuted }}
             >
               <List className="h-3.5 w-3.5" />
@@ -1335,7 +1335,7 @@ export function Agents() {
             <button
               type="button"
               onClick={() => setView("org")}
-              className="flex items-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors"
+              className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] px-3 py-1.5 text-[12px] font-medium transition-colors sm:min-h-0"
               style={view === "org" ? { background: DS.surface3, color: DS.text } : { color: DS.textMuted }}
             >
               <GitBranch className="h-3.5 w-3.5" />
@@ -1345,7 +1345,7 @@ export function Agents() {
           <button
             type="button"
             onClick={openNewAgent}
-            className="flex items-center gap-1.5 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90"
+            className="flex min-h-11 w-full items-center justify-center gap-1.5 rounded-[10px] px-3.5 py-2 text-[13px] font-semibold transition-opacity hover:opacity-90 sm:w-auto"
             style={{ background: DS.primary, color: "#fff" }}
           >
             <Plus className="h-4 w-4" />

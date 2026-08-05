@@ -284,6 +284,30 @@ function parseAgentDetailView(value: string | null): AgentDetailView {
   return "dashboard";
 }
 
+const AGENT_DETAIL_TABS = [
+  { value: "dashboard", label: "Dashboard" },
+  { value: "profile", label: "Profile" },
+  { value: "instructions", label: "Instructions" },
+  { value: "skills", label: "Skills" },
+  { value: "configuration", label: "Configuration" },
+  { value: "runs", label: "Runs" },
+  { value: "budget", label: "Budget" },
+];
+
+export function AgentDetailNavigation({
+  value,
+  onValueChange,
+}: {
+  value: AgentDetailView;
+  onValueChange: (value: string) => void;
+}) {
+  return (
+    <Tabs value={value} onValueChange={onValueChange}>
+      <PageTabBar items={AGENT_DETAIL_TABS} value={value} onValueChange={onValueChange} />
+    </Tabs>
+  );
+}
+
 function usageNumber(usage: Record<string, unknown> | null, ...keys: string[]) {
   if (!usage) return 0;
   for (const key of keys) {
@@ -1011,10 +1035,16 @@ export function AgentDetail() {
   const showConfigActionBar = (activeView === "configuration" || activeView === "instructions") && (configDirty || configSaving);
 
   return (
-    <div className={cn("space-y-6", isMobile && showConfigActionBar && "pb-24")}>
+    <div
+      className={cn(
+        "min-w-0 space-y-6 overflow-x-hidden [&_a]:min-h-11 [&_button]:min-h-11 [&_button]:min-w-11 [&_input]:min-h-11 [&_pre]:max-w-full [&_pre]:overscroll-x-contain [&_select]:min-h-11 sm:[&_a]:min-h-0 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input]:min-h-0 sm:[&_select]:min-h-0",
+        isMobile && showConfigActionBar && "pb-24",
+      )}
+      data-testid="agent-detail-responsive-root"
+    >
       {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
           <DetailBackButton fallbackTo="/agents" />
           <AgentIconPicker
             value={agent.icon}
@@ -1032,7 +1062,7 @@ export function AgentDetail() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0 sm:gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -1069,13 +1099,13 @@ export function AgentDetail() {
           {/* Overflow menu */}
           <Popover open={moreOpen} onOpenChange={setMoreOpen}>
             <PopoverTrigger asChild>
-              <Button variant="ghost" size="icon-xs">
+              <Button variant="ghost" size="icon-xs" aria-label="More agent actions">
                 <MoreHorizontal className="h-4 w-4" />
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-44 p-1" align="end">
               <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                className="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent/50 sm:min-h-0"
                 disabled={duplicateAgent.isPending}
                 onClick={handleDuplicateAgent}
               >
@@ -1087,7 +1117,7 @@ export function AgentDetail() {
                 Duplicate Agent
               </button>
               <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                className="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent/50 sm:min-h-0"
                 onClick={() => {
                   navigator.clipboard.writeText(agent.id);
                   setMoreOpen(false);
@@ -1097,7 +1127,7 @@ export function AgentDetail() {
                 Copy Agent ID
               </button>
               <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50"
+                className="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-accent/50 sm:min-h-0"
                 onClick={() => {
                   resetTaskSession.mutate(null);
                   setMoreOpen(false);
@@ -1107,7 +1137,7 @@ export function AgentDetail() {
                 Reset Sessions
               </button>
               <button
-                className="flex items-center gap-2 w-full px-2 py-1.5 text-xs rounded hover:bg-accent/50 text-destructive"
+                className="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-destructive hover:bg-accent/50 sm:min-h-0"
                 onClick={() => {
                   agentAction.mutate("terminate");
                   setMoreOpen(false);
@@ -1122,24 +1152,10 @@ export function AgentDetail() {
       </div>
 
       {!urlRunId && (
-        <Tabs
+        <AgentDetailNavigation
           value={activeView}
           onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
-        >
-          <PageTabBar
-            items={[
-              { value: "dashboard", label: "Dashboard" },
-              { value: "profile", label: "Profile" },
-              { value: "instructions", label: "Instructions" },
-              { value: "skills", label: "Skills" },
-              { value: "configuration", label: "Configuration" },
-              { value: "runs", label: "Runs" },
-              { value: "budget", label: "Budget" },
-            ]}
-            value={activeView}
-            onValueChange={(value) => navigate(`/agents/${canonicalAgentRef}/${value}`)}
-          />
-        </Tabs>
+        />
       )}
 
       {actionError && <p className="text-sm text-destructive">{actionError}</p>}
@@ -1450,7 +1466,7 @@ function AgentOverview({
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <ChartCard title="Run Activity" subtitle="Last 14 days">
           <RunActivityChart runs={runs} />
         </ChartCard>
@@ -1554,7 +1570,7 @@ function CostsSection({
         </div>
       )}
       {runsWithCost.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-border">
+        <div className="overflow-x-auto overscroll-x-contain rounded-lg border border-border" tabIndex={0} aria-label="Run costs; scroll horizontally to view all columns">
           <table className="w-full min-w-[480px] text-xs">
             <thead>
               <tr className="border-b border-border bg-accent/20">
@@ -1630,7 +1646,7 @@ function AgentConfigurePage({
   });
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl min-w-0 space-y-6">
       <ConfigurationTab
         agent={agent}
         onDirtyChange={onDirtyChange}
@@ -1668,7 +1684,7 @@ function AgentConfigurePage({
               <div className="space-y-2">
                 {(configRevisions ?? []).slice(0, 10).map((revision) => (
                   <div key={revision.id} className="border border-border/70 rounded-md p-3 space-y-2">
-                    <div className="flex items-center justify-between gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-xs text-muted-foreground">
                         <span className="font-mono">{revision.id.slice(0, 8)}</span>
                         <span className="mx-1">·</span>
@@ -3078,7 +3094,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
         isSelected ? "bg-accent/40" : "hover:bg-accent/20",
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <StatusIcon className={cn("h-3.5 w-3.5 shrink-0", statusInfo.color, run.status === "running" && "animate-spin")} />
         <span className="font-mono text-xs text-muted-foreground">
           {run.id.slice(0, 8)}
@@ -3093,7 +3109,7 @@ function RunListItem({ run, isSelected, agentId }: { run: HeartbeatRun; isSelect
           {sourceLabels[run.invocationSource] ?? run.invocationSource}
         </span>
         {sourceResolvedFold ? <SourceResolvedFoldBadge showIcon={false} className="shrink-0 text-[10px] py-0" /> : null}
-        <span className="ml-auto text-[11px] text-muted-foreground shrink-0">
+        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
           {relativeTime(run.createdAt)}
         </span>
       </div>
@@ -3354,7 +3370,7 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
         <div className="flex flex-col sm:flex-row">
           {/* Left column: status + timing */}
           <div className="flex-1 p-4 space-y-3">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={run.status} />
               {(run.status === "running" || run.status === "queued") && (
                 <Button
@@ -3563,13 +3579,13 @@ function RunDetail({ run: initialRun, agentRouteId, adapterType, adapterConfig }
             {sessionOpen && (
               <div className="px-4 pb-3 space-y-1 text-xs">
                 {run.sessionIdBefore && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span className="text-muted-foreground w-12">{sessionChanged ? "Before" : "ID"}</span>
                     <CopyText text={run.sessionIdBefore} className="font-mono" />
                   </div>
                 )}
                 {sessionChanged && run.sessionIdAfter && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <span className="text-muted-foreground w-12">After</span>
                     <CopyText text={run.sessionIdAfter} className="font-mono" />
                   </div>
@@ -4092,11 +4108,11 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
         <RunInvocationCard payload={adapterInvokePayload} censorUsernameInLogs={censorUsernameInLogs} />
       )}
 
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <span className="text-xs font-medium text-muted-foreground">
           Transcript ({transcript.length})
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="inline-flex rounded-lg border border-border/70 bg-background/70 p-0.5">
             {(["nice", "raw"] as const).map((mode) => (
               <button
@@ -4213,7 +4229,7 @@ function LogViewer({ run, adapterType }: { run: HeartbeatRun; adapterType: strin
       {events.length > 0 && (
         <div>
           <div className="mb-2 text-xs font-medium text-muted-foreground">Events ({events.length})</div>
-          <div className="bg-neutral-100 dark:bg-neutral-950 rounded-lg p-3 font-mono text-xs space-y-0.5">
+          <div className="overflow-x-auto overscroll-x-contain rounded-lg bg-neutral-100 p-3 font-mono text-xs dark:bg-neutral-950" tabIndex={0} aria-label="Run events; scroll horizontally for long event fields">
             {events.map((evt) => {
               const color = evt.color
                 ?? (evt.level ? levelColors[evt.level] : null)
