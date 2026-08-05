@@ -3,10 +3,15 @@ import express from "express";
 import request from "supertest";
 import { books, storyBibleCharacters, storyBibleChatMessages, storyBibleOutline, storyBibleStyle, storyBibleWorldLocations } from "@paperclipai/db";
 
+const bookChatActionMocks = vi.hoisted(() => ({ applyInTransaction: vi.fn() }));
 vi.mock("../services/book-agent-lanes.js", async (importOriginal) => ({ ...(await importOriginal<typeof import("../services/book-agent-lanes.js")>()), callAgentLane: vi.fn() }));
 vi.mock("../services/index.js", () => ({ logActivity: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../services/book-chat-actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/book-chat-actions.js")>()),
+  applyBookChatAuthorizationInTransaction: bookChatActionMocks.applyInTransaction,
+}));
 import { AgentLaneUnavailableError, callAgentLane } from "../services/book-agent-lanes.js";
-import { bookStudioRoutes } from "../routes/book-studio.js";
+import { bookStudioRoutes, persistBrainstormCompletion } from "../routes/book-studio.js";
 
 const book = { id: "book-1", companyId: "company-1", slug: "book", title: "Book", metadata: {}, createdAt: new Date(), updatedAt: new Date() };
 const userRow = (overrides: Record<string, unknown> = {}) => ({ id: "u-1", bookId: "book-1", turnId: "turn-1", role: "user", content: "hello", status: "failed", via: "none", delegationId: null, conversationId: "book-studio:company-1:book-1", retryCount: 0, retryable: true, authorization: null, actionResult: null, error: "offline", archivedAt: null, createdAt: new Date("2026-08-04T12:00:00Z"), ...overrides });
@@ -28,6 +33,9 @@ function createApp(initialMessages: any[]) {
         if (changes.status === "pending" && changes.retryCount) {
           const row = state.messages.find((item) => item.status === "failed" && item.role === "user" && !item.archivedAt);
           if (row) { row.status = "pending"; row.error = null; row.retryCount += 1; affected = [row]; }
+        } else if (changes.status === "completed" && changes.via === "calliope") {
+          const row = state.messages.find((item) => item.status === "pending" && item.role === "user" && !item.archivedAt);
+          if (row) { Object.assign(row, changes); affected = [row]; }
         } else {
           for (const row of state.messages) { if (!row.archivedAt || changes.archivedAt) { Object.assign(row, changes); affected.push(row); } }
         }
@@ -94,5 +102,75 @@ describe("Book Studio chat v4 durability", () => {
     expect(state.messages[0]).toMatchObject({ status: "failed", retryable: false, delegationId: "del-unknown" });
     await request(app).post("/api/companies/company-1/book-studio/books/book-1/chat/turn-1/retry").expect(409);
     expect(callAgentLane).toHaveBeenCalledTimes(1);
+  });
+
+  it("rolls back an authorized book action when its durable chat completion cannot be stored", async () => {
+    const state = { actionApplied: false, messages: [] as any[], userCompleted: false };
+    let failAssistantInsert = true;
+    const tx: any = {
+      insert: vi.fn((table: unknown) => ({
+        values: (values: any) => ({
+          returning: async () => {
+            if (table === storyBibleChatMessages && values.role === "assistant" && failAssistantInsert) {
+              failAssistantInsert = false;
+              throw new Error("assistant persistence failed");
+            }
+            const row = { id: `m-${state.messages.length + 1}`, ...values };
+            state.messages.push(row);
+            return [row];
+          },
+        }),
+      })),
+      update: vi.fn(() => ({
+        set: () => ({
+          where: () => ({
+            returning: async () => {
+              state.userCompleted = true;
+              return [{ id: "user-atomic" }];
+            },
+          }),
+        }),
+      })),
+    };
+    const db: any = {
+      transaction: vi.fn(async (callback: (transaction: any) => unknown) => {
+        const snapshot = {
+          actionApplied: state.actionApplied,
+          messages: [...state.messages],
+          userCompleted: state.userCompleted,
+        };
+        try {
+          return await callback(tx);
+        } catch (error) {
+          state.actionApplied = snapshot.actionApplied;
+          state.messages = snapshot.messages;
+          state.userCompleted = snapshot.userCompleted;
+          throw error;
+        }
+      }),
+    };
+    bookChatActionMocks.applyInTransaction.mockImplementation(async () => {
+      state.actionApplied = true;
+      return { operation: "set", section: "overview", destination: "Overview", status: "applied" };
+    });
+
+    const result = await persistBrainstormCompletion(db, {
+      companyId: "company-1",
+      bookId: "book-1",
+      turnId: "turn-atomic",
+      userMessageId: "user-atomic",
+      actor: { actorType: "user", actorId: "board-1", agentId: null, runId: null },
+      authorization: { operation: "set", destination: "overview", content: "A durable premise" } as any,
+      reply: "I will save that.",
+      conversationId: "book-studio:company-1:book-1",
+    });
+
+    expect(state.actionApplied).toBe(false);
+    expect(state.userCompleted).toBe(true);
+    expect(state.messages).toHaveLength(1);
+    expect(state.messages[0]).toMatchObject({ role: "assistant", status: "completed", actionResult: { status: "failed" } });
+    expect(state.messages[0].content).toContain("Nothing changed. assistant persistence failed");
+    expect(result.actionResult).toMatchObject({ status: "failed", error: "assistant persistence failed" });
+    expect(db.transaction).toHaveBeenCalledTimes(2);
   });
 });

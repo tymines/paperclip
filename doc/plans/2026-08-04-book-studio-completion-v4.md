@@ -227,4 +227,3 @@ No browser test may target the live Paperclip installation. Initialize the v4 wo
 - Use one independent review pass on the exact final diff/commit and one correction pass for concrete blocking correctness, safety, security, compatibility, or acceptance failures. Optional style preferences do not block.
 - Stop and return to the primary assistant if scope must change, current `origin/master`/overlapping work changes materially, live data/credentials/configuration are required, an external bridge change is breaking, a migration is destructive/incompatible, or any action would merge/deploy/restart/push/contact external agents.
 - Completion means all locally provable v4 criteria pass with evidence and the external Calliope-memory canary is explicitly listed as gated. It does not mean deployed or live.
-

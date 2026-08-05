@@ -118,7 +118,7 @@ function assertSnapshot(current: { id: string; locked: boolean; updatedAt?: Date
   if (expected && actual !== expected) throw new Error(`${label} changed while Calliope was responding; nothing changed.`);
 }
 
-export async function applyBookChatAuthorization(db: Db, args: {
+export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
   companyId: string;
   bookId: string;
   turnId: string;
@@ -127,11 +127,9 @@ export async function applyBookChatAuthorization(db: Db, args: {
 }): Promise<BookChatActionResult> {
   const { companyId, bookId, turnId, actor, authorization } = args;
   if (actor.actorType !== "user") {
-    return { operation: authorization.operation, section: authorization.destination, destination: authorization.destination, status: "failed", error: "Only a current human Book Studio request can authorize a change; nothing changed." };
+    throw new Error("Only a current human Book Studio request can authorize a change; nothing changed.");
   }
-  try {
-    return await db.transaction(async (tx) => {
-      const [book] = await tx.select().from(books).where(and(eq(books.id, bookId), eq(books.companyId, companyId))).limit(1);
+  const [book] = await tx.select().from(books).where(and(eq(books.id, bookId), eq(books.companyId, companyId))).limit(1);
       if (!book) throw new Error("Book not found; nothing changed.");
       let entityId: string | undefined;
       let destination: string = authorization.destination;
@@ -209,9 +207,17 @@ export async function applyBookChatAuthorization(db: Db, args: {
         entityId = current.id; destination = `Outline chapter ${authorization.chapterNumber}`;
       }
 
-      await logActivity(tx as unknown as Db, { companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId ?? null, runId: actor.runId ?? null, action: "book.brainstorm_action_applied", entityType: "book", entityId: bookId, details: { bookId, turnId, operation: authorization.operation, destination, targetEntityId: entityId } });
-      return { operation: authorization.operation, section: authorization.destination, destination, status: "applied", entityId, ...(authorization.destination === "outline" ? { chapterNumber: authorization.chapterNumber } : {}) };
-    });
+  await logActivity(tx, { companyId, actorType: actor.actorType, actorId: actor.actorId, agentId: actor.agentId ?? null, runId: actor.runId ?? null, action: "book.brainstorm_action_applied", entityType: "book", entityId: bookId, details: { bookId, turnId, operation: authorization.operation, destination, targetEntityId: entityId } });
+  return { operation: authorization.operation, section: authorization.destination, destination, status: "applied", entityId, ...(authorization.destination === "outline" ? { chapterNumber: authorization.chapterNumber } : {}) };
+}
+
+export async function applyBookChatAuthorization(db: Db, args: Parameters<typeof applyBookChatAuthorizationInTransaction>[1]): Promise<BookChatActionResult> {
+  const { authorization } = args;
+  if (args.actor.actorType !== "user") {
+    return { operation: authorization.operation, section: authorization.destination, destination: authorization.destination, status: "failed", error: "Only a current human Book Studio request can authorize a change; nothing changed." };
+  }
+  try {
+    return await db.transaction(async (tx) => applyBookChatAuthorizationInTransaction(tx as unknown as Db, args));
   } catch (err) {
     return { operation: authorization.operation, section: authorization.destination, destination: authorization.destination, status: "failed", error: err instanceof Error ? err.message : String(err) };
   }

@@ -33,7 +33,13 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, conflict, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
 import { buildSystemPrompt, normalizeBrainstormTurns } from "../services/brainstorm-chat.js";
-import { applyBookChatAuthorization, deriveBookChatAuthorization, resolveBookChatAuthorization, type BookChatAuthorization } from "../services/book-chat-actions.js";
+import {
+  applyBookChatAuthorizationInTransaction,
+  deriveBookChatAuthorization,
+  resolveBookChatAuthorization,
+  type BookChatActionResult,
+  type BookChatAuthorization,
+} from "../services/book-chat-actions.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
 import { callLLM } from "../services/chapter-generator.js";
 import { chapterContentHash } from "../services/book-prose-writer.js";
@@ -126,6 +132,74 @@ async function requireCompanyBook(db: Db, companyId: string, bookId: string) {
     .limit(1);
   if (!book) throw notFound("Book not found");
   return book;
+}
+
+export async function persistBrainstormCompletion(db: Db, args: {
+  companyId: string;
+  bookId: string;
+  turnId: string;
+  userMessageId: string;
+  actor: ReturnType<typeof getActorInfo>;
+  authorization: BookChatAuthorization | null;
+  reply: string;
+  conversationId: string;
+  delegationId?: string;
+}): Promise<{ reply: string; actionResult?: BookChatActionResult; assistantMessageId: string }> {
+  const persistRows = async (tx: Db, reply: string, actionResult?: BookChatActionResult) => {
+    const [assistantMsg] = await tx.insert(storyBibleChatMessages).values({
+      bookId: args.bookId,
+      turnId: args.turnId,
+      role: "assistant",
+      content: reply,
+      status: "completed",
+      via: "calliope",
+      delegationId: args.delegationId ?? null,
+      conversationId: args.conversationId,
+      actionResult: actionResult ?? null,
+    }).returning({ id: storyBibleChatMessages.id });
+    const completed = await tx.update(storyBibleChatMessages).set({
+      status: "completed",
+      via: "calliope",
+      delegationId: args.delegationId ?? null,
+      error: null,
+      actionResult: actionResult ?? null,
+    }).where(and(
+      eq(storyBibleChatMessages.id, args.userMessageId),
+      eq(storyBibleChatMessages.bookId, args.bookId),
+      eq(storyBibleChatMessages.status, "pending"),
+    )).returning({ id: storyBibleChatMessages.id });
+    if (completed.length !== 1) throw new Error("Chat turn is no longer pending; no duplicate completion was stored.");
+    return { reply, actionResult, assistantMessageId: assistantMsg.id };
+  };
+
+  if (!args.authorization) {
+    return db.transaction(async (tx) => persistRows(tx as unknown as Db, args.reply));
+  }
+
+  try {
+    return await db.transaction(async (tx) => {
+      const scopedTx = tx as unknown as Db;
+      const actionResult = await applyBookChatAuthorizationInTransaction(scopedTx, {
+        companyId: args.companyId,
+        bookId: args.bookId,
+        turnId: args.turnId,
+        actor: args.actor,
+        authorization: args.authorization!,
+      });
+      const reply = `${args.reply}\n\nSaved to ${actionResult.destination}.`;
+      return persistRows(scopedTx, reply, actionResult);
+    });
+  } catch (err) {
+    const actionResult: BookChatActionResult = {
+      operation: args.authorization.operation,
+      section: args.authorization.destination,
+      destination: args.authorization.destination,
+      status: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    };
+    const reply = `${args.reply}\n\nNothing changed. ${actionResult.error}`;
+    return db.transaction(async (tx) => persistRows(tx as unknown as Db, reply, actionResult));
+  }
 }
 
 // ── Helper: create entity routes ─────────────────────────────────────────────
@@ -1347,41 +1421,24 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       return;
     }
 
-    let actionResult: Awaited<ReturnType<typeof applyBookChatAuthorization>> | undefined;
-    if (authorization) {
-      actionResult = await applyBookChatAuthorization(db, { companyId, bookId, turnId, actor, authorization });
-      reply = actionResult.status === "applied"
-        ? `${reply}\n\nSaved to ${actionResult.destination}.`
-        : `${reply}\n\nNothing changed. ${actionResult.error ?? "The authorized addition could not be applied."}`;
-    }
-
-    // Persist assistant reply
-    const [assistantMsg] = await db.insert(storyBibleChatMessages).values({
+    const completion = await persistBrainstormCompletion(db, {
+      companyId,
       bookId,
       turnId,
-      role: "assistant",
-      content: reply,
-      status: "completed",
-      via: "calliope",
-      delegationId: delegationId ?? null,
+      userMessageId: userMsg.id,
+      actor,
+      authorization,
+      reply,
       conversationId,
-      actionResult: actionResult ?? null,
-    }).returning();
-    await db
-      .update(storyBibleChatMessages)
-      .set({
-        status: "completed",
-        via: "calliope",
-        delegationId: delegationId ?? null,
-        error: null,
-        actionResult: actionResult ?? null,
-      })
-      .where(eq(storyBibleChatMessages.id, userMsg.id));
+      delegationId,
+    });
+    reply = completion.reply;
+    const actionResult = completion.actionResult;
 
     res.json({
       reply,
       turnId,
-      messageId: assistantMsg.id,
+      messageId: completion.assistantMessageId,
       userMessageId: userMsg.id,
       via: "calliope",
       status: "completed",
@@ -1532,14 +1589,20 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       throw laneErr;
     }
 
-    let actionResult: Awaited<ReturnType<typeof applyBookChatAuthorization>> | undefined;
-    if (authorization) {
-      actionResult = await applyBookChatAuthorization(db, { companyId, bookId, turnId, actor, authorization });
-      reply = actionResult.status === "applied" ? `${reply}\n\nSaved to ${actionResult.destination}.` : `${reply}\n\nNothing changed. ${actionResult.error ?? "The authorized addition could not be applied."}`;
-    }
-    const [assistantMsg] = await db.insert(storyBibleChatMessages).values({ bookId, turnId, role: "assistant", content: reply, status: "completed", via: "calliope", delegationId: delegationId ?? null, conversationId, actionResult: actionResult ?? null }).returning();
-    await db.update(storyBibleChatMessages).set({ status: "completed", via: "calliope", delegationId: delegationId ?? null, error: null, actionResult: actionResult ?? null }).where(and(eq(storyBibleChatMessages.id, claimed.id), eq(storyBibleChatMessages.status, "pending")));
-    res.json({ reply, turnId, messageId: assistantMsg.id, userMessageId: claimed.id, via: "calliope", status: "completed", ...(delegationId ? { delegationId } : {}), ...(actionResult ? { action: actionResult } : {}) });
+    const completion = await persistBrainstormCompletion(db, {
+      companyId,
+      bookId,
+      turnId,
+      userMessageId: claimed.id,
+      actor,
+      authorization,
+      reply,
+      conversationId,
+      delegationId,
+    });
+    reply = completion.reply;
+    const actionResult = completion.actionResult;
+    res.json({ reply, turnId, messageId: completion.assistantMessageId, userMessageId: claimed.id, via: "calliope", status: "completed", ...(delegationId ? { delegationId } : {}), ...(actionResult ? { action: actionResult } : {}) });
   });
 
   // POST /chat/:messageId/to-draft — convert an assistant message into a draft entity

@@ -74,7 +74,7 @@ function createApp() {
   mockDb.update.mockImplementation(() => ({
     set: vi.fn().mockReturnValue({
       where: vi.fn().mockReturnValue({
-        returning: vi.fn().mockResolvedValue([]),
+        returning: vi.fn().mockResolvedValue([{ id: "msg-1" }]),
       }),
     }),
   }));
