@@ -6,6 +6,7 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { toNodeHandler } from "better-auth/node";
 import nodemailer from "nodemailer";
 import type { Db } from "@paperclipai/db";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 import {
   authAccounts,
   authSessions,
@@ -30,6 +31,15 @@ type BetterAuthInstance = ReturnType<typeof betterAuth>;
 
 const AUTH_COOKIE_PREFIX_FALLBACK = "default";
 const AUTH_COOKIE_PREFIX_INVALID_SEGMENTS_RE = /[^a-zA-Z0-9_-]+/g;
+const PRODUCT_NAME = PRODUCT_IDENTIFIERS.canonical.displayName;
+
+export function buildLoginOtpEmail(otp: string) {
+  return {
+    subject: `Your ${PRODUCT_NAME} login code: ${otp}`,
+    text: `Your ${PRODUCT_NAME} login code is: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
+    html: `<p>Your ${PRODUCT_NAME} login code is: <strong>${otp}</strong></p><p>This code expires in 5 minutes.</p><p>If you didn't request this, you can safely ignore this email.</p>`,
+  };
+}
 
 export function deriveAuthCookiePrefix(instanceId = resolvePaperclipInstanceId()): string {
   const scopedInstanceId = instanceId
@@ -138,12 +148,11 @@ export function createBetterAuthInstance(db: Db, config: Config, trustedOrigins:
             console.log(`[email-otp] Would send OTP ${otp} to ${email} (type: ${type}) — no SMTP configured`);
             return;
           }
+          const loginOtpEmail = buildLoginOtpEmail(otp);
           await otpTransport.sendMail({
             from: smtpFrom,
             to: email,
-            subject: `Your Paperclip login code: ${otp}`,
-            text: `Your Paperclip login code is: ${otp}\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, you can safely ignore this email.`,
-            html: `<p>Your Paperclip login code is: <strong>${otp}</strong></p><p>This code expires in 5 minutes.</p><p>If you didn't request this, you can safely ignore this email.</p>`,
+            ...loginOtpEmail,
           });
         },
       }),

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 import { useNavigate, useSearchParams } from "@/lib/router";
 import { authApi } from "../api/auth";
 import { queryKeys } from "../lib/queryKeys";
@@ -9,6 +10,7 @@ import { AsciiArtAnimation } from "@/components/AsciiArtAnimation";
 import { Sparkles } from "lucide-react";
 
 type Step = "request_code" | "enter_code";
+const PRODUCT_NAME = PRODUCT_IDENTIFIERS.canonical.displayName;
 
 export function AuthPage() {
   const queryClient = useQueryClient();
@@ -83,10 +85,10 @@ export function AuthPage() {
         <div className="w-full max-w-md mx-auto my-auto px-8 py-12">
           <div className="flex items-center gap-2 mb-8">
             <Sparkles className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Paperclip</span>
+            <span className="text-sm font-medium">{PRODUCT_NAME}</span>
           </div>
 
-          <h1 className="text-xl font-semibold">Sign in to Paperclip</h1>
+          <h1 className="text-xl font-semibold">Sign in to {PRODUCT_NAME}</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {step === "request_code"
               ? "Enter your email and we'll send you a one-time sign-in code."
