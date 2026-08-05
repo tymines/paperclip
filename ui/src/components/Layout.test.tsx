@@ -17,6 +17,7 @@ const mockInstanceSettingsApi = vi.hoisted(() => ({
 const mockNavigate = vi.hoisted(() => vi.fn());
 const mockSetSelectedCompanyId = vi.hoisted(() => vi.fn());
 const mockSetSidebarOpen = vi.hoisted(() => vi.fn());
+const mockSidebarState = vi.hoisted(() => ({ sidebarOpen: true, isMobile: false }));
 const mockCompanyState = vi.hoisted(() => ({
   companies: [{ id: "company-1", issuePrefix: "PAP", name: "Paperclip" }],
   selectedCompany: { id: "company-1", issuePrefix: "PAP", name: "Paperclip" },
@@ -41,7 +42,7 @@ vi.mock("@/lib/router", () => ({
 }));
 
 vi.mock("./Sidebar", () => ({
-  Sidebar: () => <div>Main company nav</div>,
+  Sidebar: () => <button type="button">Main company nav</button>,
 }));
 
 vi.mock("./InstanceSidebar", () => ({
@@ -93,11 +94,13 @@ vi.mock("./ToastViewport", () => ({
 }));
 
 vi.mock("./MobileBottomNav", () => ({
-  MobileBottomNav: () => null,
+  MobileBottomNav: ({ visible, disabled }: { visible: boolean; disabled?: boolean }) => (
+    <div data-testid="mobile-bottom-nav" data-visible={String(visible)} data-disabled={String(Boolean(disabled))} />
+  ),
 }));
 
 vi.mock("./WorktreeBanner", () => ({
-  WorktreeBanner: () => null,
+  WorktreeBanner: () => <button type="button">Copy worktree path</button>,
 }));
 
 vi.mock("./DevRestartBanner", () => ({
@@ -170,10 +173,10 @@ vi.mock("../context/CompanyContext", () => ({
 
 vi.mock("../context/SidebarContext", () => ({
   useSidebar: () => ({
-    sidebarOpen: true,
+    sidebarOpen: mockSidebarState.sidebarOpen,
     setSidebarOpen: mockSetSidebarOpen,
     toggleSidebar: vi.fn(),
-    isMobile: false,
+    isMobile: mockSidebarState.isMobile,
   }),
 }));
 
@@ -238,6 +241,8 @@ describe("Layout", () => {
     });
     mockPluginSlots.slots = [];
     mockPluginSlotContexts.length = 0;
+    mockSidebarState.sidebarOpen = true;
+    mockSidebarState.isMobile = false;
   });
 
   afterEach(() => {
@@ -533,5 +538,75 @@ describe("Layout", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("treats the mobile sidebar as a modal drawer with focus entry, Escape, inert background, and focus return", async () => {
+    mockSidebarState.isMobile = true;
+    mockSidebarState.sidebarOpen = true;
+    const opener = document.createElement("button");
+    opener.textContent = "Open navigation";
+    document.body.insertBefore(opener, container);
+    opener.focus();
+
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(
+      <QueryClientProvider client={queryClient}><Layout /></QueryClientProvider>,
+    ));
+    await flushReact();
+    await act(async () => {
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    });
+
+    const drawer = container.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]')!;
+    const bannerButton = Array.from(container.querySelectorAll("button")).find(
+      (element) => element.textContent === "Copy worktree path",
+    )!;
+    const bannerBackground = bannerButton.parentElement!;
+    expect(drawer.getAttribute("aria-label")).toBe("Mobile sidebar");
+    expect(document.activeElement?.textContent).toBe("Main company nav");
+    expect(bannerButton.closest("[inert]")).toBe(bannerBackground);
+    expect(bannerButton.closest('[aria-hidden="true"]')).toBe(bannerBackground);
+    expect(container.querySelector("main")?.parentElement?.parentElement?.hasAttribute("inert")).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Close sidebar"]')?.tabIndex).toBe(-1);
+    expect(container.querySelector('[data-testid="mobile-bottom-nav"]')?.getAttribute("data-disabled")).toBe("true");
+
+    mockSetSidebarOpen.mockClear();
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(mockSetSidebarOpen).toHaveBeenCalledWith(false);
+
+    mockSidebarState.sidebarOpen = false;
+    await act(async () => root.render(
+      <QueryClientProvider client={queryClient}><Layout /></QueryClientProvider>,
+    ));
+    expect(document.activeElement).toBe(opener);
+    expect(bannerButton.closest("[inert]")).toBeNull();
+    expect(bannerButton.closest('[aria-hidden="true"]')).toBeNull();
+
+    await act(async () => root.unmount());
+    opener.remove();
+  });
+
+  it("uses main as the mobile scroll owner and drives bottom-nav visibility from it", async () => {
+    mockSidebarState.isMobile = true;
+    mockSidebarState.sidebarOpen = false;
+    const root = createRoot(container);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => root.render(
+      <QueryClientProvider client={queryClient}><Layout /></QueryClientProvider>,
+    ));
+    await flushReact();
+
+    const main = container.querySelector<HTMLElement>("main")!;
+    expect(document.body.style.overflow).toBe("hidden");
+    main.scrollTop = 100;
+    await act(async () => main.dispatchEvent(new Event("scroll")));
+    expect(container.querySelector('[data-testid="mobile-bottom-nav"]')?.getAttribute("data-visible")).toBe("false");
+
+    main.scrollTop = 70;
+    await act(async () => main.dispatchEvent(new Event("scroll")));
+    expect(container.querySelector('[data-testid="mobile-bottom-nav"]')?.getAttribute("data-visible")).toBe("true");
+
+    await act(async () => root.unmount());
   });
 });

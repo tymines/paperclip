@@ -47,6 +47,14 @@ import { NotFoundPage } from "../pages/NotFound";
 import { PluginSlotMount, resolveRouteSidebarSlot, usePluginSlots } from "../plugins/slots";
 
 const INSTANCE_SETTINGS_MEMORY_KEY = "paperclip.lastInstanceSettingsPath";
+const MOBILE_DRAWER_FOCUSABLE = [
+  "a[href]",
+  "button:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
 
 function getCompanyRouteSegment(pathname: string, companyPrefix: string | undefined): string | null {
   if (!companyPrefix) return null;
@@ -133,6 +141,8 @@ export function Layout() {
   const lastMainScrollTop = useRef(0);
   const previousPathname = useRef<string | null>(null);
   const mainContentRef = useRef<HTMLElement | null>(null);
+  const sidebarDrawerRef = useRef<HTMLDivElement | null>(null);
+  const sidebarReturnFocusRef = useRef<HTMLElement | null>(null);
   const [mobileNavVisible, setMobileNavVisible] = useState(true);
   const [instanceSettingsTarget, setInstanceSettingsTarget] = useState<string>(() => readRememberedInstanceSettingsPath());
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -334,6 +344,62 @@ export function Layout() {
     };
   }, [isMobile, sidebarOpen, setSidebarOpen]);
 
+  useEffect(() => {
+    if (!isMobile || !sidebarOpen) return;
+    const drawer = sidebarDrawerRef.current;
+    if (!drawer) return;
+
+    const activeElement = document.activeElement;
+    if (activeElement instanceof HTMLElement && !drawer.contains(activeElement)) {
+      sidebarReturnFocusRef.current = activeElement;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      const firstFocusable = drawer.querySelector<HTMLElement>(MOBILE_DRAWER_FOCUSABLE);
+      (firstFocusable ?? drawer).focus({ preventScroll: true });
+    });
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setSidebarOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+
+      const focusable = Array.from(drawer.querySelectorAll<HTMLElement>(MOBILE_DRAWER_FOCUSABLE));
+      if (focusable.length === 0) {
+        event.preventDefault();
+        drawer.focus({ preventScroll: true });
+        return;
+      }
+
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", onKeyDown);
+      const returnTarget = sidebarReturnFocusRef.current;
+      sidebarReturnFocusRef.current = null;
+      if (returnTarget?.isConnected) returnTarget.focus({ preventScroll: true });
+    };
+  }, [isMobile, sidebarOpen, setSidebarOpen]);
+
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile, location.pathname, setSidebarOpen]);
+
   const updateMobileNavVisibility = useCallback((currentTop: number) => {
     const delta = currentTop - lastMainScrollTop.current;
 
@@ -355,27 +421,28 @@ export function Layout() {
       return;
     }
 
-    const onScroll = () => {
-      updateMobileNavVisibility(window.scrollY || document.documentElement.scrollTop || 0);
-    };
+    const scrollOwner = mainContentRef.current;
+    if (!scrollOwner) return;
+
+    const onScroll = () => updateMobileNavVisibility(scrollOwner.scrollTop);
 
     onScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
+    scrollOwner.addEventListener("scroll", onScroll, { passive: true });
 
     return () => {
-      window.removeEventListener("scroll", onScroll);
+      scrollOwner.removeEventListener("scroll", onScroll);
     };
   }, [isMobile, updateMobileNavVisibility]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
 
-    document.body.style.overflow = isMobile ? "visible" : "hidden";
+    document.body.style.overflow = "hidden";
 
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, [isMobile]);
+  }, []);
 
   useEffect(() => {
     if (!location.pathname.startsWith("/instance/settings/")) return;
@@ -418,21 +485,31 @@ export function Layout() {
       <div
       className={cn(
         "bg-background text-foreground pt-[env(safe-area-inset-top)]",
-        isMobile ? "min-h-dvh" : "flex h-dvh flex-col overflow-hidden",
+        "flex h-dvh flex-col overflow-hidden",
       )}
       >
       <a
         href="#main-content"
+        tabIndex={isMobile && sidebarOpen ? -1 : undefined}
+        aria-hidden={isMobile && sidebarOpen ? true : undefined}
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[200] focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         Skip to Main Content
       </a>
-      <WorktreeBanner />
-      <DevRestartBanner devServer={health?.devServer} />
-      <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
+      <div
+        className="contents"
+        aria-hidden={isMobile && sidebarOpen ? true : undefined}
+        inert={isMobile && sidebarOpen ? true : undefined}
+      >
+        <WorktreeBanner />
+        <DevRestartBanner devServer={health?.devServer} />
+      </div>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {isMobile && sidebarOpen && (
           <button
             type="button"
+            tabIndex={-1}
+            aria-hidden="true"
             className="fixed inset-0 z-40 bg-black/50"
             onClick={() => setSidebarOpen(false)}
             aria-label="Close sidebar"
@@ -441,8 +518,15 @@ export function Layout() {
 
         {isMobile ? (
           <div
+            ref={sidebarDrawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile sidebar"
+            aria-hidden={!sidebarOpen}
+            inert={!sidebarOpen ? true : undefined}
+            tabIndex={-1}
             className={cn(
-              "fixed inset-y-0 left-0 z-50 flex flex-col overflow-hidden pt-[env(safe-area-inset-top)] transition-transform duration-100 ease-out",
+              "fixed inset-y-0 left-0 z-50 flex max-w-[calc(100vw-3rem)] flex-col overflow-hidden bg-background pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl transition-transform duration-100 ease-out",
               sidebarOpen ? "translate-x-0" : "-translate-x-full"
             )}
           >
@@ -488,22 +572,28 @@ export function Layout() {
           </div>
         )}
 
-        <div className={cn("flex min-w-0 flex-col", isMobile ? "w-full" : "h-full flex-1")}>
+        <div
+          className="flex h-full min-w-0 flex-1 flex-col"
+          aria-hidden={isMobile && sidebarOpen ? true : undefined}
+          inert={isMobile && sidebarOpen ? true : undefined}
+        >
           <div
             className={cn(
-              isMobile && "sticky top-0 z-20 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
+              isMobile && "z-20 shrink-0 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/85",
             )}
           >
             <BreadcrumbBar />
           </div>
-          <div className={cn(isMobile ? "block" : "flex flex-1 min-h-0")}>
+          <div className={cn("flex min-h-0 flex-1", isMobile && "overflow-hidden")}>
             <main
               id="main-content"
               ref={mainContentRef}
               tabIndex={-1}
               className={cn(
                 "flex-1 p-4 outline-none md:p-6",
-                isMobile ? "overflow-visible pb-[calc(5rem+env(safe-area-inset-bottom))]" : "overflow-auto",
+                isMobile
+                  ? "min-w-0 overflow-x-hidden overflow-y-auto overscroll-y-contain pb-[calc(5.25rem+env(safe-area-inset-bottom))]"
+                  : "overflow-auto",
               )}
               data-pp-page-v2={uiV2 ? resolveV2PageKey(location.pathname) : undefined}
             >
@@ -520,7 +610,7 @@ export function Layout() {
           </div>
         </div>
       </div>
-      {isMobile && <MobileBottomNav visible={mobileNavVisible} />}
+      {isMobile && <MobileBottomNav visible={mobileNavVisible} disabled={sidebarOpen} />}
       <CommandPalette />
       <CreateComposerMount />
       <NewIssueDialog />
