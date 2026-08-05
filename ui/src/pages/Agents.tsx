@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -11,6 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, type OrgNode } from "../api/agents";
 import { heartbeatsApi } from "../api/heartbeats";
 import { costsApi } from "../api/costs";
+import { acpApi, type AcpAgentCapabilities, type AcpFleetResult } from "../api/acp";
 import { useCompany } from "../context/CompanyContext";
 import { useDialogActions } from "../context/DialogContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -36,40 +38,6 @@ import { getAdapterLabel } from "../adapters/adapter-display-registry";
 import { AcpFleetPanel } from "../components/AcpFleetPanel";
 
 const roleLabels = AGENT_ROLE_LABELS as Record<string, string>;
-
-// --- Host map for "Hosted by" field on Fleet cards --------------------------
-// Source: canonical-fleet.ts CANONICAL_HOST_MAP (bridge daemon + DB seed)
-const HOST_MAP: Record<string, string> = {
-  // ── Windows (Zeus) ─────────────────────────────────────────────────────
-  zeus:              "WindowsAugi · under Zeus",
-  "zeus book keeper":"WindowsAugi · under Zeus",
-  "zeus critic":     "WindowsAugi · under Zeus",
-  "zeus dispatch":   "WindowsAugi · under Zeus",
-
-  // ── Box 1 — under Hermes ──────────────────────────────────────────────
-  hermes:            "AugiAIs-Mini · under Hermes",
-  augi:              "AugiAIs-Mini · under Augi",
-  "hermes coder 1":  "AugiAIs-Mini · under Hermes",
-  "hermes coder 2":  "AugiAIs-Mini · under Hermes",
-  "hermes coder 3":  "AugiAIs-Mini · under Hermes",
-  "hermes designer": "AugiAIs-Mini · under Hermes",
-  "hermes researcher":"AugiAIs-Mini · under Hermes",
-
-  // ── Box 2 — under Ares ────────────────────────────────────────────────
-  ares:                "AugiBot2s-Mini · under Ares",
-  august:              "AugiBot2s-Mini · under August",
-  "ares evidence verifier":"AugiBot2s-Mini · under Ares",
-  "ares reviewer 1":       "AugiBot2s-Mini · under Ares",
-  "ares reviewer 2":       "AugiBot2s-Mini · under Ares",
-
-  // ── External ───────────────────────────────────────────────────────────
-  "baily ai":         "BailysApp · under Baily AI",
-};
-
-function hostForAgent(name: string): string | null {
-  const key = name.trim().toLowerCase().replace(/\s+/g, " ");
-  return HOST_MAP[key] ?? null;
-}
 
 /* -------------------------------------------------------------------------- */
 /* Paperclip Design System v1.0 tokens (locked) — applied locally so the      */
@@ -120,7 +88,16 @@ const surfaceCard: CSSProperties = {
   boxShadow: "inset 0 1px 0 rgba(255,255,255,0.04), 0 20px 48px -28px rgba(0,0,0,0.95)",
 };
 
-type FilterTab = "all" | "active" | "paused" | "error";
+type FilterTab = "all" | "active" | "paused" | "error" | "other";
+
+interface FleetPositionRow {
+  definition: AcpAgentCapabilities;
+  agent: Agent | null;
+}
+
+function fleetNameKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
 
 function matchesFilter(status: string, tab: FilterTab): boolean {
   if (status === "terminated") return false;
@@ -172,7 +149,7 @@ function statusLabel(status: string): string {
   }
 }
 
-function getConfiguredModel(agent: Agent): string | null {
+function getConfiguredModel(agent: Agent, includeFallback = true): string | null {
   const adapterValue = agent.adapterConfig?.model;
   if (typeof adapterValue === "string" && adapterValue.trim().length > 0) return adapterValue.trim();
 
@@ -207,17 +184,19 @@ function getConfiguredModel(agent: Agent): string | null {
     if (viaMatch) return viaMatch[1].trim();
   }
 
-  return FALLBACK_MODEL_MAP[agent.name.trim().toLowerCase()] ?? null;
+  return includeFallback ? FALLBACK_MODEL_MAP[agent.name.trim().toLowerCase()] ?? null : null;
+}
+
+function fleetPositionModel(position: FleetPositionRow): string {
+  if (position.definition.harness) return `${position.definition.harness} harness`;
+  if (position.definition.model) return position.definition.model;
+  if (position.agent) return getConfiguredModel(position.agent, false) ?? "—";
+  return "—";
 }
 
 const FALLBACK_MODEL_MAP: Record<string, string> = {
-  "hermes": "kimi-k2.6",
   "brainstorm": "glm-5.2",
-  "ares": "kimi-k2.6",
-  "augi": "deepseek-chat",
-  "august": "openclaw-peer (remote model)",
   "forge": "kimi-k2.7-code",
-  "atlas": "glm-5.2",
   "reviewer": "minimax-m2.7",
   "security": "kimi-k2.6",
   "codex": "gpt-5.5",
@@ -227,7 +206,6 @@ const FALLBACK_MODEL_MAP: Record<string, string> = {
   "builder": "xcodebuild (no LLM)",
   "coder b": "deepseek-v4-flash",
   "baily ai": "qwen3-vl-8b",
-  "zeus": "deepseek-v4-flash",
   "zeus vision": "gemini-2.5-flash",
 };
 
@@ -377,80 +355,6 @@ function RowControls({
 /* -------------------------------------------------------------------------- */
 /* Section grouping derived from the org (reportsTo) hierarchy                 */
 /* -------------------------------------------------------------------------- */
-interface Groups {
-  leadership: Agent[];
-  agents: Agent[];
-  external: Agent[];
-}
-
-function countNodes(node: OrgNode): number {
-  return 1 + node.reports.reduce((s, c) => s + countNodes(c), 0);
-}
-
-function deriveGroups(agents: Agent[], orgTree: OrgNode[] | undefined): Groups {
-  const sortName = (a: Agent, b: Agent) => a.name.localeCompare(b.name);
-  if (!orgTree || orgTree.length === 0) {
-    return { leadership: [], agents: [...agents].sort(sortName), external: [] };
-  }
-  // Main hierarchy = the root with the largest subtree (Hermes). Other roots
-  // (e.g. Baily AI, which reports to no-one) are treated as External.
-  const mainRoot = [...orgTree].sort((a, b) => countNodes(b) - countNodes(a))[0]!;
-
-  const depthById = new Map<string, number>();
-  const hasReports = new Map<string, boolean>();
-  const walk = (node: OrgNode, depth: number) => {
-    depthById.set(node.id, depth);
-    hasReports.set(node.id, node.reports.length > 0);
-    node.reports.forEach((c) => walk(c, depth + 1));
-  };
-  walk(mainRoot, 0);
-
-  // Build a set of agent ids that are in the main tree (by depth) OR have
-  // reportsTo pointing into the main tree — catches agents like Brainstorm
-  // whose org-tree entry may be absent or under a different root.
-  const mainIds = new Set(depthById.keys());
-  function reportsToMainTree(a: Agent): boolean {
-    return a.reportsTo !== null && depthById.has(a.reportsTo!);
-  }
-
-  const leadership: Agent[] = [];
-  const workers: Agent[] = [];
-  const external: Agent[] = [];
-  // Explicit group assignments (Tyler directive 2026-07-07).
-  // ponytail: named sets take priority over org-tree traversal.
-  const LEADERSHIP_NAMES = new Set(["zeus", "zeus book keeper", "zeus critic"]);
-  const EXTERNAL_NAMES = new Set(["baily ai"]);
-  // Always keep Hermes & Brainstorm in the main team regardless of org-tree quirks.
-  const MAIN_TEAM_NAMES = new Set(["hermes", "brainstorm", "zeus vision", "zeus coding", "zeus brainstorm", "zeus reviewer"]);
-  for (const a of agents) {
-    const nameKey = a.name.toLowerCase().trim();
-    // Explicit group overrides (Tyler directive 2026-07-07).
-    if (LEADERSHIP_NAMES.has(nameKey)) {
-      leadership.push(a);
-    } else if (EXTERNAL_NAMES.has(nameKey)) {
-      external.push(a);
-    } else if (mainIds.has(a.id)) {
-      // In the main org tree — classify by reports.
-      if (hasReports.get(a.id)) {
-        leadership.push(a);
-      } else {
-        workers.push(a);
-      }
-    } else if (reportsToMainTree(a)) {
-      // Reports into the main subtree — pull in as a worker.
-      workers.push(a);
-    } else if (MAIN_TEAM_NAMES.has(a.name.toLowerCase().trim())) {
-      workers.push(a);
-    } else {
-      external.push(a);
-    }
-  }
-  leadership.sort((a, b) => (depthById.get(a.id)! - depthById.get(b.id)!) || sortName(a, b));
-  workers.sort(sortName);
-  external.sort(sortName);
-  return { leadership, agents: workers, external };
-}
-
 /* -------------------------------------------------------------------------- */
 /* List row                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -477,6 +381,143 @@ function ColumnHeader() {
           </span>
         ),
       )}
+    </div>
+  );
+}
+
+function CanonicalAgentRow({
+  position,
+  currentTask,
+  live,
+  pending,
+  onOpen,
+  onPauseResume,
+}: {
+  position: FleetPositionRow;
+  currentTask: string;
+  live: boolean;
+  pending: boolean;
+  onOpen: (agent: Agent) => void;
+  onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+}) {
+  const { definition, agent } = position;
+  const model = fleetPositionModel(position);
+  const dim = agent?.status === "paused";
+  const role = [definition.fleetRole, definition.pairing].filter(Boolean).join(" · ")
+    || (agent ? agent.title ?? roleLabels[agent.role] ?? agent.role : definition.relationship ?? "Canonical Fleet position");
+  const rowProps = agent
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        onClick: () => onOpen(agent),
+        onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onOpen(agent);
+          }
+        },
+      }
+    : {};
+
+  return (
+    <div
+      {...rowProps}
+      className={cn(
+        "grid items-center gap-4 px-5 py-3",
+        agent && "cursor-pointer transition-colors",
+        "grid-cols-[1fr_auto] lg:gap-4",
+        GRID_COLS,
+      )}
+      style={{ borderBottom: `1px solid ${DS.border}` }}
+      data-pp-fleet-position={definition.name}
+      data-registered={agent ? "true" : "false"}
+    >
+      <div className={cn("flex min-w-0 items-center gap-3", dim && "opacity-55")}>
+        {agent ? (
+          <AgentAvatar agent={agent} />
+        ) : (
+          <span
+            className="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full font-bold"
+            style={{ color: DS.text, background: DS.surface3, boxShadow: `0 0 0 2px ${DS.warning}` }}
+          >
+            {definition.name.charAt(0)}
+          </span>
+        )}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-[14px] font-semibold" style={{ color: DS.text }}>{agent?.name ?? definition.name}</span>
+            {!agent ? (
+              <span className="rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide" style={{ background: `${DS.warning}1A`, color: DS.warning }}>
+                Not registered
+              </span>
+            ) : null}
+          </div>
+          <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>{role}</div>
+          <div className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
+            <Server className="h-3 w-3" />
+            <span>{definition.hostMachine}{definition.hostParent ? ` · under ${definition.hostParent}` : ""}</span>
+          </div>
+          {definition.surfaceLinks.length > 0 ? (
+            <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
+              {definition.surfaceLinks.map((link) => (
+                <Link key={link.href} to={link.href} className="text-[10px] font-medium no-underline hover:underline" style={{ color: DS.primary }}>
+                  {link.label}
+                </Link>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className={cn("hidden truncate font-mono text-[11px] lg:block", dim && "opacity-55")} style={{ color: DS.textMuted }} title={model}>{model}</div>
+      <div className={cn("hidden min-w-0 items-center gap-2 lg:flex", dim && "opacity-55")}>
+        {live ? <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: DS.success }} /> : null}
+        <span className="truncate text-[12px]" style={{ color: live ? DS.text : DS.textMuted }}>{agent ? currentTask : "Not registered"}</span>
+      </div>
+      <div className={cn("hidden lg:block", dim && "opacity-55")}>{agent ? <UtilizationCost agent={agent} /> : <span style={{ color: DS.textFaint }}>—</span>}</div>
+      <div className={cn("hidden text-right font-mono text-[11px] lg:block", dim && "opacity-55")} style={{ color: DS.textFaint }}>
+        {agent?.lastHeartbeatAt ? relativeTime(agent.lastHeartbeatAt) : "—"}
+      </div>
+      <div className="hidden justify-end lg:flex">{agent ? <StatusPill status={agent.status} /> : <StatusPill status="not_registered" />}</div>
+      {agent ? <RowControls agent={agent} pending={pending} onPauseResume={onPauseResume} /> : <div aria-label="No operational actions" />}
+    </div>
+  );
+}
+
+function FleetListSection({
+  label,
+  rows,
+  currentTaskFor,
+  liveFor,
+  pendingIds,
+  onOpen,
+  onPauseResume,
+}: {
+  label: string;
+  rows: FleetPositionRow[];
+  currentTaskFor: (agent: Agent) => string;
+  liveFor: (agent: Agent) => boolean;
+  pendingIds: Set<string>;
+  onOpen: (agent: Agent) => void;
+  onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      <div className="px-5 py-2" style={{ background: "rgba(255,255,255,0.015)", borderBottom: `1px solid ${DS.border}` }}>
+        <SectionLabel>{label}</SectionLabel>
+      </div>
+      {rows.map((position) => (
+        <CanonicalAgentRow
+          key={position.definition.id}
+          position={position}
+          currentTask={position.agent ? currentTaskFor(position.agent) : "Not registered"}
+          live={position.agent ? liveFor(position.agent) : false}
+          pending={position.agent ? pendingIds.has(position.agent.id) : false}
+          onOpen={onOpen}
+          onPauseResume={onPauseResume}
+        />
+      ))}
     </div>
   );
 }
@@ -542,12 +583,6 @@ function AgentRow({
           <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>
             {agent.title ?? role}
           </div>
-          {hostForAgent(agent.name) && (
-            <div className="flex items-center gap-1 text-[10px]" style={{ color: DS.textFaint }}>
-              <Server className="h-3 w-3" />
-              <span>Hosted: {hostForAgent(agent.name)}</span>
-            </div>
-          )}
         </div>
       </div>
 
@@ -637,6 +672,10 @@ function ListSection({
 /* -------------------------------------------------------------------------- */
 /* Org chart view (Hermes -> Ares -> workers; Baily AI external)              */
 /* -------------------------------------------------------------------------- */
+function countNodes(node: OrgNode): number {
+  return 1 + node.reports.reduce((sum, child) => sum + countNodes(child), 0);
+}
+
 function OrgCard({
   agent,
   node,
@@ -746,6 +785,75 @@ function OrgView({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function CanonicalOrgView({ positions, onOpen }: { positions: FleetPositionRow[]; onOpen: (agent: Agent) => void }) {
+  const groups = Array.from(new Set(positions.map((position) => position.definition.hostLabel)));
+  return (
+    <div className="grid grid-cols-1 gap-5 p-5 xl:grid-cols-3">
+      {groups.map((label) => (
+        <section key={label} className="rounded-[14px] p-4" style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}>
+          <div className="mb-3"><SectionLabel>{label}</SectionLabel></div>
+          <div className="flex flex-col gap-2.5">
+            {positions.filter((position) => position.definition.hostLabel === label).map((position) => {
+              const content = (
+                <>
+                  <div className="flex min-w-0 flex-1 items-center gap-3">
+                    {position.agent ? <AgentAvatar agent={position.agent} size={34} /> : (
+                      <span className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-full font-bold" style={{ color: DS.text, background: DS.surface3, boxShadow: `0 0 0 2px ${DS.warning}` }}>
+                        {position.definition.name.charAt(0)}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-[13px] font-semibold" style={{ color: DS.text }}>{position.agent?.name ?? position.definition.name}</div>
+                      <div className="truncate text-[10px]" style={{ color: DS.textFaint }}>
+                        {[position.definition.fleetRole, position.definition.pairing].filter(Boolean).join(" · ")}
+                      </div>
+                      <div className="truncate font-mono text-[10px]" style={{ color: DS.textMuted }}>{fleetPositionModel(position)}</div>
+                      {position.definition.relationship ? <div className="text-[10px]" style={{ color: DS.textFaint }}>{position.definition.relationship}</div> : null}
+                    </div>
+                  </div>
+                  <span className="shrink-0 text-[10px] font-medium" style={{ color: position.agent ? statusColor(position.agent.status) : DS.warning }}>
+                    {position.agent ? statusLabel(position.agent.status) : "Not registered"}
+                  </span>
+                </>
+              );
+              return position.agent ? (
+                <button key={position.definition.id} data-pp-fleet-org-position={position.definition.name} type="button" onClick={() => onOpen(position.agent!)} className="flex items-center gap-2 rounded-[10px] p-3 text-left" style={{ background: DS.surface3, border: `1px solid ${DS.border2}` }}>
+                  {content}
+                </button>
+              ) : (
+                <div key={position.definition.id} data-pp-fleet-org-position={position.definition.name} className="rounded-[10px] p-3" style={{ background: DS.surface3, border: `1px solid ${DS.border2}` }}>
+                  <div className="flex items-center gap-2">{content}</div>
+                  {position.definition.surfaceLinks.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {position.definition.surfaceLinks.map((link) => <Link key={link.href} to={link.href} className="text-[10px] font-medium no-underline hover:underline" style={{ color: DS.primary }}>{link.label}</Link>)}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function RegisteredOrgView({ agents, onOpen }: { agents: Agent[]; onOpen: (agent: Agent) => void }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+      {agents.map((agent) => (
+        <div key={agent.id} data-pp-fleet-registered-org-agent={agent.id}>
+          <OrgCard
+            agent={agent}
+            node={{ id: agent.id, name: agent.name, role: agent.role, status: agent.status, reports: [] }}
+            onOpen={() => onOpen(agent)}
+          />
+        </div>
+      ))}
     </div>
   );
 }
@@ -992,10 +1100,11 @@ export function Agents() {
   const [openAgentId, setOpenAgentId] = useState<string | null>(null);
 
   const pathSegment = location.pathname.split("/").pop() ?? "all";
-  const tab: FilterTab =
+  const requestedTab: FilterTab =
     pathSegment === "all" || pathSegment === "active" || pathSegment === "paused" || pathSegment === "error"
       ? pathSegment
       : "all";
+  const tab: FilterTab = new URLSearchParams(location.search).get("view") === "other" ? "other" : requestedTab;
 
   const { data: agents, isLoading, error } = useQuery({
     queryKey: queryKeys.agents.list(selectedCompanyId!),
@@ -1003,10 +1112,12 @@ export function Agents() {
     enabled: !!selectedCompanyId,
   });
 
-  const { data: orgTree } = useQuery({
-    queryKey: queryKeys.org(selectedCompanyId!),
-    queryFn: () => agentsApi.org(selectedCompanyId!),
+  const { data: fleetResult, isLoading: isFleetLoading, error: fleetError } = useQuery<AcpFleetResult>({
+    queryKey: ["acp", "fleet", "default", selectedCompanyId ?? "no-company"],
+    queryFn: () => acpApi.fleet({ companyId: selectedCompanyId! }),
     enabled: !!selectedCompanyId,
+    staleTime: 30_000,
+    retry: false,
   });
 
   const { data: costSummary } = useQuery({
@@ -1134,20 +1245,52 @@ export function Agents() {
   if (!selectedCompanyId) {
     return <EmptyState icon={Bot} message="Select a company to view the fleet." />;
   }
-  if (isLoading) {
+  if (isLoading || isFleetLoading) {
     return <PageSkeleton variant="list" />;
   }
 
   const allAgents = (agents ?? []).filter((a) => a.status !== "terminated");
+  const agentsByName = new Map(allAgents.map((agent) => [fleetNameKey(agent.name), agent] as const));
+  const hasCanonicalFleet = fleetResult?.ok === true && fleetResult.rosterSource === "canonical";
+  const hasRegisteredOnlyFleet = fleetResult?.ok === true && fleetResult.rosterSource !== "canonical";
+  const canonicalDefinitions = hasCanonicalFleet ? fleetResult.agents : [];
+  const fleetPositions: FleetPositionRow[] = canonicalDefinitions.map((definition) => ({
+    definition,
+    agent: definition.registered
+      ? allAgents.find((agent) => agent.id === definition.id) ?? agentsByName.get(fleetNameKey(definition.name)) ?? null
+      : null,
+  }));
+  const matchedCanonicalIds = new Set(fleetPositions.flatMap((position) => position.agent ? [position.agent.id] : []));
+  const otherAgents = allAgents.filter((agent) => !matchedCanonicalIds.has(agent.id));
   const counts = {
-    all: allAgents.length,
-    active: allAgents.filter((a) => matchesFilter(a.status, "active")).length,
-    paused: allAgents.filter((a) => a.status === "paused").length,
-    error: allAgents.filter((a) => a.status === "error").length,
+    all: hasCanonicalFleet ? fleetPositions.length : hasRegisteredOnlyFleet ? allAgents.length : 0,
+    active: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent && matchesFilter(position.agent.status, "active")).length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => matchesFilter(agent.status, "active")).length : 0,
+    paused: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent?.status === "paused").length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => agent.status === "paused").length : 0,
+    error: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent?.status === "error").length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => agent.status === "error").length : 0,
+    other: hasCanonicalFleet ? otherAgents.length : hasRegisteredOnlyFleet ? 0 : allAgents.length,
   };
 
-  const visibleAgents = allAgents.filter((a) => matchesFilter(a.status, tab));
-  const groups = deriveGroups(visibleAgents, orgTree);
+  const visiblePositions = tab === "all"
+    ? fleetPositions
+    : tab === "other"
+      ? []
+      : fleetPositions.filter((position) => position.agent && matchesFilter(position.agent.status, tab));
+  const visibleRegisteredAgents = tab === "all"
+    ? allAgents
+    : tab === "other"
+      ? []
+      : allAgents.filter((agent) => matchesFilter(agent.status, tab));
+  const hostGroups = Array.from(new Set(
+    fleetPositions
+      .map((position) => position.definition.hostLabel)
+      .filter((label): label is string => Boolean(label)),
+  ));
 
   const summarySpend = costSummary
     ? formatUsd(costSummary.spendCents)
@@ -1167,7 +1310,12 @@ export function Agents() {
             Fleet
           </h1>
           <p className="text-[13px]" style={{ color: DS.textMuted }}>
-            {allAgents.length} agents · <span className="font-mono">{summarySpend}</span>
+            {hasCanonicalFleet
+              ? <>{counts.all} Fleet positions · {counts.other} other registered records preserved</>
+              : hasRegisteredOnlyFleet
+                ? <>{counts.all} registered company agents</>
+                : <>Canonical Fleet unavailable · {counts.other} registered records preserved</>}
+            {" · "}<span className="font-mono">{summarySpend}</span>
             {summaryBudget ? <span className="font-mono"> / {summaryBudget}</span> : null} this month
           </p>
         </div>
@@ -1212,59 +1360,127 @@ export function Agents() {
         <FilterPill label="Active" count={counts.active} dot={DS.success} active={tab === "active"} onClick={() => navigate("/agents/active")} />
         <FilterPill label="Paused" count={counts.paused} dot={DS.warning} active={tab === "paused"} onClick={() => navigate("/agents/paused")} />
         <FilterPill label="Error" count={counts.error} dot={DS.critical} active={tab === "error"} onClick={() => navigate("/agents/error")} />
+        <FilterPill label="Other" count={counts.other} active={tab === "other"} onClick={() => navigate("/agents/all?view=other")} />
       </div>
 
-      {/* ACP Phase 1 — multi-agent self-described capabilities (read-only). Each
-          roster agent's models/modes are built from one ACP handshake, not from
-          hard-coded adapter config. Runs alongside the Hermes<->Ares bridge; no
-          cutover. The single-agent POC panel follows for continuity. */}
+      {/* Canonical roster definitions and registration reconciliation (read-only). */}
       <div className="mb-4 flex flex-col gap-4">
         <AcpFleetPanel companyId={selectedCompanyId ?? undefined} />
       </div>
 
       {error && <p className="text-[13px]" style={{ color: DS.critical }}>{error.message}</p>}
+      {fleetError && <p className="text-[13px]" style={{ color: DS.critical }}>Could not load the canonical Fleet: {fleetError.message}</p>}
+      {fleetResult && !fleetResult.ok ? <p className="text-[13px]" style={{ color: DS.critical }}>Could not load the canonical Fleet: {fleetResult.error}</p> : null}
 
-      {allAgents.length === 0 ? (
-        <EmptyState icon={Bot} message="Create your first agent to get started." action="New Agent" onAction={openNewAgent} />
+      {hasRegisteredOnlyFleet ? (
+        tab === "other" ? (
+          <section style={surfaceCard} className="overflow-hidden">
+            <ColumnHeader />
+            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>No other registered agents.</p>
+            <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+              This company uses its registered roster without canonical AUG positions
+            </div>
+          </section>
+        ) : view === "list" ? (
+          <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-registered-only>
+            <ColumnHeader />
+            {visibleRegisteredAgents.length === 0 ? (
+              <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+                No registered company agents match the selected filter.
+              </p>
+            ) : (
+              <ListSection
+                label="Registered company agents"
+                rows={visibleRegisteredAgents}
+                currentTaskFor={currentTaskFor}
+                liveFor={liveFor}
+                pendingIds={pendingAgentIds}
+                onOpen={(agent) => setOpenAgentId(agent.id)}
+                onPauseResume={onPauseResume}
+              />
+            )}
+            <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+              Showing {visibleRegisteredAgents.length} of {allAgents.length} registered company agents
+            </div>
+          </section>
+        ) : (
+          <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-registered-only-org>
+            <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: `1px solid ${DS.border}` }}>
+              <GitBranch className="h-3.5 w-3.5" style={{ color: DS.textFaint }} />
+              <SectionLabel>Registered Agent View</SectionLabel>
+            </div>
+            {visibleRegisteredAgents.length === 0 ? (
+              <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+                No registered company agents match the selected filter.
+              </p>
+            ) : (
+              <RegisteredOrgView agents={visibleRegisteredAgents} onOpen={(agent) => setOpenAgentId(agent.id)} />
+            )}
+          </section>
+        )
+      ) : !hasCanonicalFleet && allAgents.length > 0 ? (
+        <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-fallback>
+          <ColumnHeader />
+          <ListSection
+            label="Registered agents — canonical roster unavailable"
+            rows={allAgents}
+            external
+            currentTaskFor={currentTaskFor}
+            liveFor={liveFor}
+            pendingIds={pendingAgentIds}
+            onOpen={(agent) => setOpenAgentId(agent.id)}
+            onPauseResume={onPauseResume}
+          />
+          <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+            All {allAgents.length} registered records remain reachable while canonical Fleet data is unavailable
+          </div>
+        </section>
+      ) : fleetPositions.length === 0 ? (
+        <EmptyState icon={Bot} message="Canonical Fleet definitions are unavailable and no registered agents were returned." />
+      ) : tab === "other" ? (
+        <section style={surfaceCard} className="overflow-hidden">
+          <ColumnHeader />
+          {otherAgents.length === 0 ? (
+            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>No other registered agents.</p>
+          ) : (
+            <ListSection
+              label="Other registered agents"
+              rows={otherAgents}
+              external
+              currentTaskFor={currentTaskFor}
+              liveFor={liveFor}
+              pendingIds={pendingAgentIds}
+              onOpen={(agent) => setOpenAgentId(agent.id)}
+              onPauseResume={onPauseResume}
+            />
+          )}
+          <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+            {otherAgents.length} registered noncanonical records preserved
+          </div>
+        </section>
       ) : view === "list" ? (
         <section style={surfaceCard} className="overflow-hidden">
           <ColumnHeader />
-          {visibleAgents.length === 0 ? (
+          {visiblePositions.length === 0 ? (
             <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
-              No agents match the selected filter.
+              No registered Fleet agents match the selected filter.
             </p>
           ) : (
             <>
-              <ListSection
-                label="Leadership"
-                rows={groups.leadership}
-                currentTaskFor={currentTaskFor}
-                liveFor={liveFor}
-                pendingIds={pendingAgentIds}
-                onOpen={(a) => setOpenAgentId(a.id)}
-                onPauseResume={onPauseResume}
-              />
-              <ListSection
-                label="Agents"
-                rows={groups.agents}
-                currentTaskFor={currentTaskFor}
-                liveFor={liveFor}
-                pendingIds={pendingAgentIds}
-                onOpen={(a) => setOpenAgentId(a.id)}
-                onPauseResume={onPauseResume}
-              />
-              <ListSection
-                label="External"
-                rows={groups.external}
-                external
-                currentTaskFor={currentTaskFor}
-                liveFor={liveFor}
-                pendingIds={pendingAgentIds}
-                onOpen={(a) => setOpenAgentId(a.id)}
-                onPauseResume={onPauseResume}
-              />
+              {hostGroups.map((label) => (
+                <FleetListSection
+                  key={label}
+                  label={label}
+                  rows={visiblePositions.filter((position) => position.definition.hostLabel === label)}
+                  currentTaskFor={currentTaskFor}
+                  liveFor={liveFor}
+                  pendingIds={pendingAgentIds}
+                  onOpen={(agent) => setOpenAgentId(agent.id)}
+                  onPauseResume={onPauseResume}
+                />
+              ))}
               <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
-                Showing {visibleAgents.length} of {counts.all} agents
+                Showing {visiblePositions.length} of {counts.all} canonical Fleet positions
               </div>
             </>
           )}
@@ -1275,13 +1491,7 @@ export function Agents() {
             <GitBranch className="h-3.5 w-3.5" style={{ color: DS.textFaint }} />
             <SectionLabel>Org Chart View</SectionLabel>
           </div>
-          {orgTree && orgTree.length > 0 ? (
-            <OrgView orgTree={orgTree} agentMap={agentMap} onOpen={(id) => setOpenAgentId(id)} />
-          ) : (
-            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
-              No organizational hierarchy defined.
-            </p>
-          )}
+          <CanonicalOrgView positions={visiblePositions} onOpen={(agent) => setOpenAgentId(agent.id)} />
         </section>
       )}
 

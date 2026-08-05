@@ -1,18 +1,24 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   getStoredBoardCredential,
   readBoardAuthStore,
   removeStoredBoardCredential,
+  resolveDefaultBoardAuthClientName,
   setStoredBoardCredential,
 } from "../client/board-auth.js";
+import { selectCliIdentity } from "../cli-identity.js";
 
 function createTempAuthPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "paperclip-cli-auth-"));
   return path.join(dir, "auth.json");
 }
+
+afterEach(() => {
+  selectCliIdentity("compatibility");
+});
 
 describe("board auth store", () => {
   it("returns an empty store when the file does not exist", () => {
@@ -49,5 +55,12 @@ describe("board auth store", () => {
 
     expect(removeStoredBoardCredential("http://localhost:3100", authPath)).toBe(true);
     expect(getStoredBoardCredential("http://localhost:3100", authPath)).toBeNull();
+  });
+
+  it("derives the default client name from the active CLI identity", () => {
+    expect(resolveDefaultBoardAuthClientName()).toBe("paperclipai cli");
+
+    selectCliIdentity("canonical");
+    expect(resolveDefaultBoardAuthClientName()).toBe("olympus cli");
   });
 });

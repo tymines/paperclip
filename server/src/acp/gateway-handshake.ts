@@ -26,11 +26,11 @@ import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
 import {
+  CANONICAL_FLEET_ROSTER,
   canonicalModelFor,
+  fleetKey,
   hostFor,
-  CANONICAL_FLEET_MODELS,
   type CanonicalModel,
-  type HostEntry,
 } from "./canonical-fleet.js";
 
 // Matches the installed OpenClaw gateway (server.protocol === 4). The in-repo
@@ -122,7 +122,15 @@ export interface GatewayHandshakeOptions {
    * the canonical fleet model map (see canonical-fleet.ts) instead of the raw
    * agents.list handshake. Additive: omit it and behaviour is unchanged.
    */
-  roster?: Array<{ id: string; name: string; role?: string | null; title?: string | null }>;
+  roster?: Array<{
+    id: string;
+    name: string;
+    role?: string | null;
+    title?: string | null;
+    status?: string | null;
+  }>;
+  /** Whether the supplied database roster belongs to the AUG canonical fleet. */
+  canonicalRoster?: boolean;
   /**
    * When true, skip the OpenClaw gateway WebSocket entirely and build the
    * fleet view from the canonical DB roster + static model/host maps only.
@@ -474,16 +482,30 @@ export async function readGatewayHandshake(
 // nothing. The proven single-agent `readGatewayHandshake` above is untouched.
 // ===========================================================================
 
-/** One roster agent's capabilities, built entirely from the live handshake. */
+/** One roster/capability entry; canonical mode explicitly marks its provenance. */
 export interface AcpAgentCapabilities {
   id: string;
   name: string;
+  registered: boolean;
+  status: string | null;
   /** Org role (e.g. orchestrator, coo, engineer) when known. */
   role: string | null;
+  /** Tyler-approved functional role in the canonical Fleet presentation. */
+  fleetRole: string | null;
+  /** Builder/reviewer lane relationship when the canonical roster defines one. */
+  pairing: string | null;
   /** Human title / role description shown under the name. */
   title: string | null;
   /** Host machine + parent agent (e.g. AugiAIs-Mini · under Augi), null if unknown. */
   hostedBy: string | null;
+  hostKey: string | null;
+  hostLabel: string | null;
+  hostMachine: string | null;
+  hostParent: string | null;
+  framework: string | null;
+  harness: string | null;
+  relationship: string | null;
+  surfaceLinks: Array<{ label: string; href: string }>;
   workspace: string | null;
   runtime: string | null;
   /** Per-agent primary model id (verbatim from agents.list[].model.primary). */
@@ -543,9 +565,21 @@ function normaliseAgentCapabilities(
       return {
         id,
         name: hn,
+        registered: true,
+        status: null,
         role: null,
+        fleetRole: null,
+        pairing: null,
         title: null,
         hostedBy: h2 ? h2.machine + " · under " + h2.parent : null,
+        hostKey: null,
+        hostLabel: null,
+        hostMachine: h2?.machine ?? null,
+        hostParent: h2?.parent ?? null,
+        framework: null,
+        harness: null,
+        relationship: null,
+        surfaceLinks: [],
         workspace: a?.workspace ? String(a.workspace) : null,
         runtime: a?.agentRuntime?.id ? String(a.agentRuntime.id) : null,
         model: modelId,
@@ -567,14 +601,18 @@ function normaliseAgentCapabilities(
 }
 
 /**
- * Build per-agent capabilities from the REAL Paperclip fleet roster (DB names +
- * roles/titles) joined with the canonical fleet model map. Used when the caller
- * passes opts.roster, so the Fleet panel reflects Tyler's actual agents instead
- * of the gateway's self-described persona pool. The shared model catalog from
- * the live handshake is still used to resolve a richer modelInfo where possible.
+ * Start from the 16 canonical definitions and reconcile registered DB rows by
+ * normalized name. Unmatched DB rows are intentionally not canonical members;
+ * unmatched definitions remain honest, non-operational positions.
  */
 function buildCanonicalAgentCapabilities(
-  roster: Array<{ id: string; name: string; role?: string | null; title?: string | null }>,
+  roster: Array<{
+    id: string;
+    name: string;
+    role?: string | null;
+    title?: string | null;
+    status?: string | null;
+  }>,
   models: AcpModel[],
   team: { capable: boolean },
 ): AcpAgentCapabilities[] {
@@ -589,36 +627,94 @@ function buildCanonicalAgentCapabilities(
       ) ?? null
     );
   };
-  return roster
-    .filter((a) => a && a.id)
-    .map((a) => {
-      const cm = canonicalModelFor(a.name);
-      const h = hostFor(a.name);
+  const dbByName = new Map<string, (typeof roster)[number]>();
+  for (const agent of roster) {
+    if (!agent?.id || !agent?.name) continue;
+    const key = fleetKey(agent.name);
+    if (!dbByName.has(key)) dbByName.set(key, agent);
+  }
+  return CANONICAL_FLEET_ROSTER.map((position) => {
+    const matched = dbByName.get(fleetKey(position.name));
+    const cm = canonicalModelFor(position.name);
+    const registered = Boolean(matched);
     return {
-        id: a.id,
-        name: a.name,
-        role: a.role ?? null,
-        title: a.title ?? null,
-        hostedBy: h ? h.machine + " · under " + h.parent : null,
+        id: matched?.id ?? `canonical:${fleetKey(position.name).replace(/\s+/g, "-")}`,
+        name: matched?.name ?? position.name,
+        registered,
+        status: matched?.status ?? null,
+        role: matched?.role ?? null,
+        fleetRole: position.fleetRole,
+        pairing: position.pairing ?? null,
+        title: matched?.title ?? null,
+        hostedBy: `${position.hostMachine} · under ${position.parent ?? position.name}`,
+        hostKey: position.hostKey,
+        hostLabel: position.hostLabel,
+        hostMachine: position.hostMachine,
+        hostParent: position.parent,
+        framework: position.framework ?? null,
+        harness: position.harness ?? null,
+        relationship: position.relationship ?? null,
+        surfaceLinks: position.surfaceLinks ? [...position.surfaceLinks] : [],
         workspace: null,
         runtime: null,
-        model: cm?.model ?? null,
+        model: position.model ?? null,
         modelInfo: resolveModelInfo(cm),
         modes: [],
         modeDefault: null,
         teamCapable: team.capable,
         provenance: {
-          // Names/roles/titles are REAL (verbatim from the Paperclip DB roster).
-          name: "real",
-          role: "real",
-          title: "real",
-          // Model is DERIVED: reconciled from the live fleet config (bridge +
-          // litellm aliases + DB titles) via the canonical fleet map.
+          name: registered ? "real" : "derived",
+          role: registered ? "real" : "stub",
+          title: registered ? "real" : "stub",
           model: "derived",
           teamCapable: "derived",
         } as Record<string, Provenance>,
-      };
-    });
+    };
+  });
+}
+
+/**
+ * Company-scoped fallback for organizations that do not own the AUG fleet.
+ * It deliberately carries only registered database rows, never static Fleet
+ * definitions or their derived labels.
+ */
+function buildRegisteredAgentCapabilities(
+  roster: NonNullable<GatewayHandshakeOptions["roster"]>,
+  team: { capable: boolean },
+): AcpAgentCapabilities[] {
+  return roster.map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    registered: true,
+    status: agent.status ?? null,
+    role: agent.role ?? null,
+    fleetRole: null,
+    pairing: null,
+    title: agent.title ?? null,
+    hostedBy: null,
+    hostKey: null,
+    hostLabel: null,
+    hostMachine: null,
+    hostParent: null,
+    framework: null,
+    harness: null,
+    relationship: null,
+    surfaceLinks: [],
+    workspace: null,
+    runtime: null,
+    model: null,
+    modelInfo: null,
+    modes: [],
+    modeDefault: null,
+    teamCapable: team.capable,
+    provenance: {
+      name: "real",
+      role: "real",
+      title: "real",
+      status: "real",
+      teamCapable: "derived",
+    } as Record<string, Provenance>,
+  }));
 }
 
 export async function readGatewayFleet(
@@ -630,42 +726,29 @@ export async function readGatewayFleet(
   const timeoutMs = opts.timeoutMs ?? 12_000;
 
   // ── skipGateway mode: build fleet from canonical maps, no gateway WS ─────
-  // When skipGateway is true, build the fleet from the canonical fleet model
-  // map + host map, WITHOUT opening any WebSocket to the OpenClaw gateway.
-  // If the caller provides a DB roster, it's enriched with canonical models.
-  // If not (the lean agents live only in the static map, not in the Paperclip
-  // agent table), the roster is built from the canonical map keys directly.
-  // This permanently eliminates the "gateway handshake" as a fallback path.
+  // This mode deliberately does not open a WebSocket or infer gateway facts.
   if (opts.skipGateway) {
-    // Use the provided DB roster if non-empty; otherwise build from the static
-    // canonical map (so the canonical-db path never depends on the agent table).
-    const effectiveRoster = Array.isArray(opts.roster) && opts.roster.length > 0
-        ? opts.roster
-        : Object.keys(CANONICAL_FLEET_MODELS).map((key) => ({
-            id: "canonical-" + key.replace(/\s+/g, "-"),
-            name: key,
-            role: null,
-            title: null,
-          }));
-    const emptyTeam = { capable: true };
-    const agents = buildCanonicalAgentCapabilities(effectiveRoster, [], emptyTeam);
+    const canonicalRoster = opts.canonicalRoster ?? true;
+    const agents = canonicalRoster
+      ? buildCanonicalAgentCapabilities(opts.roster ?? [], [], { capable: false })
+      : buildRegisteredAgentCapabilities(opts.roster ?? [], { capable: false });
     const fleet: AcpFleet = {
       ok: true,
       transport: "canonical-db",
       url,
       connectedAtMs: Date.now(),
       handshakeMs: 0,
-      server: { version: "lean-roster", protocol: null, connId: null },
+      server: { version: "canonical-roster-2026-08-04-v2", protocol: null, connId: null },
       methods: [],
       events: [],
       models: [],
       slashCommands: [],
       identity: { name: "Canonical Fleet", avatar: "⚡" },
-      teamCapable: true,
-      teamCapableReason: "canonical lean roster (no gateway handshake)",
+      teamCapable: false,
+      teamCapableReason: "Not evaluated in canonical roster mode",
       agents,
       agentCount: agents.length,
-      rosterSource: "canonical",
+      rosterSource: canonicalRoster ? "canonical" : "handshake",
       provenance: {
         server: "derived",
         methods: "derived",
@@ -678,15 +761,14 @@ export async function readGatewayFleet(
       },
       notes: {
         real: [
-          `${agents.length} agents — canonical lean roster from CANONICAL_FLEET_MODELS`,
-          "per-agent model from CANONICAL_FLEET_MODELS (derived from fleet config)",
-          "host map from CANONICAL_HOST_MAP (derived from fleet config)",
+          `${agents.filter((agent) => agent.registered).length} registered agents reconciled by normalized name`,
+          "matched IDs, names, roles, titles, and statuses come from Paperclip DB rows",
         ],
         derived: [
-          "all fields are derived — no live ACP gateway handshake",
-          "teamCapable is set to true (lean Hermes agents are ACP-capable)",
+          ...(canonicalRoster ? ["16 ordered positions and their requested presentation metadata come from the 2026-08-04-v2 canonical roster"] : []),
+          "canonical mode deliberately skips the gateway",
         ],
-        stub: [],
+        stub: canonicalRoster ? agents.filter((agent) => !agent.registered).map((agent) => `${agent.name} is not registered`) : [],
       },
     };
     return fleet;

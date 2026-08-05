@@ -9,6 +9,7 @@ import { dashboardApi } from "../api/dashboard";
 import { heartbeatsApi } from "../api/heartbeats";
 import { issuesApi } from "../api/issues";
 import { queryKeys } from "../lib/queryKeys";
+import { isBrowserStorageKey } from "../lib/browser-storage-compat";
 import {
   buildInboxDismissedAtByKey,
   computeInboxBadgeData,
@@ -17,7 +18,8 @@ import {
   saveDismissedInboxAlerts,
   loadReadInboxItems,
   saveReadInboxItems,
-  READ_ITEMS_KEY,
+  DISMISSED_KEYS,
+  READ_ITEMS_KEYS,
 } from "../lib/inbox";
 
 const INBOX_ISSUE_STATUSES = "backlog,todo,in_progress,in_review,blocked,done";
@@ -28,12 +30,26 @@ export function useDismissedInboxAlerts() {
   const [dismissed, setDismissed] = useState<Set<string>>(loadDismissedInboxAlerts);
 
   useEffect(() => {
+    let refreshTimer: number | null = null;
+    let sawCanonicalEvent = false;
     const handleStorage = (event: StorageEvent) => {
-      if (event.key !== "paperclip:inbox:dismissed") return;
-      setDismissed(loadDismissedInboxAlerts());
+      if (!isBrowserStorageKey(event.key, DISMISSED_KEYS)) return;
+      if (event.key === DISMISSED_KEYS.canonical) sawCanonicalEvent = true;
+      if (refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        const readOptions = sawCanonicalEvent
+          ? { copyForward: false as const }
+          : { identity: "compatibility" as const };
+        sawCanonicalEvent = false;
+        setDismissed(loadDismissedInboxAlerts(readOptions));
+      }, 0);
     };
     window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    };
   }, []);
 
   const dismiss = (id: string) => {
@@ -109,12 +125,26 @@ export function useReadInboxItems() {
   const [readItems, setReadItems] = useState<Set<string>>(loadReadInboxItems);
 
   useEffect(() => {
+    let refreshTimer: number | null = null;
+    let sawCanonicalEvent = false;
     const handleStorage = (event: StorageEvent) => {
-      if (event.key !== READ_ITEMS_KEY) return;
-      setReadItems(loadReadInboxItems());
+      if (!isBrowserStorageKey(event.key, READ_ITEMS_KEYS)) return;
+      if (event.key === READ_ITEMS_KEYS.canonical) sawCanonicalEvent = true;
+      if (refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        const readOptions = sawCanonicalEvent
+          ? { copyForward: false as const }
+          : { identity: "compatibility" as const };
+        sawCanonicalEvent = false;
+        setReadItems(loadReadInboxItems(readOptions));
+      }, 0);
     };
     window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    };
   }, []);
 
   const markRead = (id: string) => {

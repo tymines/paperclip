@@ -59,12 +59,14 @@ export class AgentLaneUnavailableError extends Error {
   readonly lane: BookAgentLane;
   readonly reason: string;
   readonly fallbackSafe: boolean;
-  constructor(lane: BookAgentLane, reason: string, opts?: { fallbackSafe?: boolean }) {
+  readonly delegationId?: string;
+  constructor(lane: BookAgentLane, reason: string, opts?: { fallbackSafe?: boolean; delegationId?: string }) {
     super(`Book Studio ${lane} lane unavailable: ${reason}`);
     this.name = "AgentLaneUnavailableError";
     this.lane = lane;
     this.reason = reason;
     this.fallbackSafe = opts?.fallbackSafe ?? true;
+    this.delegationId = opts?.delegationId;
   }
 }
 
@@ -81,7 +83,11 @@ export interface AgentLaneCall {
   task: string;
   /** Extra metadata stamped on the delegation row (kind/bookId/chapterNumber…). */
   metadata?: Record<string, unknown>;
+  /** Stable additive identity forwarded to peer payload consumers. */
+  conversationId?: string;
   requestedByActorId?: string | null;
+  /** Reserved and committed by the Book Studio turn before external dispatch. */
+  delegationId?: string;
   /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_HADES_TIMEOUT_MS (120s). */
   timeoutMs?: number;
   /** Result-row poll interval. Default BOOK_AGENT_LANE_POLL_MS (2s). */
@@ -151,6 +157,7 @@ export async function callAgentLane(
     }
 
     const dispatch = await dispatchDelegation(db, {
+      delegationId: args.delegationId,
       companyId,
       agent: peer,
       task: args.task,
@@ -159,6 +166,7 @@ export async function callAgentLane(
         ...(args.metadata ?? {}),
       },
       requestedByActorId: args.requestedByActorId ?? null,
+      conversationId: args.conversationId ?? null,
     });
     if (dispatch.status === "failed" || !dispatch.id) {
       throw new AgentLaneUnavailableError(
@@ -303,7 +311,10 @@ export async function callAgentLane(
       await sleep(Math.min(everyMs, Math.max(0, deadline - Date.now())));
     }
   } catch (err) {
-    if (err instanceof AgentLaneUnavailableError) throw err;
+    if (err instanceof AgentLaneUnavailableError) {
+      if (err.delegationId || !dispatchedId) throw err;
+      throw new AgentLaneUnavailableError(lane, err.reason, { fallbackSafe: err.fallbackSafe, delegationId: dispatchedId });
+    }
     // Normalize unexpected transport/DB errors into the single lane failure
     // type so callers have exactly one catch path. Pre-dispatch surprises
     // launched no peer work (fallback-safe); post-dispatch surprises leave
@@ -311,7 +322,7 @@ export async function callAgentLane(
     throw new AgentLaneUnavailableError(
       lane,
       err instanceof Error ? err.message : String(err),
-      { fallbackSafe: dispatchedId === null },
+      { fallbackSafe: dispatchedId === null, delegationId: dispatchedId ?? undefined },
     );
   }
 }

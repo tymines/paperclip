@@ -1,4 +1,5 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
+export { PRODUCT_IDENTIFIERS } from "./brand.js";
 export {
   COMPANY_STATUSES,
   DEFAULT_COMPANY_ATTACHMENT_MAX_BYTES,

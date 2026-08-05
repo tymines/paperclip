@@ -1,30 +1,21 @@
-/**
- * ChatDrawer — Brainstorm Chat overlay drawer.
- * Fixed overlay, right:0, z-index above Review Notes pane.
- * Inline apiFetch pattern (no new API module).
- */
-
-import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Send, Loader2, RotateCcw, Sparkles } from "lucide-react";
-
-// ── Inline apiFetch ──────────────────────────────────────────────────────────
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Archive, Loader2, RefreshCw, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`/api${url}`, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`API ${res.status}: ${text || res.statusText}`);
+  const response = await fetch(`/api${url}`, { headers: { "Content-Type": "application/json", ...options?.headers }, ...options });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    let message = text || response.statusText;
+    try { message = JSON.parse(text).error ?? message; } catch { /* raw response */ }
+    const error = new Error(message) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
-  if (res.status === 204) return undefined as unknown as T;
-  return res.json();
+  if (response.status === 204) return undefined as T;
+  return response.json();
 }
 
-// ── Types ────────────────────────────────────────────────────────────────────
-
-interface ChatMessage {
+export interface ChatMessage {
   turnId: string;
   userMessage: string;
   reply: string;
@@ -32,11 +23,14 @@ interface ChatMessage {
   userMessageId: string;
   createdAt: string;
   status: "pending" | "completed" | "failed";
-  /** Successful replies can only come from the live Calliope agent. */
   via?: "calliope";
   delegationId?: string;
   error?: string;
+  retryable?: boolean;
+  action?: { operation: string; section: string; destination: string; status: "applied" | "failed"; chapterNumber?: number };
 }
+
+interface ArchiveGroup { archivedAt: string; messages: ChatMessage[] }
 
 export interface ChatDrawerProps {
   bookId: string;
@@ -45,342 +39,183 @@ export interface ChatDrawerProps {
   onClose: () => void;
   activeBookTitle?: string;
   onSendToDraft?: (entityType: string, data: Record<string, unknown>) => void;
+  onBookChanged?: (section?: string, chapterNumber?: number) => void;
 }
 
-// ── Component ────────────────────────────────────────────────────────────────
+const draftKey = (companySlug: string, bookId: string) => `bookStudio.chatDraft:${companySlug}:${bookId}`;
 
-export function ChatDrawer({
-  bookId,
-  companySlug,
-  isOpen,
-  onClose,
-  activeBookTitle,
-  onSendToDraft,
-}: ChatDrawerProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [resetting, setResetting] = useState(false);
-  const [resetError, setResetError] = useState<string | null>(null);
-  const [historyError, setHistoryError] = useState<string | null>(null);
-  const [loadedScope, setLoadedScope] = useState("");
-  const [sendingDraft, setSendingDraft] = useState<string | null>(null); // messageId being drafted
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTitle, onBookChanged }: ChatDrawerProps) {
   const scope = `${companySlug}:${bookId}`;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [loadedScope, setLoadedScope] = useState("");
+  const [input, setInput] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archives, setArchives] = useState<ArchiveGroup[]>([]);
+  const [archivesLoading, setArchivesLoading] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const endRef = useRef<HTMLDivElement>(null);
   const visibleMessages = loadedScope === scope ? messages : [];
+  const hasPending = visibleMessages.some((message) => message.status === "pending");
 
-  // Reload from the server for every open and book/company change.
   useEffect(() => {
-    if (!isOpen || !bookId) return;
+    try { setInput(localStorage.getItem(draftKey(companySlug, bookId)) ?? ""); } catch { setInput(""); }
+    setArchiveOpen(false);
+    setArchives([]);
+    setSubmitting(false);
+    setError(null);
+  }, [companySlug, bookId]);
 
+  useEffect(() => {
+    try { localStorage.setItem(draftKey(companySlug, bookId), input); } catch { /* private mode */ }
+  }, [companySlug, bookId, input]);
+
+  const loadHistory = useCallback(async (quiet = false) => {
+    if (!bookId) return;
+    const requestedScope = `${companySlug}:${bookId}`;
     const controller = new AbortController();
-    abortRef.current?.abort();
-    abortRef.current = controller;
-    setLoadedScope(scope);
-    setMessages([]);
-    setResetError(null);
-    setHistoryError(null);
-
-    apiFetch<{ messages: ChatMessage[] }>(
-      `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
-      { signal: controller.signal },
-    )
-      .then((res) => {
-        if (!controller.signal.aborted) setMessages(res.messages || []);
-      })
-      .catch((err) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load chat history:", err);
-        setHistoryError("Chat history could not be loaded. Retry by reopening this chat.");
-      });
-    return () => controller.abort();
-  }, [isOpen, bookId, companySlug, scope]);
-
-  // Auto-scroll on new messages
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleMessages]);
-
-  // Focus input on open
-  useEffect(() => {
-    if (isOpen) setTimeout(() => inputRef.current?.focus(), 100);
-  }, [isOpen]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort();
-    };
-  }, []);
-
-  // Click-outside-to-close — ponytail: simple overlay click handler
-  const handleOverlayClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) onClose();
-    },
-    [onClose],
-  );
-
-  const handleSend = async () => {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput("");
-    setLoading(true);
-
-    // Optimistic user message
-    const tempUser: ChatMessage = {
-      turnId: `pending:${Date.now()}`,
-      userMessage: text,
-      reply: "",
-      messageId: "",
-      userMessageId: "",
-      createdAt: new Date().toISOString(),
-      status: "pending",
-    };
-    setMessages((prev) => [...prev, tempUser]);
-
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = controller;
+    if (!quiet) { setLoadedScope(requestedScope); setMessages([]); setError(null); }
     try {
-      const res = await apiFetch<{ turnId: string; reply: string; messageId: string; userMessageId: string; status: "completed"; via: "calliope"; delegationId?: string }>(
-        `/companies/${companySlug}/book-studio/books/${bookId}/chat`,
-        { method: "POST", body: JSON.stringify({ message: text }), signal: controller.signal },
-      );
-
-      // Update the optimistic message with reply
-      setMessages((prev) => {
-        const updated = [...prev];
-        const idx = updated.findIndex((message) => message.turnId === tempUser.turnId);
-        if (idx >= 0) {
-          updated[idx] = {
-            ...updated[idx],
-            turnId: res.turnId,
-            reply: res.reply,
-            messageId: res.messageId,
-            userMessageId: res.userMessageId,
-            via: res.via,
-            status: res.status,
-            delegationId: res.delegationId,
-          };
-        }
-        return updated;
-      });
-    } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === "AbortError") return;
-      // Mark last message as error
-      setMessages((prev) => {
-        const updated = [...prev];
-        const idx = updated.findIndex((message) => message.turnId === tempUser.turnId);
-        if (idx >= 0) {
-          updated[idx] = {
-            ...updated[idx],
-            status: "failed",
-            error: "Calliope is unavailable. No reply was generated. Please try again when she is back online.",
-          };
-        }
-        return updated;
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleReset = async () => {
-    if (resetting) return;
-    const confirmed = window.confirm(
-      "Reset this chat? The current transcript will be archived and retained with this book; no book content will be deleted.",
-    );
-    if (!confirmed) return;
-    setResetting(true);
-    setResetError(null);
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    try {
-      await apiFetch(`/companies/${companySlug}/book-studio/books/${bookId}/chat/reset`, {
-        method: "POST",
-        signal: controller.signal,
-      });
-      setLoadedScope(scope);
-      setMessages([]);
-    } catch {
-      setResetError("Chat reset could not be confirmed. The displayed transcript was not cleared; reload before retrying.");
-    } finally {
-      setResetting(false);
-    }
-  };
-
-  const handleSendToDraft = async (messageId: string, entityType: string) => {
-    if (!messageId) return;
-    setSendingDraft(messageId);
-    try {
-      const res = await apiFetch<Record<string, unknown>>(
-        `/companies/${companySlug}/book-studio/books/${bookId}/chat/${messageId}/to-draft`,
-        { method: "POST", body: JSON.stringify({ target: entityType }) },
-      );
-      onSendToDraft?.(entityType, res);
+      const result = await apiFetch<{ messages: ChatMessage[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/chat`, { signal: controller.signal });
+      if (!controller.signal.aborted && scopeRef.current === requestedScope) {
+        setLoadedScope(requestedScope);
+        setMessages(result.messages ?? []);
+      }
     } catch (err) {
-      console.error("Failed to send to draft:", err);
-    } finally {
-      setSendingDraft(null);
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (!quiet && scopeRef.current === requestedScope) setError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }, [bookId, companySlug]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    void loadHistory();
+    return () => historyAbortRef.current?.abort();
+  }, [isOpen, loadHistory]);
+
+  useEffect(() => {
+    if (!isOpen || !hasPending) return;
+    const timer = window.setInterval(() => void loadHistory(true), 2000);
+    return () => window.clearInterval(timer);
+  }, [isOpen, hasPending, loadHistory]);
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [visibleMessages]);
+
+  useLayoutEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    const lineHeight = 20;
+    textarea.style.height = `${Math.min(Math.max(textarea.scrollHeight, lineHeight * 3), lineHeight * 10)}px`;
+  }, [input]);
+
+  async function send(message = input.trim()) {
+    const text = message.trim();
+    if (!text || submitting) return;
+    const requestedScope = scope;
+    const optimisticId = `pending:${crypto.randomUUID?.() ?? Date.now()}`;
+    setInput("");
+    setSubmitting(true);
+    setError(null);
+    setMessages((current) => [...current, { turnId: optimisticId, userMessage: text, reply: "", messageId: "", userMessageId: "", createdAt: new Date().toISOString(), status: "pending" }]);
+    try {
+      const result = await apiFetch<ChatMessage & { action?: ChatMessage["action"] }>(`/companies/${companySlug}/book-studio/books/${bookId}/chat`, { method: "POST", body: JSON.stringify({ message: text }) });
+      if (scopeRef.current === requestedScope) {
+        setMessages((current) => current.map((message) => message.turnId === optimisticId ? { ...message, ...result, userMessage: text, createdAt: message.createdAt } : message));
+        await loadHistory(true);
+        if (result.action?.status === "applied") onBookChanged?.(result.action.section, result.action.chapterNumber);
+      }
+    } catch (err) {
+      if (scopeRef.current === requestedScope) {
+        await loadHistory(true);
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (scopeRef.current === requestedScope) setSubmitting(false);
+    }
+  }
+
+  async function retry(turnId: string) {
+    if (submitting) return;
+    const requestedScope = scope;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const result = await apiFetch<{ action?: ChatMessage["action"] }>(`/companies/${companySlug}/book-studio/books/${bookId}/chat/${encodeURIComponent(turnId)}/retry`, { method: "POST" });
+      if (scopeRef.current === requestedScope) {
+        await loadHistory(true);
+        if (result.action?.status === "applied") onBookChanged?.(result.action.section, result.action.chapterNumber);
+      }
+    } catch (err) {
+      if (scopeRef.current === requestedScope) { await loadHistory(true); setError(err instanceof Error ? err.message : String(err)); }
+    } finally {
+      if (scopeRef.current === requestedScope) setSubmitting(false);
+    }
+  }
+
+  async function reset() {
+    if (resetting || hasPending) return;
+    if (!window.confirm("Start a new conversation? This book's active transcript will be retained in read-only history. No book content will change.")) return;
+    setResetting(true); setError(null);
+    try {
+      await apiFetch(`/companies/${companySlug}/book-studio/books/${bookId}/chat/reset`, { method: "POST" });
+      setMessages([]); setLoadedScope(scope); setArchives([]); setArchiveOpen(false);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setResetting(false); }
+  }
+
+  async function toggleArchives() {
+    const next = !archiveOpen;
+    setArchiveOpen(next);
+    if (!next || archives.length) return;
+    setArchivesLoading(true); setError(null);
+    try {
+      const result = await apiFetch<{ archives: ArchiveGroup[] }>(`/companies/${companySlug}/book-studio/books/${bookId}/chat/archives`);
+      if (scopeRef.current === scope) setArchives(result.archives ?? []);
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setArchivesLoading(false); }
+  }
 
   if (!isOpen) return null;
 
   return (
-    // ponytail: overlay handles click-outside
-    <div
-      className="fixed inset-0 z-50 flex justify-end"
-      onClick={handleOverlayClick}
-    >
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/40" />
-
-      {/* Drawer */}
-      <div className="relative w-[380px] h-full bg-gray-950 border-l border-gray-800 flex flex-col shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3 shrink-0">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-200 flex items-center gap-2">
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-              Calliope — Brainstorm
-            </h3>
-            {activeBookTitle && (
-              <p className="text-[10px] text-gray-500 mt-0.5">{activeBookTitle}</p>
-            )}
-          </div>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handleReset}
-              disabled={resetting || loading}
-              title="Archive this transcript and start a fresh chat"
-              className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 disabled:opacity-40"
-            >
-              {resetting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-              Reset chat
-            </button>
-            <button
-              onClick={onClose}
-              className="rounded p-1 text-gray-500 hover:text-gray-300"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
+    <aside aria-label="Calliope brainstorm" className="fixed inset-x-0 bottom-0 z-50 flex h-[82dvh] flex-col rounded-t-xl border-t border-gray-800 bg-gray-950 shadow-2xl md:inset-y-[52px] md:left-auto md:right-0 md:h-auto md:w-[400px] md:rounded-none md:border-l md:border-t-0" data-docked-chat>
+      <header className="flex shrink-0 items-center justify-between border-b border-gray-800 px-4 py-3">
+        <div><h3 className="flex items-center gap-2 text-sm font-semibold text-gray-200"><Sparkles className="h-3.5 w-3.5 text-purple-400" />Calliope — Brainstorm</h3>{activeBookTitle && <p className="mt-0.5 text-[10px] text-gray-500">{activeBookTitle}</p>}</div>
+        <div className="flex items-center gap-1">
+          <button onClick={() => void toggleArchives()} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300" aria-pressed={archiveOpen}><Archive className="h-3 w-3" />History</button>
+          <button onClick={() => void reset()} disabled={resetting || hasPending} title={hasPending ? "Wait for the active Calliope turn to finish before starting a new conversation" : "Archive this transcript and start a new conversation"} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 disabled:opacity-40">{resetting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}New conversation</button>
+          <button onClick={onClose} className="rounded p-1 text-gray-500 hover:text-gray-300" aria-label="Close brainstorm"><X className="h-4 w-4" /></button>
         </div>
+      </header>
 
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-          {resetError && (
-            <div role="alert" className="rounded-md border border-red-800 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-              {resetError}
-            </div>
-          )}
-          {historyError && (
-            <div role="alert" className="rounded-md border border-amber-800 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-              {historyError}
-            </div>
-          )}
-          {visibleMessages.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-center">
-              <div className="text-2xl mb-2 opacity-30">💬</div>
-              <p className="text-xs text-gray-500 leading-relaxed max-w-[240px]">
-                Ask me anything about your book. I can help brainstorm characters, locations, style, and plot.
-              </p>
-            </div>
-          )}
-
-          {visibleMessages.map((msg) => (
-            <div key={msg.turnId} className="space-y-2">
-              {/* User message */}
-              <div className="flex justify-end">
-                <div className="max-w-[85%] rounded-lg bg-blue-600/20 border border-blue-500/30 px-3 py-2">
-                  <p className="text-xs text-blue-100">{msg.userMessage}</p>
-                </div>
-              </div>
-
-              {/* AI reply */}
-              {msg.reply && (
-                <div className="flex justify-start">
-                  <div className="max-w-[85%] rounded-lg bg-gray-800 border border-gray-700 px-3 py-2">
-                    <p className="text-xs text-gray-300 whitespace-pre-wrap">{msg.reply}</p>
-                    {/* Lane provenance: successful replies are always Calliope. */}
-                    {msg.via === "calliope" && (
-                      <p className="text-[9px] text-purple-400/80 mt-1.5">via Calliope ✦ live agent</p>
-                    )}
-                    {/* Send to Draft buttons */}
-                    <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-gray-700/50">
-                      {(["character", "location", "style", "outline"] as const).map((et) => (
-                        <button
-                          key={et}
-                          onClick={() => handleSendToDraft(msg.messageId || msg.userMessageId, et)}
-                          disabled={sendingDraft === msg.messageId || !msg.messageId}
-                          className="rounded border border-gray-600 px-2 py-0.5 text-[10px] text-gray-400 hover:text-purple-300 hover:border-purple-500/50 disabled:opacity-40"
-                        >
-                          {sendingDraft === msg.messageId ? (
-                            <Loader2 className="w-2.5 h-2.5 animate-spin inline mr-1" />
-                          ) : null}
-                          {et === "outline" ? "Outline" : et.charAt(0).toUpperCase() + et.slice(1)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-              {msg.status === "pending" && !msg.reply && (
-                <p className="text-[10px] text-gray-500">Waiting for Calliope…</p>
-              )}
-              {msg.status === "failed" && !msg.reply && (
-                <div className="rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300">
-                  {msg.error || "Calliope is unavailable. No reply was generated."}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {/* Loading indicator */}
-          {loading && (
-            <div className="flex justify-start">
-              <div className="rounded-lg bg-gray-800 border border-gray-700 px-3 py-2">
-                <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
-              </div>
-            </div>
-          )}
-
-          <div ref={messagesEndRef} />
-        </div>
-
-        {/* Input bar */}
-        <div className="border-t border-gray-800 px-4 py-3 shrink-0">
-          <div className="flex items-center gap-2">
-            <input
-              ref={inputRef}
-              className="flex-1 rounded border border-gray-700 bg-gray-800/50 px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-purple-500/50"
-              placeholder="Ask about your book..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-            />
-            <button
-              onClick={handleSend}
-              disabled={!input.trim() || loading}
-              className="rounded bg-purple-600 p-1.5 text-white hover:bg-purple-500 disabled:opacity-50"
-            >
-              <Send className="w-3.5 h-3.5" />
-            </button>
+      <div className="flex-1 overflow-y-auto px-4 py-3" aria-live="polite">
+        {error && <div role="alert" className="mb-3 rounded-md border border-amber-800 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">{error}</div>}
+        {archiveOpen ? (
+          <div className="space-y-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Archived conversations</h4>
+            {archivesLoading && <p className="text-xs text-gray-500">Loading history…</p>}
+            {!archivesLoading && archives.length === 0 && <p className="text-xs italic text-gray-500">No archived conversations for this book.</p>}
+            {archives.map((archive) => <section key={archive.archivedAt} className="rounded-lg border border-gray-800 p-3"><h5 className="mb-3 text-[10px] text-gray-500">Archived {new Date(archive.archivedAt).toLocaleString()}</h5><div className="space-y-3">{archive.messages.map((message) => <div key={message.turnId}><p className="text-xs text-blue-200">You: {message.userMessage}</p>{message.reply && <p className="mt-1 whitespace-pre-wrap text-xs text-gray-400">Calliope: {message.reply}</p>}</div>)}</div></section>)}
           </div>
-        </div>
+        ) : (
+          <div className="space-y-3">
+            {visibleMessages.length === 0 && <div className="py-12 text-center text-xs text-gray-500">Ask Calliope about this book. Each book keeps its own durable conversation.</div>}
+            {visibleMessages.map((message) => <div key={message.turnId} className="space-y-2"><div className="flex justify-end"><div className="max-w-[88%] rounded-lg border border-blue-500/30 bg-blue-600/20 px-3 py-2"><p className="whitespace-pre-wrap text-xs text-blue-100">{message.userMessage}</p></div></div>{message.reply && <div className="flex justify-start"><div className="max-w-[88%] rounded-lg border border-gray-700 bg-gray-800 px-3 py-2"><p className="whitespace-pre-wrap text-xs text-gray-300">{message.reply}</p>{message.via === "calliope" && <p className="mt-1.5 text-[9px] text-purple-400/80">via Calliope ✦ live agent</p>}{message.action && <p className={`mt-1.5 text-[10px] ${message.action.status === "applied" ? "text-emerald-400" : "text-amber-400"}`}>{message.action.status === "applied" ? `Saved to ${message.action.destination}` : "No book content changed"}</p>}</div></div>}{message.status === "pending" && !message.reply && <p className="text-[10px] text-gray-500">Waiting for Calliope… This turn will reconcile here after refresh.</p>}{message.status === "failed" && <div className="flex items-center justify-between gap-2 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-300"><span>{message.error || "Calliope is unavailable. No reply was generated."}{message.retryable === false && " This turn may already have reached Calliope, so it cannot be retried safely."}</span>{message.retryable !== false && <button onClick={() => void retry(message.turnId)} disabled={submitting} className="flex shrink-0 items-center gap-1 rounded border border-amber-500/40 px-2 py-1 hover:bg-amber-500/10 disabled:opacity-40"><RefreshCw className="h-3 w-3" />Retry</button>}</div>}</div>)}
+            <div ref={endRef} />
+          </div>
+        )}
       </div>
-    </div>
+
+      {!archiveOpen && <div className="shrink-0 border-t border-gray-800 px-4 py-3"><div className="flex items-end gap-2"><textarea ref={textareaRef} rows={3} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="Ask about your book…" aria-label="Message Calliope" className="max-h-[200px] min-h-[60px] flex-1 resize-none overflow-y-auto rounded border border-gray-700 bg-gray-800/50 px-3 py-2 text-xs leading-5 text-gray-200 outline-none placeholder:text-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20" /><button onClick={() => void send()} disabled={!input.trim() || submitting} aria-label="Send message" className="rounded bg-purple-600 p-2 text-white hover:bg-purple-500 disabled:opacity-40">{submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button></div></div>}
+    </aside>
   );
 }
 

@@ -78,6 +78,9 @@ function registerModuleMocks() {
     companyService: () => ({
       getById: vi.fn(async () => ({ id: "company-1", attachmentMaxBytes: 10 * 1024 * 1024 })),
     }),
+    costService: () => ({
+      byIssueIds: vi.fn(async () => []),
+    }),
     accessService: () => mockAccessService,
     agentService: () => ({
       getById: vi.fn(async () => null),

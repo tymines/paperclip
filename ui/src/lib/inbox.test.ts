@@ -12,6 +12,14 @@ import type {
 } from "@paperclipai/shared";
 import {
   DEFAULT_INBOX_ISSUE_COLUMNS,
+  DISMISSED_KEYS,
+  INBOX_COLLAPSED_GROUPS_KEY_PREFIXES,
+  INBOX_FILTER_PREFERENCES_KEY_PREFIXES,
+  INBOX_GROUP_BY_KEYS,
+  INBOX_ISSUE_COLUMNS_KEYS,
+  INBOX_LAST_TAB_KEYS,
+  INBOX_NESTING_KEYS,
+  READ_ITEMS_KEYS,
   buildGroupedInboxSections,
   buildInboxIssueGroupCreateDefaults,
   buildInboxKeyboardNavEntries,
@@ -32,9 +40,12 @@ import {
   isMineInboxTab,
   loadInboxFilterPreferences,
   loadInboxIssueColumns,
+  loadInboxNesting,
   loadInboxWorkItemGroupBy,
   loadCollapsedInboxGroupKeys,
+  loadDismissedInboxAlerts,
   loadLastInboxTab,
+  loadReadInboxItems,
   matchesInboxIssueSearch,
   normalizeInboxIssueColumns,
   RECENT_ISSUES_LIMIT,
@@ -45,8 +56,11 @@ import {
   saveInboxFilterPreferences,
   saveCollapsedInboxGroupKeys,
   saveInboxIssueColumns,
+  saveInboxNesting,
   saveInboxWorkItemGroupBy,
+  saveDismissedInboxAlerts,
   saveLastInboxTab,
+  saveReadInboxItems,
   shouldShowCompanyAlerts,
   shouldResetInboxWorkspaceGrouping,
   shouldShowInboxSection,
@@ -309,6 +323,242 @@ const dashboard: DashboardSummary = {
 describe("inbox helpers", () => {
   beforeEach(() => {
     storage.clear();
+  });
+
+  it("uses safe defaults and no-op writes when global storage is absent or inaccessible", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    try {
+      Reflect.deleteProperty(globalThis, "localStorage");
+      expect(loadDismissedInboxAlerts()).toEqual(new Set());
+      expect(() => saveDismissedInboxAlerts(new Set(["alert:missing-storage"]))).not.toThrow();
+
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        get: () => {
+          throw new Error("storage access blocked");
+        },
+      });
+      expect(loadReadInboxItems()).toEqual(new Set());
+      expect(() => saveReadInboxItems(new Set(["issue:blocked-storage"]))).not.toThrow();
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "localStorage");
+      }
+    }
+  });
+
+  const companyFilterKeys = {
+    canonical: `${INBOX_FILTER_PREFERENCES_KEY_PREFIXES.canonical}:company-1`,
+    compatibility: `${INBOX_FILTER_PREFERENCES_KEY_PREFIXES.compatibility}:company-1`,
+  };
+  const companyCollapsedKeys = {
+    canonical: `${INBOX_COLLAPSED_GROUPS_KEY_PREFIXES.canonical}:company-1`,
+    compatibility: `${INBOX_COLLAPSED_GROUPS_KEY_PREFIXES.compatibility}:company-1`,
+  };
+  const filterValue = {
+    allCategoryFilter: "approvals" as const,
+    allApprovalFilter: "actionable" as const,
+    issueFilters: {
+      statuses: ["todo"],
+      priorities: [],
+      assignees: [],
+      creators: [],
+      labels: [],
+      projects: [],
+      workspaces: [],
+      liveOnly: false,
+      hideRoutineExecutions: false,
+    },
+  };
+
+  function storageFamilies() {
+    return [
+      {
+        name: "dismissed alerts",
+        keys: DISMISSED_KEYS,
+        canonicalRaw: JSON.stringify(["alert:canonical"]),
+        legacyRaw: JSON.stringify(["alert:legacy"]),
+        invalidRaw: JSON.stringify({ bad: true }),
+        canonicalExpected: new Set(["alert:canonical"]),
+        legacyExpected: new Set(["alert:legacy"]),
+        load: () => loadDismissedInboxAlerts(),
+        save: () => saveDismissedInboxAlerts(new Set(["alert:saved"])),
+        savedRaw: JSON.stringify(["alert:saved"]),
+      },
+      {
+        name: "read items",
+        keys: READ_ITEMS_KEYS,
+        canonicalRaw: JSON.stringify(["issue:canonical"]),
+        legacyRaw: JSON.stringify(["issue:legacy"]),
+        invalidRaw: JSON.stringify({ bad: true }),
+        canonicalExpected: new Set(["issue:canonical"]),
+        legacyExpected: new Set(["issue:legacy"]),
+        load: () => loadReadInboxItems(),
+        save: () => saveReadInboxItems(new Set(["issue:saved"])),
+        savedRaw: JSON.stringify(["issue:saved"]),
+      },
+      {
+        name: "last tab",
+        keys: INBOX_LAST_TAB_KEYS,
+        canonicalRaw: "all",
+        legacyRaw: "blocked",
+        invalidRaw: "bogus",
+        canonicalExpected: "all",
+        legacyExpected: "blocked",
+        load: () => loadLastInboxTab(),
+        save: () => saveLastInboxTab("recent"),
+        savedRaw: "recent",
+      },
+      {
+        name: "issue columns",
+        keys: INBOX_ISSUE_COLUMNS_KEYS,
+        canonicalRaw: JSON.stringify(["status"]),
+        legacyRaw: JSON.stringify(["id"]),
+        invalidRaw: JSON.stringify({ bad: true }),
+        canonicalExpected: ["status"],
+        legacyExpected: ["id"],
+        load: () => loadInboxIssueColumns(),
+        save: () => saveInboxIssueColumns(["status", "updated"]),
+        savedRaw: JSON.stringify(["status", "updated"]),
+      },
+      {
+        name: "nesting",
+        keys: INBOX_NESTING_KEYS,
+        canonicalRaw: "false",
+        legacyRaw: "true",
+        invalidRaw: "yes",
+        canonicalExpected: false,
+        legacyExpected: true,
+        load: () => loadInboxNesting(),
+        save: () => saveInboxNesting(false),
+        savedRaw: "false",
+      },
+      {
+        name: "group-by",
+        keys: INBOX_GROUP_BY_KEYS,
+        canonicalRaw: "project",
+        legacyRaw: "assignee",
+        invalidRaw: "bogus",
+        canonicalExpected: "project",
+        legacyExpected: "assignee",
+        load: () => loadInboxWorkItemGroupBy(),
+        save: () => saveInboxWorkItemGroupBy("workspace"),
+        savedRaw: "workspace",
+      },
+      {
+        name: "company filters",
+        keys: companyFilterKeys,
+        canonicalRaw: JSON.stringify({ ...filterValue, allCategoryFilter: "alerts" }),
+        legacyRaw: JSON.stringify(filterValue),
+        invalidRaw: JSON.stringify(["bad"]),
+        canonicalExpected: { ...filterValue, allCategoryFilter: "alerts" },
+        legacyExpected: filterValue,
+        load: () => loadInboxFilterPreferences("company-1"),
+        save: () => saveInboxFilterPreferences("company-1", filterValue),
+        savedRaw: JSON.stringify(filterValue),
+      },
+      {
+        name: "company collapsed groups",
+        keys: companyCollapsedKeys,
+        canonicalRaw: JSON.stringify(["type:canonical"]),
+        legacyRaw: JSON.stringify(["type:legacy"]),
+        invalidRaw: JSON.stringify({ bad: true }),
+        canonicalExpected: new Set(["type:canonical"]),
+        legacyExpected: new Set(["type:legacy"]),
+        load: () => loadCollapsedInboxGroupKeys("company-1"),
+        save: () => saveCollapsedInboxGroupKeys("company-1", new Set(["type:saved"])),
+        savedRaw: JSON.stringify(["type:saved"]),
+      },
+    ];
+  }
+
+  it("constructs all eight canonical and compatibility inbox key families", () => {
+    expect(storageFamilies().map(({ keys }) => keys)).toEqual([
+      { canonical: "olympus:inbox:dismissed", compatibility: "paperclip:inbox:dismissed" },
+      { canonical: "olympus:inbox:read-items", compatibility: "paperclip:inbox:read-items" },
+      { canonical: "olympus:inbox:last-tab", compatibility: "paperclip:inbox:last-tab" },
+      { canonical: "olympus:inbox:issue-columns", compatibility: "paperclip:inbox:issue-columns" },
+      { canonical: "olympus:inbox:nesting", compatibility: "paperclip:inbox:nesting" },
+      { canonical: "olympus:inbox:group-by", compatibility: "paperclip:inbox:group-by" },
+      { canonical: "olympus:inbox:filters:company-1", compatibility: "paperclip:inbox:filters:company-1" },
+      {
+        canonical: "olympus:inbox:collapsed-groups:company-1",
+        compatibility: "paperclip:inbox:collapsed-groups:company-1",
+      },
+    ]);
+  });
+
+  it("prefers valid canonical values for all eight inbox families", () => {
+    for (const family of storageFamilies()) {
+      storage.clear();
+      localStorage.setItem(family.keys.canonical, family.canonicalRaw);
+      localStorage.setItem(family.keys.compatibility, family.legacyRaw);
+      expect(family.load(), family.name).toEqual(family.canonicalExpected);
+      expect(localStorage.getItem(family.keys.compatibility), family.name).toBe(family.legacyRaw);
+    }
+  });
+
+  it("falls back from malformed canonical values and copies valid legacy values without deleting them", () => {
+    for (const family of storageFamilies()) {
+      storage.clear();
+      localStorage.setItem(family.keys.canonical, family.invalidRaw);
+      localStorage.setItem(family.keys.compatibility, family.legacyRaw);
+      expect(family.load(), family.name).toEqual(family.legacyExpected);
+      expect(localStorage.getItem(family.keys.canonical), family.name).toBe(family.legacyRaw);
+      expect(localStorage.getItem(family.keys.compatibility), family.name).toBe(family.legacyRaw);
+    }
+  });
+
+  it("preserves valid portions of mixed legacy arrays while copying only normalized data forward", () => {
+    const cases = [
+      {
+        keys: DISMISSED_KEYS,
+        raw: JSON.stringify(["alert:kept", "not-an-alert", 42]),
+        load: () => loadDismissedInboxAlerts(),
+        expected: new Set(["alert:kept"]),
+        canonicalRaw: JSON.stringify(["alert:kept"]),
+      },
+      {
+        keys: READ_ITEMS_KEYS,
+        raw: JSON.stringify(["issue:kept", 42]),
+        load: () => loadReadInboxItems(),
+        expected: new Set(["issue:kept"]),
+        canonicalRaw: JSON.stringify(["issue:kept"]),
+      },
+      {
+        keys: INBOX_ISSUE_COLUMNS_KEYS,
+        raw: JSON.stringify(["updated", "bogus", 42, "status"]),
+        load: () => loadInboxIssueColumns(),
+        expected: ["status", "updated"],
+        canonicalRaw: JSON.stringify(["status", "updated"]),
+      },
+      {
+        keys: companyCollapsedKeys,
+        raw: JSON.stringify(["type:kept", 42]),
+        load: () => loadCollapsedInboxGroupKeys("company-1"),
+        expected: new Set(["type:kept"]),
+        canonicalRaw: JSON.stringify(["type:kept"]),
+      },
+    ];
+
+    for (const testCase of cases) {
+      storage.clear();
+      localStorage.setItem(testCase.keys.compatibility, testCase.raw);
+      expect(testCase.load()).toEqual(testCase.expected);
+      expect(localStorage.getItem(testCase.keys.canonical)).toBe(testCase.canonicalRaw);
+      expect(localStorage.getItem(testCase.keys.compatibility)).toBe(testCase.raw);
+    }
+  });
+
+  it("writes canonical first-release and rollback-compatible values for all eight inbox families", () => {
+    for (const family of storageFamilies()) {
+      storage.clear();
+      family.save();
+      expect(localStorage.getItem(family.keys.canonical), family.name).toBe(family.savedRaw);
+      expect(localStorage.getItem(family.keys.compatibility), family.name).toBe(family.savedRaw);
+    }
   });
 
   it("counts the same inbox sources the badge uses", () => {

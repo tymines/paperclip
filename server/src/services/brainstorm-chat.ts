@@ -27,6 +27,8 @@ export interface BrainstormChatRow {
   via: string | null;
   delegationId: string | null;
   error: string | null;
+  retryable?: boolean;
+  actionResult?: Record<string, unknown> | null;
   createdAt: Date;
 }
 
@@ -41,6 +43,8 @@ export interface BrainstormTurnDto {
   via?: "calliope";
   delegationId?: string;
   error?: string;
+  retryable?: boolean;
+  action?: Record<string, unknown>;
 }
 
 /** Pair chronological active rows into the durable turn contract used by the UI. */
@@ -89,6 +93,8 @@ export function normalizeBrainstormTurns(rows: BrainstormChatRow[]): BrainstormT
       turn.status = row.status === "failed" ? "failed" : row.status === "completed" ? "completed" : "pending";
       if (turn.reply) turn.status = "completed";
       if (row.error) turn.error = row.error;
+      turn.retryable = row.retryable !== false;
+      if (row.actionResult) turn.action = row.actionResult;
       if (row.via === "calliope") turn.via = "calliope";
       if (row.delegationId) turn.delegationId = row.delegationId;
     } else if (row.role === "assistant") {

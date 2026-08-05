@@ -1,169 +1,138 @@
-# fleet.yaml — SINGLE SOURCE OF TRUTH for the Tyler Co roster.
-# Souls, Hermes profiles, and Paperclip roster entries are GENERATED from this file.
-# Edit here, regenerate, commit. If a soul or the DB disagrees with this file, this file wins.
-# Watchdog runs a drift check against this file.
-#
-# Last correction (2026-07-09, Zeus):
-#   1. REVIEWERS: R1 (Gemini), R2 (DeepSeek), EV (OpenAI) — 3 distinct families. Verified OpenAI 200.
-#   2. Bosses: Ares on kimi-k2.6 (smart). Zeus moved to deepseek-v4-pro (Tyler 2026-07-13 — was
-#      kimi-k2.6; the kimi provider was the "Provider authentication failed" cause). Workers stay on flash.
-#   3. Hermes Designer: gemini (vision exception to flash rule). Zeus Dispatch: deepseek-v4-flash (operational).
+# fleet.yaml — canonical Fleet lineup manifest for configuration review.
+# The Fleet API's matching runtime definition lives in server/src/acp/canonical-fleet.ts.
+# Operational agent records are reconciled to the presentation roster by name;
+# neither definition creates, renames, pauses, resumes, archives, or terminates agents.
 
 meta:
-  version: 2
-  updated: 2026-07-09
-  rules:
-    - "REVIEWERS: R1=Gemini, R2=DeepSeek, EV=OpenAI(gpt-4o-mini) — 3 distinct model families, NO overlap."
-    - "Bosses on smart models (kimi-k2.6), workers on flash (deepseek-v4-flash)."
-    - "Hermes Designer: gemini (vision required, exception to flash rule)."
-    - "OpenAI key verified live HTTP 200 from Box 2 (2026-07-09). Ares EV only OpenAI consumer."
-    - "DeepSeek, Gemini, Kimi are the 3 non-OpenAI working families. All providers confirmed."
+  version: 2026-08-04-v2
+  updated: 2026-08-04
+  canonical_positions: 16
 
-boxes:
+hosts:
   windows:
-    hostname: WindowsAugi
-    tailscale_ip: 100.103.95.73
-    stage: plan
-    hosts: [paperclip, postgres, vault, obsidian-brain]
+    label: "WINDOWS — ZEUS"
+    machine: WindowsAugi
   box1:
-    hostname: AugiAIs-Mini
-    tailscale_ip: 100.68.190.105
-    user: augi
-    stage: execute
+    label: "BOX 1 — HERMES"
+    machine: AugiAIs-Mini
   box2:
-    hostname: AugiBot2s-Mini
-    tailscale_ip: 100.85.82.53
-    user: augibot2
-    stage: review
+    label: "BOX 2 — ARES"
+    machine: AugiBot2s-Mini
+
+workflow:
+  sequence: builder -> paired reviewer -> Zeus senior review -> Tyler approval
+  merge_authority: Tyler
+  automatic_deployment: false
 
 agents:
-  # ---- Plan (Windows, Hermes framework) ----
   - name: Zeus
-    box: windows
+    host: windows
     orchestrator: null
-    role: plan-orchestrator
-    model: deepseek-v4-pro         # Tyler 2026-07-13: Zeus on DeepSeek V4 Pro (was kimi-k2.6)
-    framework: hermes
-    adapter: hermes_local
-  - name: Zeus Critic
-    box: windows
-    orchestrator: Zeus
-    role: plan-critic
-    model: deepseek-v4-flash
-    framework: hermes
-  - name: Zeus Book Keeper
-    box: windows
-    orchestrator: Zeus
-    role: memory-scribe
-    model: deepseek-v4-flash
-    framework: hermes
-  - name: Zeus Dispatch
-    box: windows
-    orchestrator: Zeus
-    role: board-dispatcher
-    model: deepseek-v4-flash        # operational dispatch, flash OK
-    framework: hermes
+    role: chief-agent
+    model: SOL
 
-  # ---- Execute (Box 1, Hermes framework) ----
+  - name: Athena
+    host: windows
+    orchestrator: Zeus
+    role: agent
+    model: Kimi K3
+
   - name: Hermes
-    box: box1
+    host: box1
     orchestrator: Zeus
-    role: execute-dispatcher
-    model: deepseek-v4-flash
-    framework: hermes
-    adapter: hermes_local
-  - name: Hermes Coder 1
-    box: box1
-    orchestrator: Hermes
-    role: coder
-    model: deepseek-v4-flash
-    framework: hermes
-  - name: Hermes Coder 2
-    box: box1
-    orchestrator: Hermes
-    role: coder
-    model: deepseek-v4-flash
-    framework: hermes
-  - name: Hermes Coder 3
-    box: box1
-    orchestrator: Hermes
-    role: coder
-    model: deepseek-v4-flash
-    framework: hermes
-  - name: Hermes Designer
-    box: box1
-    orchestrator: Hermes
-    role: designer
-    model: gemini                   # vision required — exception to flash rule
-    framework: hermes
-  - name: Hermes Researcher
-    box: box1
-    orchestrator: Hermes
-    role: researcher
-    model: deepseek-v4-flash
-    framework: hermes
+    role: boss-coordinator
+    model: SOL
 
-  # ---- Review (Box 2, Hermes framework) ----
-  # REVIEWER DIVERSITY: R1=Gemini, R2=DeepSeek, EV=OpenAI — 3 distinct families
-  - name: Ares
-    box: box2
-    orchestrator: Zeus
-    role: review-boss
-    model: kimi-k2.6               # smart boss
-    framework: hermes
-    adapter: hermes_local
-  - name: Ares Reviewer 1
-    box: box2
-    orchestrator: Ares
-    role: reviewer
-    model: gemini-2.5-flash        # Gemini family — distinct from R2 + EV
-    framework: hermes
-  - name: Ares Reviewer 2
-    box: box2
-    orchestrator: Ares
-    role: reviewer
-    model: deepseek-v4-flash       # DeepSeek family — distinct from R1 + EV
-    framework: hermes
-  - name: Ares Evidence Verifier
-    box: box2
-    orchestrator: Ares
-    role: evidence-verifier
-    model: gpt-4o-mini             # OpenAI family — distinct from R1 + R2. Live-verified 200.
-    framework: hermes
+  - name: Atlas
+    host: box1
+    orchestrator: Hermes
+    role: builder
+    model: SOL
+    paired_with: Achlys
 
-  # ---- Standalones ----
+  - name: Artemis
+    host: box1
+    orchestrator: Hermes
+    role: builder
+    model: Kimi K3
+    paired_with: Chronos
+
+  - name: Chronos
+    host: box1
+    orchestrator: Hermes
+    role: reviewer
+    model: SOL
+    paired_with: Artemis
+
+  - name: Achlys
+    host: box1
+    orchestrator: Hermes
+    role: reviewer
+    model: Kimi K3
+    paired_with: Atlas
+
   - name: Augi
-    box: box1
-    orchestrator: null
-    role: apps-build-engineer
-    model: deepseek-v4-flash
-    framework: openclaw
-    standalone: true
-  - name: August
-    box: box2
-    orchestrator: null
-    role: fleet-ops-responder
-    model: deepseek-v4-flash
-    framework: openclaw
-    standalone: true
-  - name: Baily AI
-    box: external
-    orchestrator: null
-    role: in-app-service
-    model: qwen/qwen3-vl-8b-instruct
-    framework: external
-    standalone: true
-    dispatchable: false
-  - name: Nano Banana 2
-    box: box1
+    host: box1
     orchestrator: Hermes
-    role: designer
-    model: gemini-3.1-flash-image
-    framework: hermes
-  - name: Hermes UI Designer
-    box: windows
+    role: harness-agent
+    framework: openclaw
+    harness: OpenClaw
+
+  - name: Ares
+    host: box2
     orchestrator: Zeus
-    role: designer
-    model: gpt-5.4-mini
-    framework: hermes
-    profile: hermes-ui-designer
+    role: boss-coordinator
+    model: Kimi K3
+
+  - name: Apollo
+    host: box2
+    orchestrator: Ares
+    role: builder
+    model: SOL
+    paired_with: Hades
+
+  - name: Hephaestus
+    host: box2
+    orchestrator: Ares
+    role: builder
+    model: Kimi K3
+    paired_with: Poseidon
+
+  - name: Poseidon
+    host: box2
+    orchestrator: Ares
+    role: reviewer
+    model: SOL
+    paired_with: Hephaestus
+
+  - name: Hades
+    host: box2
+    orchestrator: Ares
+    role: reviewer
+    model: Kimi K3
+    paired_with: Apollo
+
+  - name: Calliope
+    host: box2
+    orchestrator: Ares
+    role: creative-partner
+    model: SOL
+    relationship: "Baily's agent"
+    surfaces:
+      - label: Book Writing
+        href: /book-writing
+      - label: AI Influencer Studio
+        href: /image-studio
+
+  - name: Book Keeper
+    host: box2
+    orchestrator: Ares
+    role: book-keeper
+    model: DeepSeek V4 Flash
+
+  - name: August
+    host: box2
+    orchestrator: Ares
+    role: harness-agent
+    framework: openclaw
+    harness: OpenClaw

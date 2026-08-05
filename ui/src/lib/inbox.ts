@@ -13,18 +13,38 @@ import {
   type IssueFilterState,
 } from "./issue-filters";
 import { formatAssigneeUserLabel } from "./assignees";
+import {
+  buildBrowserStorageKeys,
+  getBrowserStorage,
+  readBrowserStorageIdentity,
+  readBrowserStorageValue,
+  writeBrowserStorageValue,
+  type BrowserStorageCodec,
+  type BrowserStorageIdentity,
+  type BrowserStorageKeys,
+} from "./browser-storage-compat";
 
 export const RECENT_ISSUES_LIMIT = 100;
 export const FAILED_RUN_STATUSES = new Set(["failed", "timed_out"]);
 export const ACTIONABLE_APPROVAL_STATUSES = new Set(["pending", "revision_requested"]);
-export const DISMISSED_KEY = "paperclip:inbox:dismissed";
-export const READ_ITEMS_KEY = "paperclip:inbox:read-items";
-export const INBOX_LAST_TAB_KEY = "paperclip:inbox:last-tab";
-export const INBOX_ISSUE_COLUMNS_KEY = "paperclip:inbox:issue-columns";
-export const INBOX_NESTING_KEY = "paperclip:inbox:nesting";
-export const INBOX_GROUP_BY_KEY = "paperclip:inbox:group-by";
-export const INBOX_FILTER_PREFERENCES_KEY_PREFIX = "paperclip:inbox:filters";
-export const INBOX_COLLAPSED_GROUPS_KEY_PREFIX = "paperclip:inbox:collapsed-groups";
+export const DISMISSED_KEYS = buildBrowserStorageKeys(":", "inbox:dismissed");
+export const READ_ITEMS_KEYS = buildBrowserStorageKeys(":", "inbox:read-items");
+export const INBOX_LAST_TAB_KEYS = buildBrowserStorageKeys(":", "inbox:last-tab");
+export const INBOX_ISSUE_COLUMNS_KEYS = buildBrowserStorageKeys(":", "inbox:issue-columns");
+export const INBOX_NESTING_KEYS = buildBrowserStorageKeys(":", "inbox:nesting");
+export const INBOX_GROUP_BY_KEYS = buildBrowserStorageKeys(":", "inbox:group-by");
+export const INBOX_FILTER_PREFERENCES_KEY_PREFIXES = buildBrowserStorageKeys(":", "inbox:filters");
+export const INBOX_COLLAPSED_GROUPS_KEY_PREFIXES = buildBrowserStorageKeys(":", "inbox:collapsed-groups");
+
+// Preserve the existing exported compatibility-key API for callers outside this module.
+export const DISMISSED_KEY = DISMISSED_KEYS.compatibility;
+export const READ_ITEMS_KEY = READ_ITEMS_KEYS.compatibility;
+export const INBOX_LAST_TAB_KEY = INBOX_LAST_TAB_KEYS.compatibility;
+export const INBOX_ISSUE_COLUMNS_KEY = INBOX_ISSUE_COLUMNS_KEYS.compatibility;
+export const INBOX_NESTING_KEY = INBOX_NESTING_KEYS.compatibility;
+export const INBOX_GROUP_BY_KEY = INBOX_GROUP_BY_KEYS.compatibility;
+export const INBOX_FILTER_PREFERENCES_KEY_PREFIX = INBOX_FILTER_PREFERENCES_KEY_PREFIXES.compatibility;
+export const INBOX_COLLAPSED_GROUPS_KEY_PREFIX = INBOX_COLLAPSED_GROUPS_KEY_PREFIXES.compatibility;
 export type InboxTab = "mine" | "recent" | "unread" | "blocked" | "all";
 export type InboxCategoryFilter =
   | "everything"
@@ -163,6 +183,49 @@ const defaultInboxFilterPreferences: InboxFilterPreferences = {
   issueFilters: defaultIssueFilterState,
 };
 
+type InboxStorageReadOptions = {
+  copyForward?: boolean;
+  identity?: BrowserStorageIdentity;
+};
+
+function readInboxStorageValue<T>(
+  keys: BrowserStorageKeys,
+  codec: BrowserStorageCodec<T>,
+  options: InboxStorageReadOptions,
+): T | undefined {
+  return options.identity
+    ? readBrowserStorageIdentity(getBrowserStorage(), keys, options.identity, codec.decode)
+    : readBrowserStorageValue(getBrowserStorage(), keys, codec, options);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function parseJson(raw: string): unknown {
+  return JSON.parse(raw) as unknown;
+}
+
+function decodeInboxFilterPreferences(raw: string): InboxFilterPreferences | undefined {
+  const parsed = parseJson(raw);
+  if (!isPlainRecord(parsed)) return undefined;
+  return {
+    allCategoryFilter: normalizeInboxCategoryFilter(parsed.allCategoryFilter),
+    allApprovalFilter: normalizeInboxApprovalFilter(parsed.allApprovalFilter),
+    issueFilters: normalizeIssueFilterState(parsed.issueFilters),
+  };
+}
+
+function encodeInboxFilterPreferences(preferences: InboxFilterPreferences): string {
+  return JSON.stringify({
+    allCategoryFilter: normalizeInboxCategoryFilter(preferences.allCategoryFilter),
+    allApprovalFilter: normalizeInboxApprovalFilter(preferences.allApprovalFilter),
+    issueFilters: normalizeIssueFilterState(preferences.issueFilters),
+  });
+}
+
 function normalizeInboxCategoryFilter(value: unknown): InboxCategoryFilter {
   return value === "issues_i_touched"
     || value === "join_requests"
@@ -177,118 +240,86 @@ function normalizeInboxApprovalFilter(value: unknown): InboxApprovalFilter {
   return value === "actionable" || value === "resolved" ? value : "all";
 }
 
-function getInboxFilterPreferencesStorageKey(companyId: string | null | undefined): string | null {
+function getInboxFilterPreferencesStorageKeys(companyId: string | null | undefined): BrowserStorageKeys | null {
   if (!companyId) return null;
-  return `${INBOX_FILTER_PREFERENCES_KEY_PREFIX}:${companyId}`;
+  return buildBrowserStorageKeys(":", `inbox:filters:${companyId}`);
 }
 
-function getInboxCollapsedGroupsStorageKey(companyId: string | null | undefined): string | null {
+function getInboxCollapsedGroupsStorageKeys(companyId: string | null | undefined): BrowserStorageKeys | null {
   if (!companyId) return null;
-  return `${INBOX_COLLAPSED_GROUPS_KEY_PREFIX}:${companyId}`;
+  return buildBrowserStorageKeys(":", `inbox:collapsed-groups:${companyId}`);
 }
 
 export function loadInboxFilterPreferences(
   companyId: string | null | undefined,
+  options: InboxStorageReadOptions = {},
 ): InboxFilterPreferences {
-  const storageKey = getInboxFilterPreferencesStorageKey(companyId);
-  if (!storageKey) {
+  const storageKeys = getInboxFilterPreferencesStorageKeys(companyId);
+  if (!storageKeys) {
     return {
       ...defaultInboxFilterPreferences,
       issueFilters: { ...defaultIssueFilterState },
     };
   }
 
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) {
-      return {
-        ...defaultInboxFilterPreferences,
-        issueFilters: { ...defaultIssueFilterState },
-      };
-    }
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      allCategoryFilter: normalizeInboxCategoryFilter(parsed.allCategoryFilter),
-      allApprovalFilter: normalizeInboxApprovalFilter(parsed.allApprovalFilter),
-      issueFilters: normalizeIssueFilterState(parsed.issueFilters),
-    };
-  } catch {
-    return {
-      ...defaultInboxFilterPreferences,
-      issueFilters: { ...defaultIssueFilterState },
-    };
-  }
+  return readInboxStorageValue(storageKeys, {
+    decode: decodeInboxFilterPreferences,
+    encode: encodeInboxFilterPreferences,
+  }, options) ?? {
+    ...defaultInboxFilterPreferences,
+    issueFilters: { ...defaultIssueFilterState },
+  };
 }
 
 export function saveInboxFilterPreferences(
   companyId: string | null | undefined,
   preferences: InboxFilterPreferences,
 ) {
-  const storageKey = getInboxFilterPreferencesStorageKey(companyId);
-  if (!storageKey) return;
-
-  try {
-    localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        allCategoryFilter: normalizeInboxCategoryFilter(preferences.allCategoryFilter),
-        allApprovalFilter: normalizeInboxApprovalFilter(preferences.allApprovalFilter),
-        issueFilters: normalizeIssueFilterState(preferences.issueFilters),
-      }),
-    );
-  } catch {
-    // Ignore localStorage failures.
-  }
+  const storageKeys = getInboxFilterPreferencesStorageKeys(companyId);
+  if (!storageKeys) return;
+  writeBrowserStorageValue(getBrowserStorage(), storageKeys, preferences, encodeInboxFilterPreferences);
 }
 
 export function loadCollapsedInboxGroupKeys(
   companyId: string | null | undefined,
+  options: InboxStorageReadOptions = {},
 ): Set<string> {
-  const storageKey = getInboxCollapsedGroupsStorageKey(companyId);
-  if (!storageKey) return new Set();
-
-  try {
-    const raw = localStorage.getItem(storageKey);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : []);
-  } catch {
-    return new Set();
-  }
+  const storageKeys = getInboxCollapsedGroupsStorageKeys(companyId);
+  if (!storageKeys) return new Set();
+  return readInboxStorageValue(storageKeys, {
+    decode: (raw) => {
+      const parsed = parseJson(raw);
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((entry): entry is string => typeof entry === "string"))
+        : undefined;
+    },
+    encode: (groupKeys) => JSON.stringify([...groupKeys]),
+  }, options) ?? new Set();
 }
 
 export function saveCollapsedInboxGroupKeys(
   companyId: string | null | undefined,
   groupKeys: ReadonlySet<string>,
 ) {
-  const storageKey = getInboxCollapsedGroupsStorageKey(companyId);
-  if (!storageKey) return;
-
-  try {
-    localStorage.setItem(storageKey, JSON.stringify([...groupKeys]));
-  } catch {
-    // Ignore localStorage failures.
-  }
+  const storageKeys = getInboxCollapsedGroupsStorageKeys(companyId);
+  if (!storageKeys) return;
+  writeBrowserStorageValue(getBrowserStorage(), storageKeys, groupKeys, (value) => JSON.stringify([...value]));
 }
 
-export function loadDismissedInboxAlerts(): Set<string> {
-  try {
-    const raw = localStorage.getItem(DISMISSED_KEY);
-    if (!raw) return new Set();
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return new Set();
-    return new Set(parsed.filter((value): value is string => typeof value === "string" && value.startsWith("alert:")));
-  } catch {
-    return new Set();
-  }
+export function loadDismissedInboxAlerts(options: InboxStorageReadOptions = {}): Set<string> {
+  return readInboxStorageValue(DISMISSED_KEYS, {
+    decode: (raw) => {
+      const parsed = parseJson(raw);
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((value): value is string => typeof value === "string" && value.startsWith("alert:")))
+        : undefined;
+    },
+    encode: (ids) => JSON.stringify([...ids]),
+  }, options) ?? new Set();
 }
 
 export function saveDismissedInboxAlerts(ids: Set<string>) {
-  try {
-    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...ids]));
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(getBrowserStorage(), DISMISSED_KEYS, ids, (value) => JSON.stringify([...value]));
 }
 
 export function buildInboxDismissedAtByKey(dismissals: InboxDismissal[]): Map<string, number> {
@@ -307,21 +338,20 @@ export function isInboxEntityDismissed(
   return dismissedAt >= normalizeTimestamp(activityAt);
 }
 
-export function loadReadInboxItems(): Set<string> {
-  try {
-    const raw = localStorage.getItem(READ_ITEMS_KEY);
-    return raw ? new Set(JSON.parse(raw)) : new Set();
-  } catch {
-    return new Set();
-  }
+export function loadReadInboxItems(options: InboxStorageReadOptions = {}): Set<string> {
+  return readInboxStorageValue(READ_ITEMS_KEYS, {
+    decode: (raw) => {
+      const parsed = parseJson(raw);
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((entry): entry is string => typeof entry === "string"))
+        : undefined;
+    },
+    encode: (ids) => JSON.stringify([...ids]),
+  }, options) ?? new Set();
 }
 
 export function saveReadInboxItems(ids: Set<string>) {
-  try {
-    localStorage.setItem(READ_ITEMS_KEY, JSON.stringify([...ids]));
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(getBrowserStorage(), READ_ITEMS_KEYS, ids, (value) => JSON.stringify([...value]));
 }
 
 export function normalizeInboxIssueColumns(columns: Iterable<string | InboxIssueColumn>): InboxIssueColumn[] {
@@ -334,44 +364,38 @@ export function getAvailableInboxIssueColumns(enableWorkspaceColumn: boolean): I
   return inboxIssueColumns.filter((column) => column !== "workspace");
 }
 
-export function loadInboxIssueColumns(): InboxIssueColumn[] {
-  try {
-    const raw = localStorage.getItem(INBOX_ISSUE_COLUMNS_KEY);
-    if (raw === null) return DEFAULT_INBOX_ISSUE_COLUMNS;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return DEFAULT_INBOX_ISSUE_COLUMNS;
-    return normalizeInboxIssueColumns(parsed);
-  } catch {
-    return DEFAULT_INBOX_ISSUE_COLUMNS;
-  }
+export function loadInboxIssueColumns(options: InboxStorageReadOptions = {}): InboxIssueColumn[] {
+  return readInboxStorageValue(INBOX_ISSUE_COLUMNS_KEYS, {
+    decode: (raw) => {
+      const parsed = parseJson(raw);
+      return Array.isArray(parsed)
+        ? normalizeInboxIssueColumns(parsed.filter((entry): entry is string => typeof entry === "string"))
+        : undefined;
+    },
+    encode: (columns) => JSON.stringify(normalizeInboxIssueColumns(columns)),
+  }, options) ?? DEFAULT_INBOX_ISSUE_COLUMNS;
 }
 
 export function saveInboxIssueColumns(columns: InboxIssueColumn[]) {
-  try {
-    localStorage.setItem(
-      INBOX_ISSUE_COLUMNS_KEY,
-      JSON.stringify(normalizeInboxIssueColumns(columns)),
-    );
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(
+    getBrowserStorage(),
+    INBOX_ISSUE_COLUMNS_KEYS,
+    columns,
+    (value) => JSON.stringify(normalizeInboxIssueColumns(value)),
+  );
 }
 
-export function loadInboxWorkItemGroupBy(): InboxWorkItemGroupBy {
-  try {
-    const raw = localStorage.getItem(INBOX_GROUP_BY_KEY);
-    return raw === "type" || raw === "assignee" || raw === "project" || raw === "workspace" ? raw : "none";
-  } catch {
-    return "none";
-  }
+export function loadInboxWorkItemGroupBy(options: InboxStorageReadOptions = {}): InboxWorkItemGroupBy {
+  return readInboxStorageValue(INBOX_GROUP_BY_KEYS, {
+    decode: (raw) => raw === "none" || raw === "type" || raw === "assignee" || raw === "project" || raw === "workspace"
+      ? raw
+      : undefined,
+    encode: String,
+  }, options) ?? "none";
 }
 
 export function saveInboxWorkItemGroupBy(groupBy: InboxWorkItemGroupBy) {
-  try {
-    localStorage.setItem(INBOX_GROUP_BY_KEY, groupBy);
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_GROUP_BY_KEYS, groupBy, String);
 }
 
 export function shouldResetInboxWorkspaceGrouping(
@@ -608,50 +632,39 @@ export function resolveIssueWorkspaceGroup(
   };
 }
 
-export function loadInboxNesting(): boolean {
-  try {
-    const raw = localStorage.getItem(INBOX_NESTING_KEY);
-    return raw !== "false";
-  } catch {
-    return true;
-  }
+export function loadInboxNesting(options: InboxStorageReadOptions = {}): boolean {
+  return readInboxStorageValue(INBOX_NESTING_KEYS, {
+    decode: (raw) => raw === "true" ? true : raw === "false" ? false : undefined,
+    encode: String,
+  }, options) ?? true;
 }
 
 export function saveInboxNesting(enabled: boolean) {
-  try {
-    localStorage.setItem(INBOX_NESTING_KEY, String(enabled));
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_NESTING_KEYS, enabled, String);
 }
 
 export function resolveInboxNestingEnabled(preferenceEnabled: boolean, isMobile: boolean): boolean {
   return preferenceEnabled && !isMobile;
 }
 
-export function loadLastInboxTab(): InboxTab {
-  try {
-    const raw = localStorage.getItem(INBOX_LAST_TAB_KEY);
-    if (
-      raw === "all"
-      || raw === "unread"
-      || raw === "recent"
-      || raw === "mine"
-      || raw === "blocked"
-    ) return raw;
-    if (raw === "new") return "mine";
-    return "mine";
-  } catch {
-    return "mine";
-  }
+export function loadLastInboxTab(options: InboxStorageReadOptions = {}): InboxTab {
+  return readInboxStorageValue(INBOX_LAST_TAB_KEYS, {
+    decode: (raw) => {
+      if (
+        raw === "all"
+        || raw === "unread"
+        || raw === "recent"
+        || raw === "mine"
+        || raw === "blocked"
+      ) return raw;
+      return raw === "new" ? "mine" : undefined;
+    },
+    encode: String,
+  }, options) ?? "mine";
 }
 
 export function saveLastInboxTab(tab: InboxTab) {
-  try {
-    localStorage.setItem(INBOX_LAST_TAB_KEY, tab);
-  } catch {
-    // Ignore localStorage failures.
-  }
+  writeBrowserStorageValue(getBrowserStorage(), INBOX_LAST_TAB_KEYS, tab, String);
 }
 
 export function isMineInboxTab(tab: InboxTab): boolean {

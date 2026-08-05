@@ -83,7 +83,7 @@ const BIBLE_TABS: BibleTabDef[] = [
 
 // ── API data types ──────────────────────────────────────────────────────────
 
-interface BookData {
+export interface BookData {
   id: string;
   companyId: string;
   slug: string;
@@ -93,7 +93,7 @@ interface BookData {
   updatedAt: string;
 }
 
-interface CharacterEntity {
+export interface CharacterEntity {
   id: string;
   bookId: string;
   name: string;
@@ -107,7 +107,7 @@ interface CharacterEntity {
   metadata?: Record<string, unknown> | null;
 }
 
-interface WorldLocationEntity {
+export interface WorldLocationEntity {
   id: string;
   bookId: string;
   name: string;
@@ -121,7 +121,7 @@ interface WorldLocationEntity {
   metadata?: Record<string, unknown> | null;
 }
 
-interface StyleEntity {
+export interface StyleEntity {
   id: string;
   bookId: string;
   pov: string;
@@ -183,7 +183,7 @@ function safeJsonStringify(v: Record<string, unknown>): string {
 
 const API_BASE = "/api";
 
-async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
+export async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     headers: { "Content-Type": "application/json", ...options?.headers },
     ...options,
@@ -372,7 +372,7 @@ interface CharacterCardProps {
   onDelete: (id: string) => void;
 }
 
-function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
+export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, onUpdate, onDelete }: CharacterCardProps) {
   const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(char.name);
@@ -605,7 +605,7 @@ interface LocationCardProps {
   onDelete: (id: string) => void;
 }
 
-function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
+export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUpdate, onDelete }: LocationCardProps) {
   const { selectedCompanyId: mediaCompanyId } = useCompany();
   const [editing, setEditing] = useState(false);
   const [editName, setEditName] = useState(loc.name);
@@ -800,7 +800,7 @@ interface StyleCardProps {
   onDelete: (id: string) => void;
 }
 
-function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: StyleCardProps) {
+export function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, onDelete }: StyleCardProps) {
   const [editing, setEditing] = useState(false);
   const [editPov, setEditPov] = useState(entry.pov);
   const [editTense, setEditTense] = useState(entry.tense);
@@ -1003,7 +1003,7 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
 
 // ── Create Form Components ──────────────────────────────────────────────────
 
-function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
+export function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: string; role: string; description: string; voiceCard: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
   const [name, setName] = useState("");
   const [role, setRole] = useState("");
   const [desc, setDesc] = useState("");
@@ -1033,7 +1033,7 @@ function CreateCharacterForm({ onSave, onCancel }: { onSave: (data: { name: stri
   );
 }
 
-function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
+export function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: string; description: string; rules: Record<string, unknown>; sensoryNotes: Record<string, unknown>; source: string }) => void; onCancel: () => void }) {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [rules, setRules] = useState("{}");
@@ -1063,7 +1063,7 @@ function CreateLocationForm({ onSave, onCancel }: { onSave: (data: { name: strin
   );
 }
 
-function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => void; onCancel: () => void }) {
+export function CreateStyleForm({ onSave, onCancel }: { onSave: (data: { pov: string; tense: string; comps: string; sampleParagraph: string; bannedCliches: string[]; tropes: string[]; source: string }) => void; onCancel: () => void }) {
   const [pov, setPov] = useState("");
   const [tense, setTense] = useState("");
   const [comps, setComps] = useState("");
@@ -1131,7 +1131,7 @@ function CreateOutlineForm({ onSave, onCancel }: { onSave: (data: { chapterNumbe
 
 // ── Overview Editor (inline, no separate file) ───────────────────────────
 
-function OverviewEditor({
+export function OverviewEditor({
   book,
   loading,
   onUpdate,
@@ -1139,12 +1139,13 @@ function OverviewEditor({
 }: {
   book: BookData | null;
   loading: boolean;
-  onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => void;
+  onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => Promise<void> | void;
   onDelete?: () => Promise<void>;
 }) {
   const [editTitle, setEditTitle] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
   // Delete confirmation: type the exact title to arm the button.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -1168,9 +1169,16 @@ function OverviewEditor({
   }, [book?.id]);
 
   const handleSave = async () => {
+    if (!editTitle.trim()) {
+      setError("Title cannot be empty.");
+      return;
+    }
     setSaving(true);
+    setError(null);
     try {
-      await onUpdate({ title: editTitle, metadata: { description: editDesc } });
+      await onUpdate({ title: editTitle.trim(), metadata: { description: editDesc } });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
     }
@@ -1192,9 +1200,10 @@ function OverviewEditor({
           autoGrow
           placeholder="What's this book about?"
         />
+        {error && <div role="alert" className="rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 text-[11px] text-red-300">{error}</div>}
         <button
           onClick={handleSave}
-          disabled={saving}
+          disabled={saving || !editTitle.trim()}
           className="flex items-center gap-1 rounded bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50"
         >
           {saving ? "Saving..." : "Save Changes"}

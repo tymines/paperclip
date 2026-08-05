@@ -8,8 +8,8 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Paperclip" />
-    <title>Paperclip</title>
+    <meta name="apple-mobile-web-app-title" content="Olympus" />
+    <title>Olympus</title>
     <!-- PAPERCLIP_RUNTIME_BRANDING_START -->
     <!-- PAPERCLIP_RUNTIME_BRANDING_END -->
     <!-- PAPERCLIP_FAVICON_START -->
@@ -22,12 +22,27 @@
     <link rel="manifest" href="/site.webmanifest" />
     <script>
       (() => {
-        const key = "paperclip.theme";
+        const canonicalKey = "olympus.theme";
+        const compatibilityKey = "paperclip.theme";
         const darkThemeColor = "#18181b";
         const lightThemeColor = "#ffffff";
         try {
-          const stored = window.localStorage.getItem(key);
-          const theme = stored === "light" || stored === "dark" ? stored : "dark";
+          const canonicalTheme = window.localStorage.getItem(canonicalKey);
+          let stored = canonicalTheme === "light" || canonicalTheme === "dark"
+            ? canonicalTheme
+            : null;
+          if (!stored) {
+            const compatibilityTheme = window.localStorage.getItem(compatibilityKey);
+            if (compatibilityTheme === "light" || compatibilityTheme === "dark") {
+              stored = compatibilityTheme;
+              try {
+                window.localStorage.setItem(canonicalKey, compatibilityTheme);
+              } catch {
+                // Continue with the valid legacy preference when migration storage is restricted.
+              }
+            }
+          }
+          const theme = stored ?? "dark";
           const isDark = theme === "dark";
           document.documentElement.classList.toggle("dark", isDark);
           document.documentElement.style.colorScheme = isDark ? "dark" : "light";

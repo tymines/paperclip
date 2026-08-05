@@ -4,7 +4,8 @@
   "description": "Paperclip CLI — orchestrate AI agent teams to run a business",
   "type": "module",
   "bin": {
-    "paperclipai": "./dist/index.js"
+    "paperclipai": "./dist/index.js",
+    "olympus": "./dist/olympus.js"
   },
   "keywords": [
     "paperclip",
@@ -31,7 +32,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config);\" && chmod +x dist/index.js",
+    "build": "node --input-type=module -e \"import esbuild from 'esbuild'; import config from './esbuild.config.mjs'; await esbuild.build(config);\" && chmod +x dist/index.js dist/olympus.js && node --check dist/index.js && node --check dist/olympus.js && node --input-type=module -e \"import { statSync } from 'node:fs'; for (const file of ['dist/index.js', 'dist/olympus.js']) console.log(file + ' (' + statSync(file).size + ' bytes)');\"",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },

@@ -7,8 +7,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  readThemePreference,
+  THEME_STORAGE_KEYS,
+  type ThemePreference,
+} from "../lib/storage-migration";
 
-type Theme = "light" | "dark";
+type Theme = ThemePreference;
 
 interface ThemeContextValue {
   theme: Theme;
@@ -16,12 +21,19 @@ interface ThemeContextValue {
   toggleTheme: () => void;
 }
 
-const THEME_STORAGE_KEY = "paperclip.theme";
 const DARK_THEME_COLOR = "#18181b";
 const LIGHT_THEME_COLOR = "#ffffff";
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 function resolveThemeFromDocument(): Theme {
+  if (typeof window !== "undefined") {
+    try {
+      const storedTheme = readThemePreference(window.localStorage);
+      if (storedTheme) return storedTheme;
+    } catch {
+      // Fall back to the initialized document theme when storage is restricted.
+    }
+  }
   if (typeof document === "undefined") return "dark";
   return document.documentElement.classList.contains("dark") ? "dark" : "light";
 }
@@ -52,7 +64,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     applyTheme(theme);
     try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
+      localStorage.setItem(THEME_STORAGE_KEYS.canonical, theme);
     } catch {
       // Ignore local storage write failures in restricted environments.
     }

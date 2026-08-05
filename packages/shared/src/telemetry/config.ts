@@ -1,25 +1,78 @@
 import type { TelemetryConfig } from "./types.js";
+import {
+  createBrandEnvReader,
+  type BrandEnvironment,
+  type BrandEnvReader,
+} from "../env-compat.js";
 
 const CI_ENV_VARS = ["CI", "CONTINUOUS_INTEGRATION", "BUILD_NUMBER", "GITHUB_ACTIONS", "GITLAB_CI"];
 
-function isCI(): boolean {
-  return CI_ENV_VARS.some((key) => process.env[key] === "true" || process.env[key] === "1");
+export interface TelemetryConfigRuntime {
+  getEnv: () => BrandEnvironment;
+  readBrandEnv: BrandEnvReader;
 }
 
-export function resolveTelemetryConfig(fileConfig?: { enabled?: boolean }): TelemetryConfig {
-  if (process.env.PAPERCLIP_TELEMETRY_DISABLED === "1") {
+const getProcessEnv = (): BrandEnvironment => process.env;
+const productionBrandEnvReader = createBrandEnvReader({ getEnv: getProcessEnv });
+const productionRuntime: TelemetryConfigRuntime = {
+  getEnv: getProcessEnv,
+  readBrandEnv: productionBrandEnvReader,
+};
+
+function isCI(env: BrandEnvironment): boolean {
+  return CI_ENV_VARS.some((key) => env[key] === "true" || env[key] === "1");
+}
+
+function parseOlympusDisabled(value: string): boolean | undefined {
+  if (value === "1") return true;
+  if (value === "0") return false;
+  return undefined;
+}
+
+function parsePaperclipDisabled(value: string): boolean {
+  return value === "1";
+}
+
+function parseOlympusEndpoint(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePaperclipEndpoint(value: string): string {
+  return value;
+}
+
+export function resolveTelemetryConfig(
+  fileConfig?: { enabled?: boolean },
+  runtime: TelemetryConfigRuntime = productionRuntime,
+): TelemetryConfig {
+  const disabled = runtime.readBrandEnv({
+    suffix: "TELEMETRY_DISABLED",
+    parseOlympus: parseOlympusDisabled,
+    parsePaperclip: parsePaperclipDisabled,
+  });
+  if (disabled === true) {
     return { enabled: false };
   }
-  if (process.env.DO_NOT_TRACK === "1") {
+  const env = runtime.getEnv();
+  if (env.DO_NOT_TRACK === "1") {
     return { enabled: false };
   }
-  if (isCI()) {
+  if (isCI(env)) {
     return { enabled: false };
   }
   if (fileConfig?.enabled === false) {
     return { enabled: false };
   }
 
-  const endpoint = process.env.PAPERCLIP_TELEMETRY_ENDPOINT || undefined;
+  const endpoint = runtime.readBrandEnv({
+    suffix: "TELEMETRY_ENDPOINT",
+    parseOlympus: parseOlympusEndpoint,
+    parsePaperclip: parsePaperclipEndpoint,
+  });
   return { enabled: true, endpoint };
 }

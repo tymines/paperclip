@@ -26,14 +26,16 @@ import { registerWorktreeCommands } from "./commands/worktree.js";
 import { registerPluginCommands } from "./commands/client/plugin.js";
 import { registerClientAuthCommands } from "./commands/client/auth.js";
 import { cliVersion } from "./version.js";
+import { getCliProductIdentifiers } from "./cli-identity.js";
 
 const program = new Command();
+const cliProductIdentifiers = getCliProductIdentifiers();
 const DATA_DIR_OPTION_HELP =
-  "Paperclip data directory root (isolates state from ~/.paperclip)";
+  `${cliProductIdentifiers.displayName} data directory root (isolates state from ~/.paperclip)`;
 
 program
-  .name("paperclipai")
-  .description("Paperclip CLI — setup, diagnose, and configure your instance")
+  .name(cliProductIdentifiers.cli)
+  .description(`${cliProductIdentifiers.displayName} CLI — setup, diagnose, and configure your instance`)
   .version(cliVersion);
 
 program.hook("preAction", (_thisCommand, actionCommand) => {

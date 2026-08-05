@@ -3,16 +3,19 @@
 // ManuscriptEditor so full parity is preserved from day one (3b replaces it
 // with the Beats/Prose/Context/Bible workspace, 3c adds the inspector +
 // overlays). Mounted at /:company/book-deck alongside the classic page.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DeckTopBar, type DirectorMode } from "@/components/book-studio/deck/DeckTopBar";
 import { DeckRail, type DeckChapter, type DeckBibleSection } from "@/components/book-studio/deck/DeckRail";
 import { DeckWorkspace, type Beat } from "@/components/book-studio/deck/DeckWorkspace";
 import { DeckInspector } from "@/components/book-studio/deck/DeckInspector";
 import { DecisionInbox, TasteSheet, RunPlanSheet, ExportSheet } from "@/components/book-studio/deck/DeckOverlays";
 import { NewBookModal } from "@/components/book-studio/deck/NewBookModal";
-import { CodexPanel } from "@/components/book-studio/CodexPanel";
+import { CodexPanel, type CodexSectionId } from "@/components/book-studio/CodexPanel";
 import { ChatDrawer } from "@/components/book-studio/ChatDrawer";
 import { BookMediaPanel } from "@/components/book-studio/BookMediaPanel";
+import { StoryBibleSectionEditor } from "@/components/book-studio/StoryBibleSectionEditor";
+import { STORY_BIBLE_SECTIONS, isLegacyStoryBibleSection, isStoryBibleSectionId, type StoryBibleSectionId } from "@/components/book-studio/storyBibleSections";
+import type { BookData } from "./BookWritingPage";
 import { useCompany } from "../context/CompanyContext";
 
 const API_BASE = "/api";
@@ -34,26 +37,8 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-interface BookData { id: string; slug: string; title: string; metadata: Record<string, unknown> }
 interface OutlineEntry { id: string; chapterNumber: number; title: string; locked: boolean; beats?: Beat[] }
 interface ChapterRow { id: string; chapterNumber: number; title: string; content: string; locked: boolean }
-
-const BIBLE_SECTION_DEFS = [
-  { id: "overview", icon: "📕", label: "Overview" },
-  { id: "characters", icon: "👤", label: "Characters" },
-  { id: "world-locations", icon: "🏔️", label: "Locations" },
-  { id: "style", icon: "🎨", label: "Style" },
-  { id: "lore", icon: "📜", label: "Lore" },
-  { id: "factions", icon: "⚑", label: "Factions" },
-  { id: "objects", icon: "🗡️", label: "Objects" },
-  { id: "systems", icon: "✦", label: "Systems" },
-  { id: "timeline", icon: "🕰️", label: "Timeline" },
-  { id: "threads", icon: "🧵", label: "Threads" },
-  { id: "themes", icon: "💭", label: "Themes" },
-  { id: "glossary", icon: "📖", label: "Glossary" },
-  { id: "relationships", icon: "🔗", label: "Relationships" },
-  { id: "facts", icon: "▪️", label: "Facts" },
-];
 
 const CODEX_TYPES = new Set(["lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"]);
 
@@ -62,35 +47,53 @@ export function DirectorsDeckPage() {
   const companySlug = selectedCompanyId ?? "";
 
   const [books, setBooks] = useState<BookData[]>([]);
+  const [booksLoading, setBooksLoading] = useState(true);
+  const [booksError, setBooksError] = useState<string | null>(null);
   const [activeBookId, setActiveBookId] = useState<string | null>(null);
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
   const [sectionCounts, setSectionCounts] = useState<Record<string, number | string>>({});
   const [reviewCount, setReviewCount] = useState(0);
   const [activeChapter, setActiveChapter] = useState<number | null>(null);
-  const [activeSection, setActiveSection] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<StoryBibleSectionId>("overview");
+  const [centerMode, setCenterMode] = useState<"chapter" | "bible">("bible");
   const [mode, setMode] = useState<DirectorMode>("co");
-  const [showCodex, setShowCodex] = useState(false);
   const [overlay, setOverlay] = useState<"inbox" | "taste" | "runplan" | "export" | null>(null);
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(() => {
+    try { return localStorage.getItem("bookStudio.brainstormOpen") === "1"; } catch { return false; }
+  });
+  const [mediaOpen, setMediaOpen] = useState(false);
   const [newBookOpen, setNewBookOpen] = useState(false);
   const [proseRefreshKey, setProseRefreshKey] = useState(0);
+  const activeBookRequestRef = useRef<string | null>(null);
 
   const activeBook = useMemo(() => books.find((b) => b.id === activeBookId) ?? null, [books, activeBookId]);
 
+  useEffect(() => {
+    try { localStorage.setItem("bookStudio.brainstormOpen", chatOpen ? "1" : "0"); } catch { /* private mode */ }
+  }, [chatOpen]);
+
   // ── load books ──
   useEffect(() => {
-    if (!companySlug) return;
+    if (!companySlug) { setBooks([]); setActiveBookId(null); setBooksLoading(false); return; }
+    setBooksLoading(true);
+    setBooksError(null);
     apiFetch<{ books: BookData[] }>(`/companies/${companySlug}/book-studio/books`)
       .then(({ books: list }) => {
         setBooks(list);
-        if (list.length && !activeBookId) setActiveBookId(list[0].id);
+        setActiveBookId((current) => list.some((book) => book.id === current) ? current : list[0]?.id ?? null);
       })
-      .catch(() => {});
+      .catch((err) => { setBooks([]); setActiveBookId(null); setBooksError(err instanceof Error ? err.message : String(err)); })
+      .finally(() => setBooksLoading(false));
   }, [companySlug]);
 
   // ── load per-book data ──
   const loadBookData = useCallback(async (bookId: string) => {
+    activeBookRequestRef.current = bookId;
+    setOutline([]);
+    setChapters([]);
+    setSectionCounts({});
+    setReviewCount(0);
     const p = `/companies/${companySlug}/book-studio/books/${bookId}`;
     const [outlineRes, chaptersRes, charsRes, locsRes, styleRes, queueRes] = await Promise.allSettled([
       apiFetch<{ outline: OutlineEntry[] }>(`${p}/outline`),
@@ -100,6 +103,7 @@ export function DirectorsDeckPage() {
       apiFetch<{ style: unknown[] }>(`${p}/style`),
       apiFetch<{ pendingCount: number }>(`${p}/bible-review-queue`),
     ]);
+    if (activeBookRequestRef.current !== bookId) return;
     if (outlineRes.status === "fulfilled") setOutline(outlineRes.value.outline ?? []);
     if (chaptersRes.status === "fulfilled") setChapters(chaptersRes.value.chapters ?? []);
     const counts: Record<string, number | string> = {
@@ -123,13 +127,14 @@ export function DirectorsDeckPage() {
       const r = await apiFetch<{ available: boolean; known: unknown[] }>(`${p}/codex-facts?chapter=9999`);
       counts.facts = r.available ? r.known.length : "?";
     } catch { counts.facts = "?"; }
+    if (activeBookRequestRef.current !== bookId) return;
     setSectionCounts(counts);
     if (queueRes.status === "fulfilled") setReviewCount(queueRes.value.pendingCount ?? 0);
   }, [companySlug]);
 
   useEffect(() => {
-    if (!activeBook) return;
-    loadBookData(activeBook.id);
+    if (!activeBook) { activeBookRequestRef.current = null; setOutline([]); setChapters([]); setSectionCounts({}); return; }
+    void loadBookData(activeBook.id);
     const m = (activeBook.metadata?.directorMode as DirectorMode | undefined) ?? "co";
     setMode(m);
   }, [activeBookId]);
@@ -162,7 +167,7 @@ export function DirectorsDeckPage() {
   }, [outline, chapters, activeBook]);
 
   const deckSections: DeckBibleSection[] = useMemo(() =>
-    BIBLE_SECTION_DEFS.map((s) => {
+    STORY_BIBLE_SECTIONS.filter((s) => s.id !== "review-queue").map((s) => {
       const count = sectionCounts[s.id] ?? 0;
       const n = typeof count === "number" ? count : 0;
       return { ...s, count, ready: s.id === "overview" ? "ok" : n > 2 ? "ok" : n > 0 ? "thin" : "none" };
@@ -176,6 +181,19 @@ export function DirectorsDeckPage() {
     });
     setBooks((prev) => [book, ...prev]);
     setActiveBookId(book.id);
+  }
+
+  function applyUpdatedBook(updated: BookData) {
+    setBooks((current) => current.map((book) => book.id === updated.id ? updated : book));
+  }
+
+  async function handleRenameBook(title: string) {
+    if (!activeBook) throw new Error("Select a book before renaming it.");
+    const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books/${activeBook.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    applyUpdatedBook(book);
   }
 
   async function handleModeChange(m: DirectorMode) {
@@ -223,7 +241,9 @@ export function DirectorsDeckPage() {
       <DeckTopBar
         books={books.map(({ id, slug, title }) => ({ id, slug, title }))}
         activeBookId={activeBookId}
+        booksLoading={booksLoading}
         onSelectBook={setActiveBookId}
+        onRenameBook={handleRenameBook}
         onNewBook={() => setNewBookOpen(true)}
         status={{
           ready: deckChapters.filter((c) => c.state === "pass").length,
@@ -235,7 +255,7 @@ export function DirectorsDeckPage() {
         onTaste={() => setOverlay("taste")}
         onRunPlan={() => setOverlay("runplan")}
         onBrainstorm={() => setChatOpen(true)}
-        onMedia={() => { /* BookMediaPanel is self-launching (mounted below) */ }}
+        onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
       <div className="grid grid-cols-1 lg:grid-cols-[272px_minmax(460px,1fr)_322px] md:grid-cols-[240px_minmax(0,1fr)] min-h-0">
@@ -243,18 +263,20 @@ export function DirectorsDeckPage() {
           <DeckRail
             chapters={deckChapters}
             activeChapter={activeChapter}
-            onSelectChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+            onSelectChapter={(n) => { setActiveChapter(n); setCenterMode("chapter"); }}
             onUnlockChapter={handleUnlockChapter}
             sections={deckSections}
             activeSection={activeSection}
-            onSelectSection={(id) => { setActiveSection(id); setShowCodex(true); }}
+            onSelectSection={(id) => { setActiveSection(id as StoryBibleSectionId); setCenterMode("bible"); }}
             reviewCount={reviewCount}
-            onOpenReviewQueue={() => { setActiveSection("review-queue"); setShowCodex(true); }}
+            onOpenReviewQueue={() => { setActiveSection("review-queue"); setCenterMode("bible"); }}
           />
         </div>
         <main className="min-w-0 overflow-hidden bg-[#0a0c10] flex flex-col">
-          {showCodex && activeBook ? (
-            <div className="flex-1 overflow-auto"><CodexPanel bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} /></div>
+          {centerMode === "bible" && activeBook && isLegacyStoryBibleSection(activeSection) ? (
+            <div className="flex-1 overflow-auto"><StoryBibleSectionEditor key={`${activeBook.id}:${activeSection}`} companySlug={companySlug} book={activeBook} section={activeSection} onBookUpdated={applyUpdatedBook} onChanged={() => void loadBookData(activeBook.id)} /></div>
+          ) : centerMode === "bible" && activeBook ? (
+            <div className="flex-1 overflow-auto"><CodexPanel key={`${activeBook.id}:${activeSection}`} bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} activeSection={activeSection as CodexSectionId} showSectionPicker={false} /></div>
           ) : activeBook && activeChapter != null ? (
             <div className="flex-1 min-h-0">
               <DeckWorkspace
@@ -273,7 +295,7 @@ export function DirectorsDeckPage() {
             </div>
           ) : (
             <div className="flex items-center justify-center h-full text-gray-600 text-sm">
-              {activeBook ? "Select a chapter in the queue" : "Select or create a book"}
+              {booksError ? `Could not load books: ${booksError}` : activeBook ? "Select a chapter in the queue" : "Select or create a book"}
             </div>
           )}
         </main>
@@ -284,9 +306,9 @@ export function DirectorsDeckPage() {
               companySlug={companySlug}
               chapterNumber={activeChapter}
               chapterStatus={activeChapter != null ? chapterStatusMap[String(activeChapter)] ?? null : null}
-              onJumpToBeats={() => { /* workspace beats tab is the default view */ setShowCodex(false); }}
+              onJumpToBeats={() => { setCenterMode("chapter"); }}
               onOpenDecisionInbox={() => setOverlay("inbox")}
-              onSelectChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+              onSelectChapter={(n) => { setActiveChapter(n); setCenterMode("chapter"); }}
               onHighlightOffset={() => { /* deep-link highlight lands with the Prose view rework */ }}
               onRevisionAccepted={() => { setProseRefreshKey((k) => k + 1); loadBookData(activeBook.id); }}
             />
@@ -303,7 +325,7 @@ export function DirectorsDeckPage() {
           bookId={activeBook.id}
           companySlug={companySlug}
           onClose={() => setOverlay(null)}
-          onOpenChapter={(n) => { setActiveChapter(n); setShowCodex(false); }}
+          onOpenChapter={(n) => { setActiveChapter(n); setCenterMode("chapter"); }}
         />
       )}
       {overlay === "taste" && activeBook && (
@@ -322,9 +344,14 @@ export function DirectorsDeckPage() {
           isOpen={chatOpen}
           onClose={() => setChatOpen(false)}
           activeBookTitle={activeBook.title}
+          onBookChanged={(section, chapterNumber) => {
+            if (section === "outline" && chapterNumber) { setActiveChapter(chapterNumber); setCenterMode("chapter"); }
+            else if (section && isStoryBibleSectionId(section)) { setActiveSection(section); setCenterMode("bible"); }
+            void loadBookData(activeBook.id);
+          }}
         />
       )}
-      {activeBook && <BookMediaPanel bookId={activeBook.id} />}
+      {activeBook && <BookMediaPanel bookId={activeBook.id} bookTitle={activeBook.title} open={mediaOpen} onOpenChange={setMediaOpen} showLauncher={false} />}
     </div>
   );
 }

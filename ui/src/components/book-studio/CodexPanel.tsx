@@ -92,7 +92,7 @@ const CODEX_SECTIONS = [
   { id: "glossary", label: "Glossary", icon: <BookA className="w-3 h-3" /> },
 ] as const;
 
-type SectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts" | "review-queue";
+export type CodexSectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts" | "review-queue";
 
 const REL_ENTITY_TYPES = ["character", "location", "lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"];
 
@@ -132,12 +132,20 @@ function MeterBar({ meter }: { meter: number }) {
 
 // ── Main panel ────────────────────────────────────────────────────────
 
-export function CodexPanel({ bookId, companySlug, currentChapter }: {
+export function CodexPanel({ bookId, companySlug, currentChapter, activeSection, onSectionChange, showSectionPicker = true }: {
   bookId: string;
   companySlug: string;
   currentChapter?: number;
+  activeSection?: CodexSectionId;
+  onSectionChange?: (section: CodexSectionId) => void;
+  showSectionPicker?: boolean;
 }) {
-  const [section, setSection] = useState<SectionId>("lore");
+  const [internalSection, setInternalSection] = useState<CodexSectionId>(activeSection ?? "lore");
+  const section = activeSection ?? internalSection;
+  const setSection = (next: CodexSectionId) => {
+    if (activeSection === undefined) setInternalSection(next);
+    onSectionChange?.(next);
+  };
   const [entities, setEntities] = useState<CodexEntity[]>([]);
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [knownFacts, setKnownFacts] = useState<Fact[]>([]);
@@ -268,7 +276,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
   return (
     <div className="flex flex-col h-full">
       {/* Section picker */}
-      <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-gray-800 shrink-0">
+      {showSectionPicker && <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-gray-800 shrink-0">
         {CODEX_SECTIONS.map((s) => (
           <button
             key={s.id}
@@ -287,7 +295,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter }: {
         <button onClick={() => { setSection("review-queue"); setShowAdd(false); }} className={`flex items-center gap-1 px-2 py-1 rounded text-[11px] ${section === "review-queue" ? "bg-blue-900/50 text-blue-300" : "text-gray-500 hover:text-gray-300"}`}>
           <Inbox className="w-3 h-3" />Review Queue
         </button>
-      </div>
+      </div>}
 
       {!available && (
         <div className="mx-3 mt-2 px-3 py-2 rounded border border-amber-800/60 bg-amber-950/30 text-amber-300 text-[11px]">

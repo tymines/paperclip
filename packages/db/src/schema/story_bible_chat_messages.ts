@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, index, integer, jsonb, uniqueIndex, boolean } from "drizzle-orm/pg-core";
 import { books } from "./books.js";
 
 export const storyBibleChatMessages = pgTable("story_bible_chat_messages", {
@@ -9,12 +9,21 @@ export const storyBibleChatMessages = pgTable("story_bible_chat_messages", {
   content: text("content").notNull(),
   status: text("status").notNull().default("completed"),
   via: text("via"),
+  /** Reserved before any bridge POST; the same value keys jarvis_delegations. */
+  dispatchAttemptId: uuid("dispatch_attempt_id"),
   delegationId: uuid("delegation_id"),
+  conversationId: text("conversation_id"),
+  retryCount: integer("retry_count").notNull().default(0),
+  retryable: boolean("retryable").notNull().default(true),
+  authorization: jsonb("authorization").$type<Record<string, unknown> | null>(),
+  actionResult: jsonb("action_result").$type<Record<string, unknown> | null>(),
   error: text("error"),
   archivedAt: timestamp("archived_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (table) => ({
   bookCreatedAtIndex: index("chat_messages_book_created_at_idx").on(table.bookId, table.createdAt),
+  uniqueTurnRoleIndex: uniqueIndex("chat_messages_book_turn_role_unique_idx").on(table.bookId, table.turnId, table.role),
+  dispatchAttemptIndex: uniqueIndex("chat_messages_dispatch_attempt_unique_idx").on(table.dispatchAttemptId),
 }));
 
 export type StoryBibleChatMessage = typeof storyBibleChatMessages.$inferSelect;

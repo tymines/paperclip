@@ -1,5 +1,5 @@
 /**
- * esbuild configuration for building the paperclipai CLI for npm.
+ * esbuild configuration for building the paperclipai and olympus CLIs for npm.
  *
  * Bundles all workspace packages (@paperclipai/*) into a single file.
  * External npm packages remain as regular dependencies.
@@ -52,12 +52,15 @@ for (const name of externalWorkspacePackages) {
 
 /** @type {import('esbuild').BuildOptions} */
 export default {
-  entryPoints: ["src/index.ts"],
+  entryPoints: {
+    index: "src/index.ts",
+    olympus: "src/olympus.ts",
+  },
   bundle: true,
   platform: "node",
   target: "node20",
   format: "esm",
-  outfile: "dist/index.js",
+  outdir: "dist",
   banner: { js: "#!/usr/bin/env node" },
   external: [...externals].sort(),
   treeShaking: true,

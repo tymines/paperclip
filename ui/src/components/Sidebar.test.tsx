@@ -131,6 +131,19 @@ describe("Sidebar", () => {
     vi.clearAllMocks();
   });
 
+  it("renders the Olympus top-left wordmark and accessible home link", async () => {
+    mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
+    const root = await renderSidebar();
+
+    const homeLink = container.querySelector('a[aria-label="Olympus home"]');
+    expect(homeLink?.getAttribute("href")).toBe("/home");
+    expect(homeLink?.textContent?.trim()).toBe("Olympus");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
   it("links the top search icon to the search page without showing Search in Work nav", async () => {
     mockInstanceSettingsApi.getExperimental.mockResolvedValue({ enableIsolatedWorkspaces: false });
     const root = await renderSidebar();

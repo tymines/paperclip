@@ -70,10 +70,22 @@ export type AcpHandshakeResult = AcpHandshake | AcpHandshakeError;
 export interface AcpAgentCapabilities {
   id: string;
   name: string;
+  registered: boolean;
+  status: string | null;
   role?: string | null;
+  fleetRole: string | null;
+  pairing: string | null;
   title?: string | null;
   /** Host machine + parent agent (e.g. AugiAIs-Mini u00b7 under Augi), null if unknown. */
   hostedBy: string | null;
+  hostKey: string | null;
+  hostLabel: string | null;
+  hostMachine: string | null;
+  hostParent: string | null;
+  framework: string | null;
+  harness: string | null;
+  relationship: string | null;
+  surfaceLinks: Array<{ label: string; href: string }>;
   workspace: string | null;
   runtime: string | null;
   model: string | null;

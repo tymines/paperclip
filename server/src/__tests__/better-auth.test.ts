@@ -3,6 +3,7 @@ import type { BetterAuthOptions } from "better-auth";
 import { getCookies } from "better-auth/cookies";
 import {
   buildBetterAuthAdvancedOptions,
+  buildLoginOtpEmail,
   deriveAuthCookiePrefix,
   deriveAuthTrustedOrigins,
 } from "../auth/better-auth.js";
@@ -74,5 +75,15 @@ describe("Better Auth cookie scoping", () => {
     ]));
     expect(trustedOrigins).not.toContain("https://board.example.test:3100");
     expect(trustedOrigins).not.toContain("http://board.example.test:3100");
+  });
+});
+
+describe("Better Auth login email", () => {
+  it("uses the canonical Olympus display name without changing the login code", () => {
+    expect(buildLoginOtpEmail("123456")).toEqual({
+      subject: "Your Olympus login code: 123456",
+      text: "Your Olympus login code is: 123456\n\nThis code expires in 5 minutes.\n\nIf you didn't request this, you can safely ignore this email.",
+      html: "<p>Your Olympus login code is: <strong>123456</strong></p><p>This code expires in 5 minutes.</p><p>If you didn't request this, you can safely ignore this email.</p>",
+    });
   });
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 import pc from "picocolors";
 import { buildCliCommandLabel } from "./command-label.js";
 import { resolveDefaultCliAuthPath } from "../config/home.js";
+import { getCliProductIdentifiers } from "../cli-identity.js";
 
 type RequestedAccess = "board" | "instance_admin_required";
 
@@ -58,6 +59,10 @@ function toStringOrNull(value: unknown): string | null {
 
 function normalizeApiBase(apiBase: string): string {
   return apiBase.trim().replace(/\/+$/, "");
+}
+
+export function resolveDefaultBoardAuthClientName(): string {
+  return `${getCliProductIdentifiers().cli} cli`;
 }
 
 export function resolveBoardAuthStorePath(overridePath?: string): string {
@@ -207,7 +212,7 @@ export async function loginBoardCli(params: {
     method: "POST",
     body: JSON.stringify({
       command,
-      clientName: params.clientName?.trim() || "paperclipai cli",
+      clientName: params.clientName?.trim() || resolveDefaultBoardAuthClientName(),
       requestedAccess: params.requestedAccess,
       requestedCompanyId: params.requestedCompanyId?.trim() || null,
     }),

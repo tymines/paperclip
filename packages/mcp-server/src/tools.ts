@@ -12,6 +12,7 @@ import {
   upsertIssueDocumentSchema,
   linkIssueApprovalSchema,
 } from "@paperclipai/shared";
+import { PRODUCT_IDENTIFIERS } from "@paperclipai/shared/brand";
 import { PaperclipApiClient } from "./client.js";
 import { formatErrorResponse, formatTextResponse } from "./format.js";
 
@@ -222,7 +223,7 @@ async function getIssueWorkspaceRuntime(client: PaperclipApiClient, issueId: str
 }
 
 export function createToolDefinitions(client: PaperclipApiClient): ToolDefinition[] {
-  return [
+  const paperclipTools: ToolDefinition[] = [
     makeTool(
       "paperclipMe",
       "Get the current authenticated Paperclip actor details",
@@ -606,4 +607,23 @@ export function createToolDefinitions(client: PaperclipApiClient): ToolDefinitio
       },
     ),
   ];
+
+  const compatibilityPrefix = PRODUCT_IDENTIFIERS.compatibility.mcpServerKey;
+  const canonicalPrefix = PRODUCT_IDENTIFIERS.canonical.mcpServerKey;
+  const olympusTools = paperclipTools.map((tool): ToolDefinition => {
+    if (!tool.name.startsWith(compatibilityPrefix)) {
+      throw new Error(`Cannot alias MCP tool without ${compatibilityPrefix} prefix: ${tool.name}`);
+    }
+
+    return {
+      ...tool,
+      name: `${canonicalPrefix}${tool.name.slice(compatibilityPrefix.length)}`,
+      description: tool.description.replaceAll(
+        PRODUCT_IDENTIFIERS.compatibility.displayName,
+        PRODUCT_IDENTIFIERS.canonical.displayName,
+      ),
+    };
+  });
+
+  return [...paperclipTools, ...olympusTools];
 }

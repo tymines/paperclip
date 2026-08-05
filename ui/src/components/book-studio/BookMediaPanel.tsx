@@ -17,11 +17,24 @@ import { useToast } from "../../context/ToastContext";
 
 const AMBER = "#F4B940";
 
-export function BookMediaPanel({ bookId }: { bookId: string }) {
+export interface BookMediaPanelProps {
+  bookId: string;
+  bookTitle?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  showLauncher?: boolean;
+}
+
+export function BookMediaPanel({ bookId, bookTitle, open: controlledOpen, onOpenChange, showLauncher = true }: BookMediaPanelProps) {
   const { selectedCompanyId: cid } = useCompany();
   const { pushToast } = useToast();
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = (next: boolean) => {
+    if (controlledOpen === undefined) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [section, setSection] = useState<"cover" | "illustrations" | "trailer" | "narration" | "library">("cover");
   const [assetFilter, setAssetFilter] = useState<string>("all");
   const [iconTarget, setIconTarget] = useState<Record<string, string>>({}); // jobId -> characterId
@@ -32,6 +45,15 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   // describe it"). Empty = the server's auto-prompt from title/context.
   const [coverPrompt, setCoverPrompt] = useState("");
   const [illPrompt, setIllPrompt] = useState("");
+
+  useEffect(() => {
+    setSection("cover");
+    setCoverPrompt("");
+    setIllPrompt("");
+    setAssetFilter("all");
+    setIconTarget({});
+    setLocTarget({});
+  }, [bookId]);
 
   const overviewQ = useQuery({
     queryKey: ["book-media", cid, bookId],
@@ -118,20 +140,20 @@ export function BookMediaPanel({ bookId }: { bookId: string }) {
   return (
     <>
       {/* toggle — fixed, layout-independent; safe-area aware on mobile */}
-      <button
+      {showLauncher && <button
         onClick={() => setOpen(!open)}
         title="Book media — cover, illustrations, trailer, narration"
         className="fixed bottom-20 right-5 z-40 mb-[env(safe-area-inset-bottom)] flex items-center gap-2 rounded-full border border-gray-700 bg-gray-900/95 px-4 py-2 text-xs font-semibold text-gray-200 shadow-lg backdrop-blur hover:border-blue-500"
       >
         <Clapperboard size={14} className="text-blue-400" /> Media
-      </button>
+      </button>}
 
       {open && (
         <div className="fixed z-50 flex flex-col bg-gray-950 shadow-2xl inset-x-0 bottom-0 h-[85dvh] w-full rounded-t-xl border-t border-gray-800 pb-[env(safe-area-inset-bottom)] md:inset-y-0 md:left-auto md:right-0 md:h-auto md:w-[420px] md:max-w-full md:rounded-none md:border-t-0 md:border-l md:pb-0">
           <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-semibold text-gray-100">
               <Clapperboard size={15} className="text-blue-400" /> Book Media
-              <span className="max-w-[180px] truncate text-xs font-normal text-gray-500">{ov?.book.title ?? ""}</span>
+              <span className="max-w-[180px] truncate text-xs font-normal text-gray-500">{bookTitle ?? ov?.book.title ?? ""}</span>
             </div>
             <button onClick={() => setOpen(false)} className="text-gray-500 hover:text-gray-200"><X size={16} /></button>
           </div>

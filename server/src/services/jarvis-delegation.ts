@@ -64,6 +64,8 @@ export class PeerUnconfiguredError extends Error {
 }
 
 export interface DelegationInput {
+  /** Optional caller-reserved durable primary key for idempotent dispatch. */
+  delegationId?: string;
   companyId: string;
   conversationId?: string | null;
   agent: PeerAgentId;
@@ -274,6 +276,7 @@ export async function dispatchDelegation(
   const [row] = await db
     .insert(jarvisDelegations)
     .values({
+      ...(input.delegationId ? { id: input.delegationId } : {}),
       companyId: input.companyId,
       conversationId: input.conversationId ?? null,
       agent: input.agent,

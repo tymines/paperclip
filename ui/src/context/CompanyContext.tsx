@@ -11,6 +11,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import type { Company } from "@paperclipai/shared";
 import { companiesApi } from "../api/companies";
 import { ApiError } from "../api/client";
+import {
+  buildBrowserStorageKeys,
+  getBrowserStorage,
+  readBrowserStorageValue,
+  removeBrowserStorageValue,
+  writeBrowserStorageValue,
+} from "../lib/browser-storage-compat";
 import { queryKeys } from "../lib/queryKeys";
 import type { CompanySelectionSource } from "../lib/company-selection";
 type CompanySelectionOptions = { source?: CompanySelectionSource };
@@ -32,7 +39,7 @@ interface CompanyContextValue {
   }) => Promise<Company>;
 }
 
-const STORAGE_KEY = "paperclip.selectedCompanyId";
+export const SELECTED_COMPANY_STORAGE_KEYS = buildBrowserStorageKeys(".", "selectedCompanyId");
 
 const CompanyContext = createContext<CompanyContextValue | null>(null);
 
@@ -62,6 +69,17 @@ export function shouldClearStoredCompanySelection(input: {
   unauthorized: boolean;
 }) {
   return !input.isLoading && !input.unauthorized && input.companies.length === 0;
+}
+
+function readStoredCompanySelection(selectableCompanyIds: ReadonlySet<string>): string | null {
+  return readBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS, {
+    decode: (raw) => selectableCompanyIds.has(raw) ? raw : undefined,
+    encode: String,
+  }) ?? null;
+}
+
+function saveStoredCompanySelection(companyId: string): void {
+  writeBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS, companyId, String);
 }
 
 export function CompanyProvider({ children }: { children: ReactNode }) {
@@ -105,27 +123,30 @@ export function CompanyProvider({ children }: { children: ReactNode }) {
         if (selectedCompanyId !== null) {
           setSelectedCompanyIdState(null);
         }
-        localStorage.removeItem(STORAGE_KEY);
+        removeBrowserStorageValue(getBrowserStorage(), SELECTED_COMPANY_STORAGE_KEYS);
       }
       return;
     }
 
+    const selectableCompanyIds = new Set(sidebarCompanies.length > 0
+      ? sidebarCompanies.map((company) => company.id)
+      : companies.map((company) => company.id));
     const next = resolveBootstrapCompanySelection({
       companies,
       sidebarCompanies,
       selectedCompanyId,
-      storedCompanyId: localStorage.getItem(STORAGE_KEY),
+      storedCompanyId: readStoredCompanySelection(selectableCompanyIds),
     });
     if (next === null || next === selectedCompanyId) return;
     setSelectedCompanyIdState(next);
     setSelectionSource("bootstrap");
-    localStorage.setItem(STORAGE_KEY, next);
+    saveStoredCompanySelection(next);
   }, [companies, companyListUnauthorized, isLoading, selectedCompanyId, sidebarCompanies]);
 
   const setSelectedCompanyId = useCallback((companyId: string, options?: CompanySelectionOptions) => {
     setSelectedCompanyIdState(companyId);
     setSelectionSource(options?.source ?? "manual");
-    localStorage.setItem(STORAGE_KEY, companyId);
+    saveStoredCompanySelection(companyId);
   }, []);
 
   const reloadCompanies = useCallback(async () => {
