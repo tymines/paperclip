@@ -5,14 +5,11 @@ Date: 2026-08-05
 ## Authority and source state
 
 - Repository: `https://github.com/tymines/paperclip.git`
-- Worktree: `C:\Users\tyler\Documents\Codex\2026-08-05\mobile-shell-navigation-p1\work\paperclip-mobile-shell-navigation-p1`
+- Worktree: isolated local feature worktree (operator-local path intentionally omitted)
 - Branch: `codex/mobile-shell-navigation-p1-20260805`
-- Provisional integration base recorded before implementation: `04722c1b4bf6965bf2a2feee7dda281f6ab59498`
-- First final integration parent: `079df26d78a77a018a11034f34d44305f8b67f03`
-- Final integration parent after the CI-only correction: `2d304da7557363a41b2948c85c6c1395afcd5448`
-- `04722c1b..079df26d` had zero movement in the packet's allowed files. The only change was the Fleet/Book/Olympus integration checkpoint document.
-- `079df26d..2d304da7` also had zero movement in the packet's allowed files. It changed only two server test mocks outside this packet.
-- Both re-anchors were clean fast-forwards. No conflicts or overlapping user edits were present.
+- Final integration parent: `d7d78ea3159e763756439faf49f8a2b77b7a2624`
+- Published PR head before this checkpoint-only correction: `4be432caae794e72b21179ce505f4c89b2112ad5`
+- The two implementation commits were replayed cleanly onto the final integration parent. No conflicts or overlapping user edits were present.
 
 ## Delivered contract
 
@@ -36,19 +33,18 @@ Date: 2026-08-05
 ## Verification
 
 - `pnpm install --frozen-lockfile`: pass. Windows emitted existing optional plugin SDK `.EXE` bin-link warnings only.
-- `pnpm --filter @paperclipai/ui exec vitest run src/components/Layout.test.tsx src/components/BreadcrumbBar.test.tsx src/components/MobileBottomNav.test.tsx src/components/PageTabBar.test.tsx`: pass, 4 files and 14 tests.
+- `pnpm --filter @paperclipai/ui exec vitest run src/components/Layout.test.tsx src/components/BreadcrumbBar.test.tsx src/components/MobileBottomNav.test.tsx src/components/PageTabBar.test.tsx`: pass, 4 files and 15 tests.
 - `pnpm --filter @paperclipai/ui typecheck`: pass.
 - `pnpm --filter @paperclipai/ui build`: pass. Existing MarkdownEditor mixed dynamic/static import and chunk-size warnings remain.
 - `pnpm typecheck`: pass across 25 workspace projects.
 - `pnpm build`: pass across 25 workspace projects, with the same existing UI bundle warnings.
+- Root `pnpm test:run` was not run locally because the stable project is intentionally split into serialized CI groups. GitHub's required server, workspaces-a, workspaces-b, and four serialized server-suite checks passed on the published head. The merge-train full-suite job passed on its single infrastructure-flake rerun after PostgreSQL cleanup hooks exceeded their timeout on the first attempt.
 - `pnpm build-storybook`: pass, with existing third-party `use client`, sourcemap, and chunk-size warnings.
 - `git diff --check`: pass.
 
 ### Browser evidence
 
-Browser evidence is stored outside the repository at:
-
-`C:\Users\tyler\AppData\Local\Temp\paperclip-mobile-shell-p1-evidence-20260805`
+Browser evidence is stored outside the repository in an operator-local temporary evidence directory; the absolute user path is intentionally omitted.
 
 `agent-browser` verified the compiled, static Storybook Search surface at these viewports:
 
@@ -64,4 +60,4 @@ At all eight widths, `body.scrollWidth` equalled `body.clientWidth`. At phone wi
 - Vite preview was rejected after it was found to proxy read-only API requests to an existing local server. Both preview processes and that browser session were stopped immediately; no write request was made.
 - The existing compiled `Product/Navigation & Layout` Storybook story fails before rendering with `usePluginLauncherRuntime must be used within PluginLauncherProvider`. A blocker screenshot is preserved as `navigation-story-provider-blocker.png`. Fixing Storybook infrastructure is outside this packet.
 - Therefore the full requested route-by-route shell screenshot and desktop geometry-comparator matrix is not claimed. Drawer, scroll-owner, bottom-nav visibility/inertness, hamburger variants, and tab callback behavior are covered by focused tests; responsive PageTabBar and overflow are additionally covered in a real browser.
-- No merge, push, deployment, live-system mutation, credential change, or external notification was performed.
+- The feature branch and PR were published for review. No merge, deployment, live-system mutation, credential change, or external notification was performed by this packet.
