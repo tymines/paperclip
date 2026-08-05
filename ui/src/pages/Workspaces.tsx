@@ -23,6 +23,17 @@ type ProjectWorkspaceGroup = {
   runningServiceCount: number;
 };
 
+export function WorkspacesProjectLink({ projectRef, name }: { projectRef: string; name: string }) {
+  return (
+    <Link
+      to={`/projects/${projectRef}/workspaces`}
+      className="inline-flex min-h-11 min-w-0 max-w-full items-center break-all text-base font-semibold text-foreground transition-colors hover:text-primary hover:underline sm:min-h-0"
+    >
+      {name}
+    </Link>
+  );
+}
+
 export const WORKSPACES_RESPONSIVE_CLASS =
   "flex min-w-0 flex-col gap-6 overflow-x-hidden bg-gradient-to-b from-background via-background to-primary/[0.03] [&_button]:min-h-11 [&_button]:min-w-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0";
 
@@ -153,12 +164,7 @@ export function Workspaces() {
             <section key={group.project.id} className="space-y-3">
               <div className="flex flex-wrap items-end justify-between gap-2">
                 <div className="min-w-0">
-                  <Link
-                    to={`/projects/${group.projectRef}/workspaces`}
-                    className="inline-flex min-h-11 items-center text-base font-semibold text-foreground transition-colors hover:text-primary hover:underline sm:min-h-0"
-                  >
-                    {group.project.name}
-                  </Link>
+                  <WorkspacesProjectLink projectRef={group.projectRef} name={group.project.name} />
                   {group.project.description ? (
                     <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
                       {group.project.description}

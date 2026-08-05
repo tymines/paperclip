@@ -77,6 +77,31 @@ function executionWorkspaceTabPath(workspaceId: string, tab: ExecutionWorkspaceT
   return `/execution-workspaces/${workspaceId}/${segment}`;
 }
 
+export function ExecutionWorkspaceTabs({
+  activeTab,
+  onValueChange,
+}: {
+  activeTab: ExecutionWorkspaceTab;
+  onValueChange: (value: ExecutionWorkspaceTab) => void;
+}) {
+  return (
+    <Tabs value={activeTab} onValueChange={(value) => onValueChange(value as ExecutionWorkspaceTab)}>
+      <PageTabBar
+        items={[
+          { value: "issues", label: "Issues" },
+          { value: "services", label: "Services" },
+          { value: "configuration", label: "Configuration" },
+          { value: "runtime_logs", label: "Runtime logs" },
+          { value: "routines", label: "Routines" },
+        ]}
+        align="start"
+        value={activeTab}
+        onValueChange={(value) => onValueChange(value as ExecutionWorkspaceTab)}
+      />
+    </Tabs>
+  );
+}
+
 function LegacyWorkspaceTabRedirect({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     try {
@@ -229,6 +254,59 @@ function Field({
       </div>
       {children}
     </label>
+  );
+}
+
+export function ExecutionWorkspaceRuntimeConfigControl({
+  inheritRuntime,
+  workspaceRuntime,
+  inheritedRuntimeConfig,
+  onChange,
+}: {
+  inheritRuntime: boolean;
+  workspaceRuntime: string;
+  inheritedRuntimeConfig: Record<string, unknown> | null;
+  onChange: (next: { inheritRuntime: boolean; workspaceRuntime: string }) => void;
+}) {
+  return (
+    <details className="rounded-md border border-dashed border-border/70 bg-background px-4 py-3">
+      <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium sm:min-h-0">
+        Advanced runtime JSON
+      </summary>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
+      </p>
+      <div className="mt-3">
+        <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
+          <label htmlFor="inherit-runtime-config" className="mb-2 flex min-h-11 cursor-pointer items-center gap-2 text-sm text-muted-foreground sm:min-h-0">
+            <input
+              id="inherit-runtime-config"
+              type="checkbox"
+              className="h-11 w-11 shrink-0 rounded border-border sm:h-4 sm:w-4"
+              checked={inheritRuntime}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                onChange({
+                  inheritRuntime: checked,
+                  workspaceRuntime:
+                    !checked && !workspaceRuntime.trim() && inheritedRuntimeConfig
+                      ? formatJson(inheritedRuntimeConfig)
+                      : workspaceRuntime,
+                });
+              }}
+            />
+            <span>Inherit project workspace runtime config</span>
+          </label>
+          <Textarea
+            className="min-h-64 font-mono sm:min-h-96"
+            value={workspaceRuntime}
+            onChange={(event) => onChange({ inheritRuntime, workspaceRuntime: event.target.value })}
+            disabled={inheritRuntime}
+            placeholder={'{\n  "commands": [\n    {\n      "id": "web",\n      "name": "web",\n      "kind": "service",\n      "command": "pnpm dev",\n      "cwd": ".",\n      "port": { "type": "auto" }\n    },\n    {\n      "id": "db-migrate",\n      "name": "db:migrate",\n      "kind": "job",\n      "command": "pnpm db:migrate",\n      "cwd": "."\n    }\n  ]\n}'}
+          />
+        </Field>
+      </div>
+    </details>
   );
 }
 
@@ -734,20 +812,7 @@ export function ExecutionWorkspaceDetail() {
         {runtimeActionErrorMessage ? <p className="text-sm text-destructive">{runtimeActionErrorMessage}</p> : null}
         {!runtimeActionErrorMessage && runtimeActionMessage ? <p className="text-sm text-muted-foreground">{runtimeActionMessage}</p> : null}
 
-        <Tabs value={activeTab ?? "issues"} onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}>
-          <PageTabBar
-            items={[
-              { value: "issues", label: "Issues" },
-              { value: "services", label: "Services" },
-              { value: "configuration", label: "Configuration" },
-              { value: "runtime_logs", label: "Runtime logs" },
-              { value: "routines", label: "Routines" },
-            ]}
-            align="start"
-            value={activeTab ?? "issues"}
-            onValueChange={(value) => handleTabChange(value as ExecutionWorkspaceTab)}
-          />
-        </Tabs>
+        <ExecutionWorkspaceTabs activeTab={activeTab ?? "issues"} onValueChange={handleTabChange} />
 
         {activeTab === "services" ? (
           <WorkspaceRuntimeControls
@@ -926,42 +991,12 @@ export function ExecutionWorkspaceDetail() {
                     </div>
                   </div>
 
-                  <details className="rounded-md border border-dashed border-border/70 bg-background px-4 py-3">
-                    <summary className="cursor-pointer text-sm font-medium">Advanced runtime JSON</summary>
-                    <p className="mt-2 text-sm text-muted-foreground">
-                      Override the inherited workspace command model only when this execution workspace truly needs different service or job behavior.
-                    </p>
-                    <div className="mt-3">
-                      <Field label="Workspace commands JSON" hint="Legacy `services` arrays still work, but `commands` supports both services and jobs.">
-                        <div className="mb-2 flex items-center gap-2 text-sm text-muted-foreground">
-                          <input
-                            id="inherit-runtime-config"
-                            type="checkbox"
-                            className="rounded border-border"
-                            checked={form.inheritRuntime}
-                            onChange={(event) => {
-                              const checked = event.target.checked;
-                              setForm((current) => {
-                                if (!current) return current;
-                                if (!checked && !current.workspaceRuntime.trim() && inheritedRuntimeConfig) {
-                                  return { ...current, inheritRuntime: checked, workspaceRuntime: formatJson(inheritedRuntimeConfig) };
-                                }
-                                return { ...current, inheritRuntime: checked };
-                              });
-                            }}
-                          />
-                          <label htmlFor="inherit-runtime-config">Inherit project workspace runtime config</label>
-                        </div>
-                        <Textarea
-                          className="min-h-64 font-mono sm:min-h-96"
-                          value={form.workspaceRuntime}
-                          onChange={(event) => setForm((current) => current ? { ...current, workspaceRuntime: event.target.value } : current)}
-                          disabled={form.inheritRuntime}
-                          placeholder={'{\n  "commands": [\n    {\n      "id": "web",\n      "name": "web",\n      "kind": "service",\n      "command": "pnpm dev",\n      "cwd": ".",\n      "port": { "type": "auto" }\n    },\n    {\n      "id": "db-migrate",\n      "name": "db:migrate",\n      "kind": "job",\n      "command": "pnpm db:migrate",\n      "cwd": "."\n    }\n  ]\n}'}
-                        />
-                      </Field>
-                    </div>
-                  </details>
+                  <ExecutionWorkspaceRuntimeConfigControl
+                    inheritRuntime={form.inheritRuntime}
+                    workspaceRuntime={form.workspaceRuntime}
+                    inheritedRuntimeConfig={inheritedRuntimeConfig}
+                    onChange={(next) => setForm((current) => current ? { ...current, ...next } : current)}
+                  />
                 </div>
               </div>
 
