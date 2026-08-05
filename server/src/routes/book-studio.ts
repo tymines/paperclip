@@ -135,6 +135,107 @@ async function requireCompanyBook(db: Db, companyId: string, bookId: string) {
   return book;
 }
 
+async function acquireBookChatLock(tx: Db, bookId: string) {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${bookId}`}))`);
+}
+
+export async function persistBrainstormFailure(db: Db, args: {
+  bookId: string;
+  turnId: string;
+  userMessageId: string;
+  conversationId: string;
+  dispatchAttemptId: string;
+  error: string;
+  retryable: boolean;
+  delegationId: string | null;
+}): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const scopedTx = tx as unknown as Db;
+    await acquireBookChatLock(scopedTx, args.bookId);
+    const failed = await scopedTx.update(storyBibleChatMessages).set({
+      status: "failed",
+      via: "none",
+      error: args.error.slice(0, 2000),
+      retryable: args.retryable,
+      delegationId: args.delegationId,
+    }).where(and(
+      eq(storyBibleChatMessages.id, args.userMessageId),
+      eq(storyBibleChatMessages.bookId, args.bookId),
+      eq(storyBibleChatMessages.turnId, args.turnId),
+      eq(storyBibleChatMessages.role, "user"),
+      eq(storyBibleChatMessages.conversationId, args.conversationId),
+      eq(storyBibleChatMessages.dispatchAttemptId, args.dispatchAttemptId),
+      eq(storyBibleChatMessages.status, "pending"),
+      isNull(storyBibleChatMessages.archivedAt),
+    )).returning({ id: storyBibleChatMessages.id });
+    return failed.length === 1;
+  });
+}
+
+export async function claimBrainstormRetry(db: Db, args: {
+  bookId: string;
+  turnId: string;
+  retryDispatchAttemptId: string;
+  defaultConversationId: string;
+}) {
+  return db.transaction(async (tx) => {
+    const scopedTx = tx as unknown as Db;
+    await acquireBookChatLock(scopedTx, args.bookId);
+    const activeRows = await scopedTx.select().from(storyBibleChatMessages)
+      .where(and(
+        eq(storyBibleChatMessages.bookId, args.bookId),
+        isNull(storyBibleChatMessages.archivedAt),
+      ))
+      .orderBy(desc(storyBibleChatMessages.createdAt))
+      .limit(200);
+    const userMsg = activeRows.find((row) => row.turnId === args.turnId && row.role === "user");
+    if (!userMsg) throw notFound("Failed turn not found");
+    const existingAssistant = activeRows.find((row) => row.turnId === args.turnId && row.role === "assistant");
+    if (existingAssistant) return { kind: "completed" as const, activeRows };
+    const activePending = activeRows.find((row) => row.status === "pending");
+    if (activePending) {
+      if (activePending.id === userMsg.id) {
+        throw conflict("This Calliope turn is still working; it will reconcile without another dispatch.");
+      }
+      throw conflict("Wait for the active Calliope turn to finish before retrying another message.");
+    }
+    if (userMsg.status !== "failed") throw conflict("Only a failed Calliope turn can be retried.");
+    if (!userMsg.retryable) throw conflict("This turn has an indeterminate delegation and cannot be safely retried; no duplicate work was launched.");
+    const latestHuman = activeRows.find((row) => row.role === "user");
+    if (latestHuman?.id !== userMsg.id) throw conflict("This is no longer the latest human instruction; retry would be ambiguous. Send a new explicit instruction instead.");
+
+    const conversationPredicate = userMsg.conversationId === null
+      ? isNull(storyBibleChatMessages.conversationId)
+      : eq(storyBibleChatMessages.conversationId, userMsg.conversationId);
+    const priorDispatchPredicate = userMsg.dispatchAttemptId === null
+      ? isNull(storyBibleChatMessages.dispatchAttemptId)
+      : eq(storyBibleChatMessages.dispatchAttemptId, userMsg.dispatchAttemptId);
+    const [claimed] = await scopedTx.update(storyBibleChatMessages)
+      .set({
+        status: "pending",
+        error: null,
+        retryCount: sql`${storyBibleChatMessages.retryCount} + 1`,
+        dispatchAttemptId: args.retryDispatchAttemptId,
+        delegationId: args.retryDispatchAttemptId,
+        conversationId: userMsg.conversationId ?? args.defaultConversationId,
+      })
+      .where(and(
+        eq(storyBibleChatMessages.id, userMsg.id),
+        eq(storyBibleChatMessages.bookId, args.bookId),
+        eq(storyBibleChatMessages.turnId, args.turnId),
+        eq(storyBibleChatMessages.role, "user"),
+        eq(storyBibleChatMessages.status, "failed"),
+        eq(storyBibleChatMessages.retryable, true),
+        conversationPredicate,
+        priorDispatchPredicate,
+        isNull(storyBibleChatMessages.archivedAt),
+      ))
+      .returning();
+    if (!claimed) throw conflict("This turn was already claimed for retry; no duplicate work was launched.");
+    return { kind: "claimed" as const, activeRows, userMsg, claimed };
+  });
+}
+
 export async function persistBrainstormCompletion(db: Db, args: {
   companyId: string;
   bookId: string;
@@ -144,6 +245,7 @@ export async function persistBrainstormCompletion(db: Db, args: {
   authorization: BookChatAuthorization | null;
   reply: string;
   conversationId: string;
+  dispatchAttemptId: string;
   delegationId?: string;
 }): Promise<{ reply: string; actionResult?: BookChatActionResult; assistantMessageId: string }> {
   const persistRows = async (tx: Db, reply: string, actionResult?: BookChatActionResult) => {
@@ -167,7 +269,12 @@ export async function persistBrainstormCompletion(db: Db, args: {
     }).where(and(
       eq(storyBibleChatMessages.id, args.userMessageId),
       eq(storyBibleChatMessages.bookId, args.bookId),
+      eq(storyBibleChatMessages.turnId, args.turnId),
+      eq(storyBibleChatMessages.role, "user"),
+      eq(storyBibleChatMessages.conversationId, args.conversationId),
+      eq(storyBibleChatMessages.dispatchAttemptId, args.dispatchAttemptId),
       eq(storyBibleChatMessages.status, "pending"),
+      isNull(storyBibleChatMessages.archivedAt),
     )).returning({ id: storyBibleChatMessages.id });
     if (completed.length !== 1) throw new Error("Chat turn is no longer pending; no duplicate completion was stored.");
     return { reply, actionResult, assistantMessageId: assistantMsg.id };
@@ -175,15 +282,16 @@ export async function persistBrainstormCompletion(db: Db, args: {
 
   if (!args.authorization) {
     return db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${args.bookId}`}))`);
-      return persistRows(tx as unknown as Db, args.reply);
+      const scopedTx = tx as unknown as Db;
+      await acquireBookChatLock(scopedTx, args.bookId);
+      return persistRows(scopedTx, args.reply);
     });
   }
   const authorization = args.authorization;
   try {
     return await db.transaction(async (tx) => {
       const scopedTx = tx as unknown as Db;
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${args.bookId}`}))`);
+      await acquireBookChatLock(scopedTx, args.bookId);
       const actionResult = await applyBookChatAuthorizationInTransaction(scopedTx, {
           companyId: args.companyId, bookId: args.bookId, turnId: args.turnId,
           userMessageId: args.userMessageId, actor: args.actor, authorization,
@@ -199,7 +307,11 @@ export async function persistBrainstormCompletion(db: Db, args: {
       error: err instanceof Error ? err.message : String(err),
     };
     const reply = `${args.reply}\n\nNothing changed. ${actionResult.error}`;
-    return db.transaction(async (tx) => persistRows(tx as unknown as Db, reply, actionResult));
+    return db.transaction(async (tx) => {
+      const scopedTx = tx as unknown as Db;
+      await acquireBookChatLock(scopedTx, args.bookId);
+      return persistRows(scopedTx, reply, actionResult);
+    });
   }
 }
 
@@ -1407,10 +1519,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       delegationId = lane.delegationId;
     } catch (laneErr) {
       if (!(laneErr instanceof AgentLaneUnavailableError)) throw laneErr;
-      await db
-        .update(storyBibleChatMessages)
-        .set({ status: "failed", via: "none", error: laneErr.message.slice(0, 2000), retryable: laneErr.fallbackSafe, delegationId: laneErr.delegationId ?? null })
-        .where(eq(storyBibleChatMessages.id, userMsg.id));
+      const failed = await persistBrainstormFailure(db, {
+        bookId,
+        turnId,
+        userMessageId: userMsg.id,
+        conversationId,
+        dispatchAttemptId,
+        error: laneErr.message,
+        retryable: laneErr.fallbackSafe,
+        delegationId: laneErr.delegationId ?? null,
+      });
+      if (!failed) throw conflict("This Calliope turn changed before its lane failure could be stored; no stale terminal state was written.");
       res.status(laneErr.fallbackSafe ? 503 : 502).json({
         error: "Calliope is unavailable. Your message was saved, but no reply was generated.",
         turnId,
@@ -1433,6 +1552,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       authorization,
       reply,
       conversationId,
+      dispatchAttemptId,
       delegationId,
     });
     reply = completion.reply;
@@ -1524,39 +1644,20 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     assertCompanyAccess(req, companyId);
     const book = await requireCompanyBook(db, companyId, bookId);
 
-    const activeRows = await db.select().from(storyBibleChatMessages)
-      .where(and(eq(storyBibleChatMessages.bookId, bookId), isNull(storyBibleChatMessages.archivedAt)))
-      .orderBy(desc(storyBibleChatMessages.createdAt))
-      .limit(200);
-    const userMsg = activeRows.find((row) => row.turnId === turnId && row.role === "user");
-    if (!userMsg) throw notFound("Failed turn not found");
-    const existingAssistant = activeRows.find((row) => row.turnId === turnId && row.role === "assistant");
-    if (existingAssistant) {
-      res.json(normalizeBrainstormTurns(activeRows.filter((row) => row.turnId === turnId).reverse())[0]);
+    const retryDispatchAttemptId = randomUUID();
+    // The shared lock is acquired before reading eligibility, then every
+    // pending/latest-instruction predicate is rechecked before the claim.
+    const retryClaim = await claimBrainstormRetry(db, {
+      bookId,
+      turnId,
+      retryDispatchAttemptId,
+      defaultConversationId: `book-studio:${companyId}:${bookId}`,
+    });
+    if (retryClaim.kind === "completed") {
+      res.json(normalizeBrainstormTurns(retryClaim.activeRows.filter((row) => row.turnId === turnId).reverse())[0]);
       return;
     }
-    if (userMsg.status === "pending") throw conflict("This Calliope turn is still working; it will reconcile without another dispatch.");
-    if (userMsg.status !== "failed") throw conflict("Only a failed Calliope turn can be retried.");
-    if (!userMsg.retryable) throw conflict("This turn has an indeterminate delegation and cannot be safely retried; no duplicate work was launched.");
-    const laterHuman = activeRows.find((row) => row.role === "user" && row.createdAt > userMsg.createdAt);
-    if (laterHuman) throw conflict("This is no longer the latest human instruction; retry would be ambiguous. Send a new explicit instruction instead.");
-
-    const retryDispatchAttemptId = randomUUID();
-    // Claim under the shared book lock: reset, retry, send, and late completion cannot interleave.
-    const claimed = await db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`book-chat:${bookId}`}))`);
-      const [row] = await tx.update(storyBibleChatMessages)
-      .set({ status: "pending", error: null, retryCount: sql`${storyBibleChatMessages.retryCount} + 1`, dispatchAttemptId: retryDispatchAttemptId, delegationId: retryDispatchAttemptId })
-      .where(and(
-        eq(storyBibleChatMessages.id, userMsg.id),
-        eq(storyBibleChatMessages.bookId, bookId),
-        eq(storyBibleChatMessages.status, "failed"),
-        isNull(storyBibleChatMessages.archivedAt),
-      ))
-      .returning();
-      return row;
-    });
-    if (!claimed) throw conflict("This turn was already claimed for retry; no duplicate work was launched.");
+    const { activeRows, userMsg, claimed } = retryClaim;
 
     const characters = await db.select().from(storyBibleCharacters).where(eq(storyBibleCharacters.bookId, bookId));
     const locations = await db.select().from(storyBibleWorldLocations).where(eq(storyBibleWorldLocations.bookId, bookId));
@@ -1573,7 +1674,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       .filter((row) => row.turnId !== turnId && (row.role === "user" || row.role === "assistant"))
       .map((row) => ({ role: row.role, content: row.content }));
     chronological.push({ role: "user", content: userMsg.content });
-    const conversationId = userMsg.conversationId ?? `book-studio:${companyId}:${bookId}`;
+    const conversationId = claimed.conversationId ?? `book-studio:${companyId}:${bookId}`;
     const authorization = (userMsg.authorization ?? null) as BookChatAuthorization | null;
     const actor = getActorInfo(req);
 
@@ -1590,7 +1691,17 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       const reason = laneErr instanceof Error ? laneErr.message : String(laneErr);
       const retryable = laneErr instanceof AgentLaneUnavailableError ? laneErr.fallbackSafe : false;
       const failedDelegationId = laneErr instanceof AgentLaneUnavailableError ? laneErr.delegationId ?? null : null;
-      await db.update(storyBibleChatMessages).set({ status: "failed", via: "none", error: reason.slice(0, 2000), retryable, delegationId: failedDelegationId }).where(and(eq(storyBibleChatMessages.id, claimed.id), eq(storyBibleChatMessages.status, "pending")));
+      const failed = await persistBrainstormFailure(db, {
+        bookId,
+        turnId,
+        userMessageId: claimed.id,
+        conversationId,
+        dispatchAttemptId: retryDispatchAttemptId,
+        error: reason,
+        retryable,
+        delegationId: failedDelegationId,
+      });
+      if (!failed) throw conflict("This Calliope retry changed before its lane failure could be stored; no stale terminal state was written.");
       if (laneErr instanceof AgentLaneUnavailableError) {
         res.status(laneErr.fallbackSafe ? 503 : 502).json({ error: "Calliope is unavailable. The same turn remains saved and failed.", turnId, status: "failed", via: "none", retryable: laneErr.fallbackSafe });
         return;
@@ -1607,6 +1718,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
       authorization,
       reply,
       conversationId,
+      dispatchAttemptId: retryDispatchAttemptId,
       delegationId,
     });
     reply = completion.reply;

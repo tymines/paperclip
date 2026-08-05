@@ -14,7 +14,7 @@ import { AgentLaneUnavailableError, callAgentLane } from "../services/book-agent
 import { bookStudioRoutes, persistBrainstormCompletion } from "../routes/book-studio.js";
 
 const book = { id: "book-1", companyId: "company-1", slug: "book", title: "Book", metadata: {}, createdAt: new Date(), updatedAt: new Date() };
-const userRow = (overrides: Record<string, unknown> = {}) => ({ id: "u-1", bookId: "book-1", turnId: "turn-1", role: "user", content: "hello", status: "failed", via: "none", delegationId: null, conversationId: "book-studio:company-1:book-1", retryCount: 0, retryable: true, authorization: null, actionResult: null, error: "offline", archivedAt: null, createdAt: new Date("2026-08-04T12:00:00Z"), ...overrides });
+const userRow = (overrides: Record<string, unknown> = {}) => ({ id: "u-1", bookId: "book-1", turnId: "turn-1", role: "user", content: "hello", status: "failed", via: "none", dispatchAttemptId: "00000000-0000-4000-8000-000000000001", delegationId: null, conversationId: "book-studio:company-1:book-1", retryCount: 0, retryable: true, authorization: null, actionResult: null, error: "offline", archivedAt: null, createdAt: new Date("2026-08-04T12:00:00Z"), ...overrides });
 
 function createApp(initialMessages: any[]) {
   const state = { messages: [...initialMessages] };
@@ -32,7 +32,14 @@ function createApp(initialMessages: any[]) {
       if (table === storyBibleChatMessages) {
         if (changes.status === "pending" && changes.retryCount) {
           const row = state.messages.find((item) => item.status === "failed" && item.role === "user" && !item.archivedAt);
-          if (row) { row.status = "pending"; row.error = null; row.retryCount += 1; affected = [row]; }
+          if (row) {
+            row.status = "pending";
+            row.error = null;
+            row.retryCount += 1;
+            row.dispatchAttemptId = changes.dispatchAttemptId;
+            row.delegationId = changes.delegationId;
+            affected = [row];
+          }
         } else if (changes.status === "completed" && changes.via === "calliope") {
           const row = state.messages.find((item) => item.status === "pending" && item.role === "user" && !item.archivedAt);
           if (row) { Object.assign(row, changes); affected = [row]; }
@@ -96,10 +103,11 @@ describe("Book Studio chat v4 durability", () => {
 
   it("makes a retry permanently non-retryable when its dispatch outcome is indeterminate", async () => {
     vi.mocked(callAgentLane).mockRejectedValue(new AgentLaneUnavailableError("calliope", "durable state unproven", { fallbackSafe: false, delegationId: "del-unknown" }));
-    const { app, state } = createApp([userRow()]);
+    const { app, db, state } = createApp([userRow()]);
     const first = await request(app).post("/api/companies/company-1/book-studio/books/book-1/chat/turn-1/retry").expect(502);
     expect(first.body.retryable).toBe(false);
     expect(state.messages[0]).toMatchObject({ status: "failed", retryable: false, delegationId: "del-unknown" });
+    expect(db.execute).toHaveBeenCalledTimes(2);
     await request(app).post("/api/companies/company-1/book-studio/books/book-1/chat/turn-1/retry").expect(409);
     expect(callAgentLane).toHaveBeenCalledTimes(1);
   });
@@ -108,6 +116,7 @@ describe("Book Studio chat v4 durability", () => {
     const state = { actionApplied: false, messages: [] as any[], userCompleted: false };
     let failAssistantInsert = true;
     const tx: any = {
+      execute: vi.fn().mockResolvedValue([]),
       insert: vi.fn((table: unknown) => ({
         values: (values: any) => ({
           returning: async () => {
@@ -163,6 +172,7 @@ describe("Book Studio chat v4 durability", () => {
       authorization: { operation: "set", destination: "overview", content: "A durable premise" } as any,
       reply: "I will save that.",
       conversationId: "book-studio:company-1:book-1",
+      dispatchAttemptId: "00000000-0000-4000-8000-000000000002",
     });
 
     expect(state.actionApplied).toBe(false);
@@ -172,5 +182,6 @@ describe("Book Studio chat v4 durability", () => {
     expect(state.messages[0].content).toContain("Nothing changed. assistant persistence failed");
     expect(result.actionResult).toMatchObject({ status: "failed", error: "assistant persistence failed" });
     expect(db.transaction).toHaveBeenCalledTimes(2);
+    expect(tx.execute).toHaveBeenCalledTimes(2);
   });
 });

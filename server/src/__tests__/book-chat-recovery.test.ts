@@ -4,9 +4,18 @@ import { reconcileBookChatTurns } from "../services/book-chat-recovery.js";
 
 function recoveryDb(rows: any[], delegation: any, companyId = "company-1") {
   const calls: unknown[] = [];
+  const query = (table: unknown) => {
+    const get = () => table === books ? [{ id: "book-1" }] : table === jarvisDelegations ? (delegation ? [delegation] : []) : rows;
+    const thenable: any = {
+      where: () => thenable,
+      limit: async (limit: number) => get().slice(0, limit),
+      then: (resolve: any, reject: any) => Promise.resolve(get()).then(resolve, reject),
+    };
+    return thenable;
+  };
   const db: any = {
     execute: vi.fn().mockResolvedValue([]),
-    select: vi.fn(() => ({ from: (table: unknown) => ({ where: () => ({ limit: async () => table === books ? [{ id: "book-1" }] : table === jarvisDelegations ? (delegation ? [delegation] : []) : rows }) }) })),
+    select: vi.fn(() => ({ from: (table: unknown) => query(table) })),
     update: vi.fn(() => ({
       set: (changes: any) => ({
         where: () => ({
