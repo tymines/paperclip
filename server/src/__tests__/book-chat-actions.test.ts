@@ -27,6 +27,12 @@ describe("Book Studio direct-add authorization", () => {
     expect(deriveBookChatAuthorization("update outline beat 2 in chapter 3: Mira burns the false map.")).toMatchObject({ operation: "outline.update-beat", destination: "outline", chapterNumber: 3, beatNumber: 2 });
   });
 
+  it("rejects newline and comma-then compound instructions without rejecting a valid single instruction", () => {
+    expect(deriveBookChatAuthorization("set overview to First\nthen add a character")).toBeNull();
+    expect(deriveBookChatAuthorization("set overview to First, then add a character")).toBeNull();
+    expect(deriveBookChatAuthorization("set overview to One clear premise")).toMatchObject({ operation: "overview.set" });
+  });
+
   it("snapshots an exact current target identity for later lock/stale validation", () => {
     const authorization = deriveBookChatAuthorization("update character Mira: New description")!;
     const resolved = resolveBookChatAuthorization(authorization, { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [{ id: "char-1", name: "Mira", locked: false, updatedAt: "2026-08-04T12:00:00.000Z" }], locations: [], styles: [], outlines: [] });

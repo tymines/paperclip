@@ -81,7 +81,7 @@ describe("Book Studio chat v4 durability", () => {
     const second = await request(app).post("/api/companies/company-1/book-studio/books/book-1/chat/turn-1/retry").expect(409);
     expect(second.body.error).toContain("still working");
     expect(callAgentLane).toHaveBeenCalledTimes(1);
-    expect(callAgentLane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: "book-studio:company-1:book-1", metadata: expect.objectContaining({ turnId: "turn-1", retryCount: 1 }) }));
+    expect(callAgentLane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ conversationId: "book-studio:company-1:book-1", delegationId: expect.any(String), metadata: expect.objectContaining({ turnId: "turn-1", retryCount: 1 }) }));
     resolveLane({ text: "answer", delegationId: "del-1", lane: "calliope" });
     expect((await first).status).toBe(200);
     expect(state.messages.filter((row) => row.role === "assistant" && row.turnId === "turn-1")).toHaveLength(1);

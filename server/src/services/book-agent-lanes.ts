@@ -86,6 +86,8 @@ export interface AgentLaneCall {
   /** Stable additive identity forwarded to peer payload consumers. */
   conversationId?: string;
   requestedByActorId?: string | null;
+  /** Reserved and committed by the Book Studio turn before external dispatch. */
+  delegationId?: string;
   /** Defaults: BOOK_CALLIOPE_TIMEOUT_MS (45s) / BOOK_HADES_TIMEOUT_MS (120s). */
   timeoutMs?: number;
   /** Result-row poll interval. Default BOOK_AGENT_LANE_POLL_MS (2s). */
@@ -155,6 +157,7 @@ export async function callAgentLane(
     }
 
     const dispatch = await dispatchDelegation(db, {
+      delegationId: args.delegationId,
       companyId,
       agent: peer,
       task: args.task,

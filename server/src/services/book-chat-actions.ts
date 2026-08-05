@@ -1,6 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { books, storyBibleCharacters, storyBibleOutline, storyBibleStyle, storyBibleWorldLocations } from "@paperclipai/db";
+import { books, storyBibleCharacters, storyBibleChatMessages, storyBibleOutline, storyBibleStyle, storyBibleWorldLocations } from "@paperclipai/db";
 import { logActivity } from "./index.js";
 
 type TargetSnapshot = { id: string; name?: string; chapterNumber?: number; pov?: string; tense?: string; locked: boolean; updatedAt?: string | null };
@@ -25,6 +25,7 @@ export interface BookChatActionResult {
 
 const clean = (value: string, max: number) => value.trim().replace(/\s+/g, " ").slice(0, max);
 const containsExtraAction = (value: string) => /(?:^|[.;]\s*|\band\s+)(?:add|append|create|delete|rename|set|update)\s+(?:a\s+|an\s+|the\s+)?(?:book|character|location|outline|overview|premise|style)\b/i.test(value);
+const hasCompoundAction = (value: string) => /\r?\n|,\s*(?:and\s+)?then\s+/i.test(value);
 
 /**
  * Strict, fail-closed authorization grammar. The exact latest human message
@@ -33,7 +34,7 @@ const containsExtraAction = (value: string) => /(?:^|[.;]\s*|\band\s+)(?:add|app
  */
 export function deriveBookChatAuthorization(message: string): BookChatAuthorization | null {
   const exact = message.trim();
-  if (!exact || exact.length > 20_000) return null;
+  if (!exact || exact.length > 20_000 || hasCompoundAction(exact)) return null;
 
   const overview = /^(set|append)\s+(?:the\s+)?(?:overview|description|premise)\s*(?::|\bto\b)\s*([\s\S]+)$/i.exec(exact);
   if (overview) {
@@ -122,12 +123,23 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
   companyId: string;
   bookId: string;
   turnId: string;
+  userMessageId?: string;
   actor: { actorType: "agent" | "user" | "system"; actorId: string; agentId?: string | null; runId?: string | null };
   authorization: BookChatAuthorization;
 }): Promise<BookChatActionResult> {
   const { companyId, bookId, turnId, actor, authorization } = args;
   if (actor.actorType !== "user") {
     throw new Error("Only a current human Book Studio request can authorize a change; nothing changed.");
+  }
+  if (args.userMessageId) {
+    const [latestHuman] = await tx.select({ id: storyBibleChatMessages.id })
+      .from(storyBibleChatMessages)
+      .where(and(eq(storyBibleChatMessages.bookId, bookId), isNull(storyBibleChatMessages.archivedAt), eq(storyBibleChatMessages.role, "user")))
+      .orderBy(sql`${storyBibleChatMessages.createdAt} desc, ${storyBibleChatMessages.id} desc`)
+      .limit(1);
+    if (!latestHuman || latestHuman.id !== args.userMessageId) {
+      throw new Error("A newer human Book Studio instruction superseded this turn; nothing changed.");
+    }
   }
   const [book] = await tx.select().from(books).where(and(eq(books.id, bookId), eq(books.companyId, companyId))).limit(1);
       if (!book) throw new Error("Book not found; nothing changed.");
