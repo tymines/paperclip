@@ -20,6 +20,7 @@ import { approvalsApi } from "../api/approvals";
 import { costsApi } from "../api/costs";
 import { activityApi } from "../api/activity";
 import { jarvisApi } from "../api/jarvis";
+import { acpApi, type AcpAgentCapabilities, type AcpFleetResult } from "../api/acp";
 import { useCompany } from "../context/CompanyContext";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useDialogActions } from "../context/DialogContext";
@@ -87,6 +88,50 @@ function isAgentOperational(agent: Agent): boolean {
   return !["paused", "error", "terminated", "pending_approval"].includes(
     agent.status as string,
   );
+}
+
+interface HomeFleetEntry {
+  definition: AcpAgentCapabilities | null;
+  agent: Agent | null;
+}
+
+function fleetNameKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function resolveHomeFleet(
+  agents: Agent[],
+  fleetResult: AcpFleetResult | undefined,
+): { entries: HomeFleetEntry[]; canonical: boolean } {
+  if (fleetResult?.ok === true && fleetResult.rosterSource === "canonical") {
+    const byId = new Map(agents.map((agent) => [agent.id, agent]));
+    const byName = new Map(agents.map((agent) => [fleetNameKey(agent.name), agent]));
+    return {
+      canonical: true,
+      entries: fleetResult.agents.map((definition) => ({
+        definition,
+        agent: definition.registered
+          ? byId.get(definition.id) ?? byName.get(fleetNameKey(definition.name)) ?? null
+          : null,
+      })),
+    };
+  }
+
+  return {
+    canonical: false,
+    entries: [...agents]
+      .sort((x, y) => {
+        const xo = isAgentOperational(x) ? 0 : 1;
+        const yo = isAgentOperational(y) ? 0 : 1;
+        if (xo !== yo) return xo - yo;
+        return (y.spentMonthlyCents ?? 0) - (x.spentMonthlyCents ?? 0);
+      })
+      .map((agent) => ({ definition: null, agent })),
+  };
+}
+
+export function countOperationalHomeFleet(entries: HomeFleetEntry[]): number {
+  return entries.filter((entry) => entry.agent && isAgentOperational(entry.agent)).length;
 }
 
 function agentStatusColor(agent: Agent): string {
@@ -177,29 +222,25 @@ function SectionLabel({ children }: { children: ReactNode }) {
 /* -------------------------------------------------------------------------- */
 /* Fleet strip                                                                */
 /* -------------------------------------------------------------------------- */
-function FleetStrip({ companyId, companyPrefix }: { companyId: string; companyPrefix?: string }) {
-  const { data: agents } = useQuery({
-    queryKey: queryKeys.agents.list(companyId),
-    queryFn: () => agentsApi.list(companyId),
-    enabled: !!companyId,
-  });
-
-  const list = useMemo(() => {
-    const a = agents ?? [];
-    return [...a].sort((x, y) => {
-      const xo = isAgentOperational(x) ? 0 : 1;
-      const yo = isAgentOperational(y) ? 0 : 1;
-      if (xo !== yo) return xo - yo;
-      return (y.spentMonthlyCents ?? 0) - (x.spentMonthlyCents ?? 0);
-    });
-  }, [agents]);
+function FleetStrip({
+  agents,
+  fleetResult,
+  loading,
+  companyPrefix,
+}: {
+  agents: Agent[];
+  fleetResult: AcpFleetResult | undefined;
+  loading: boolean;
+  companyPrefix?: string;
+}) {
+  const fleet = useMemo(() => resolveHomeFleet(agents, fleetResult), [agents, fleetResult]);
 
   const totalSpend = useMemo(
-    () => (agents ?? []).reduce((sum, a) => sum + (a.spentMonthlyCents ?? 0), 0),
-    [agents],
+    () => fleet.entries.reduce((sum, entry) => sum + (entry.agent?.spentMonthlyCents ?? 0), 0),
+    [fleet.entries],
   );
 
-  if (!agents) return null;
+  if (loading) return null;
 
   return (
     <section style={surfaceCard} className="p-5">
@@ -207,7 +248,7 @@ function FleetStrip({ companyId, companyPrefix }: { companyId: string; companyPr
         <div className="flex items-center gap-2.5">
           <SectionLabel>Your fleet</SectionLabel>
           <span className="text-[12px] font-medium" style={{ color: DS.textFaint }}>
-            · {agents.length} agents · {formatUsd(totalSpend)} this month
+            · {fleet.entries.length} {fleet.canonical ? "fleet positions" : "registered agents"} · {formatUsd(totalSpend)} this month
           </span>
         </div>
         <Link
@@ -220,20 +261,16 @@ function FleetStrip({ companyId, companyPrefix }: { companyId: string; companyPr
       </div>
 
       <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-auto-hide">
-        {list.map((agent, i) => {
+        {fleet.entries.map(({ definition, agent }, i) => {
           const ring = RING_HUES[i % RING_HUES.length];
-          const icon = agent.icon ?? null;
+          const name = definition?.name ?? agent?.name ?? "Unknown";
+          const icon = agent?.icon ?? null;
           const isImg = !!icon && (icon.startsWith("http") || icon.startsWith("/"));
-          const initial = (agent.name ?? "?").trim().charAt(0).toUpperCase();
-          const role = agent.title ?? agent.role ?? "";
-          const spent = agent.spentMonthlyCents ?? 0;
-          return (
-            <Link
-              key={agent.id}
-              to={companyPrefix ? `/${companyPrefix}/agents/${agent.id}` : `/agents/${agent.id}`}
-              className="group flex w-[150px] shrink-0 flex-col gap-2.5 rounded-[14px] px-3.5 py-3 transition-colors"
-              style={{ background: DS.surface3, border: `1px solid ${DS.border}` }}
-            >
+          const initial = name.trim().charAt(0).toUpperCase();
+          const role = agent?.title ?? definition?.fleetRole ?? agent?.role ?? "";
+          const spent = agent?.spentMonthlyCents ?? 0;
+          const content = (
+            <>
               <div className="flex items-center gap-2.5">
                 <span
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold"
@@ -251,7 +288,7 @@ function FleetStrip({ companyId, companyPrefix }: { companyId: string; companyPr
                 </span>
                 <div className="min-w-0">
                   <div className="truncate text-[14px] font-semibold" style={{ color: DS.text }}>
-                    {agent.name}
+                    {name}
                   </div>
                   {role ? (
                     <div className="truncate text-[11px]" style={{ color: DS.textFaint }}>
@@ -267,12 +304,28 @@ function FleetStrip({ companyId, companyPrefix }: { companyId: string; companyPr
                 <span className="flex items-center gap-1.5 text-[11px]" style={{ color: DS.textMuted }}>
                   <span
                     className="h-1.5 w-1.5 rounded-full"
-                    style={{ background: agentStatusColor(agent) }}
+                    style={{ background: agent ? agentStatusColor(agent) : DS.textFaint }}
                   />
-                  {agentStatusLabel(agent)}
+                  {agent ? agentStatusLabel(agent) : "Not registered"}
                 </span>
               </div>
+            </>
+          );
+          const cardClass = "group flex w-[150px] shrink-0 flex-col gap-2.5 rounded-[14px] px-3.5 py-3 transition-colors";
+          const cardStyle = { background: DS.surface3, border: `1px solid ${DS.border}` };
+          return agent ? (
+            <Link
+              key={definition?.id ?? agent.id}
+              to={companyPrefix ? `/${companyPrefix}/agents/${agent.id}` : `/agents/${agent.id}`}
+              className={cardClass}
+              style={cardStyle}
+            >
+              {content}
             </Link>
+          ) : (
+            <div key={definition?.id ?? name} className={cardClass} style={cardStyle}>
+              {content}
+            </div>
           );
         })}
         <Link
@@ -694,6 +747,11 @@ export function Home() {
     queryFn: () => agentsApi.list(selectedCompanyId!),
     enabled: !!selectedCompanyId,
   });
+  const { data: fleetResult, isPending: fleetPending } = useQuery({
+    queryKey: ["acp", "fleet", "home", selectedCompanyId ?? "no-company"],
+    queryFn: () => acpApi.fleet({ companyId: selectedCompanyId! }),
+    enabled: !!selectedCompanyId,
+  });
   const { data: issues } = useQuery({
     queryKey: queryKeys.issues.list(selectedCompanyId!),
     queryFn: () => issuesApi.list(selectedCompanyId!),
@@ -715,9 +773,13 @@ export function Home() {
     enabled: !!selectedCompanyId,
   });
 
+  const homeFleet = useMemo(
+    () => resolveHomeFleet(agents ?? [], fleetResult),
+    [agents, fleetResult],
+  );
   const agentsActive = useMemo(
-    () => (agents ?? []).filter(isAgentOperational).length,
-    [agents],
+    () => countOperationalHomeFleet(homeFleet.entries),
+    [homeFleet.entries],
   );
   const tasksInFlight = useMemo(
     () => (issues ?? []).filter((i) => IN_FLIGHT_STATUSES.has(i.status)).length,
@@ -776,14 +838,19 @@ export function Home() {
       </div>
 
       {/* 1 — Fleet strip */}
-      <FleetStrip companyId={selectedCompanyId} companyPrefix={companyPrefix} />
+      <FleetStrip
+        agents={agents ?? []}
+        fleetResult={fleetResult}
+        loading={fleetPending}
+        companyPrefix={companyPrefix}
+      />
 
       {/* 2 — Metrics row: exactly four KPI tiles */}
       <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
         <KpiTile
           label="Agents Active"
-          value={`${agentsActive}/${agents?.length ?? 0}`}
-          sub="Operational (not paused/errored)"
+          value={fleetPending ? "—" : `${agentsActive}/${homeFleet.entries.length}`}
+          sub={fleetPending ? "Loading canonical fleet" : homeFleet.canonical ? "Operational canonical fleet" : "Operational registered agents"}
           icon={Bot}
           accent={DS.primary}
           to={companyPrefix ? `/${companyPrefix}/agents` : "/agents"}
