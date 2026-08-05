@@ -443,7 +443,7 @@ function IssueDetailLoadingState({
   const identifier = headerSeed?.identifier ?? headerSeed?.id.slice(0, 8) ?? null;
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden">
       <div className="space-y-3">
         <Skeleton className="h-3 w-40" />
 
@@ -3244,7 +3244,7 @@ export function IssueDetail() {
   );
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden">
       {/* Parent chain breadcrumb */}
       {ancestors.length > 0 && (
         <nav className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
@@ -3466,6 +3466,7 @@ export function IssueDetail() {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className="h-11 w-11"
                 onClick={copyIssueToClipboard}
                 title={`Copy ${issueNoun.singular} as markdown`}
               >
@@ -3474,6 +3475,7 @@ export function IssueDetail() {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className="h-11 w-11"
                 onClick={() => setMobilePropsOpen(true)}
                 title="Properties"
               >
@@ -3964,7 +3966,7 @@ export function IssueDetail() {
           for <textarea> miss it because the composer is a contenteditable
           MarkdownEditor; use [data-pp-comment-input] or [data-testid="issue-chat-composer"]. */}
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1">
+        <TabsList variant="line" className="w-full justify-start gap-1 overflow-x-auto overscroll-x-contain" data-testid="issue-detail-tabs">
           <TabsTrigger value="chat" className="gap-1.5">
             <MessageSquare className="h-3.5 w-3.5" />
             Chat

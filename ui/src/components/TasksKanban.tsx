@@ -86,7 +86,13 @@ export function TasksKanban({ issues, onIssueClick, onStatusChange, approvals }:
   }, [approvals]);
 
   return (
-    <div className="flex gap-4 overflow-x-auto pb-4" style={{ minHeight: 400 }}>
+    <div
+      className="flex max-w-full gap-4 overflow-x-auto overscroll-x-contain pb-4"
+      style={{ minHeight: 400 }}
+      role="region"
+      aria-label="Kanban columns. Scroll horizontally to see all columns."
+      data-testid="tasks-kanban-scroller"
+    >
       {COLUMNS.map((col) => {
         const items = columnIssues[col.id] ?? [];
         const Icon = col.icon;

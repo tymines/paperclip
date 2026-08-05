@@ -1949,7 +1949,7 @@ export function Inbox() {
   const activeIssueFilterCount = countActiveIssueFilters(issueFilters, true);
   const showGeneralIssueToolbarControls = tab !== "blocked";
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden">
       <div className="space-y-2">
         {/* Search — full-width row on mobile, inline on desktop */}
         <div className="relative sm:hidden">
@@ -1976,12 +1976,13 @@ export function Inbox() {
                 e.currentTarget.blur();
               }
             }}
-            className="h-8 w-full pl-8 text-xs"
+            className="h-11 w-full pl-8 text-xs sm:h-8"
             data-page-search-target="true"
+            data-testid="inbox-mobile-search"
           />
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)} className="max-w-full overflow-x-auto">
           <PageTabBar
             items={[
               {
@@ -1999,7 +2000,7 @@ export function Inbox() {
           />
         </Tabs>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative hidden sm:block">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -2050,7 +2051,7 @@ export function Inbox() {
                     type="button"
                     variant="outline"
                     size="icon"
-                    className={cn("h-8 w-8 shrink-0", blockedGroupBy !== "none" && "bg-accent")}
+                    className={cn("h-11 w-11 shrink-0 sm:h-8 sm:w-8", blockedGroupBy !== "none" && "bg-accent")}
                     title="Group"
                   >
                     <Layers className="h-3.5 w-3.5" />
@@ -2089,7 +2090,7 @@ export function Inbox() {
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="h-8 w-8 shrink-0"
+                    className="h-11 w-11 shrink-0 sm:h-8 sm:w-8"
                     title="Sort"
                   >
                     <ArrowUpDown className="h-3.5 w-3.5" />
@@ -2147,7 +2148,7 @@ export function Inbox() {
                     type="button"
                     variant="outline"
                     size="icon"
-                    className={cn("h-8 w-8 shrink-0", groupBy !== "none" && "bg-accent")}
+                    className={cn("h-11 w-11 shrink-0 sm:h-8 sm:w-8", groupBy !== "none" && "bg-accent")}
                     title="Group"
                   >
                     <Layers className="h-3.5 w-3.5" />
@@ -2192,7 +2193,7 @@ export function Inbox() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-8 shrink-0"
+                    className="h-11 shrink-0 sm:h-8"
                     onClick={() => setShowMarkAllReadConfirm(true)}
                     disabled={markAllReadMutation.isPending}
                   >
@@ -2230,12 +2231,12 @@ export function Inbox() {
       </div>
 
       {tab === "all" && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Select
             value={allCategoryFilter}
             onValueChange={(value) => updateAllCategoryFilter(value as InboxCategoryFilter)}
           >
-            <SelectTrigger className="h-8 w-[170px] text-xs">
+            <SelectTrigger className="h-11 w-full text-xs sm:h-8 sm:w-[170px]" data-testid="inbox-all-category-filter">
               <SelectValue placeholder="Category" />
             </SelectTrigger>
             <SelectContent>
@@ -2253,7 +2254,7 @@ export function Inbox() {
               value={allApprovalFilter}
               onValueChange={(value) => updateAllApprovalFilter(value as InboxApprovalFilter)}
             >
-              <SelectTrigger className="h-8 w-[170px] text-xs">
+              <SelectTrigger className="h-11 w-full text-xs sm:h-8 sm:w-[170px]" data-testid="inbox-all-approval-filter">
                 <SelectValue placeholder="Approval status" />
               </SelectTrigger>
               <SelectContent>

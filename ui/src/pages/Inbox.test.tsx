@@ -290,6 +290,31 @@ describe("Inbox toolbar", () => {
       root.unmount();
     });
   });
+
+  it("keeps phone search and All filters full-width while retaining desktop widths", async () => {
+    routerMock.location.pathname = "/inbox/all";
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
+    });
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Inbox />
+        </QueryClientProvider>,
+      );
+    });
+
+    const search = container.querySelector('[data-testid="inbox-mobile-search"]');
+    const category = container.querySelector('[data-testid="inbox-all-category-filter"]');
+    expect(search?.className).toContain("h-11");
+    expect(search?.className).toContain("sm:h-8");
+    expect(category?.className).toContain("w-full");
+    expect(category?.className).toContain("sm:w-[170px]");
+
+    act(() => root.unmount());
+  });
 });
 
 describe("FailedRunInboxRow", () => {

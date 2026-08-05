@@ -855,6 +855,8 @@ describe("IssueDetail", () => {
 
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
+    expect(container.firstElementChild?.className).toContain("min-w-0");
+    expect(container.firstElementChild?.className).toContain("overflow-x-hidden");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
