@@ -11,6 +11,9 @@ vi.mock("../services/book-agent-lanes.js", async (importOriginal) => {
   const mod = await importOriginal<typeof import("../services/book-agent-lanes.js")>();
   return { ...mod, callAgentLane: vi.fn() };
 });
+vi.mock("../services/book-chat-recovery.js", () => ({
+  reconcileBookChatTurns: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../services/index.js", () => ({ logActivity: vi.fn().mockResolvedValue(undefined) }));
 
 import { bookStudioRoutes } from "../routes/book-studio.js";

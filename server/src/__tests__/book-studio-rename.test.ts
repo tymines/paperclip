@@ -22,6 +22,7 @@ function createApp(book = EXISTING) {
     select: vi.fn(() => query(book ? [book] : [])),
     update: vi.fn(() => ({ set: vi.fn((changes) => ({ where: vi.fn(() => ({ returning: vi.fn(async () => { Object.assign(updated, changes); return [updated]; }) })) })) })),
   };
+  db.transaction = vi.fn(async (callback: (tx: Db) => unknown) => callback(db as Db));
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => { req.actor = { type: "board", userId: "board-1", source: "local_implicit" }; next(); });
