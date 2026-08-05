@@ -20,6 +20,12 @@ export default defineConfig({
   use: {
     baseURL: BASE_URL,
     headless: true,
+    // These tests exercise the current server build, not offline-cache
+    // lifecycle behavior. A freshly installed service worker claims the test
+    // page and navigates it during activation, which can strand Playwright's
+    // locator polling behind that navigation. Keep this suite deterministic;
+    // service-worker behavior belongs in its own focused browser coverage.
+    serviceWorkers: "block",
     screenshot: "only-on-failure",
     trace: "on-first-retry",
   },

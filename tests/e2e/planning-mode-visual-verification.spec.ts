@@ -10,8 +10,14 @@ test("captures planning mode UI for desktop and mobile", async ({ page }) => {
   const companyName = `PAP-3413-${timestamp}`;
   const screenshotDir = "test-results/planning-mode";
 
-  await page.goto("/onboarding");
-  await expect(page.locator("h3", { hasText: "Name your company" })).toBeVisible({ timeout: 5_000 });
+  await page.goto("/onboarding", { waitUntil: "domcontentloaded" });
+  const wizardHeading = page.locator("h3", { hasText: "Name your company" });
+  const startButton = page.getByRole("button", { name: "Start Onboarding" });
+  await expect(wizardHeading.or(startButton)).toBeVisible({ timeout: 5_000 });
+  if (await startButton.isVisible()) {
+    await startButton.click();
+  }
+  await expect(wizardHeading).toBeVisible({ timeout: 5_000 });
 
   await page.locator('input[placeholder="Acme Corp"]').fill(companyName);
   await page.getByRole("button", { name: "Next" }).click();

@@ -273,6 +273,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build
+        run: pnpm build
+
       - name: Install Playwright
         run: npx playwright install --with-deps chromium
 
@@ -294,6 +297,7 @@ jobs:
       - name: Run e2e tests
         env:
           PAPERCLIP_E2E_SKIP_LLM: "true"
+          PAPERCLIP_UI_DEV_MIDDLEWARE: "false"
         run: pnpm run test:e2e
 
       - name: Upload Playwright report
