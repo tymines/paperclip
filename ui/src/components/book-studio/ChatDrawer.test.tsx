@@ -15,9 +15,12 @@ const fetchMock = vi.fn();
 const turn = (overrides: Record<string, unknown> = {}) => ({ turnId: "turn-1", userMessage: "Question", reply: "Answer", messageId: "a-1", userMessageId: "u-1", createdAt: new Date().toISOString(), status: "completed", via: "calliope", ...overrides });
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 async function flush() { await act(async () => { for (let i = 0; i < 5; i += 1) await Promise.resolve(); }); }
+function stubPhone(matches: boolean) {
+  vi.stubGlobal("matchMedia", vi.fn(() => ({ matches, media: "(max-width: 767px)", onchange: null, addEventListener: vi.fn(), removeEventListener: vi.fn(), addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn() })));
+}
 
 beforeEach(() => {
-  vi.clearAllMocks(); localStorage.clear(); vi.stubGlobal("fetch", fetchMock);
+  vi.clearAllMocks(); localStorage.clear(); vi.stubGlobal("fetch", fetchMock); stubPhone(false);
   container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
 });
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
@@ -50,13 +53,36 @@ describe("ChatDrawer v4", () => {
   });
 
   it("uses dialog semantics and closes on Escape while returning focus", async () => {
+    stubPhone(true);
     fetchMock.mockResolvedValue(response({ messages: [] }));
     const trigger = document.createElement("button"); document.body.appendChild(trigger); trigger.focus();
     const onClose = vi.fn(); await render({ onClose }); await flush();
-    expect(container.querySelector('[role="dialog"]')?.getAttribute("aria-modal")).toBe("true");
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+    for (const label of ["History", "New conversation"]) expect(Array.from(dialog.querySelectorAll("button")).find((button) => button.textContent?.includes(label))?.className).toContain("min-h-11");
+    expect(dialog.querySelector('[aria-label="Close brainstorm"]')?.className).toContain("h-11");
+    expect(dialog.querySelector('[aria-label="Send message"]')?.className).toContain("h-11");
+    const controls = Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled])'));
+    controls.at(-1)!.focus(); act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(controls[0]);
+    controls[0].focus(); act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(controls.at(-1));
     act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     expect(onClose).toHaveBeenCalledTimes(1);
+    await render({ isOpen: false, onClose });
+    expect(document.activeElement).toBe(trigger);
     trigger.remove();
+  });
+
+  it("keeps the desktop dock non-modal without focus stealing or Escape interception", async () => {
+    fetchMock.mockResolvedValue(response({ messages: [] }));
+    const outside = document.createElement("button"); document.body.appendChild(outside); outside.focus();
+    const onClose = vi.fn(); await render({ onClose }); await flush();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector("[data-chat-backdrop]")).toBeNull();
+    expect(document.activeElement).toBe(outside);
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(onClose).not.toHaveBeenCalled(); outside.remove();
   });
 
   it("is docked without a backdrop and keeps the editor outside the panel interactive", async () => {

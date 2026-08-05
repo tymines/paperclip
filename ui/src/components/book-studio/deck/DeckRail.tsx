@@ -63,7 +63,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
           <button
             key={c.chapterNumber}
             onClick={() => onSelectChapter(c.chapterNumber)}
-            className={`grid grid-cols-[30px_1fr_auto] gap-2.5 items-baseline w-full text-left px-4 py-2 border-b border-white/5 hover:bg-white/5 ${activeChapter === c.chapterNumber ? "bg-gradient-to-r from-[#e0955a22] to-transparent" : ""}`}
+            className={`grid grid-cols-[30px_1fr_auto] gap-2.5 items-baseline w-full text-left px-4 py-2 border-b border-white/5 hover:bg-white/5 ${mobileSection ? "min-h-11 md:min-h-0" : ""} ${activeChapter === c.chapterNumber ? "bg-gradient-to-r from-[#e0955a22] to-transparent" : ""}`}
           >
             <span className={`font-serif text-[15px] text-right tabular-nums ${activeChapter === c.chapterNumber ? "text-[#e0955a]" : "text-gray-600"}`}>
               {String(c.chapterNumber).padStart(2, "0")}
@@ -98,7 +98,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
             key={s.id}
             data-section-id={s.id}
             onClick={() => onSelectSection(s.id)}
-            className={`flex items-center gap-2.5 w-full px-4 py-1.5 text-left border-b border-white/5 hover:bg-white/5 ${activeSection === s.id ? "bg-gradient-to-r from-[#b39dff14] to-transparent" : ""}`}
+            className={`flex items-center gap-2.5 w-full px-4 py-1.5 text-left border-b border-white/5 hover:bg-white/5 ${mobileSection ? "min-h-11 md:min-h-0" : ""} ${activeSection === s.id ? "bg-gradient-to-r from-[#b39dff14] to-transparent" : ""}`}
             aria-current={activeSection === s.id ? "page" : undefined}
           >
             <span className="w-[18px] text-center text-[11px] opacity-80">{s.icon}</span>
@@ -111,7 +111,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
         <button
           data-section-id="review-queue"
           onClick={onOpenReviewQueue}
-          className={`flex items-center gap-2.5 w-full px-4 py-2.5 text-left border-t border-white/10 text-amber-400 text-[11.5px] hover:bg-[#e5b45e16] ${activeSection === "review-queue" ? "bg-gradient-to-r from-[#e5b45e20] to-transparent" : ""}`}
+          className={`flex items-center gap-2.5 w-full px-4 py-2.5 text-left border-t border-white/10 text-amber-400 text-[11.5px] hover:bg-[#e5b45e16] ${mobileSection ? "min-h-11 md:min-h-0" : ""} ${activeSection === "review-queue" ? "bg-gradient-to-r from-[#e5b45e20] to-transparent" : ""}`}
           aria-current={activeSection === "review-queue" ? "page" : undefined}
           title="Bible review queue — extraction only proposes; nothing enters canon without your click"
         >

@@ -44,7 +44,21 @@ export interface ChatDrawerProps {
 
 const draftKey = (companySlug: string, bookId: string) => `bookStudio.chatDraft:${companySlug}:${bookId}`;
 
+function usePhoneViewport() {
+  const [isPhone, setIsPhone] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const query = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsPhone(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  return isPhone;
+}
+
 export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTitle, onBookChanged }: ChatDrawerProps) {
+  const isPhone = usePhoneViewport();
   const scope = `${companySlug}:${bookId}`;
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
@@ -110,9 +124,9 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
   }, [isOpen, hasPending, loadHistory]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !isPhone) return;
     returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const items = () => Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), textarea:not([disabled])') ?? []);
+    const items = () => Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") { event.preventDefault(); onClose(); return; }
       if (event.key !== "Tab") return;
@@ -123,7 +137,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
     document.addEventListener("keydown", onKeyDown);
     requestAnimationFrame(() => items()[0]?.focus());
     return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
-  }, [isOpen, onClose]);
+  }, [isOpen, isPhone, onClose]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [visibleMessages]);
 
@@ -205,13 +219,13 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 md:inset-auto" role="presentation"><button className="absolute inset-0 h-full w-full bg-black/65 md:hidden" onClick={onClose} aria-label="Close brainstorm" /><aside ref={drawerRef} role="dialog" aria-modal="true" aria-label="Calliope brainstorm" className="fixed inset-x-0 bottom-0 flex h-[82dvh] max-h-[calc(100dvh-env(safe-area-inset-top))] flex-col rounded-t-xl border-t border-gray-800 bg-gray-950 pb-[env(safe-area-inset-bottom)] shadow-2xl md:inset-y-[52px] md:left-auto md:right-0 md:h-auto md:w-[400px] md:rounded-none md:border-l md:border-t-0 md:pb-0" data-docked-chat>
+    <div className="fixed inset-0 z-50 md:inset-auto" role="presentation">{isPhone && <button className="absolute inset-0 h-full w-full bg-black/65" onClick={onClose} aria-label="Close brainstorm" data-chat-backdrop />}<aside ref={drawerRef} {...(isPhone ? { role: "dialog", "aria-modal": true } : {})} aria-label="Calliope brainstorm" className="fixed inset-x-0 bottom-0 flex h-[82dvh] max-h-[calc(100dvh-env(safe-area-inset-top))] flex-col rounded-t-xl border-t border-gray-800 bg-gray-950 pb-[env(safe-area-inset-bottom)] shadow-2xl md:inset-y-[52px] md:left-auto md:right-0 md:h-auto md:w-[400px] md:rounded-none md:border-l md:border-t-0 md:pb-0" data-docked-chat>
       <header className="flex shrink-0 items-center justify-between border-b border-gray-800 px-4 py-3">
         <div><h3 className="flex items-center gap-2 text-sm font-semibold text-gray-200"><Sparkles className="h-3.5 w-3.5 text-purple-400" />Calliope — Brainstorm</h3>{activeBookTitle && <p className="mt-0.5 text-[10px] text-gray-500">{activeBookTitle}</p>}</div>
         <div className="flex items-center gap-1">
-          <button onClick={() => void toggleArchives()} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300" aria-pressed={archiveOpen}><Archive className="h-3 w-3" />History</button>
-          <button onClick={() => void reset()} disabled={resetting || hasPending} title={hasPending ? "Wait for the active Calliope turn to finish before starting a new conversation" : "Archive this transcript and start a new conversation"} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 disabled:opacity-40">{resetting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}New conversation</button>
-          <button onClick={onClose} className="rounded p-1 text-gray-500 hover:text-gray-300" aria-label="Close brainstorm"><X className="h-4 w-4" /></button>
+          <button onClick={() => void toggleArchives()} className="flex min-h-11 items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 md:min-h-0" aria-pressed={archiveOpen}><Archive className="h-3 w-3" />History</button>
+          <button onClick={() => void reset()} disabled={resetting || hasPending} title={hasPending ? "Wait for the active Calliope turn to finish before starting a new conversation" : "Archive this transcript and start a new conversation"} className="flex min-h-11 items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-500 hover:text-purple-300 disabled:opacity-40 md:min-h-0">{resetting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}New conversation</button>
+          <button onClick={onClose} className="grid h-11 w-11 place-items-center rounded text-gray-500 hover:text-gray-300 md:h-auto md:w-auto md:p-1" aria-label="Close brainstorm"><X className="h-4 w-4" /></button>
         </div>
       </header>
 
@@ -234,7 +248,7 @@ export function ChatDrawer({ bookId, companySlug, isOpen, onClose, activeBookTit
         )}
       </div>
 
-      {!archiveOpen && <div className="shrink-0 border-t border-gray-800 px-4 py-3"><div className="flex items-end gap-2"><textarea ref={textareaRef} rows={3} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="Ask about your book…" aria-label="Message Calliope" className="max-h-[200px] min-h-[60px] flex-1 resize-none overflow-y-auto rounded border border-gray-700 bg-gray-800/50 px-3 py-2 text-xs leading-5 text-gray-200 outline-none placeholder:text-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20" /><button onClick={() => void send()} disabled={!input.trim() || submitting} aria-label="Send message" className="rounded bg-purple-600 p-2 text-white hover:bg-purple-500 disabled:opacity-40">{submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button></div></div>}
+      {!archiveOpen && <div className="shrink-0 border-t border-gray-800 px-4 py-3"><div className="flex items-end gap-2"><textarea ref={textareaRef} rows={3} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void send(); } }} placeholder="Ask about your book…" aria-label="Message Calliope" className="max-h-[200px] min-h-[60px] flex-1 resize-none overflow-y-auto rounded border border-gray-700 bg-gray-800/50 px-3 py-2 text-xs leading-5 text-gray-200 outline-none placeholder:text-gray-600 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20" /><button onClick={() => void send()} disabled={!input.trim() || submitting} aria-label="Send message" className="grid h-11 w-11 place-items-center rounded bg-purple-600 text-white hover:bg-purple-500 disabled:opacity-40 md:h-auto md:w-auto md:p-2">{submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}</button></div></div>}
     </aside></div>
   );
 }
