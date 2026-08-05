@@ -76,8 +76,8 @@ vi.mock("../components/ProjectWorkspacesContent", () => ({
   ProjectWorkspacesContent: () => <div data-testid="project-workspaces" />,
 }));
 vi.mock("../components/PageTabBar", () => ({
-  PageTabBar: ({ items }: { items: Array<{ value: string; label: string }> }) => (
-    <div>{items.map((item) => <button key={item.value}>{item.label}</button>)}</div>
+  PageTabBar: ({ items, onValueChange }: { items: Array<{ value: string; label: string }>; onValueChange?: (value: string) => void }) => (
+    <div>{items.map((item) => <button key={item.value} onClick={() => onValueChange?.(item.value)}>{item.label}</button>)}</div>
   ),
 }));
 vi.mock("../components/IssuesList", () => ({
@@ -179,6 +179,11 @@ describe("ProjectDetail", () => {
 
     expect(container.textContent).toContain("Managed by Missions");
     expect(container.textContent).toContain("Plugin operations");
+    const responsiveRoot = container.querySelector('[data-testid="project-detail-responsive-root"]');
+    expect(responsiveRoot?.className).toContain("overflow-x-hidden");
+    const budgetTab = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Budget");
+    act(() => budgetTab?.click());
+    expect(mockNavigate).toHaveBeenCalledWith("/projects/project-1/budget");
     expect(mockIssuesApi.list).toHaveBeenCalledWith("company-1", {
       projectId: "project-1",
       originKindPrefix: "plugin:paperclip.missions",

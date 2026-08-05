@@ -91,7 +91,7 @@ export function ProjectWorkspaceSummaryCard({
             </div>
             <Link
               to={workspaceHref}
-              className="block break-words text-base font-semibold leading-6 text-foreground hover:underline"
+              className="inline-flex min-h-11 items-center break-words text-base font-semibold leading-6 text-foreground hover:underline sm:min-h-0"
             >
               {summary.workspaceName}
             </Link>
@@ -105,7 +105,7 @@ export function ProjectWorkspaceSummaryCard({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-9 justify-center px-3 text-xs"
+                className="h-11 justify-center px-3 text-xs sm:h-9"
                 disabled={runtimeActionPending}
                 onClick={() =>
                   onRuntimeAction({
@@ -130,7 +130,7 @@ export function ProjectWorkspaceSummaryCard({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-9 px-3 text-xs text-muted-foreground"
+                className="h-11 px-3 text-xs text-muted-foreground sm:h-9"
                 onClick={() => onCloseWorkspace({
                   id: summary.executionWorkspaceId!,
                   name: summary.workspaceName,
@@ -154,7 +154,7 @@ export function ProjectWorkspaceSummaryCard({
                     <CopyText
                       text={summary.branchName}
                       containerClassName="min-w-0"
-                      className="min-w-0 break-all text-left font-mono text-xs text-foreground"
+                      className="min-h-11 min-w-11 break-all text-left font-mono text-xs text-foreground sm:min-h-0 sm:min-w-0"
                       copiedLabel="Branch copied"
                     >
                       {summary.branchName}
@@ -162,7 +162,7 @@ export function ProjectWorkspaceSummaryCard({
                     <CopyText
                       text={summary.branchName}
                       ariaLabel="Copy branch"
-                      className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
+                      className="min-h-11 min-w-11 shrink-0 text-muted-foreground hover:text-foreground sm:mt-0.5 sm:min-h-0 sm:min-w-0"
                       copiedLabel="Branch copied"
                     >
                       <Copy className="h-3.5 w-3.5" />
@@ -182,7 +182,7 @@ export function ProjectWorkspaceSummaryCard({
                       text={summary.cwd}
                       title={summary.cwd}
                       containerClassName="min-w-0"
-                      className="min-w-0 break-all text-left font-mono text-xs text-foreground"
+                      className="min-h-11 min-w-11 break-all text-left font-mono text-xs text-foreground sm:min-h-0 sm:min-w-0"
                       copiedLabel="Path copied"
                     >
                       {truncatePath(summary.cwd)}
@@ -190,7 +190,7 @@ export function ProjectWorkspaceSummaryCard({
                     <CopyText
                       text={summary.cwd}
                       ariaLabel="Copy path"
-                      className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground"
+                      className="min-h-11 min-w-11 shrink-0 text-muted-foreground hover:text-foreground sm:mt-0.5 sm:min-h-0 sm:min-w-0"
                       copiedLabel="Path copied"
                     >
                       <Copy className="h-3.5 w-3.5" />
@@ -210,7 +210,7 @@ export function ProjectWorkspaceSummaryCard({
                     target="_blank"
                     rel="noreferrer"
                     className={cn(
-                      "break-all font-mono text-xs hover:underline",
+                      "inline-flex min-h-11 items-center break-all font-mono text-xs hover:underline sm:min-h-0",
                       summary.primaryServiceUrlRunning
                         ? "text-emerald-700 hover:text-emerald-800 dark:text-emerald-300 dark:hover:text-emerald-200"
                         : "text-foreground",
@@ -236,7 +236,7 @@ export function ProjectWorkspaceSummaryCard({
               {hiddenIssueCount > 0 ? (
                 <Link
                   to={workspaceHref}
-                  className="inline-flex items-center rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                  className="inline-flex min-h-11 items-center rounded-full border border-border bg-background px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground hover:underline sm:min-h-0"
                 >
                   +{hiddenIssueCount} more
                 </Link>
@@ -254,7 +254,7 @@ function IssuePill({ issue }: { issue: Issue }) {
     <IssuesQuicklook issue={issue}>
       <Link
         to={`/issues/${issue.identifier ?? issue.id}`}
-        className="inline-flex items-center rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground/30 hover:text-foreground hover:underline"
+        className="inline-flex min-h-11 items-center rounded-full border border-border bg-background px-2.5 py-1 font-mono text-xs text-foreground transition-colors hover:border-foreground/30 hover:text-foreground hover:underline sm:min-h-0"
       >
         {issue.identifier ?? issue.id.slice(0, 8)}
       </Link>

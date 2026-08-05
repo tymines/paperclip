@@ -56,6 +56,9 @@ type WorkspaceFormState = {
 
 type ExecutionWorkspaceTab = "services" | "configuration" | "runtime_logs" | "issues" | "routines";
 
+export const EXECUTION_WORKSPACE_RESPONSIVE_CLASS =
+  "min-w-0 space-y-4 overflow-x-hidden sm:space-y-6 [&_button]:min-h-11 [&_button]:min-w-11 [&_input:not([type=checkbox])]:min-h-11 [&_select]:min-h-11 sm:[&_button]:min-h-0 sm:[&_button]:min-w-0 sm:[&_input:not([type=checkbox])]:min-h-0 sm:[&_select]:min-h-0";
+
 function resolveExecutionWorkspaceTab(pathname: string, workspaceId: string): ExecutionWorkspaceTab | null {
   const segments = pathname.split("/").filter(Boolean);
   const executionWorkspacesIndex = segments.indexOf("execution-workspaces");
@@ -149,7 +152,7 @@ function formStateFromWorkspace(workspace: ExecutionWorkspace): WorkspaceFormSta
   };
 }
 
-function buildWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
+export function buildExecutionWorkspacePatch(initialState: WorkspaceFormState, nextState: WorkspaceFormState) {
   const patch: Record<string, unknown> = {};
   const configPatch: Record<string, unknown> = {};
 
@@ -266,7 +269,7 @@ function WorkspaceLink({
   project: Project;
   workspace: ProjectWorkspace;
 }) {
-  return <Link to={projectWorkspaceUrl(project, workspace.id)} className="hover:underline">{workspace.name}</Link>;
+  return <Link to={projectWorkspaceUrl(project, workspace.id)} className="inline-flex min-h-11 items-center hover:underline sm:min-h-0">{workspace.name}</Link>;
 }
 
 function ExecutionWorkspaceIssuesList({
@@ -360,7 +363,7 @@ function WorkspaceRoutineRow({
     <div className="flex flex-col gap-3 border-b border-border px-3 py-3 last:border-b-0 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1 space-y-1.5">
         <div className="flex flex-wrap items-center gap-2">
-          <Link to={`/routines/${routine.id}`} className="truncate text-sm font-medium hover:underline">
+          <Link to={`/routines/${routine.id}`} className="inline-flex min-h-11 max-w-full items-center truncate text-sm font-medium hover:underline sm:min-h-0">
             {routine.title}
           </Link>
           {routine.status !== "active" ? (
@@ -701,7 +704,7 @@ export function ExecutionWorkspaceDetail() {
 
     let patch: Record<string, unknown>;
     try {
-      patch = buildWorkspacePatch(initialState, form);
+      patch = buildExecutionWorkspacePatch(initialState, form);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Failed to build workspace update.");
       return;
@@ -713,7 +716,7 @@ export function ExecutionWorkspaceDetail() {
 
   return (
     <>
-      <div className="space-y-4 overflow-hidden sm:space-y-6">
+      <div className={EXECUTION_WORKSPACE_RESPONSIVE_CLASS} data-testid="execution-workspace-responsive-root">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-2">
             <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
@@ -993,7 +996,7 @@ export function ExecutionWorkspaceDetail() {
               </CardHeader>
               <CardContent>
               <DetailRow label="Project">
-                {project ? <Link to={`/projects/${projectRef}`} className="hover:underline">{project.name}</Link> : <MonoValue value={workspace.projectId} />}
+                {project ? <Link to={`/projects/${projectRef}`} className="inline-flex min-h-11 items-center hover:underline sm:min-h-0">{project.name}</Link> : <MonoValue value={workspace.projectId} />}
               </DetailRow>
               <DetailRow label="Project workspace">
                 {project && linkedProjectWorkspace ? (
@@ -1006,7 +1009,7 @@ export function ExecutionWorkspaceDetail() {
               </DetailRow>
               <DetailRow label="Source issue">
                 {sourceIssue ? (
-                  <Link to={issueUrl(sourceIssue)} className="hover:underline">
+                  <Link to={issueUrl(sourceIssue)} className="inline-flex min-h-11 items-center hover:underline sm:min-h-0">
                     {sourceIssue.identifier ?? sourceIssue.id} · {sourceIssue.title}
                   </Link>
                 ) : workspace.sourceIssueId ? (
@@ -1017,7 +1020,7 @@ export function ExecutionWorkspaceDetail() {
               </DetailRow>
               <DetailRow label="Derived from">
                 {derivedWorkspace ? (
-                  <Link to={executionWorkspaceTabPath(derivedWorkspace.id, "configuration")} className="hover:underline">
+                  <Link to={executionWorkspaceTabPath(derivedWorkspace.id, "configuration")} className="inline-flex min-h-11 items-center hover:underline sm:min-h-0">
                     {derivedWorkspace.name}
                   </Link>
                 ) : workspace.derivedFromExecutionWorkspaceId ? (
@@ -1047,7 +1050,7 @@ export function ExecutionWorkspaceDetail() {
               <DetailRow label="Repo URL">
                 {workspace.repoUrl && isSafeExternalUrl(workspace.repoUrl) ? (
                   <div className="inline-flex max-w-full items-start gap-2">
-                    <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex min-w-0 items-center gap-1 break-all hover:underline">
+                    <a href={workspace.repoUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 min-w-0 items-center gap-1 break-all hover:underline sm:min-h-0">
                       {workspace.repoUrl}
                       <ExternalLink className="h-3.5 w-3.5 shrink-0" />
                     </a>
