@@ -295,7 +295,7 @@ test.describe("Signoff execution policy", () => {
     });
 
     // Step 2: Navigate to issue in UI and verify execution label
-    await page.goto(`/${ctx.companyPrefix}/issues/${issue.identifier}`);
+    await page.goto(`/${ctx.companyPrefix}/issues/${issue.identifier}`, { waitUntil: "domcontentloaded" });
     await expect(page.locator("text=Review pending")).toBeVisible({ timeout: 10_000 });
 
     // Step 3: Reviewer approves → should route to approver
@@ -313,7 +313,7 @@ test.describe("Signoff execution policy", () => {
     expect(step3Issue.executionState.completedStageIds).toHaveLength(1);
 
     // Step 4: Verify UI shows approval pending
-    await page.reload();
+    await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.locator("text=Approval pending")).toBeVisible({ timeout: 10_000 });
 
     // Step 5: Approver approves → should complete

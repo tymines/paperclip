@@ -22,9 +22,15 @@ const TASK_TITLE = "E2E test task";
 
 test.describe("Onboarding wizard", () => {
   test("completes full wizard flow", async ({ page }) => {
-    await page.goto("/onboarding");
+    await page.goto("/onboarding", { waitUntil: "domcontentloaded" });
 
     const wizardHeading = page.locator("h3", { hasText: "Name your company" });
+    const startButton = page.getByRole("button", { name: "Start Onboarding" });
+
+    await expect(wizardHeading.or(startButton)).toBeVisible({ timeout: 5_000 });
+    if (await startButton.isVisible()) {
+      await startButton.click();
+    }
 
     await expect(wizardHeading).toBeVisible({ timeout: 5_000 });
 
