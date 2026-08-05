@@ -23,9 +23,58 @@
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { agentService } from "../services/agents.js";
+import { assertCompanyAccess } from "../routes/authz.js";
 import { readGatewayHandshake, readGatewayFleet } from "./gateway-handshake.js";
 
-export function createAcpRouter(db?: Db): Router {
+interface FleetRosterRow {
+  id: string;
+  name: string;
+  role?: string | null;
+  title?: string | null;
+  status?: string | null;
+}
+
+interface FleetRosterSourceRow extends FleetRosterRow {
+  status: string;
+}
+
+interface AcpRouterDependencies {
+  listAgents?: (companyId: string) => Promise<FleetRosterSourceRow[]>;
+  getCompany?: (companyId: string) => Promise<{ issuePrefix: string } | null>;
+}
+
+async function getCompanyById(db: Db, companyId: string) {
+  // Keep the ACP route lightweight in isolated route tests; production only
+  // loads the company service after a validated, authorized company request.
+  const { companyService } = await import("../services/companies.js");
+  return companyService(db).getById(companyId);
+}
+
+export async function readFleetRoster(
+  db: Db,
+  companyId: string,
+  listAgents: (id: string) => Promise<FleetRosterSourceRow[]> = (id) => agentService(db).list(id),
+): Promise<
+  { ok: true; roster: FleetRosterRow[] } | { ok: false }
+> {
+  try {
+    const rows = await listAgents(companyId);
+    return {
+      ok: true,
+      roster: rows.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        role: (agent.role as string | null) ?? null,
+        title: agent.title ?? null,
+        status: agent.status,
+      })),
+    };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function createAcpRouter(db?: Db, dependencies: AcpRouterDependencies = {}): Router {
   const router = Router();
 
   // GET /acp/handshake?agentId=<gateway agent id>&url=<ws url>&label=<label>
@@ -41,37 +90,46 @@ export function createAcpRouter(db?: Db): Router {
     }
   });
 
-  // GET /acp/fleet?url=<ws url>&companyId=<id>  — Phase 1: per-agent capabilities
-  // for the whole roster, built from a single handshake (read-only, additive).
-  // With companyId + db, the roster is the REAL Paperclip fleet (names/roles from
-  // the DB) joined with the canonical fleet model map.
-  router.get("/acp/fleet", async (req, res) => {
-    const url = typeof req.query.url === "string" ? req.query.url : undefined;
-    const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+  // GET /acp/fleet?companyId=<id> — authorize the company-scoped DB read, then
+  // reconcile registered rows into the canonical read-only Fleet definitions.
+  router.get("/acp/fleet", async (req, res, next) => {
     try {
-      let roster:
-        | Array<{ id: string; name: string; role?: string | null; title?: string | null }>
-        | undefined;
-      if (db && companyId) {
-        try {
-          const rows = await agentService(db).list(companyId);
-          roster = rows
-            .filter((a) => a.status !== "paused")
-            .map((a) => ({
-            id: a.id,
-            name: a.name,
-            role: (a.role as string | null) ?? null,
-            title: a.title ?? null,
-          }));
-        } catch {
-          // Roster fetch is best-effort; fall back to the handshake roster.
-          roster = undefined;
-        }
+      const url = typeof req.query.url === "string" ? req.query.url : undefined;
+      const companyId = typeof req.query.companyId === "string" ? req.query.companyId : undefined;
+      if (!companyId) {
+        res.status(400).json({ ok: false, error: "companyId is required", stage: "validation" });
+        return;
       }
-      const fleet = await readGatewayFleet({ url, roster, skipGateway: true });
+      // Authorize before looking up any company data or registered agents.
+      assertCompanyAccess(req, companyId);
+      let roster: FleetRosterRow[] | undefined;
+      let canonicalRoster = false;
+      if (db) {
+        const company = dependencies.getCompany
+          ? await dependencies.getCompany(companyId)
+          : await getCompanyById(db, companyId);
+        if (!company) {
+          res.status(404).json({ ok: false, error: "Company not found", stage: "company" });
+          return;
+        }
+        canonicalRoster = company.issuePrefix.trim().toUpperCase() === "AUG";
+        const result = await readFleetRoster(db, companyId, dependencies.listAgents);
+        if (!result.ok) {
+          res.status(503).json({
+            ok: false,
+            agentLabel: "Canonical Fleet",
+            url: url ?? "",
+            error: "Fleet roster unavailable",
+            stage: "roster",
+          });
+          return;
+        }
+        roster = result.roster;
+      }
+      const fleet = await readGatewayFleet({ url, roster, canonicalRoster, skipGateway: true });
       res.status(fleet.ok ? 200 : 502).json(fleet);
-    } catch (err) {
-      res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    } catch (error) {
+      next(error);
     }
   });
 
