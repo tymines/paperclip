@@ -31,6 +31,8 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
   const hostCount = new Set(agents.map((agent) => agent.hostKey).filter(Boolean)).size;
   const requestedModels = Array.from(new Set(agents.map((agent) => agent.model).filter((model): model is string => Boolean(model))));
   const harnessCount = agents.filter((agent) => agent.harness).length;
+  const hasCanonicalRoster = data?.ok === true && data.rosterSource === "canonical";
+  const hasRegisteredOnlyRoster = data?.ok === true && data.rosterSource !== "canonical";
 
   return (
     <section
@@ -41,9 +43,13 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
         <div className="flex items-center gap-2.5">
           <Users className="h-4 w-4" style={{ color: C.primary }} />
           <div>
-            <div className="text-[14px] font-semibold" style={{ color: C.text }}>Canonical Fleet roster</div>
+            <div className="text-[14px] font-semibold" style={{ color: C.text }}>
+              {hasRegisteredOnlyRoster ? "Registered company roster" : "Canonical Fleet roster"}
+            </div>
             <div className="text-[11px]" style={{ color: C.textFaint }}>
-              Current v2 definitions reconciled read-only to registered Paperclip agents; no gateway connection
+              {hasRegisteredOnlyRoster
+                ? "Registered Paperclip agents for the selected company; no canonical AUG metadata or gateway connection"
+                : "Current v2 definitions reconciled read-only to registered Paperclip agents; no gateway connection"}
             </div>
           </div>
         </div>
@@ -63,7 +69,7 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
         {error ? <p className="text-[13px]" style={{ color: C.critical }}>Could not load canonical Fleet: {(error as Error).message}</p> : null}
         {data && !data.ok ? <p className="text-[13px]" style={{ color: C.critical }}>Could not load canonical Fleet: {data.error}</p> : null}
 
-        {data?.ok ? (
+        {hasCanonicalRoster ? (
           <div className="flex flex-col gap-3" data-pp-fleet-summary>
             <div className="flex flex-wrap gap-3 text-[12px]" style={{ color: C.textMuted }}>
               <span><strong style={{ color: C.text }}>{data.agentCount}</strong> canonical positions</span>
@@ -80,6 +86,15 @@ export function AcpFleetPanel({ url, companyId }: { url?: string; companyId?: st
             </div>
             <div className="text-[11px]" style={{ color: C.textMuted }}>
               Workflow: builder → paired reviewer → Zeus senior review → Tyler approval. No automatic deployment.
+            </div>
+          </div>
+        ) : hasRegisteredOnlyRoster ? (
+          <div className="flex flex-col gap-3" data-pp-fleet-summary data-pp-fleet-registered-only-summary>
+            <div className="flex flex-wrap gap-3 text-[12px]" style={{ color: C.textMuted }}>
+              <span><strong style={{ color: C.text }}>{data.agentCount}</strong> registered company agents</span>
+            </div>
+            <div className="text-[11px]" style={{ color: C.textMuted }}>
+              Only registered database agents are shown; canonical AUG hosts, pairings, models, and missing positions are not inferred.
             </div>
           </div>
         ) : null}

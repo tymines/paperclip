@@ -842,6 +842,22 @@ function CanonicalOrgView({ positions, onOpen }: { positions: FleetPositionRow[]
   );
 }
 
+function RegisteredOrgView({ agents, onOpen }: { agents: Agent[]; onOpen: (agent: Agent) => void }) {
+  return (
+    <div className="grid grid-cols-1 gap-3 p-5 md:grid-cols-2 xl:grid-cols-3">
+      {agents.map((agent) => (
+        <div key={agent.id} data-pp-fleet-registered-org-agent={agent.id}>
+          <OrgCard
+            agent={agent}
+            node={{ id: agent.id, name: agent.name, role: agent.role, status: agent.status, reports: [] }}
+            onOpen={() => onOpen(agent)}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Agent detail drawer (run history + config)                                 */
 /* -------------------------------------------------------------------------- */
@@ -1235,7 +1251,9 @@ export function Agents() {
 
   const allAgents = (agents ?? []).filter((a) => a.status !== "terminated");
   const agentsByName = new Map(allAgents.map((agent) => [fleetNameKey(agent.name), agent] as const));
-  const canonicalDefinitions = fleetResult?.ok ? fleetResult.agents : [];
+  const hasCanonicalFleet = fleetResult?.ok === true && fleetResult.rosterSource === "canonical";
+  const hasRegisteredOnlyFleet = fleetResult?.ok === true && fleetResult.rosterSource !== "canonical";
+  const canonicalDefinitions = hasCanonicalFleet ? fleetResult.agents : [];
   const fleetPositions: FleetPositionRow[] = canonicalDefinitions.map((definition) => ({
     definition,
     agent: definition.registered
@@ -1244,13 +1262,18 @@ export function Agents() {
   }));
   const matchedCanonicalIds = new Set(fleetPositions.flatMap((position) => position.agent ? [position.agent.id] : []));
   const otherAgents = allAgents.filter((agent) => !matchedCanonicalIds.has(agent.id));
-  const fleetAvailable = fleetResult?.ok === true;
   const counts = {
-    all: fleetPositions.length,
-    active: fleetPositions.filter((position) => position.agent && matchesFilter(position.agent.status, "active")).length,
-    paused: fleetPositions.filter((position) => position.agent?.status === "paused").length,
-    error: fleetPositions.filter((position) => position.agent?.status === "error").length,
-    other: otherAgents.length,
+    all: hasCanonicalFleet ? fleetPositions.length : hasRegisteredOnlyFleet ? allAgents.length : 0,
+    active: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent && matchesFilter(position.agent.status, "active")).length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => matchesFilter(agent.status, "active")).length : 0,
+    paused: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent?.status === "paused").length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => agent.status === "paused").length : 0,
+    error: hasCanonicalFleet
+      ? fleetPositions.filter((position) => position.agent?.status === "error").length
+      : hasRegisteredOnlyFleet ? allAgents.filter((agent) => agent.status === "error").length : 0,
+    other: hasCanonicalFleet ? otherAgents.length : hasRegisteredOnlyFleet ? 0 : allAgents.length,
   };
 
   const visiblePositions = tab === "all"
@@ -1258,6 +1281,11 @@ export function Agents() {
     : tab === "other"
       ? []
       : fleetPositions.filter((position) => position.agent && matchesFilter(position.agent.status, tab));
+  const visibleRegisteredAgents = tab === "all"
+    ? allAgents
+    : tab === "other"
+      ? []
+      : allAgents.filter((agent) => matchesFilter(agent.status, tab));
   const hostGroups = Array.from(new Set(
     fleetPositions
       .map((position) => position.definition.hostLabel)
@@ -1282,9 +1310,11 @@ export function Agents() {
             Fleet
           </h1>
           <p className="text-[13px]" style={{ color: DS.textMuted }}>
-            {fleetAvailable
+            {hasCanonicalFleet
               ? <>{counts.all} Fleet positions · {counts.other} other registered records preserved</>
-              : <>Canonical Fleet unavailable · {counts.other} registered records preserved</>}
+              : hasRegisteredOnlyFleet
+                ? <>{counts.all} registered company agents</>
+                : <>Canonical Fleet unavailable · {counts.other} registered records preserved</>}
             {" · "}<span className="font-mono">{summarySpend}</span>
             {summaryBudget ? <span className="font-mono"> / {summaryBudget}</span> : null} this month
           </p>
@@ -1342,7 +1372,53 @@ export function Agents() {
       {fleetError && <p className="text-[13px]" style={{ color: DS.critical }}>Could not load the canonical Fleet: {fleetError.message}</p>}
       {fleetResult && !fleetResult.ok ? <p className="text-[13px]" style={{ color: DS.critical }}>Could not load the canonical Fleet: {fleetResult.error}</p> : null}
 
-      {!fleetAvailable && allAgents.length > 0 ? (
+      {hasRegisteredOnlyFleet ? (
+        tab === "other" ? (
+          <section style={surfaceCard} className="overflow-hidden">
+            <ColumnHeader />
+            <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>No other registered agents.</p>
+            <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+              This company uses its registered roster without canonical AUG positions
+            </div>
+          </section>
+        ) : view === "list" ? (
+          <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-registered-only>
+            <ColumnHeader />
+            {visibleRegisteredAgents.length === 0 ? (
+              <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+                No registered company agents match the selected filter.
+              </p>
+            ) : (
+              <ListSection
+                label="Registered company agents"
+                rows={visibleRegisteredAgents}
+                currentTaskFor={currentTaskFor}
+                liveFor={liveFor}
+                pendingIds={pendingAgentIds}
+                onOpen={(agent) => setOpenAgentId(agent.id)}
+                onPauseResume={onPauseResume}
+              />
+            )}
+            <div className="px-5 py-3 text-center text-[11px]" style={{ color: DS.textFaint }}>
+              Showing {visibleRegisteredAgents.length} of {allAgents.length} registered company agents
+            </div>
+          </section>
+        ) : (
+          <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-registered-only-org>
+            <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: `1px solid ${DS.border}` }}>
+              <GitBranch className="h-3.5 w-3.5" style={{ color: DS.textFaint }} />
+              <SectionLabel>Registered Agent View</SectionLabel>
+            </div>
+            {visibleRegisteredAgents.length === 0 ? (
+              <p className="px-5 py-10 text-center text-[13px]" style={{ color: DS.textMuted }}>
+                No registered company agents match the selected filter.
+              </p>
+            ) : (
+              <RegisteredOrgView agents={visibleRegisteredAgents} onOpen={(agent) => setOpenAgentId(agent.id)} />
+            )}
+          </section>
+        )
+      ) : !hasCanonicalFleet && allAgents.length > 0 ? (
         <section style={surfaceCard} className="overflow-hidden" data-pp-fleet-fallback>
           <ColumnHeader />
           <ListSection

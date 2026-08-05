@@ -182,6 +182,51 @@ function fleetResult() {
   };
 }
 
+function registeredOnlyFleetResult(agents: Agent[]) {
+  return {
+    ok: true as const,
+    transport: "canonical-db" as const,
+    url: "",
+    agentLabel: "Canonical Fleet",
+    connectedAtMs: Date.now(),
+    handshakeMs: 0,
+    server: { version: "registered-roster", protocol: null, connId: null },
+    methods: [], events: [], models: [], slashCommands: [],
+    identity: { name: "Registered agents", avatar: null },
+    teamCapable: false,
+    teamCapableReason: "Not evaluated",
+    agents: agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      registered: true,
+      status: agent.status,
+      role: agent.role,
+      fleetRole: null,
+      pairing: null,
+      title: agent.title,
+      hostedBy: null,
+      hostKey: null,
+      hostLabel: null,
+      hostMachine: null,
+      hostParent: null,
+      framework: null,
+      harness: null,
+      relationship: null,
+      surfaceLinks: [],
+      workspace: null,
+      runtime: null,
+      model: null,
+      capabilities: [],
+      commands: [],
+      channelCount: 0,
+    })),
+    agentCount: agents.length,
+    rosterSource: "handshake" as const,
+    provenance: { agents: "real" as const },
+    notes: { real: ["registered-only"], derived: [], stub: [] },
+  };
+}
+
 function registeredAgentsFixture() {
   return [
     ...canonicalNames.filter((name) => name !== "Calliope").map((name) => makeAgent({
@@ -306,6 +351,33 @@ describe("Agents", () => {
     expect(container.textContent).toContain("Baily AI");
     expect(container.querySelector('a[href="/agents/baily-ai/configuration"]')).not.toBeNull();
     expect(container.textContent).toContain("1 registered noncanonical records preserved");
+  });
+
+  it("renders a successful registered-only response with null canonical metadata in List and Org", async () => {
+    const registeredAgents = [
+      makeAgent({ id: "tenant-alpha", name: "Tenant Alpha", urlKey: "tenant-alpha", title: "Coordinator" }),
+      makeAgent({ id: "tenant-beta", name: "Tenant Beta", urlKey: "tenant-beta", status: "paused", title: "Reviewer" }),
+    ];
+    mockAgentsApi.list.mockResolvedValue(registeredAgents);
+    mockAgentsApi.get.mockImplementation((id: string) => Promise.resolve(registeredAgents.find((agent) => agent.id === id)));
+    mockAcpApi.fleet.mockResolvedValue(registeredOnlyFleetResult(registeredAgents));
+
+    root = await renderAgents(container, queryClient);
+
+    expect(container.textContent).toContain("2 registered company agents");
+    expect(container.querySelector('[data-pp-fleet-row="tenant-alpha"]')).not.toBeNull();
+    expect(container.querySelector('[data-pp-fleet-row="tenant-beta"]')).not.toBeNull();
+    expect(container.querySelector('a[href="/agents/tenant-alpha/configuration"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("WINDOWS — ZEUS");
+
+    const orgButton = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Org"));
+    await act(async () => orgButton?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+
+    const orgAgents = container.querySelectorAll("[data-pp-fleet-registered-org-agent]");
+    expect(orgAgents).toHaveLength(2);
+    await act(async () => orgAgents[0]?.querySelector("button")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flushReact();
+    expect(container.querySelector('a[href="/agents/tenant-alpha"]')).not.toBeNull();
   });
 
   it("keeps duplicate-name registered rows discoverable in Other by unmatched ID", async () => {
