@@ -216,6 +216,9 @@ function treeControlPreviewErrorCopy(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to load preview.";
 }
 
+export const ISSUE_DETAIL_TABS_LIST_CLASS =
+  "h-auto min-h-[50px] w-full justify-start gap-1 overflow-x-auto overscroll-x-contain sm:h-9 sm:min-h-0";
+
 export function canBoardResolveRecoveryAction(
   companyId: string | null | undefined,
   boardAccess: CurrentBoardAccess | undefined,
@@ -443,7 +446,7 @@ function IssueDetailLoadingState({
   const identifier = headerSeed?.identifier ?? headerSeed?.id.slice(0, 8) ?? null;
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden">
       <div className="space-y-3">
         <Skeleton className="h-3 w-40" />
 
@@ -3244,7 +3247,7 @@ export function IssueDetail() {
   );
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="max-w-3xl min-w-0 space-y-6 overflow-x-hidden">
       {/* Parent chain breadcrumb */}
       {ancestors.length > 0 && (
         <nav className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
@@ -3466,6 +3469,7 @@ export function IssueDetail() {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className="h-11 w-11"
                 onClick={copyIssueToClipboard}
                 title={`Copy ${issueNoun.singular} as markdown`}
               >
@@ -3474,6 +3478,7 @@ export function IssueDetail() {
               <Button
                 variant="ghost"
                 size="icon-xs"
+                className="h-11 w-11"
                 onClick={() => setMobilePropsOpen(true)}
                 title="Properties"
               >
@@ -3964,21 +3969,21 @@ export function IssueDetail() {
           for <textarea> miss it because the composer is a contenteditable
           MarkdownEditor; use [data-pp-comment-input] or [data-testid="issue-chat-composer"]. */}
       <Tabs value={detailTab} onValueChange={setDetailTab} className="space-y-3">
-        <TabsList variant="line" className="w-full justify-start gap-1">
-          <TabsTrigger value="chat" className="gap-1.5">
+        <TabsList variant="line" className={ISSUE_DETAIL_TABS_LIST_CLASS} data-testid="issue-detail-tabs">
+          <TabsTrigger value="chat" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-chat">
             <MessageSquare className="h-3.5 w-3.5" />
             Chat
           </TabsTrigger>
-          <TabsTrigger value="activity" className="gap-1.5">
+          <TabsTrigger value="activity" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-activity">
             <ActivityIcon className="h-3.5 w-3.5" />
             Activity
           </TabsTrigger>
-          <TabsTrigger value="related-work" className="gap-1.5">
+          <TabsTrigger value="related-work" className="min-h-11 gap-1.5 sm:min-h-0" data-testid="issue-detail-tab-related-work">
             <ListTree className="h-3.5 w-3.5" />
             Related work
           </TabsTrigger>
           {issuePluginTabItems.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
+            <TabsTrigger key={item.value} value={item.value} className="min-h-11 sm:min-h-0">
               {item.label}
             </TabsTrigger>
           ))}

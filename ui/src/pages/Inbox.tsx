@@ -402,7 +402,7 @@ export function FailedRunInboxRow({
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 shrink-0 px-2.5"
+          className="h-11 shrink-0 px-3 sm:h-8 sm:px-2.5"
           onClick={onRetry}
           disabled={isRetrying}
         >
@@ -413,7 +413,7 @@ export function FailedRunInboxRow({
           <button
             type="button"
             onClick={onDismiss}
-            className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground sm:h-auto sm:w-auto sm:p-1"
             aria-label="Dismiss"
           >
             <X className="h-4 w-4" />
@@ -424,7 +424,7 @@ export function FailedRunInboxRow({
   );
 }
 
-function ApprovalInboxRow({
+export function ApprovalInboxRow({
   approval,
   requesterName,
   onApprove,
@@ -545,7 +545,7 @@ function ApprovalInboxRow({
         <div className="mt-3 flex gap-2 sm:hidden">
           <Button
             size="sm"
-            className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+            className="h-11 bg-green-700 px-4 text-white hover:bg-green-600 sm:h-8 sm:px-3"
             onClick={onApprove}
             disabled={isPending}
           >
@@ -554,7 +554,7 @@ function ApprovalInboxRow({
           <Button
             variant="destructive"
             size="sm"
-            className="h-8 px-3"
+            className="h-11 px-4 sm:h-8 sm:px-3"
             onClick={onReject}
             disabled={isPending}
           >
@@ -566,7 +566,7 @@ function ApprovalInboxRow({
   );
 }
 
-function JoinRequestInboxRow({
+export function JoinRequestInboxRow({
   joinRequest,
   onApprove,
   onReject,
@@ -671,7 +671,7 @@ function JoinRequestInboxRow({
       <div className="mt-3 flex gap-2 sm:hidden">
         <Button
           size="sm"
-          className="h-8 bg-green-700 px-3 text-white hover:bg-green-600"
+          className="h-11 bg-green-700 px-4 text-white hover:bg-green-600 sm:h-8 sm:px-3"
           onClick={onApprove}
           disabled={isPending}
         >
@@ -680,7 +680,7 @@ function JoinRequestInboxRow({
         <Button
           variant="destructive"
           size="sm"
-          className="h-8 px-3"
+          className="h-11 px-4 sm:h-8 sm:px-3"
           onClick={onReject}
           disabled={isPending}
         >
@@ -1949,7 +1949,7 @@ export function Inbox() {
   const activeIssueFilterCount = countActiveIssueFilters(issueFilters, true);
   const showGeneralIssueToolbarControls = tab !== "blocked";
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-6 overflow-x-hidden">
       <div className="space-y-2">
         {/* Search — full-width row on mobile, inline on desktop */}
         <div className="relative sm:hidden">
@@ -1976,12 +1976,13 @@ export function Inbox() {
                 e.currentTarget.blur();
               }
             }}
-            className="h-8 w-full pl-8 text-xs"
+            className="h-11 w-full pl-8 text-xs sm:h-8"
             data-page-search-target="true"
+            data-testid="inbox-mobile-search"
           />
         </div>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <Tabs value={tab} onValueChange={(value) => navigate(`/inbox/${value}`)} className="max-w-full overflow-x-auto">
           <PageTabBar
             items={[
               {
@@ -1999,7 +2000,7 @@ export function Inbox() {
           />
         </Tabs>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <div className="relative hidden sm:block">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -2030,6 +2031,10 @@ export function Inbox() {
           </div>
           {tab === "blocked" ? (
             <>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-blocked-filter-target"
+              >
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
@@ -2044,13 +2049,14 @@ export function Inbox() {
                 iconOnly
                 workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace").map((w) => ({ id: w.id, name: w.name })) : undefined}
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     type="button"
                     variant="outline"
                     size="icon"
-                    className={cn("h-8 w-8 shrink-0", blockedGroupBy !== "none" && "bg-accent")}
+                    className={cn("h-11 w-11 shrink-0 sm:h-8 sm:w-8", blockedGroupBy !== "none" && "bg-accent")}
                     title="Group"
                   >
                     <Layers className="h-3.5 w-3.5" />
@@ -2075,6 +2081,10 @@ export function Inbox() {
                   </div>
                 </PopoverContent>
               </Popover>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-blocked-columns-target"
+              >
               <IssueColumnPicker
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
@@ -2083,13 +2093,14 @@ export function Inbox() {
                 title="Choose which inbox columns stay visible"
                 iconOnly
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     type="button"
                     variant="outline"
                     size="icon"
-                    className="h-8 w-8 shrink-0"
+                    className="h-11 w-11 shrink-0 sm:h-8 sm:w-8"
                     title="Sort"
                   >
                     <ArrowUpDown className="h-3.5 w-3.5" />
@@ -2127,6 +2138,10 @@ export function Inbox() {
               >
                 <ListTree className="h-3.5 w-3.5" />
               </Button>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-filter-target"
+              >
               <IssueFiltersPopover
                 state={issueFilters}
                 onChange={updateIssueFilters}
@@ -2141,13 +2156,14 @@ export function Inbox() {
                 iconOnly
                 workspaces={isolatedWorkspacesEnabled ? executionWorkspaces.filter((w) => w.mode === "isolated_workspace").map((w) => ({ id: w.id, name: w.name })) : undefined}
               />
+              </span>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     type="button"
                     variant="outline"
                     size="icon"
-                    className={cn("h-8 w-8 shrink-0", groupBy !== "none" && "bg-accent")}
+                    className={cn("h-11 w-11 shrink-0 sm:h-8 sm:w-8", groupBy !== "none" && "bg-accent")}
                     title="Group"
                   >
                     <Layers className="h-3.5 w-3.5" />
@@ -2178,6 +2194,10 @@ export function Inbox() {
                   </div>
                 </PopoverContent>
               </Popover>
+              <span
+                className="inline-flex [&>button]:h-11 [&>button]:w-11 sm:[&>button]:h-8 sm:[&>button]:w-8"
+                data-testid="inbox-columns-target"
+              >
               <IssueColumnPicker
                 availableColumns={availableIssueColumns}
                 visibleColumnSet={visibleIssueColumnSet}
@@ -2186,13 +2206,14 @@ export function Inbox() {
                 title="Choose which inbox columns stay visible"
                 iconOnly
               />
+              </span>
               {canMarkAllRead && (
                 <>
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="h-8 shrink-0"
+                    className="h-11 shrink-0 sm:h-8"
                     onClick={() => setShowMarkAllReadConfirm(true)}
                     disabled={markAllReadMutation.isPending}
                   >
@@ -2230,12 +2251,12 @@ export function Inbox() {
       </div>
 
       {tab === "all" && (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <Select
             value={allCategoryFilter}
             onValueChange={(value) => updateAllCategoryFilter(value as InboxCategoryFilter)}
           >
-            <SelectTrigger className="h-8 w-[170px] text-xs">
+            <SelectTrigger className="h-11 w-full text-xs sm:h-8 sm:w-[170px]" data-testid="inbox-all-category-filter">
               <SelectValue placeholder="Category" />
             </SelectTrigger>
             <SelectContent>
@@ -2253,7 +2274,7 @@ export function Inbox() {
               value={allApprovalFilter}
               onValueChange={(value) => updateAllApprovalFilter(value as InboxApprovalFilter)}
             >
-              <SelectTrigger className="h-8 w-[170px] text-xs">
+              <SelectTrigger className="h-11 w-full text-xs sm:h-8 sm:w-[170px]" data-testid="inbox-all-approval-filter">
                 <SelectValue placeholder="Approval status" />
               </SelectTrigger>
               <SelectContent>

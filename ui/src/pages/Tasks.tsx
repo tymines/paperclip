@@ -167,7 +167,7 @@ const LENS_GROUPS: LensGroup[] = [
 /* -------------------------------------------------------------------------- */
 /* Small presentational helpers                                               */
 /* -------------------------------------------------------------------------- */
-function FilterChip({
+export function FilterChip({
   label,
   count,
   active,
@@ -186,7 +186,7 @@ function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      className="flex shrink-0 items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-[13px] font-medium transition-colors"
+      className="flex h-11 min-w-11 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-colors sm:h-auto sm:min-w-0 sm:py-1.5"
       style={{
         color: active ? accent : DS.textMuted,
         background: active ? `${accent}1F` : "transparent",
@@ -593,10 +593,10 @@ export function Tasks() {
 
   /* -------------------------------- render -------------------------------- */
   return (
-    <div className="flex min-h-full flex-col" style={{ background: DS.canvas, color: DS.text }}>
+    <div className="flex min-h-full min-w-0 flex-col overflow-x-hidden" style={{ background: DS.canvas, color: DS.text }}>
       {/* Header */}
       <div className="flex items-center justify-between gap-3 px-4 pt-5 md:px-6">
-        <div className="flex items-baseline gap-3">
+        <div className="flex min-w-0 items-baseline gap-3">
           <h1 className="text-[20px] font-semibold tracking-[-0.01em]" style={{ color: DS.text }}>
             Tasks
           </h1>
@@ -607,7 +607,7 @@ export function Tasks() {
         <button
           type="button"
           onClick={() => openNewIssue()}
-          className="flex shrink-0 items-center gap-1.5 rounded-[10px] px-3 py-2 text-[13px] font-medium transition-opacity hover:opacity-90"
+          className="flex h-11 shrink-0 items-center gap-1.5 rounded-[10px] px-3 text-[13px] font-medium transition-opacity hover:opacity-90 sm:h-auto sm:py-2"
           style={{ background: DS.primary, color: "#FFFFFF" }}
           data-pp-new-task="true"
         >
@@ -622,12 +622,12 @@ export function Tasks() {
         style={{ borderBottom: `1px solid ${DS.border}` }}
       >
         {LENS_GROUPS.map((group, gi) => (
-          <div key={group.label} className="flex items-center gap-2">
+          <div key={group.label} className="flex max-w-full flex-wrap items-center gap-2">
             {gi > 0 ? (
               <span aria-hidden className="mx-1 h-4 w-px self-center" style={{ background: DS.border2 }} />
             ) : null}
             <GroupLabel>{group.label}</GroupLabel>
-            <div className="flex items-center gap-1">
+            <div className="flex flex-wrap items-center gap-1">
               {group.lenses.map((l) => (
                 <FilterChip
                   key={l.id}
@@ -666,13 +666,13 @@ export function Tasks() {
       )}
 
       {/* Zone 3 Toggle */}
-      <div className="flex items-center justify-between px-4 pb-2 md:px-6">
+      <div className="flex items-center justify-between gap-3 px-4 pb-2 md:px-6">
         <span className="text-[11px] font-medium uppercase tracking-[0.08em]" style={{ color: DS.textFaint }}>
           {showKanban ? "Kanban Board" : isIssueLens ? (lens === "all" ? "All Issues" : lens.charAt(0).toUpperCase() + lens.slice(1).replace(/_/g, " ")) : ""}
         </span>
         <button
           onClick={toggleView}
-          className="flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-[11px] font-medium transition-colors"
+          className="flex h-11 shrink-0 items-center gap-1.5 rounded-[8px] px-2.5 text-[11px] font-medium transition-colors sm:h-auto sm:py-1.5"
           style={{ background: DS.surface3, border: "1px solid " + DS.border, color: DS.textMuted }}
         >
           {showKanban ? <List className="h-3.5 w-3.5" /> : <LayoutGrid className="h-3.5 w-3.5" />}

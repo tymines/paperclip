@@ -5,7 +5,7 @@ import type { Agent, Issue, IssueTreeControlPreview, IssueTreeHold } from "@pape
 import { act, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { canBoardResolveRecoveryAction, IssueDetail } from "./IssueDetail";
+import { canBoardResolveRecoveryAction, ISSUE_DETAIL_TABS_LIST_CLASS, IssueDetail } from "./IssueDetail";
 
 const mockIssuesApi = vi.hoisted(() => ({
   get: vi.fn(),
@@ -338,13 +338,6 @@ vi.mock("@/components/ui/scroll-area", () => ({
 
 vi.mock("@/components/ui/skeleton", () => ({
   Skeleton: () => <div data-testid="skeleton" />,
-}));
-
-vi.mock("@/components/ui/tabs", () => ({
-  Tabs: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsContent: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsList: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
-  TabsTrigger: ({ children }: { children?: ReactNode }) => <button type="button">{children}</button>,
 }));
 
 vi.mock("@/components/ui/textarea", () => ({
@@ -855,6 +848,22 @@ describe("IssueDetail", () => {
 
     expect(container.textContent).toContain("Issue detail smoke");
     expect(container.textContent).toContain("Chat thread");
+    expect(container.firstElementChild?.className).toContain("min-w-0");
+    expect(container.firstElementChild?.className).toContain("overflow-x-hidden");
+    const tabsList = container.querySelector('[data-testid="issue-detail-tabs"]');
+    const chatTab = container.querySelector('[data-testid="issue-detail-tab-chat"]');
+    const activityTab = container.querySelector<HTMLButtonElement>('[data-testid="issue-detail-tab-activity"]');
+    expect(tabsList?.className).toContain("group-data-[orientation=horizontal]/tabs:h-9");
+    for (const className of ISSUE_DETAIL_TABS_LIST_CLASS.split(" ")) {
+      expect(tabsList?.className).toContain(className);
+    }
+    expect(chatTab?.className).toContain("min-h-11");
+    expect(chatTab?.className).toContain("sm:min-h-0");
+    expect(activityTab?.getAttribute("data-state")).toBe("inactive");
+    await act(async () => {
+      activityTab?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+    expect(activityTab?.getAttribute("data-state")).toBe("active");
     expect(consoleErrorSpy).not.toHaveBeenCalled();
   });
 
