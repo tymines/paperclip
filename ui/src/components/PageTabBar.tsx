@@ -17,12 +17,11 @@ interface PageTabBarProps {
 export function PageTabBar({ items, value, onValueChange, align = "center" }: PageTabBarProps) {
   const { isMobile } = useSidebar();
 
-  if (isMobile && value !== undefined) {
+  if (isMobile && value !== undefined && onValueChange) {
     return (
       <select
         value={value}
-        onChange={(e) => onValueChange?.(e.target.value)}
-        disabled={!onValueChange}
+        onChange={(e) => onValueChange(e.target.value)}
         aria-label="Page section"
         className="h-11 w-full max-w-full rounded-md border border-border bg-background px-3 py-1 text-base focus:outline-none focus:ring-1 focus:ring-ring"
       >
