@@ -6,13 +6,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   PROTOCOL,
   PROFILES,
+  cancelRunState,
   claimRun,
   deadlineDelayMs,
   parseRequest,
   parseRunnerArgs,
   persistTerminal,
+  prepareRunState,
   readStoredEnvelope,
+  registerRunProcess,
   runStatePaths,
+  scheduleDeadline,
   terminateProcessTree,
 } from "./olympus-hermes-runner-v1.mjs";
 
@@ -28,7 +32,7 @@ const request = {
   companyId: "33333333-3333-4333-8333-333333333333",
   role: "builder",
   prompt: "do work",
-  deadlineAt: "2999-01-01T00:00:00.000Z",
+  deadlineAt: new Date(Date.now() + 60_000).toISOString(),
   workspace: { remoteCwd: "/Users/augi/shared-agent-workspace/project" },
 };
 
@@ -58,6 +62,8 @@ describe("versioned Hermes runner", () => {
     expect(() => parseRequest(JSON.stringify({ ...request, role: "reviewer" }), "atlas")).toThrow(/role/);
     expect(() => parseRequest(JSON.stringify({ ...request, command: "sh" }), "atlas")).toThrow(/unsupported/);
     expect(() => parseRequest("x".repeat(96 * 1024 + 1), "atlas")).toThrow(/oversized/);
+    expect(() => parseRequest(JSON.stringify({ ...request, deadlineAt: new Date(Date.now() - 1_000).toISOString() }), "atlas")).toThrow(/passed/);
+    expect(() => parseRequest(JSON.stringify({ ...request, deadlineAt: new Date(Date.now() + 31 * 60_000).toISOString() }), "atlas")).toThrow(/out of bounds/);
   });
 
   it("deduplicates a run/profile lock and returns stored terminal state on retry", async () => {
@@ -80,15 +86,57 @@ describe("versioned Hermes runner", () => {
     expect(await claimRun(paths.lockPath)).toBe(true);
     const cancelled = { protocol: PROTOCOL, runId: request.runId, profile: "atlas", status: "cancelled", result: "deadline" };
     const completed = { ...cancelled, status: "completed", result: "late" };
-    expect(await persistTerminal(paths.resultPath, paths.lockPath, cancelled)).toEqual(cancelled);
-    expect(await persistTerminal(paths.resultPath, paths.lockPath, completed)).toEqual(cancelled);
+    expect(await persistTerminal(paths.resultPath, cancelled)).toEqual(cancelled);
+    expect(await persistTerminal(paths.resultPath, completed)).toEqual(cancelled);
     expect(await readStoredEnvelope(paths.resultPath)).toEqual(cancelled);
+  });
+
+  it("does not reclaim a tuple cancelled before the run claims it", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "hermes-runner-before-claim-"));
+    temporaryDirs.push(stateRoot);
+    const cancelled = await cancelRunState("atlas", request.runId, stateRoot, () => undefined);
+    const prepared = await prepareRunState("atlas", request.runId, stateRoot);
+    expect(cancelled.status).toBe("cancelled");
+    expect(prepared.kind).toBe("terminal");
+    expect(prepared.envelope).toEqual(cancelled);
+  });
+
+  it("kills a child when cancellation lands between claim and PID registration", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "hermes-runner-before-pid-"));
+    temporaryDirs.push(stateRoot);
+    const prepared = await prepareRunState("atlas", request.runId, stateRoot);
+    expect(prepared.kind).toBe("claimed");
+    const cancelled = await cancelRunState("atlas", request.runId, stateRoot, () => undefined);
+    const terminated = [];
+    const observed = await registerRunProcess(prepared.paths, 4242, (pid) => terminated.push(pid));
+    expect(observed).toEqual(cancelled);
+    expect(terminated).toEqual([4242]);
+  });
+
+  it("cancels by registered PID and ignores a late child completion", async () => {
+    const stateRoot = await mkdtemp(path.join(os.tmpdir(), "hermes-runner-after-pid-"));
+    temporaryDirs.push(stateRoot);
+    const prepared = await prepareRunState("atlas", request.runId, stateRoot);
+    expect(prepared.kind).toBe("claimed");
+    expect(await registerRunProcess(prepared.paths, 4343, () => undefined)).toBeNull();
+    const terminated = [];
+    const cancelled = await cancelRunState("atlas", request.runId, stateRoot, (pid) => terminated.push(pid));
+    const completed = { ...cancelled, status: "completed", result: "late" };
+    expect(terminated).toEqual([4343]);
+    expect(await persistTerminal(prepared.paths.resultPath, completed)).toEqual(cancelled);
   });
 
   it("computes a bounded deadline delay and rejects malformed deadlines", () => {
     expect(deadlineDelayMs("2026-08-05T12:00:01.000Z", Date.parse("2026-08-05T12:00:00.000Z"))).toBe(1_000);
     expect(deadlineDelayMs("2026-08-05T11:59:00.000Z", Date.parse("2026-08-05T12:00:00.000Z"))).toBe(1);
     expect(() => deadlineDelayMs("invalid", 0)).toThrow(/invalid/);
+  });
+
+  it("arms the actual deadline timer path", async () => {
+    const fired = await new Promise((resolve) => {
+      scheduleDeadline(new Date(Date.now() + 15).toISOString(), () => resolve(true));
+    });
+    expect(fired).toBe(true);
   });
 
   it("escalates cancellation when a child ignores SIGTERM", async () => {

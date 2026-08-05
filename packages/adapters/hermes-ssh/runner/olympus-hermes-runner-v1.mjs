@@ -9,6 +9,7 @@ export const PROTOCOL = "olympus-hermes-run/v1";
 export const WORKSPACE_ROOT = "/Users/augi/shared-agent-workspace";
 export const MAX_REQUEST_BYTES = 96 * 1024;
 export const MAX_RESULT_BYTES = 128 * 1024;
+export const MAX_DEADLINE_MS = 30 * 60 * 1000 + 30 * 1000;
 export const PROFILES = Object.freeze({
   atlas: Object.freeze({ role: "builder", model: "SOL", wrapper: "/Users/augi/.local/bin/atlas" }),
   artemis: Object.freeze({ role: "builder", model: "Kimi K3", wrapper: "/Users/augi/.local/bin/artemis" }),
@@ -56,6 +57,7 @@ export function parseRequest(raw, profile) {
   if (typeof request.prompt !== "string" || Buffer.byteLength(request.prompt, "utf8") > 64 * 1024) fail("prompt is invalid or oversized");
   if (typeof request.deadlineAt !== "string" || !Number.isFinite(Date.parse(request.deadlineAt))) fail("deadlineAt is invalid");
   if (Date.parse(request.deadlineAt) <= Date.now()) fail("request deadline has passed");
+  if (Date.parse(request.deadlineAt) - Date.now() > MAX_DEADLINE_MS) fail("request deadline is out of bounds");
   if (!request.workspace || typeof request.workspace !== "object" || Array.isArray(request.workspace) || Object.keys(request.workspace).join() !== "remoteCwd") {
     fail("workspace must contain only remoteCwd");
   }
@@ -74,8 +76,9 @@ export async function validateWorkspace(remoteCwd) {
 }
 
 function envelope(runId, profile, status, result) {
-  const bounded = Buffer.byteLength(result, "utf8") <= MAX_RESULT_BYTES ? result : "Hermes result exceeded the permitted size";
-  return { protocol: PROTOCOL, runId, profile, status, result: bounded };
+  const value = { protocol: PROTOCOL, runId, profile, status, result };
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") <= MAX_RESULT_BYTES) return value;
+  return { ...value, result: "Hermes result exceeded the permitted size" };
 }
 
 export function runStatePaths(profile, runId, stateRoot = STATE_ROOT) {
@@ -103,12 +106,11 @@ export async function claimRun(lockPath) {
   }
 }
 
-export async function persistTerminal(resultPath, lockPath, value) {
+export async function persistTerminal(resultPath, value) {
   const temporary = `${resultPath}.${process.pid}.${Date.now()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: "wx" });
     await link(temporary, resultPath);
-    await rm(lockPath, { recursive: true, force: true });
     return value;
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
@@ -140,17 +142,58 @@ export function deadlineDelayMs(deadlineAt, now = Date.now()) {
   return Math.max(1, parsed - now);
 }
 
-async function cancelRun(profile, runId) {
-  const { profileDir, resultPath, lockPath, pidPath } = runStatePaths(profile, runId);
+export function scheduleDeadline(deadlineAt, onDeadline, now = Date.now()) {
+  return setTimeout(onDeadline, deadlineDelayMs(deadlineAt, now));
+}
+
+export async function prepareRunState(profile, runId, stateRoot = STATE_ROOT) {
+  const paths = runStatePaths(profile, runId, stateRoot);
+  await mkdir(paths.profileDir, { recursive: true, mode: 0o700 });
+  const existing = await readStoredEnvelope(paths.resultPath);
+  if (existing) return { kind: "terminal", envelope: existing, paths };
+  if (!await claimRun(paths.lockPath)) {
+    const terminal = await readStoredEnvelope(paths.resultPath);
+    return terminal
+      ? { kind: "terminal", envelope: terminal, paths }
+      : { kind: "busy", paths };
+  }
+  const terminalAfterClaim = await readStoredEnvelope(paths.resultPath);
+  if (terminalAfterClaim) {
+    await rm(paths.lockPath, { recursive: true, force: true });
+    return { kind: "terminal", envelope: terminalAfterClaim, paths };
+  }
+  return { kind: "claimed", paths };
+}
+
+export async function registerRunProcess(paths, pid, terminate = terminateProcessTree) {
+  try {
+    await writeFile(paths.pidPath, `${pid}\n`, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    terminate(pid);
+    throw error;
+  }
+  const terminal = await readStoredEnvelope(paths.resultPath);
+  if (!terminal) return null;
+  terminate(pid);
+  await rm(paths.lockPath, { recursive: true, force: true });
+  return terminal;
+}
+
+export async function cancelRunState(profile, runId, stateRoot = STATE_ROOT, terminate = terminateProcessTree) {
+  const { profileDir, resultPath, pidPath } = runStatePaths(profile, runId, stateRoot);
   await mkdir(profileDir, { recursive: true, mode: 0o700 });
   const existing = await readStoredEnvelope(resultPath);
-  if (existing) return emit(existing, existing.status === "completed" ? 0 : 1);
+  if (existing) return existing;
   const rawPid = await readFile(pidPath, "utf8").catch(() => "");
   const pid = Number(rawPid.trim());
-  if (Number.isInteger(pid) && pid > 0) terminateProcessTree(pid);
+  if (Number.isInteger(pid) && pid > 0) terminate(pid);
   const value = envelope(runId, profile, "cancelled", "Cancelled by Olympus");
-  const terminal = await persistTerminal(resultPath, lockPath, value);
-  return emit(terminal ?? value, terminal?.status === "completed" ? 0 : 1);
+  return persistTerminal(resultPath, value);
+}
+
+async function cancelRun(profile, runId) {
+  const terminal = await cancelRunState(profile, runId);
+  return emit(terminal, terminal.status === "completed" ? 0 : 1);
 }
 
 async function readStdin() {
@@ -171,23 +214,27 @@ async function emit(value, exitCode) {
 
 async function run() {
   const parsedArgs = parseRunnerArgs(process.argv.slice(2));
-  if (parsedArgs.operation === "cancel") return cancelRun(parsedArgs.profile, parsedArgs.runId);
+  activeFailureContext.profile = parsedArgs.profile;
+  if (parsedArgs.operation === "cancel") {
+    activeFailureContext.runId = parsedArgs.runId;
+    return cancelRun(parsedArgs.profile, parsedArgs.runId);
+  }
   const { profile, maxTurns } = parsedArgs;
   const request = parseRequest(await readStdin(), profile);
+  activeFailureContext.runId = request.runId;
   const cwd = await validateWorkspace(request.workspace.remoteCwd);
-  const { profileDir, resultPath, lockPath, pidPath } = runStatePaths(profile, request.runId);
-  await mkdir(profileDir, { recursive: true, mode: 0o700 });
-
-  const stored = await readStoredEnvelope(resultPath);
-  if (stored) return emit(stored, stored.status === "completed" ? 0 : 1);
-  if (!await claimRun(lockPath)) return emit(envelope(request.runId, profile, "failed", "This run/profile tuple is already executing"), 1);
+  const prepared = await prepareRunState(profile, request.runId);
+  if (prepared.kind === "terminal") return emit(prepared.envelope, prepared.envelope.status === "completed" ? 0 : 1);
+  if (prepared.kind === "busy") return emit(envelope(request.runId, profile, "failed", "This run/profile tuple is already executing"), 1);
+  const { resultPath, lockPath } = prepared.paths;
 
   let child;
   let terminal = false;
   const persist = async (value) => {
     if (terminal) return false;
     terminal = true;
-    const stored = await persistTerminal(resultPath, lockPath, value);
+    const stored = await persistTerminal(resultPath, value);
+    await rm(lockPath, { recursive: true, force: true });
     return stored ?? value;
   };
   const cancel = async () => {
@@ -208,8 +255,29 @@ async function run() {
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  if (!child.pid) fail("wrapper did not provide a process id");
-  await writeFile(pidPath, `${child.pid}\n`, { mode: 0o600, flag: "wx" });
+  let earlyChildError = null;
+  const childOutcome = new Promise((resolve) => {
+    child.once("error", (error) => {
+      earlyChildError = error;
+      resolve({ error, code: null });
+    });
+    child.once("close", (code) => resolve({ error: null, code }));
+  });
+  if (!child.pid) {
+    const failed = await persist(envelope(request.runId, profile, "failed", "Hermes wrapper failed to start"));
+    return emit(failed, 1);
+  }
+  try {
+    const cancelledAfterSpawn = await registerRunProcess(prepared.paths, child.pid);
+    if (cancelledAfterSpawn) return emit(cancelledAfterSpawn, cancelledAfterSpawn.status === "completed" ? 0 : 1);
+  } catch {
+    const failed = await persist(envelope(request.runId, profile, "failed", "Hermes runner could not record the wrapper process"));
+    return emit(failed, 1);
+  }
+  if (earlyChildError) {
+    const failed = await persist(envelope(request.runId, profile, "failed", "Hermes wrapper failed to start"));
+    return emit(failed, 1);
+  }
   child.stdin.end(request.prompt);
   let stdout = "";
   let stdoutBytes = 0;
@@ -221,21 +289,22 @@ async function run() {
   });
   // Drain stderr without forwarding it; wrappers may include prompts or provider details.
   child.stderr.resume();
-  const deadlineDelay = deadlineDelayMs(request.deadlineAt);
-  const deadlineTimer = setTimeout(() => {
+  const deadlineTimer = scheduleDeadline(request.deadlineAt, () => {
     if (terminal) return;
     terminateProcessTree(child.pid);
     const value = envelope(request.runId, profile, "cancelled", "Hermes run deadline exceeded");
     void persist(value).then((stored) => {
       if (stored) return emit(stored, stored.status === "completed" ? 0 : 1);
     });
-  }, deadlineDelay);
-  const exitCode = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => resolve(code));
   });
+  const outcome = await childOutcome;
   clearTimeout(deadlineTimer);
   if (terminal) return;
+  if (outcome.error) {
+    const failed = await persist(envelope(request.runId, profile, "failed", "Hermes wrapper failed during execution"));
+    return emit(failed, 1);
+  }
+  const exitCode = outcome.code;
   const status = exitCode === 0 && !oversized ? "completed" : "failed";
   const result = oversized
     ? "Hermes result exceeded the permitted size"
@@ -248,11 +317,9 @@ async function run() {
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+const activeFailureContext = { profile: "atlas", runId: "00000000-0000-4000-8000-000000000000" };
 if (isMain) {
   run().catch(async (error) => {
-    const profileArg = process.argv[process.argv.indexOf("--profile") + 1];
-    const profile = Object.hasOwn(PROFILES, profileArg) ? profileArg : "atlas";
-    const runId = "00000000-0000-4000-8000-000000000000";
-    await emit(envelope(runId, profile, "failed", error instanceof Error ? error.message : "runner failed"), 1);
+    await emit(envelope(activeFailureContext.runId, activeFailureContext.profile, "failed", error instanceof Error ? error.message : "runner failed"), 1);
   });
 }
