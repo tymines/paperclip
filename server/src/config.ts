@@ -85,6 +85,8 @@ export interface Config {
   feedbackExportBackendToken: string | undefined;
   heartbeatSchedulerEnabled: boolean;
   heartbeatSchedulerIntervalMs: number;
+  imageStudioGenerationWorkerEnabled: boolean;
+  imageStudioGenerationWorkerIntervalMs: number;
   socialSchedulerEnabled: boolean;
   socialSchedulerIntervalMs: number;
   socialDmPollerEnabled: boolean;
@@ -349,6 +351,12 @@ export function loadConfig(): Config {
     feedbackExportBackendToken,
     heartbeatSchedulerEnabled: process.env.HEARTBEAT_SCHEDULER_ENABLED !== "false",
     heartbeatSchedulerIntervalMs: Math.max(10000, Number(process.env.HEARTBEAT_SCHEDULER_INTERVAL_MS) || 30000),
+    imageStudioGenerationWorkerEnabled:
+      process.env.IMAGE_STUDIO_GENERATION_WORKER_ENABLED === "true",
+    imageStudioGenerationWorkerIntervalMs: Math.max(
+      1000,
+      Number(process.env.IMAGE_STUDIO_GENERATION_WORKER_INTERVAL_MS) || 15000,
+    ),
     socialSchedulerEnabled: process.env.SOCIAL_SCHEDULER_ENABLED !== "false",
     socialSchedulerIntervalMs: Math.max(5000, Number(process.env.SOCIAL_SCHEDULER_INTERVAL_MS) || 30000),
     socialDmPollerEnabled: process.env.SOCIAL_DM_POLLER_ENABLED !== "false",

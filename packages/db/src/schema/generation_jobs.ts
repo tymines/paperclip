@@ -39,6 +39,12 @@ export const generationJobs = pgTable(
     aspectRatio: text("aspect_ratio"),
     seed: bigint("seed", { mode: "number" }),
     status: text("status").notNull().default("queued"),
+    // Null for every row that predates the durable worker migration. Routes
+    // explicitly stamp newly-created work so startup cannot drain old paid work.
+    submissionEligibleAt: timestamp("submission_eligible_at", { withTimezone: true }),
+    submissionAttemptId: uuid("submission_attempt_id"),
+    submissionStartedAt: timestamp("submission_started_at", { withTimezone: true }),
+    landingStartedAt: timestamp("landing_started_at", { withTimezone: true }),
     replicatePredictionId: text("replicate_prediction_id"),
     outputPath: text("output_path"),
     contentRating: text("content_rating").notNull().default("sfw"),
