@@ -6,18 +6,28 @@ import {
   storyBibleStyle,
   storyBibleOutline,
   books,
+  bibleLore,
+  bibleFactions,
+  bibleObjects,
+  bibleSystems,
+  bibleTimelineEvents,
+  bibleThreads,
+  bibleThemes,
+  bibleGlossary,
 } from "@paperclipai/db";
 import { eq } from "drizzle-orm";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { callAgentLane, AgentLaneUnavailableError } from "../services/book-agent-lanes.js";
+import { isMissingCodexTable } from "../services/book-bible-codex.js";
 
 // ── Context builder ─────────────────────────────────────────────────────────
 
 interface BibleContext {
-  characters: { name: string; role: string; description: string }[];
-  locations: { name: string; description: string }[];
+  characters: { id: string; name: string; role: string; description: string }[];
+  locations: { id: string; name: string; description: string }[];
   style: { pov: string; tense: string; comps: string; bannedCliches: string[] }[];
   outline: { chapterNumber: number; title: string; beatsCount: number }[];
+  codex: { entityType: string; id: string; name: string; summary: string }[];
 }
 
 async function loadBibleContext(
@@ -27,6 +37,7 @@ async function loadBibleContext(
   const [chars, locs, styles, outlines] = await Promise.all([
     db
       .select({
+        id: storyBibleCharacters.id,
         name: storyBibleCharacters.name,
         role: storyBibleCharacters.role,
         description: storyBibleCharacters.description,
@@ -35,6 +46,7 @@ async function loadBibleContext(
       .where(eq(storyBibleCharacters.bookId, bookId)),
     db
       .select({
+        id: storyBibleWorldLocations.id,
         name: storyBibleWorldLocations.name,
         description: storyBibleWorldLocations.description,
       })
@@ -59,6 +71,28 @@ async function loadBibleContext(
       .where(eq(storyBibleOutline.bookId, bookId)),
   ]);
 
+  const codexTables = [
+    ["lore", bibleLore],
+    ["factions", bibleFactions],
+    ["objects", bibleObjects],
+    ["systems", bibleSystems],
+    ["timeline", bibleTimelineEvents],
+    ["threads", bibleThreads],
+    ["themes", bibleThemes],
+    ["glossary", bibleGlossary],
+  ] as const;
+  const codex = (await Promise.all(codexTables.map(async ([entityType, table]) => {
+    try {
+      const rows = await db.select({ id: table.id, name: table.name, summary: table.summary })
+        .from(table)
+        .where(eq(table.bookId, bookId));
+      return rows.map((row) => ({ entityType, ...row }));
+    } catch (err) {
+      if (isMissingCodexTable(err)) return [];
+      throw err;
+    }
+  }))).flat();
+
   return {
     characters: chars,
     locations: locs,
@@ -70,6 +104,7 @@ async function loadBibleContext(
       ...o,
       beatsCount: Array.isArray(o.beatsCount) ? o.beatsCount.length : 0,
     })),
+    codex,
   };
 }
 
@@ -79,14 +114,14 @@ function formatContext(ctx: BibleContext): string {
   if (ctx.characters.length > 0) {
     parts.push("CHARACTERS:");
     for (const c of ctx.characters) {
-      parts.push(`- ${c.name} (${c.role}): ${c.description}`);
+      parts.push(`- [character:${c.id}] ${c.name} (${c.role}): ${c.description}`);
     }
   }
 
   if (ctx.locations.length > 0) {
     parts.push("LOCATIONS:");
     for (const l of ctx.locations) {
-      parts.push(`- ${l.name}: ${l.description}`);
+      parts.push(`- [location:${l.id}] ${l.name}: ${l.description}`);
     }
   }
 
@@ -106,6 +141,13 @@ function formatContext(ctx: BibleContext): string {
     parts.push("OUTLINE:");
     for (const o of ctx.outline) {
       parts.push(`- Ch.${o.chapterNumber}: ${o.title} (${o.beatsCount} beats)`);
+    }
+  }
+
+  if (ctx.codex.length > 0) {
+    parts.push("CODEX ENTITIES (use the bracketed type and ID exactly for relationships):");
+    for (const entity of ctx.codex) {
+      parts.push(`- [${entity.entityType}:${entity.id}] ${entity.name}: ${entity.summary}`);
     }
   }
 
@@ -149,6 +191,7 @@ function normalizeEntityOutput(
       out.beats = beats.map((b) => ({ description: b }));
     }
   }
+
   if (entityType === "relationship") {
     if (!Array.isArray(out.rules)) out.rules = typeof out.rules === "string" ? [out.rules] : [];
     const meter = Number(out.meter);
@@ -265,6 +308,19 @@ export function storyBibleGenerateRoutes(db: Db) {
 
         // Normalize Calliope output to match DB schemas.
         const normalized = normalizeEntityOutput(entityType, parsed);
+
+        if (entityType === "relationship") {
+          const validRefs = new Set([
+            ...ctx.characters.map((entity) => `character:${entity.id}`),
+            ...ctx.locations.map((entity) => `location:${entity.id}`),
+            ...ctx.codex.map((entity) => `${entity.entityType}:${entity.id}`),
+          ]);
+          const fromRef = `${String(normalized.fromEntityType)}:${String(normalized.fromEntityId)}`;
+          const toRef = `${String(normalized.toEntityType)}:${String(normalized.toEntityId)}`;
+          if (!validRefs.has(fromRef) || !validRefs.has(toRef)) {
+            throw Object.assign(new Error("Calliope returned a relationship with an unresolved book entity reference"), { status: 502 });
+          }
+        }
 
         // Validate required fields
         for (const f of fields) {

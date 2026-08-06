@@ -24,27 +24,27 @@ function q<T>(value: T): any {
   return chain;
 }
 
-function mockDb(bookCompanyId = "c1"): Db {
+function mockDb(bookCompanyId = "c1", contextRows: Record<string, unknown>[] = []): Db {
   let bookLookupPending = true;
   return {
     select: vi.fn(() => {
       const value = bookLookupPending
         ? [{ id: "book-1", companyId: bookCompanyId, title: "The Echo of Stone" }]
-        : [];
+        : contextRows;
       bookLookupPending = false;
       return q(value);
     }),
   } as unknown as Db;
 }
 
-function createTestApp(bookCompanyId = "c1") {
+function createTestApp(bookCompanyId = "c1", contextRows: Record<string, unknown>[] = []) {
   const app = express();
   app.use(express.json());
   app.use((req: any, _res, next) => {
     req.actor = { type: "board", userId: "test-user", source: "local_implicit" };
     next();
   });
-  app.use(storyBibleGenerateRoutes(mockDb(bookCompanyId)));
+  app.use(storyBibleGenerateRoutes(mockDb(bookCompanyId, contextRows)));
   app.use((err: any, _req: any, res: any, _next: any) => {
     res.status(err.status || 500).json({ error: err.message || "Internal error" });
   });
@@ -119,19 +119,41 @@ describe("Story-bible generation through Calliope", () => {
       assertion: (draft: Record<string, unknown>) => expect(draft.details).toEqual({}),
     },
     {
-      endpoint: "relationship",
-      output: { fromEntityType: "character", fromEntityId: "a", toEntityType: "character", toEntityId: "b", type: "rivals", arcStage: "early", meter: 500, rules: "Never trust each other" },
-      assertion: (draft: Record<string, unknown>) => {
-        expect(draft.meter).toBe(100);
-        expect(draft.rules).toEqual(["Never trust each other"]);
-      },
-    },
-    {
       endpoint: "fact",
       output: { statement: "The gate opens at midnight.", knownAsOf: 0 },
       assertion: (draft: Record<string, unknown>) => expect(draft.knownAsOf).toBe(1),
     },
   ];
+
+  it("returns a relationship draft only when both references exist in this book", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: JSON.stringify({ fromEntityType: "character", fromEntityId: "a", toEntityType: "character", toEntityId: "b", type: "rivals", arcStage: "early", meter: 500, rules: "Never trust each other" }),
+      delegationId: "del-relationship",
+      lane: "calliope",
+    });
+    const contextRows = [
+      { id: "a", name: "A", role: "hero", description: "", summary: "" },
+      { id: "b", name: "B", role: "rival", description: "", summary: "" },
+    ];
+    const res = await request(createTestApp("c1", contextRows))
+      .post("/companies/c1/book-studio/books/book-1/generate/relationship")
+      .send({ prompt: "Connect A and B" });
+    expect(res.status).toBe(200);
+    expect(res.body.draft).toMatchObject({ fromEntityId: "a", toEntityId: "b", meter: 100, rules: ["Never trust each other"] });
+  });
+
+  it("rejects a generated relationship with a dangling reference", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: JSON.stringify({ fromEntityType: "character", fromEntityId: "invented", toEntityType: "character", toEntityId: "b", type: "rivals", arcStage: "early", meter: 0, rules: [] }),
+      delegationId: "del-relationship-invalid",
+      lane: "calliope",
+    });
+    const res = await request(createTestApp("c1", [{ id: "b", name: "B", role: "rival", description: "", summary: "" }]))
+      .post("/companies/c1/book-studio/books/book-1/generate/relationship")
+      .send({});
+    expect(res.status).toBe(502);
+    expect(res.body.error).toContain("unresolved book entity reference");
+  });
 
   it.each(genericCases)("returns the existing $endpoint draft shape from Calliope", async ({ endpoint, output, assertion }) => {
     vi.mocked(callAgentLane).mockResolvedValue({
