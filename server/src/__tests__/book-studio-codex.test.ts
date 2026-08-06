@@ -22,7 +22,7 @@ vi.mock("../services/book-bible-codex.js", async (importOriginal) => {
 });
 
 import {
-  bibleLore, bibleThreads, bibleGlossary, bibleRelationships, bibleFacts,
+  bibleLore, bibleThreads, bibleGlossary, bibleRelationships, bibleFacts, storyBibleCharacters,
 } from "@paperclipai/db";
 
 const REL_ERR = () => Object.assign(new Error('relation "bible_facts" does not exist'), { code: "42P01" });
@@ -34,6 +34,7 @@ interface MockState {
   entities: Record<string, any[]>;
   relationships: any[];
   facts: any[];
+  characters: any[];
   failOnCodex: boolean;
 }
 
@@ -42,6 +43,7 @@ function mockDb(opts?: Partial<MockState>) {
     entities: opts?.entities ?? { lore: [], threads: [], glossary: [] },
     relationships: opts?.relationships ?? [],
     facts: opts?.facts ?? [FACT_CH2, FACT_CH8],
+    characters: opts?.characters ?? [],
     failOnCodex: opts?.failOnCodex ?? false,
   };
   const tableState = (table: unknown): any[] => {
@@ -50,6 +52,7 @@ function mockDb(opts?: Partial<MockState>) {
     if (table === bibleGlossary) return state.entities.glossary;
     if (table === bibleRelationships) return state.relationships;
     if (table === bibleFacts) return state.facts;
+    if (table === storyBibleCharacters) return state.characters;
     return [];
   };
   const maybeFail = (table: unknown) => {
@@ -192,17 +195,32 @@ describe("codex lock enforcement (Spec v1 §7)", () => {
 
 describe("codex relationships", () => {
   it("creates a typed, metered relationship with arc rules", async () => {
-    const db = mockDb();
+    const db = mockDb({
+      characters: [{ id: "c-1", bookId: "book-1", name: "Kaelen" }],
+      entities: { lore: [{ id: "l-9", bookId: "book-1", name: "The Oath" }], threads: [], glossary: [] },
+    });
     const app = await createTestApp(db);
     const res = await request(app).post(`${BASE}/codex-relationships`).send({
       fromEntityType: "character", fromEntityId: "c-1",
-      toEntityType: "factions", toEntityId: "f-9",
+      toEntityType: "lore", toEntityId: "l-9",
       type: "secret allegiance", arcStage: "strained", meter: -40,
       rules: ["never reveals membership before ch.9"],
     });
     expect(res.status).toBe(201);
     expect(res.body.relationship.meter).toBe(-40);
     expect(res.body.relationship.rules).toHaveLength(1);
+  });
+
+  it("rejects dangling or cross-book relationship endpoints", async () => {
+    const db = mockDb({ characters: [{ id: "c-1", bookId: "book-1", name: "Kaelen" }] });
+    const app = await createTestApp(db);
+    const res = await request(app).post(`${BASE}/codex-relationships`).send({
+      fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "character", toEntityId: "invented", meter: 0,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("existing entities in this book");
+    expect(db.__state.relationships).toHaveLength(0);
   });
 
   it("rejects a meter outside −100…+100", async () => {

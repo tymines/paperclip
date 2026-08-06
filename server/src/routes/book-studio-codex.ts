@@ -12,7 +12,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import { eq, and } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { bibleRelationships, bibleFacts } from "@paperclipai/db";
+import { bibleRelationships, bibleFacts, storyBibleCharacters, storyBibleWorldLocations } from "@paperclipai/db";
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { logActivity } from "../services/index.js";
@@ -201,6 +201,24 @@ export function bookStudioCodexRoutes(db: Db) {
     return errs;
   };
 
+  async function relationshipEntityExists(entityType: string, entityId: string, bookId: string): Promise<boolean> {
+    if (entityType === "character") {
+      const rows = await db.select({ id: storyBibleCharacters.id }).from(storyBibleCharacters)
+        .where(and(eq(storyBibleCharacters.id, entityId), eq(storyBibleCharacters.bookId, bookId)));
+      return rows.some((row) => row.id === entityId);
+    }
+    if (entityType === "location") {
+      const rows = await db.select({ id: storyBibleWorldLocations.id }).from(storyBibleWorldLocations)
+        .where(and(eq(storyBibleWorldLocations.id, entityId), eq(storyBibleWorldLocations.bookId, bookId)));
+      return rows.some((row) => row.id === entityId);
+    }
+    if (!isCodexEntityType(entityType)) return false;
+    const table = CODEX_ENTITY_TABLES[entityType];
+    const rows = await db.select({ id: table.id }).from(table)
+      .where(and(eq(table.id, entityId), eq(table.bookId, bookId)));
+    return rows.some((row) => row.id === entityId);
+  }
+
   router.post(`${BASE}/codex-relationships`, async (req, res, next) => {
     try {
       const { companyId, bookId } = req.params as Record<string, string>;
@@ -209,6 +227,11 @@ export function bookStudioCodexRoutes(db: Db) {
       const errs = validateRelBody(body, false);
       if (errs.length) throw badRequest(errs.join("; "));
       try {
+        const [fromExists, toExists] = await Promise.all([
+          relationshipEntityExists(String(body.fromEntityType), String(body.fromEntityId), bookId),
+          relationshipEntityExists(String(body.toEntityType), String(body.toEntityId), bookId),
+        ]);
+        if (!fromExists || !toExists) throw badRequest("Relationship endpoints must reference existing entities in this book");
         const [row] = await db.insert(bibleRelationships).values({
           id: randomUUID(),
           bookId,

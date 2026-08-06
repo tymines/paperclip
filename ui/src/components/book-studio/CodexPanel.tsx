@@ -7,6 +7,7 @@ import {
   Plus, Lock, LockOpen, Trash2, ScrollText, Users2, Gem, Cog, Clock,
   GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles, Inbox,
 } from "lucide-react";
+import { GenerateDraftPanel, type BEntityType } from "./GenerateDraftPanel";
 
 const API_BASE = "/api";
 
@@ -155,6 +156,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   const [available, setAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
+  const [showGenerate, setShowGenerate] = useState(false);
   const [factChapter, setFactChapter] = useState(currentChapter ?? 1);
 
   // Add-form state (shared shape; per-section extras read at submit)
@@ -163,6 +165,8 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   const [factForm, setFactForm] = useState({ statement: "", knownAsOf: String(currentChapter ?? 1) });
 
   const prefix = `/companies/${companySlug}/book-studio/books/${bookId}`;
+
+  useEffect(() => { setShowGenerate(false); }, [section]);
 
   const load = useCallback(async () => {
     setError(null);
@@ -249,6 +253,32 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
     setShowAdd(false); load();
   }
 
+  async function acceptGeneratedDraft(draft: Record<string, unknown>) {
+    setError(null);
+    try {
+      if (section === "relationships") {
+        await apiFetch(`${prefix}/codex-relationships`, {
+          method: "POST",
+          body: JSON.stringify({ ...draft, source: "co-created" }),
+        });
+      } else if (section === "facts") {
+        await apiFetch(`${prefix}/codex-facts`, {
+          method: "POST",
+          body: JSON.stringify({ ...draft, provenance: "co-created" }),
+        });
+      } else if (section !== "review-queue") {
+        await apiFetch(`${prefix}/codex/${section}`, {
+          method: "POST",
+          body: JSON.stringify({ ...draft, source: "co-created" }),
+        });
+      }
+      setShowGenerate(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // ── Bible review queue (extraction proposes; Baily approves/rejects) ──
   async function extractFromChapter() {
     setExtracting(true);
@@ -310,6 +340,22 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
       )}
 
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
+        {section !== "review-queue" && (
+          <div className="border-b border-gray-800/70 pb-2">
+            <button onClick={() => setShowGenerate((value) => !value)} className="flex items-center gap-1.5 px-1 py-1.5 text-xs text-purple-400 hover:text-purple-200">
+              <Sparkles className="w-3 h-3" /> Generate with Calliope
+            </button>
+            {showGenerate && (
+              <GenerateDraftPanel
+                entityType={(section === "relationships" ? "relationship" : section === "facts" ? "fact" : section) as BEntityType}
+                bookId={bookId}
+                companySlug={companySlug}
+                onDiscard={() => setShowGenerate(false)}
+                onAccept={(draft) => void acceptGeneratedDraft(draft)}
+              />
+            )}
+          </div>
+        )}
         {/* ── Entity sections ── */}
         {section !== "relationships" && section !== "facts" && section !== "review-queue" && (
           <>
