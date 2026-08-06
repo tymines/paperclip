@@ -58,6 +58,11 @@ describe("Story-bible generation through Calliope", () => {
 
   const genericCases = [
     {
+      endpoint: "overview",
+      output: { title: "A Better Title", description: "A sharper premise." },
+      assertion: (draft: Record<string, unknown>) => expect(draft.description).toBe("A sharper premise."),
+    },
+    {
       endpoint: "character",
       output: {
         name: "Elena Voss",
@@ -107,6 +112,24 @@ describe("Story-bible generation through Calliope", () => {
         expect(draft.pov).toBe("third person limited");
         expect(draft.comps).toBe("Shades of Magic, Library at Mount Char");
       },
+    },
+    {
+      endpoint: "lore",
+      output: { name: "The First Oath", summary: "An ancient covenant.", details: null },
+      assertion: (draft: Record<string, unknown>) => expect(draft.details).toEqual({}),
+    },
+    {
+      endpoint: "relationship",
+      output: { fromEntityType: "character", fromEntityId: "a", toEntityType: "character", toEntityId: "b", type: "rivals", arcStage: "early", meter: 500, rules: "Never trust each other" },
+      assertion: (draft: Record<string, unknown>) => {
+        expect(draft.meter).toBe(100);
+        expect(draft.rules).toEqual(["Never trust each other"]);
+      },
+    },
+    {
+      endpoint: "fact",
+      output: { statement: "The gate opens at midnight.", knownAsOf: 0 },
+      assertion: (draft: Record<string, unknown>) => expect(draft.knownAsOf).toBe(1),
     },
   ];
 

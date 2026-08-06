@@ -170,26 +170,31 @@ export function DirectorsDeckPage() {
   // ── rail models ──
   const deckChapters: DeckChapter[] = useMemo(() => {
     const byNumber = new Map(chapters.map((c) => [c.chapterNumber, c]));
+    const outlineByNumber = new Map(outline.map((entry) => [entry.chapterNumber, entry]));
     const chapterStatus = (activeBook?.metadata?.chapterStatus ?? {}) as Record<string, string>;
-    return outline
-      .slice()
-      .sort((a, b) => a.chapterNumber - b.chapterNumber)
-      .map((o) => {
-        const ch = byNumber.get(o.chapterNumber);
+    const chapterNumbers = new Set([
+      ...outline.map((entry) => entry.chapterNumber),
+      ...chapters.map((entry) => entry.chapterNumber),
+    ]);
+    return [...chapterNumbers]
+      .sort((a, b) => a - b)
+      .map((chapterNumber) => {
+        const o = outlineByNumber.get(chapterNumber);
+        const ch = byNumber.get(chapterNumber);
         const words = (ch?.content ?? "").split(/\s+/).filter(Boolean).length;
-        const status = chapterStatus[String(o.chapterNumber)];
+        const status = chapterStatus[String(chapterNumber)];
         const state: DeckChapter["state"] =
           status === "exception" ? "fail"
           : status === "queued" || (ch?.content ?? "").trim() ? "pass"
           : status === "drafting" || status === "draft-pending-review" ? "run"
           : "idle";
         return {
-          chapterNumber: o.chapterNumber,
-          title: o.title || ch?.title || `Chapter ${o.chapterNumber}`,
+          chapterNumber,
+          title: o?.title || ch?.title || `Chapter ${chapterNumber}`,
           state,
           meta: state === "pass" ? `Ready · ${words}w` : state === "fail" ? "Canon exception" : state === "run" ? "Working" : "Planned",
           score: null,
-          locked: Boolean(ch?.locked || o.locked),
+          locked: Boolean(ch?.locked || o?.locked),
         };
       });
   }, [outline, chapters, activeBook]);

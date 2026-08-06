@@ -50,7 +50,9 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type BEntityType = "character" | "location" | "world-rule" | "style" | "outline-beats";
+export type BEntityType = "overview" | "character" | "location" | "world-rule" | "style" | "outline-beats"
+  | "lore" | "factions" | "objects" | "systems" | "timeline" | "threads" | "themes" | "glossary"
+  | "relationship" | "fact";
 
 export interface GenerateDraftPanelProps {
   entityType: BEntityType;
@@ -66,22 +68,44 @@ export interface GenerateDraftPanelProps {
 // ── Entity labels ────────────────────────────────────────────────────────────
 
 const ENTITY_LABELS: Record<BEntityType, string> = {
+  overview: "Overview",
   character: "Character",
   location: "Location",
   "world-rule": "World Rule",
   style: "Style",
   "outline-beats": "Outline Beats",
+  lore: "Lore Entry",
+  factions: "Faction",
+  objects: "Object",
+  systems: "System",
+  timeline: "Timeline Event",
+  threads: "Story Thread",
+  themes: "Theme",
+  glossary: "Glossary Entry",
+  relationship: "Relationship",
+  fact: "Fact",
 };
 
 // ── Route helpers ────────────────────────────────────────────────────────────
 
 function generateRoute(entityType: BEntityType): string {
   const map: Record<BEntityType, string> = {
+    overview: "/generate/overview",
     character: "/generate/character",
     location: "/generate/location",
     "world-rule": "/generate/world-rule",
     style: "/generate/style",
     "outline-beats": "/generate/outline-beats",
+    lore: "/generate/lore",
+    factions: "/generate/factions",
+    objects: "/generate/objects",
+    systems: "/generate/systems",
+    timeline: "/generate/timeline",
+    threads: "/generate/threads",
+    themes: "/generate/themes",
+    glossary: "/generate/glossary",
+    relationship: "/generate/relationship",
+    fact: "/generate/fact",
   };
   return map[entityType];
 }
@@ -255,6 +279,17 @@ export function GenerateDraftPanel({
             </div>
           );
         })()}
+
+        {!["character", "location", "world-rule", "style", "outline-beats"].includes(entityType) && (
+          <div className="space-y-1 text-[11px] text-gray-400">
+            {Object.entries(draft).map(([key, value]) => (
+              <div key={key}>
+                <span className="font-medium text-gray-300">{key}: </span>
+                <span className="whitespace-pre-wrap">{typeof value === "string" || typeof value === "number" ? String(value) : JSON.stringify(value)}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Action buttons */}
         <div className="flex items-center gap-2 pt-1">

@@ -44,6 +44,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
   const ready = chapters.filter((c) => c.state === "pass").length;
   const working = chapters.filter((c) => c.state === "run").length;
   const exceptions = chapters.filter((c) => c.state === "fail").length;
+  const planned = chapters.filter((c) => c.state === "idle").length;
   return (
     <aside className="bg-[#0d1016] border-r border-white/5 min-w-0 overflow-auto" aria-label="Chapter queue and story bible">
       {mobileSection !== "bible" && <><div className="sticky top-0 bg-[#0d1016] px-4 pt-3.5 pb-2.5 border-b border-white/5 z-10">
@@ -52,11 +53,14 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
           <strong className="font-serif text-base font-semibold">Chapters</strong>
           <span className="text-gray-500 text-[10.5px] tabular-nums">{chapters.length} total</span>
         </div>
-        <div className="flex gap-3.5 mt-2 text-[10.5px] text-gray-400 tabular-nums">
+        {chapters.length === 0 ? (
+          <div className="mt-2 text-[10.5px] text-gray-500">No chapters yet. Add an outline or manuscript chapter to begin.</div>
+        ) : <div className="flex flex-wrap gap-x-3.5 gap-y-1 mt-2 text-[10.5px] text-gray-400 tabular-nums">
           <span><b className="text-emerald-400 text-[13px] mr-1">{ready}</b>ready</span>
           <span><b className="text-amber-400 text-[13px] mr-1">{working}</b>working</span>
           <span><b className="text-red-400 text-[13px] mr-1">{exceptions}</b>exception</span>
-        </div>
+          {planned > 0 && <span><b className="text-gray-300 text-[13px] mr-1">{planned}</b>planned</span>}
+        </div>}
       </div>
       <nav>
         {chapters.map((c) => (

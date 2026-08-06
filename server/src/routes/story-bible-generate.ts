@@ -149,6 +149,27 @@ function normalizeEntityOutput(
       out.beats = beats.map((b) => ({ description: b }));
     }
   }
+  if (entityType === "relationship") {
+    if (!Array.isArray(out.rules)) out.rules = typeof out.rules === "string" ? [out.rules] : [];
+    const meter = Number(out.meter);
+    out.meter = Number.isFinite(meter) ? Math.max(-100, Math.min(100, meter)) : 0;
+  }
+  if (entityType === "fact") {
+    const knownAsOf = Number(out.knownAsOf);
+    out.knownAsOf = Number.isInteger(knownAsOf) && knownAsOf >= 1 ? knownAsOf : 1;
+  }
+  if (["lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"].includes(entityType)) {
+    if (!out.details || typeof out.details !== "object" || Array.isArray(out.details)) out.details = {};
+    if (entityType === "timeline") {
+      const chapterNumber = Number(out.chapterNumber);
+      out.chapterNumber = Number.isInteger(chapterNumber) && chapterNumber >= 1 ? chapterNumber : null;
+    }
+    if (entityType === "threads") {
+      if (!["open", "paid", "abandoned"].includes(String(out.payoffState))) out.payoffState = "open";
+      const payoffChapter = Number(out.payoffChapter);
+      out.payoffChapter = Number.isInteger(payoffChapter) && payoffChapter >= 1 ? payoffChapter : null;
+    }
+  }
   return out;
 }
 
@@ -283,6 +304,11 @@ export function storyBibleGenerateRoutes(db: Db) {
 
   // Character
   router.post(
+    "/companies/:companyId/book-studio/books/:bookId/generate/overview",
+    buildGenerateHandler("overview", ["title", "description"]),
+  );
+
+  router.post(
     "/companies/:companyId/book-studio/books/:bookId/generate/character",
     buildGenerateHandler("character", [
       "name",
@@ -324,6 +350,25 @@ export function storyBibleGenerateRoutes(db: Db) {
       "bannedCliches",
     ]),
   );
+
+  const codexGenerateFields: Record<string, string[]> = {
+    lore: ["name", "summary", "details"],
+    factions: ["name", "summary", "details"],
+    objects: ["name", "summary", "details"],
+    systems: ["name", "summary", "details"],
+    timeline: ["name", "summary", "details", "chapterNumber"],
+    threads: ["name", "summary", "details", "payoffState", "payoffChapter"],
+    themes: ["name", "summary", "details"],
+    glossary: ["name", "summary", "details", "term", "definition"],
+    relationship: ["fromEntityType", "fromEntityId", "toEntityType", "toEntityId", "type", "arcStage", "meter", "rules"],
+    fact: ["statement", "knownAsOf"],
+  };
+  for (const [entityType, fields] of Object.entries(codexGenerateFields)) {
+    router.post(
+      `/companies/:companyId/book-studio/books/:bookId/generate/${entityType}`,
+      buildGenerateHandler(entityType, fields),
+    );
+  }
 
   // Outline beats — dedicated multi-chapter handler (acceptance finding #3:
   // the generic single-entity handler ignored "N chapters" requests and let

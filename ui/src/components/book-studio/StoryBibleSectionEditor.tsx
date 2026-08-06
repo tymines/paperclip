@@ -90,7 +90,23 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
   };
 
   if (section === "overview") {
-    return <OverviewEditor key={book.id} book={book} loading={false} onUpdate={updateBook} />;
+    return <div data-story-bible-section={section}>
+      <OverviewEditor key={book.id} book={book} loading={false} onUpdate={updateBook} />
+      <div className="px-4 pb-4">
+        <button onClick={() => setShowGenerate((value) => !value)} className="flex items-center gap-1.5 px-1 py-1.5 text-xs text-purple-400 hover:text-purple-200">
+          <Sparkles className="h-3 w-3" /> Generate with Calliope
+        </button>
+        {showGenerate && <GenerateDraftPanel entityType="overview" bookId={book.id} companySlug={companySlug}
+          onDiscard={() => setShowGenerate(false)}
+          onAccept={(draft) => void run(async () => {
+            await updateBook({
+              title: typeof draft.title === "string" && draft.title.trim() ? draft.title.trim() : book.title,
+              metadata: { description: typeof draft.description === "string" ? draft.description : "" },
+            });
+            setShowGenerate(false);
+          })} />}
+      </div>
+    </div>;
   }
 
   const empty = section === "characters" ? characters.length === 0 : section === "world-locations" ? locations.length === 0 : styles.length === 0;

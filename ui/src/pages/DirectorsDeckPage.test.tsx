@@ -198,4 +198,28 @@ describe("DirectorsDeckPage — + NEW BOOK create flow", () => {
     const submit = container!.querySelector('[role="dialog"] button[type="submit"]') as HTMLButtonElement;
     expect(submit.disabled).toBe(true);
   });
+
+  it("shows a manuscript-only chapter even when the outline has no matching row", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      let payload: unknown = {};
+      if (url.endsWith("/book-studio/books")) payload = { books: [{ id: "book-1", slug: "orphan", title: "Orphan Chapter", metadata: {} }] };
+      else if (url.endsWith("/outline")) payload = { outline: [] };
+      else if (url.endsWith("/chapters")) payload = { chapters: [{ id: "ch-1", chapterNumber: 3, title: "Recovered Chapter", content: "Existing manuscript prose.", locked: false }] };
+      else if (url.includes("/characters")) payload = { characters: [] };
+      else if (url.includes("/world-locations")) payload = { "world-locations": [] };
+      else if (url.includes("/style")) payload = { style: [] };
+      else if (url.includes("/bible-review-queue")) payload = { pendingCount: 0 };
+      else if (url.includes("/codex-relationships")) payload = { available: true, relationships: [] };
+      else if (url.includes("/codex-facts")) payload = { available: true, known: [] };
+      else if (url.includes("/codex/")) payload = { available: true, entities: [] };
+      return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) } as Response;
+    }));
+    const r = renderPage(); container = r.container; root = r.root;
+    await flush();
+    await flush();
+
+    expect(container!.textContent).toContain("Recovered Chapter");
+    expect(container!.textContent).toContain("1ready");
+  });
 });
