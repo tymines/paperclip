@@ -41,9 +41,12 @@ import {
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
 import {
+  beginGenerationWorkerShutdown,
+  drainGenerationWorker,
   pollGenerations,
   reconcileGenerationsOnStartup,
 } from "./services/replicate-generator.js";
+import { logGenerationTickWarnings } from "./services/image-studio/generation-logging.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createSocialScheduler } from "./workers/social-scheduler.js";
@@ -754,6 +757,7 @@ export async function startServer(): Promise<StartedServer> {
     socialDmPoller,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
+  let imageStudioGenerationInterval: NodeJS.Timeout | null = null;
 
   // Increase keep-alive timeouts to safely outlive default idle timeouts
   // of common reverse proxies and load balancers (like AWS ALB, Nginx, or Traefik).
@@ -951,19 +955,22 @@ export async function startServer(): Promise<StartedServer> {
     );
     void reconcileGenerationsOnStartup(db as any)
       .then((result) => {
+        logGenerationTickWarnings(logger, result, "startup");
         logger.info(result, "image-studio generation startup reconciliation completed");
       })
       .catch(() => {
         logger.error("image-studio generation startup reconciliation failed");
       });
-    setInterval(() => {
+    imageStudioGenerationInterval = setInterval(() => {
       void pollGenerations(db as any)
         .then((result) => {
+          logGenerationTickWarnings(logger, result, "scheduled");
           if (
             result.submitted > 0 ||
             result.succeeded > 0 ||
             result.failed > 0 ||
-            result.quarantinedSubmissions > 0
+            result.quarantinedSubmissions > 0 ||
+            result.quarantinedLandings > 0
           ) {
             logger.info(result, "image-studio generation queue tick advanced jobs");
           }
@@ -1066,6 +1073,23 @@ export async function startServer(): Promise<StartedServer> {
   {
     const shutdown = async (signal: "SIGINT" | "SIGTERM") => {
       logger.info({ signal }, "Shutdown signal received; closing server gracefully");
+
+      // Stop all new scheduled/route generation kicks before any database or
+      // process teardown, then boundedly drain the active paid-provider tick.
+      beginGenerationWorkerShutdown();
+      if (imageStudioGenerationInterval) {
+        clearInterval(imageStudioGenerationInterval);
+        imageStudioGenerationInterval = null;
+      }
+      const generationDrained = await drainGenerationWorker(10_000);
+      if (!generationDrained) {
+        logger.warn(
+          { source: "shutdown", drained: false, timeoutMs: 10_000 },
+          "image-studio generation worker drain timed out",
+        );
+      } else {
+        logger.info({ source: "shutdown", drained: true }, "image-studio generation worker drained");
+      }
 
       // Stop accepting new connections and drain in-flight requests.
       await new Promise<void>((resolveClose) => {

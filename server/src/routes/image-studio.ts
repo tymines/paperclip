@@ -18,6 +18,7 @@ import { logger } from "../middleware/logger.js";
 import { generateContentIdeas } from "../services/influencer-studio/content-generator.js";
 import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
+import { logGenerationTickWarnings } from "../services/image-studio/generation-logging.js";
 import {
   expandPromptVariations,
   kickGenerationQueue,
@@ -70,11 +71,15 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
   const router = Router();
 
   function kickGenerationQueueAfterEnqueue(): void {
-    void kickGenerationQueue(db).catch(() => {
-      // Provider errors can contain URLs, handles, or request details. Keep this
-      // lifecycle signal intentionally context-free and sanitized.
-      logger.error("image-studio enqueue generation queue kick failed");
-    });
+    void kickGenerationQueue(db)
+      .then((result) => {
+        logGenerationTickWarnings(logger, result, "enqueue");
+      })
+      .catch(() => {
+        // Provider errors can contain URLs, handles, or request details. Keep this
+        // lifecycle signal intentionally context-free and sanitized.
+        logger.error("image-studio enqueue generation queue kick failed");
+      });
   }
 
   // GET /api/companies/:companyId/image-studio/providers

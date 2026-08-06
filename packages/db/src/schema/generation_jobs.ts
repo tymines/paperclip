@@ -44,6 +44,7 @@ export const generationJobs = pgTable(
     submissionEligibleAt: timestamp("submission_eligible_at", { withTimezone: true }),
     submissionAttemptId: uuid("submission_attempt_id"),
     submissionStartedAt: timestamp("submission_started_at", { withTimezone: true }),
+    landingStartedAt: timestamp("landing_started_at", { withTimezone: true }),
     replicatePredictionId: text("replicate_prediction_id"),
     outputPath: text("output_path"),
     contentRating: text("content_rating").notNull().default("sfw"),

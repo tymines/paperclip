@@ -60,6 +60,7 @@ const POLLABLE_STATUSES = ["submitted", "polling"] as const;
  * accepted the request even when Paperclip did not receive or persist a handle.
  */
 export const SUBMISSION_LEASE_MS = 5 * 60 * 1000;
+export const LANDING_LEASE_MS = 5 * 60 * 1000;
 
 const OUTPUTLESS_SUCCESS_ERROR = "Provider completed the generation without an output.";
 const UNKNOWN_SUBMISSION_ERROR =
@@ -68,6 +69,9 @@ const SUBMISSION_FAILED_ERROR =
   "Generation submission failed or its outcome is unknown; it was not retried to prevent duplicate billing.";
 const PROVIDER_FAILED_ERROR = "Provider reported that the generation failed.";
 const PROVIDER_CANCELED_ERROR = "Provider reported that the generation was canceled.";
+const LANDING_FAILED_ERROR = "Generation output could not be stored safely.";
+const INTERRUPTED_LANDING_ERROR =
+  "Generation output landing was interrupted and was not retried to avoid duplicate gallery records.";
 
 export type GenerationTickResult = {
   polled: number;
@@ -76,6 +80,8 @@ export type GenerationTickResult = {
   failed: number;
   pollDeferred: number;
   quarantinedSubmissions: number;
+  quarantinedLandings: number;
+  skippedDuringShutdown: boolean;
 };
 
 export type GenerationWorkerDependencies = {
@@ -94,6 +100,8 @@ function emptyTickResult(): GenerationTickResult {
     failed: 0,
     pollDeferred: 0,
     quarantinedSubmissions: 0,
+    quarantinedLandings: 0,
+    skippedDuringShutdown: false,
   };
 }
 
@@ -450,7 +458,7 @@ async function landSucceededJob(
     contentRating: job.contentRating,
   });
 
-  await db
+  const completed = await db
     .update(generationJobs)
     .set({
       status: "succeeded",
@@ -459,7 +467,16 @@ async function landSucceededJob(
       actualCostUsd: costUsd,
       completedAt: new Date(),
     })
-    .where(eq(generationJobs.id, job.id));
+    .where(
+      and(
+        eq(generationJobs.id, job.id),
+        eq(generationJobs.status, "landing"),
+      ),
+    )
+    .returning({ id: generationJobs.id });
+  if (completed.length !== 1) {
+    throw new Error("generation landing claim was no longer active");
+  }
 }
 
 type PollOutcome = "pending" | "succeeded" | "failed" | "deferred";
@@ -492,14 +509,12 @@ async function pollOne(
           );
         return "failed";
       }
-      // Atomically claim the job before downloading/inserting so a concurrent
-      // tick — or a second server process sharing this DB — can't land the same
-      // prediction twice (which would duplicate the gallery row + double-count
-      // cost). Only the worker whose UPDATE flips it out of an in-flight status
-      // proceeds; others see 0 rows and bail.
+      // Claim a durable nonterminal landing state before touching the filesystem
+      // or gallery. A process crash leaves `landing` behind for startup/periodic
+      // reconciliation instead of falsely publishing `succeeded`.
       const claimed = await db
         .update(generationJobs)
-        .set({ status: "succeeded" })
+        .set({ status: "landing", landingStartedAt: new Date() })
         .where(
           and(
             eq(generationJobs.id, job.id),
@@ -508,8 +523,28 @@ async function pollOne(
         )
         .returning({ id: generationJobs.id });
       if (claimed.length === 0) return "pending"; // another worker already claimed it
-      await landSucceededJob(db, job, provider, status);
-      return "succeeded";
+      try {
+        await landSucceededJob(db, job, provider, status);
+        return "succeeded";
+      } catch {
+        // Download, filesystem, image processing, gallery insert, or final job
+        // update failures are terminal and sanitized. Retrying a partially
+        // completed landing could create duplicate gallery/file state.
+        await db
+          .update(generationJobs)
+          .set({
+            status: "failed",
+            errorMessage: LANDING_FAILED_ERROR,
+            completedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(generationJobs.id, job.id),
+              eq(generationJobs.status, "landing"),
+            ),
+          );
+        return "failed";
+      }
     } else if (status.status === "failed" || status.status === "canceled") {
       await db
         .update(generationJobs)
@@ -550,6 +585,7 @@ async function pollOne(
 // don't double-submit or exceed the concurrency cap inside one server process.
 // Database compare-and-set claims provide the cross-process boundary.
 let tickInFlight: Promise<GenerationTickResult> | null = null;
+let acceptingGenerationWork = true;
 
 // Per-provider "is the token configured?" cache for one tick (cheap disk reads,
 // but avoid hammering the store inside the queued loop).
@@ -583,6 +619,25 @@ async function quarantineExpiredSubmissions(db: Db, now: Date): Promise<number> 
   return rows.length;
 }
 
+async function quarantineExpiredLandings(db: Db, now: Date): Promise<number> {
+  const leaseCutoff = new Date(now.getTime() - LANDING_LEASE_MS);
+  const rows = await db
+    .update(generationJobs)
+    .set({
+      status: "failed",
+      errorMessage: INTERRUPTED_LANDING_ERROR,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(generationJobs.status, "landing"),
+        lte(generationJobs.landingStartedAt, leaseCutoff),
+      ),
+    )
+    .returning({ id: generationJobs.id });
+  return rows.length;
+}
+
 async function runTick(
   db: Db,
   options: { submitQueued: boolean; now?: Date },
@@ -590,6 +645,10 @@ async function runTick(
 ): Promise<GenerationTickResult> {
   const result = emptyTickResult();
   result.quarantinedSubmissions = await quarantineExpiredSubmissions(
+    db,
+    options.now ?? new Date(),
+  );
+  result.quarantinedLandings = await quarantineExpiredLandings(
     db,
     options.now ?? new Date(),
   );
@@ -669,6 +728,9 @@ export async function pollGenerations(
   db: Db,
   dependencies: GenerationWorkerDependencies = DEFAULT_WORKER_DEPENDENCIES,
 ): Promise<GenerationTickResult> {
+  if (!acceptingGenerationWork) {
+    return { ...emptyTickResult(), skippedDuringShutdown: true };
+  }
   if (tickInFlight) return tickInFlight;
   tickInFlight = runTick(db, { submitQueued: true }, dependencies).finally(() => {
     tickInFlight = null;
@@ -692,5 +754,38 @@ export async function reconcileGenerationsOnStartup(
   return tickInFlight;
 }
 
-/** Alias used by the generate route to kick the queue right after enqueue. */
-export const kickGenerationQueue = pollGenerations;
+/** Route kick used immediately after enqueue; disabled as shutdown begins. */
+export async function kickGenerationQueue(
+  db: Db,
+  dependencies: GenerationWorkerDependencies = DEFAULT_WORKER_DEPENDENCIES,
+): Promise<GenerationTickResult> {
+  return pollGenerations(db, dependencies);
+}
+
+/** Prevent timers/routes from starting new generation work during shutdown. */
+export function beginGenerationWorkerShutdown(): void {
+  acceptingGenerationWork = false;
+}
+
+/** Boundedly wait for the active tick. Returns false when the deadline wins. */
+export async function drainGenerationWorker(timeoutMs = 10_000): Promise<boolean> {
+  const active = tickInFlight;
+  if (!active) return true;
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      active.then(() => true, () => true),
+      new Promise<boolean>((resolveDrain) => {
+        timeout = setTimeout(() => resolveDrain(false), Math.max(0, timeoutMs));
+        timeout.unref();
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+/** Focused-test reset; production startup relies on the module default. */
+export function resetGenerationWorkerLifecycleForTests(): void {
+  acceptingGenerationWork = true;
+}
