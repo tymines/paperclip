@@ -6,7 +6,9 @@
 ALTER TABLE "generation_jobs" ADD COLUMN "submission_eligible_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "generation_jobs" ADD COLUMN "submission_attempt_id" uuid;--> statement-breakpoint
 ALTER TABLE "generation_jobs" ADD COLUMN "submission_started_at" timestamp with time zone;--> statement-breakpoint
-ALTER TABLE "generation_jobs" DROP CONSTRAINT "generation_jobs_status_check";--> statement-breakpoint
+-- Historical AugiAI databases can predate the named status constraint even
+-- though fresh databases contain it. Both shapes must migrate safely.
+ALTER TABLE "generation_jobs" DROP CONSTRAINT IF EXISTS "generation_jobs_status_check";--> statement-breakpoint
 ALTER TABLE "generation_jobs" ADD CONSTRAINT "generation_jobs_status_check"
   CHECK ("status" IN ('queued','submitting','submitted','polling','succeeded','failed'));--> statement-breakpoint
 CREATE UNIQUE INDEX "generation_jobs_submission_attempt_unique_idx"
