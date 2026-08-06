@@ -44,6 +44,57 @@ if (!embeddedPostgresSupport.supported) {
 
 describeEmbeddedPostgres("applyPendingMigrations", () => {
   it(
+    "recognizes the released 0164 hash without replaying it after 0165",
+    async () => {
+      const connectionString = await createTempDatabase();
+
+      await applyPendingMigrations(connectionString);
+
+      const sql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const currentRecoveryHash = await migrationHash(
+          "0164_image_studio_generation_recovery.sql",
+        );
+        const releasedRecoveryHash =
+          "dacd92471464a037626f9e8e25c11f369d28b78177a5616ad3dc20e5ca728245";
+
+        await sql.unsafe(
+          `UPDATE "drizzle"."__drizzle_migrations" SET hash = '${releasedRecoveryHash}' WHERE hash = '${currentRecoveryHash}'`,
+        );
+      } finally {
+        await sql.end();
+      }
+
+      const migrationState = await inspectMigrations(connectionString);
+      expect(migrationState.status).toBe("upToDate");
+      expect(migrationState.appliedMigrations).toContain(
+        "0164_image_studio_generation_recovery.sql",
+      );
+      expect(migrationState.appliedMigrations).toContain(
+        "0165_image_studio_landing_recovery.sql",
+      );
+
+      await applyPendingMigrations(connectionString);
+
+      const verifySql = postgres(connectionString, { max: 1, onnotice: () => {} });
+      try {
+        const constraints = await verifySql.unsafe<{ definition: string }[]>(`
+          SELECT pg_get_constraintdef(c.oid) AS definition
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          WHERE t.relname = 'generation_jobs'
+            AND c.contype = 'c'
+            AND pg_get_constraintdef(c.oid) LIKE '%landing%'
+        `);
+        expect(constraints).toHaveLength(1);
+      } finally {
+        await verifySql.end();
+      }
+    },
+    20_000,
+  );
+
+  it(
     "applies an inserted earlier migration without replaying later legacy migrations",
     async () => {
       const connectionString = await createTempDatabase();

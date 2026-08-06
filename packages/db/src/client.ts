@@ -10,6 +10,17 @@ const MIGRATIONS_FOLDER = fileURLToPath(new URL("./migrations", import.meta.url)
 const DRIZZLE_MIGRATIONS_TABLE = "__drizzle_migrations";
 const MIGRATIONS_JOURNAL_JSON = fileURLToPath(new URL("./migrations/meta/_journal.json", import.meta.url));
 
+// Migration 0164 was released before its legacy-schema compatibility fix. Databases
+// that applied the original bytes must continue to recognize that ledger hash as
+// 0164, or the migration runner would replay it after 0165 and regress the final
+// status constraint (including support for the durable `landing` state).
+const LEGACY_MIGRATION_HASH_ALIASES = new Map<string, string>([
+  [
+    "dacd92471464a037626f9e8e25c11f369d28b78177a5616ad3dc20e5ca728245",
+    "0164_image_studio_generation_recovery.sql",
+  ],
+]);
+
 function createUtilitySql(url: string) {
   return postgres(url, { max: 1, onnotice: () => {} });
 }
@@ -296,6 +307,12 @@ async function mapHashesToMigrationFiles(migrationFiles: string[]): Promise<Map<
       mapped.set(hash, migrationFile);
     }),
   );
+
+  for (const [legacyHash, migrationFile] of LEGACY_MIGRATION_HASH_ALIASES) {
+    if (migrationFiles.includes(migrationFile) && !mapped.has(legacyHash)) {
+      mapped.set(legacyHash, migrationFile);
+    }
+  }
 
   return mapped;
 }
