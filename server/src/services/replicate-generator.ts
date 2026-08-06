@@ -25,9 +25,10 @@
  * for synthetic-character LoRA inference, wired as a normal config path.
  */
 import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import sharp from "sharp";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
   imageProviders,
@@ -49,8 +50,52 @@ import { uploadsRoot } from "./image-studio/uploads.js";
 export const INFERENCE_MODEL =
   process.env.REPLICATE_INFERENCE_MODEL ?? "black-forest-labs/flux-dev-lora";
 
-/** Statuses that count against the Replicate concurrency cap. */
-const IN_FLIGHT_STATUSES = ["submitted", "polling"] as const;
+/** Statuses that count against the provider concurrency cap. */
+const ACTIVE_STATUSES = ["submitting", "submitted", "polling"] as const;
+const POLLABLE_STATUSES = ["submitted", "polling"] as const;
+
+/**
+ * A crashed POST remains quarantined for this lease before becoming terminal.
+ * It is never submitted again: a transport failure can mean the paid provider
+ * accepted the request even when Paperclip did not receive or persist a handle.
+ */
+export const SUBMISSION_LEASE_MS = 5 * 60 * 1000;
+
+const OUTPUTLESS_SUCCESS_ERROR = "Provider completed the generation without an output.";
+const UNKNOWN_SUBMISSION_ERROR =
+  "Generation submission outcome is unknown after restart; it was not retried to prevent duplicate billing.";
+const SUBMISSION_FAILED_ERROR =
+  "Generation submission failed or its outcome is unknown; it was not retried to prevent duplicate billing.";
+const PROVIDER_FAILED_ERROR = "Provider reported that the generation failed.";
+const PROVIDER_CANCELED_ERROR = "Provider reported that the generation was canceled.";
+
+export type GenerationTickResult = {
+  polled: number;
+  submitted: number;
+  succeeded: number;
+  failed: number;
+  pollDeferred: number;
+  quarantinedSubmissions: number;
+};
+
+export type GenerationWorkerDependencies = {
+  resolveProvider(host: string): ImageProvider | null;
+};
+
+const DEFAULT_WORKER_DEPENDENCIES: GenerationWorkerDependencies = {
+  resolveProvider: getProvider,
+};
+
+function emptyTickResult(): GenerationTickResult {
+  return {
+    polled: 0,
+    submitted: 0,
+    succeeded: 0,
+    failed: 0,
+    pollDeferred: 0,
+    quarantinedSubmissions: 0,
+  };
+}
 
 type Persona = typeof imageProviders.$inferSelect;
 
@@ -271,26 +316,44 @@ async function buildParams(
  * Submit a single queued job to its provider. Returns the prediction id, or
  * marks the job failed (with error_message) and returns null on any error.
  */
-export async function fireGeneration(db: Db, job: GenerationJob): Promise<string | null> {
+export async function fireGeneration(
+  db: Db,
+  job: GenerationJob,
+  submissionAttemptId: string,
+  dependencies: GenerationWorkerDependencies = DEFAULT_WORKER_DEPENDENCIES,
+): Promise<string | null> {
   try {
-    const provider = getProvider(job.providerHost);
+    const provider = dependencies.resolveProvider(job.providerHost);
     if (!provider) throw new Error(`Unknown provider_host '${job.providerHost}'`);
     const { params } = await buildParams(db, job, provider);
     const { predictionId } = await provider.submitGeneration(params);
-    await db
+    const persisted = await db
       .update(generationJobs)
       .set({ status: "submitted", replicatePredictionId: predictionId })
-      .where(eq(generationJobs.id, job.id));
-    return predictionId;
-  } catch (err) {
+      .where(
+        and(
+          eq(generationJobs.id, job.id),
+          eq(generationJobs.status, "submitting"),
+          eq(generationJobs.submissionAttemptId, submissionAttemptId),
+        ),
+      )
+      .returning({ id: generationJobs.id });
+    return persisted.length > 0 ? predictionId : null;
+  } catch {
     await db
       .update(generationJobs)
       .set({
         status: "failed",
-        errorMessage: err instanceof Error ? err.message : String(err),
+        errorMessage: SUBMISSION_FAILED_ERROR,
         completedAt: new Date(),
       })
-      .where(eq(generationJobs.id, job.id));
+      .where(
+        and(
+          eq(generationJobs.id, job.id),
+          eq(generationJobs.status, "submitting"),
+          eq(generationJobs.submissionAttemptId, submissionAttemptId),
+        ),
+      );
     return null;
   }
 }
@@ -399,14 +462,36 @@ async function landSucceededJob(
     .where(eq(generationJobs.id, job.id));
 }
 
-/** Poll one in-flight job and advance its state. Errors are stored, not thrown. */
-async function pollOne(db: Db, job: GenerationJob): Promise<void> {
-  if (!job.replicatePredictionId) return;
+type PollOutcome = "pending" | "succeeded" | "failed" | "deferred";
+
+/** Poll one in-flight job and advance its state. GET failures remain retryable. */
+async function pollOne(
+  db: Db,
+  job: GenerationJob,
+  dependencies: GenerationWorkerDependencies,
+): Promise<PollOutcome> {
+  if (!job.replicatePredictionId) return "deferred";
   try {
-    const provider = getProvider(job.providerHost);
+    const provider = dependencies.resolveProvider(job.providerHost);
     if (!provider) throw new Error(`Unknown provider_host '${job.providerHost}'`);
     const status = await provider.pollPrediction(job.replicatePredictionId);
     if (status.status === "succeeded") {
+      if (!status.outputUrl) {
+        await db
+          .update(generationJobs)
+          .set({
+            status: "failed",
+            errorMessage: OUTPUTLESS_SUCCESS_ERROR,
+            completedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(generationJobs.id, job.id),
+              inArray(generationJobs.status, [...POLLABLE_STATUSES]),
+            ),
+          );
+        return "failed";
+      }
       // Atomically claim the job before downloading/inserting so a concurrent
       // tick — or a second server process sharing this DB — can't land the same
       // prediction twice (which would duplicate the gallery row + double-count
@@ -418,100 +503,161 @@ async function pollOne(db: Db, job: GenerationJob): Promise<void> {
         .where(
           and(
             eq(generationJobs.id, job.id),
-            inArray(generationJobs.status, [...IN_FLIGHT_STATUSES]),
+            inArray(generationJobs.status, [...POLLABLE_STATUSES]),
           ),
         )
         .returning({ id: generationJobs.id });
-      if (claimed.length === 0) return; // another worker already claimed it
+      if (claimed.length === 0) return "pending"; // another worker already claimed it
       await landSucceededJob(db, job, provider, status);
+      return "succeeded";
     } else if (status.status === "failed" || status.status === "canceled") {
       await db
         .update(generationJobs)
         .set({
           status: "failed",
-          errorMessage: status.error ?? `Prediction ${status.status}`,
+          errorMessage:
+            status.status === "canceled" ? PROVIDER_CANCELED_ERROR : PROVIDER_FAILED_ERROR,
           completedAt: new Date(),
         })
-        .where(eq(generationJobs.id, job.id));
+        .where(
+          and(
+            eq(generationJobs.id, job.id),
+            inArray(generationJobs.status, [...POLLABLE_STATUSES]),
+          ),
+        );
+      return "failed";
     } else if (job.status !== "polling") {
       // starting | processing → mark polling so the UI shows progress.
       await db
         .update(generationJobs)
         .set({ status: "polling" })
-        .where(eq(generationJobs.id, job.id));
+        .where(
+          and(
+            eq(generationJobs.id, job.id),
+            inArray(generationJobs.status, [...POLLABLE_STATUSES]),
+          ),
+        );
     }
-  } catch (err) {
-    await db
-      .update(generationJobs)
-      .set({
-        status: "failed",
-        errorMessage: err instanceof Error ? err.message : String(err),
-        completedAt: new Date(),
-      })
-      .where(eq(generationJobs.id, job.id));
+    return "pending";
+  } catch {
+    // Polling is GET-only and safe to retry. Do not persist raw provider errors:
+    // they may contain handles, URLs, inputs, or other sensitive material.
+    return "deferred";
   }
 }
 
 // Serialise ticks so concurrent invocations (15s timer + post-enqueue kick)
-// don't double-submit or exceed the concurrency cap.
-let tickInFlight: Promise<void> | null = null;
+// don't double-submit or exceed the concurrency cap inside one server process.
+// Database compare-and-set claims provide the cross-process boundary.
+let tickInFlight: Promise<GenerationTickResult> | null = null;
 
 // Per-provider "is the token configured?" cache for one tick (cheap disk reads,
 // but avoid hammering the store inside the queued loop).
-async function configuredHosts(): Promise<Set<string>> {
+async function configuredHosts(dependencies: GenerationWorkerDependencies): Promise<Set<string>> {
   const set = new Set<string>();
   await Promise.all(
     (["replicate", "atlascloud", "wavespeedai"] as const).map(async (host) => {
-      const p = getProvider(host);
+      const p = dependencies.resolveProvider(host);
       if (p && (await p.isConfigured())) set.add(host);
     }),
   );
   return set;
 }
 
-async function runTick(db: Db): Promise<void> {
+async function quarantineExpiredSubmissions(db: Db, now: Date): Promise<number> {
+  const leaseCutoff = new Date(now.getTime() - SUBMISSION_LEASE_MS);
+  const rows = await db
+    .update(generationJobs)
+    .set({
+      status: "failed",
+      errorMessage: UNKNOWN_SUBMISSION_ERROR,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(generationJobs.status, "submitting"),
+        lte(generationJobs.submissionStartedAt, leaseCutoff),
+      ),
+    )
+    .returning({ id: generationJobs.id });
+  return rows.length;
+}
+
+async function runTick(
+  db: Db,
+  options: { submitQueued: boolean; now?: Date },
+  dependencies: GenerationWorkerDependencies,
+): Promise<GenerationTickResult> {
+  const result = emptyTickResult();
+  result.quarantinedSubmissions = await quarantineExpiredSubmissions(
+    db,
+    options.now ?? new Date(),
+  );
+
   // 1. Poll everything currently in flight (any provider).
   const inFlight = await db
     .select()
     .from(generationJobs)
-    .where(inArray(generationJobs.status, [...IN_FLIGHT_STATUSES]));
+    .where(inArray(generationJobs.status, [...POLLABLE_STATUSES]));
   for (const job of inFlight) {
-    await pollOne(db, job);
+    result.polled += 1;
+    const outcome = await pollOne(db, job, dependencies);
+    if (outcome === "succeeded") result.succeeded += 1;
+    if (outcome === "failed") result.failed += 1;
+    if (outcome === "deferred") result.pollDeferred += 1;
   }
+
+  if (!options.submitQueued) return result;
 
   // 2. Submit queued jobs up to the free concurrency budget. Recompute in-flight
   // AFTER polling, since some of step 1 may have just succeeded/failed.
   const stillInFlight = await db
     .select({ id: generationJobs.id })
     .from(generationJobs)
-    .where(inArray(generationJobs.status, [...IN_FLIGHT_STATUSES]));
+    .where(inArray(generationJobs.status, [...ACTIVE_STATUSES]));
   const slots = concurrencyCap() - stillInFlight.length;
-  if (slots <= 0) return;
+  if (slots <= 0) return result;
 
   const queued = await db
     .select()
     .from(generationJobs)
-    .where(eq(generationJobs.status, "queued"))
+    .where(
+      and(
+        eq(generationJobs.status, "queued"),
+        isNotNull(generationJobs.submissionEligibleAt),
+      ),
+    )
     .orderBy(asc(generationJobs.createdAt))
     .limit(slots);
-  if (queued.length === 0) return;
+  if (queued.length === 0) return result;
 
   // A job whose provider has no token stays queued (matches the old Replicate
   // behaviour) — don't fail it just because a key isn't set yet.
-  const configured = await configuredHosts();
+  const configured = await configuredHosts(dependencies);
   for (const job of queued) {
     if (!configured.has(job.providerHost)) continue;
-    // Atomically claim queued → submitted so a concurrent tick / second server
-    // process can't double-submit the same job (which would waste a paid
-    // prediction). Only the worker that flips the row proceeds.
+    const submissionAttemptId = randomUUID();
+    const submissionStartedAt = new Date();
+    // Atomically claim queued -> submitting before the paid POST. If the process
+    // exits after the provider accepts but before the handle is durable, this
+    // state is quarantined and never blindly submitted a second time.
     const claimed = await db
       .update(generationJobs)
-      .set({ status: "submitted" })
-      .where(and(eq(generationJobs.id, job.id), eq(generationJobs.status, "queued")))
+      .set({ status: "submitting", submissionAttemptId, submissionStartedAt })
+      .where(
+        and(
+          eq(generationJobs.id, job.id),
+          eq(generationJobs.status, "queued"),
+          isNotNull(generationJobs.submissionEligibleAt),
+        ),
+      )
       .returning({ id: generationJobs.id });
     if (claimed.length === 0) continue; // another worker grabbed it
-    await fireGeneration(db, job);
+    const predictionId = await fireGeneration(db, job, submissionAttemptId, dependencies);
+    if (predictionId) result.submitted += 1;
+    else result.failed += 1;
   }
+  return result;
 }
 
 /**
@@ -519,9 +665,28 @@ async function runTick(db: Db): Promise<void> {
  * to the concurrency cap. Safe to call concurrently — ticks are serialised.
  * Invoked every 15s by the scheduler and kicked right after a batch is enqueued.
  */
-export async function pollGenerations(db: Db): Promise<void> {
+export async function pollGenerations(
+  db: Db,
+  dependencies: GenerationWorkerDependencies = DEFAULT_WORKER_DEPENDENCIES,
+): Promise<GenerationTickResult> {
   if (tickInFlight) return tickInFlight;
-  tickInFlight = runTick(db).finally(() => {
+  tickInFlight = runTick(db, { submitQueued: true }, dependencies).finally(() => {
+    tickInFlight = null;
+  });
+  return tickInFlight;
+}
+
+/**
+ * Idempotent startup reconciliation. Existing submitted/polling jobs are
+ * GET-polled, expired unknown submissions are quarantined, and queued work is
+ * deliberately not submitted. Historical queued rows remain ineligible.
+ */
+export async function reconcileGenerationsOnStartup(
+  db: Db,
+  dependencies: GenerationWorkerDependencies = DEFAULT_WORKER_DEPENDENCIES,
+): Promise<GenerationTickResult> {
+  if (tickInFlight) return tickInFlight;
+  tickInFlight = runTick(db, { submitQueued: false }, dependencies).finally(() => {
     tickInFlight = null;
   });
   return tickInFlight;

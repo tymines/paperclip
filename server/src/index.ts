@@ -40,7 +40,10 @@ import {
   routineService,
 } from "./services/index.js";
 import { createFeedbackTraceShareClientFromConfig } from "./services/feedback-share-client.js";
-import { pollGenerations } from "./services/replicate-generator.js";
+import {
+  pollGenerations,
+  reconcileGenerationsOnStartup,
+} from "./services/replicate-generator.js";
 import { buildRuntimeApiCandidateUrls, choosePrimaryRuntimeApiUrl } from "./runtime-api.js";
 import { createPluginWorkerManager } from "./services/plugin-worker-manager.js";
 import { createSocialScheduler } from "./workers/social-scheduler.js";
@@ -936,14 +939,41 @@ export async function startServer(): Promise<StartedServer> {
         });
     }, config.heartbeatSchedulerIntervalMs);
 
-    // Image Studio batch generator: poll in-flight Replicate predictions and
-    // submit queued generation_jobs up to the concurrency cap, every 15s. Plain
-    // HTTP worker — no agent loop. The generate route also kicks this on enqueue.
-    setInterval(() => {
-      void pollGenerations(db as any).catch((err) => {
-        logger.error({ err }, "image-studio generation queue tick failed");
+  }
+
+  // Image Studio generation is independent from agent heartbeat scheduling.
+  // Startup reconciliation is GET-only for durable handles and never submits
+  // queued rows; recurring ticks submit only explicitly eligible new rows.
+  if (config.imageStudioGenerationWorkerEnabled) {
+    logger.info(
+      { intervalMs: config.imageStudioGenerationWorkerIntervalMs },
+      "image-studio generation worker enabled",
+    );
+    void reconcileGenerationsOnStartup(db as any)
+      .then((result) => {
+        logger.info(result, "image-studio generation startup reconciliation completed");
+      })
+      .catch(() => {
+        logger.error("image-studio generation startup reconciliation failed");
       });
-    }, 15_000);
+    setInterval(() => {
+      void pollGenerations(db as any)
+        .then((result) => {
+          if (
+            result.submitted > 0 ||
+            result.succeeded > 0 ||
+            result.failed > 0 ||
+            result.quarantinedSubmissions > 0
+          ) {
+            logger.info(result, "image-studio generation queue tick advanced jobs");
+          }
+        })
+        .catch(() => {
+          logger.error("image-studio generation queue tick failed");
+        });
+    }, config.imageStudioGenerationWorkerIntervalMs);
+  } else {
+    logger.info("image-studio generation worker disabled");
   }
 
   if (config.databaseBackupEnabled) {
@@ -1005,6 +1035,8 @@ export async function startServer(): Promise<StartedServer> {
         migrationSummary,
         heartbeatSchedulerEnabled: config.heartbeatSchedulerEnabled,
         heartbeatSchedulerIntervalMs: config.heartbeatSchedulerIntervalMs,
+        imageStudioGenerationWorkerEnabled: config.imageStudioGenerationWorkerEnabled,
+        imageStudioGenerationWorkerIntervalMs: config.imageStudioGenerationWorkerIntervalMs,
         databaseBackupEnabled: config.databaseBackupEnabled,
         databaseBackupIntervalMinutes: config.databaseBackupIntervalMinutes,
         databaseBackupRetentionDays: config.databaseBackupRetentionDays,

@@ -14,6 +14,7 @@ import {
 import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { socialPosts } from "@paperclipai/db";
+import { logger } from "../middleware/logger.js";
 import { generateContentIdeas } from "../services/influencer-studio/content-generator.js";
 import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
@@ -67,6 +68,14 @@ async function loadProvider(db: Db, companyId: string, providerId: string) {
 
 export function imageStudioRoutes(db: Db, storage?: StorageService) {
   const router = Router();
+
+  function kickGenerationQueueAfterEnqueue(): void {
+    void kickGenerationQueue(db).catch(() => {
+      // Provider errors can contain URLs, handles, or request details. Keep this
+      // lifecycle signal intentionally context-free and sanitized.
+      logger.error("image-studio enqueue generation queue kick failed");
+    });
+  }
 
   // GET /api/companies/:companyId/image-studio/providers
   router.get("/companies/:companyId/image-studio/providers", async (req, res) => {
@@ -813,6 +822,9 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
           ? defaults.baseSeed + seedOffset + i
           : null,
       status: "queued" as const,
+      // Only route-created work after the repaired worker is live is eligible.
+      // Migrated historical rows remain NULL and can never be auto-submitted.
+      submissionEligibleAt: new Date(),
       contentRating: defaults.contentRating,
       costEstimateUsd: costEstimate,
     }));
@@ -904,7 +916,7 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
     const inserted = await db.insert(generationJobs).values(rows).returning({ id: generationJobs.id });
 
     // Kick the queue immediately (fire-and-forget); the 15s scheduler also drives it.
-    void kickGenerationQueue(db).catch(() => {});
+    kickGenerationQueueAfterEnqueue();
 
     res.status(202).json({
       batch_id: batchId,
@@ -993,7 +1005,7 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
       .insert(generationJobs)
       .values(rows)
       .returning({ id: generationJobs.id });
-    void kickGenerationQueue(db).catch(() => {});
+    kickGenerationQueueAfterEnqueue();
 
     res.status(202).json({
       batch_id: batchId,
@@ -1188,7 +1200,7 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
       .insert(generationJobs)
       .values(allRows)
       .returning({ id: generationJobs.id, providerHost: generationJobs.providerHost });
-    void kickGenerationQueue(db).catch(() => {});
+    kickGenerationQueueAfterEnqueue();
 
     // Group the created job ids by provider for the side-by-side UI.
     const jobsByProvider: Record<string, string[]> = {};
@@ -1279,7 +1291,7 @@ export function imageStudioRoutes(db: Db, storage?: StorageService) {
     if (allRows.length === 0) throw badRequest("No valid categories resolved");
 
     const inserted = await db.insert(generationJobs).values(allRows).returning({ id: generationJobs.id });
-    void kickGenerationQueue(db).catch(() => {});
+    kickGenerationQueueAfterEnqueue();
 
     res.status(202).json({
       batch_id: batchId,

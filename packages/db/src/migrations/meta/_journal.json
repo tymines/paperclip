@@ -1121,6 +1121,13 @@
       "when": 1785888000000,
       "tag": "0163_book_studio_durable_dispatch",
       "breakpoints": true
+    },
+    {
+      "idx": 160,
+      "version": "7",
+      "when": 1785992400000,
+      "tag": "0164_image_studio_generation_recovery",
+      "breakpoints": true
     }
   ]
 }
