@@ -60,7 +60,7 @@ function MobileSheet({ title, onClose, children }: { title: string; onClose: () 
     requestAnimationFrame(() => (focusable()[0] ?? dialogRef.current)?.focus());
     return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
   }, [onClose]);
-  return <div className="fixed inset-0 z-[70] md:hidden" role="presentation">
+  return <div className="fixed inset-0 z-[70] @min-[1100px]/deck:hidden" role="presentation">
     <button className="absolute inset-0 h-full w-full bg-black/65" aria-label={`Close ${title}`} onClick={onClose} />
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="absolute inset-x-0 bottom-0 max-h-[88dvh] overflow-y-auto rounded-t-2xl border border-white/15 bg-[#0d1016] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl">
       <header className="sticky top-0 z-10 flex min-h-12 items-center justify-between border-b border-white/10 bg-[#0d1016] px-4"><h2 className="font-serif text-lg">{title}</h2><button className="grid h-11 w-11 place-items-center rounded-md border border-white/15" onClick={onClose} aria-label={`Close ${title}`}>×</button></header>
@@ -270,7 +270,7 @@ export function DirectorsDeckPage() {
   const chapterStatusMap = (activeBook?.metadata?.chapterStatus ?? {}) as Record<string, string>;
 
   return (
-    <div className="grid h-full grid-rows-[52px_auto_1fr] md:grid-rows-[52px_1fr] bg-[#0a0c10] text-[#ece9e2] font-sans">
+    <div className="@container/deck grid h-full min-w-0 grid-rows-[52px_auto_minmax(0,1fr)] overflow-x-hidden bg-[#0a0c10] text-[#ece9e2] font-sans">
       <DeckTopBar
         books={books.map(({ id, slug, title }) => ({ id, slug, title }))}
         activeBookId={activeBookId}
@@ -291,11 +291,11 @@ export function DirectorsDeckPage() {
         onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
-      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] md:hidden" aria-label="Book tools">
+      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[1100px]/deck:hidden" aria-label="Book tools">
         {(["chapters", "bible", "inspect", "tools"] as const).map((sheet) => <button key={sheet} className="min-h-11 px-1 text-[11px] font-semibold" onClick={() => setMobileSheet(sheet)}>{sheet === "bible" ? "Story Bible" : sheet[0].toUpperCase() + sheet.slice(1)}</button>)}
       </nav>
-      <div className="grid grid-cols-1 lg:grid-cols-[272px_minmax(460px,1fr)_322px] md:grid-cols-[240px_minmax(0,1fr)] min-h-0">
-        <div className="hidden md:block min-h-0">
+      <div className="grid min-h-0 min-w-0 grid-cols-1 @min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)] @min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]">
+        <div className="hidden min-h-0 @min-[760px]/deck:block">
           <DeckRail
             chapters={deckChapters}
             activeChapter={activeChapter}
@@ -336,7 +336,7 @@ export function DirectorsDeckPage() {
           )}
         </main>
         {activeBook && (
-          <div className="hidden lg:block min-h-0">
+          <div className="hidden min-h-0 @min-[1100px]/deck:block">
             <DeckInspector
               bookId={activeBook.id}
               companySlug={companySlug}

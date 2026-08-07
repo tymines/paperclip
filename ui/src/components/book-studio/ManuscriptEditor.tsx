@@ -470,13 +470,13 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       : (chapters.find((c) => c.chapterNumber === selectedCh)?.title ?? `Chapter ${selectedCh}`);
 
   return (
-    <div className="flex flex-col min-h-0 h-full">
+    <div className="@container/manuscript flex h-full min-h-0 min-w-0 flex-col">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-gray-800 px-5 py-3 shrink-0">
-        <div className="flex min-w-0 flex-1 items-center gap-3">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-gray-800 px-3 py-3 @min-[760px]/manuscript:flex-row @min-[760px]/manuscript:items-center @min-[760px]/manuscript:justify-between @min-[760px]/manuscript:gap-x-3 @min-[760px]/manuscript:px-5">
+        <div className="flex min-w-0 flex-1 items-center gap-2 @min-[760px]/manuscript:gap-3">
           {!noChapters && (
             <select
-              className="shrink-0 rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500/50"
+              className="min-w-0 max-w-[55%] flex-1 truncate rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-sm text-gray-200 focus:border-blue-500/50 focus:outline-none @min-[760px]/manuscript:max-w-72"
               value={selectedCh ?? ""}
               onChange={(e) => setSelectedCh(parseInt(e.target.value, 10) || null)}
             >
@@ -487,7 +487,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
               ))}
             </select>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-gray-100" title={chapterTitle}>{chapterTitle}</h2>
             <p className="text-xs text-gray-500 whitespace-nowrap">{noChapters ? "No chapters" : `${wordCount.toLocaleString()} words`}</p>
           </div>
@@ -511,7 +511,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
           )}
         </div>
 
-        <div className="flex w-full items-center gap-2 overflow-x-auto pb-1 md:w-auto md:flex-wrap md:justify-end md:overflow-visible md:pb-0 [&>button]:shrink-0 [&>button]:whitespace-nowrap">
+        <div className="flex w-full min-w-0 items-center gap-2 overflow-x-auto pb-1 @min-[760px]/manuscript:w-auto @min-[760px]/manuscript:flex-wrap @min-[760px]/manuscript:justify-end @min-[760px]/manuscript:overflow-visible @min-[760px]/manuscript:pb-0 [&>button]:shrink-0 [&>button]:whitespace-nowrap">
           <button
             onClick={draftProse}
             disabled={drafting || selectedCh == null || chapterLocked}

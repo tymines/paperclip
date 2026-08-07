@@ -222,4 +222,20 @@ describe("DirectorsDeckPage — + NEW BOOK create flow", () => {
     expect(container!.textContent).toContain("Recovered Chapter");
     expect(container!.textContent).toContain("1ready");
   });
+
+  it("uses deck container width for the compact, laptop, and wide-desktop panes", async () => {
+    stubFetch(() => ({ ok: true, status: 200, payload: { book: NEW_BOOK } }));
+    const r = renderPage(); container = r.container; root = r.root;
+    await flush();
+
+    const page = container!.firstElementChild as HTMLElement;
+    expect(page.className).toContain("@container/deck");
+    expect(page.className).toContain("overflow-x-hidden");
+
+    const workspaceGrid = container!.querySelector("main")!.parentElement!;
+    expect(workspaceGrid.className).toContain("grid-cols-1");
+    expect(workspaceGrid.className).toContain("@min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)]");
+    expect(workspaceGrid.className).toContain("@min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]");
+    expect(container!.querySelector('nav[aria-label="Book tools"]')!.className).toContain("@min-[1100px]/deck:hidden");
+  });
 });

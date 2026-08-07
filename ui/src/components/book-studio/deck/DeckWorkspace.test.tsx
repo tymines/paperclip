@@ -118,6 +118,12 @@ describe("DeckWorkspace — beat delete control", () => {
     expect(title.className).toContain("break-words");
     const stage = Array.from(container!.querySelectorAll("span")).find((node) => node.textContent?.includes("Compile"))!.parentElement!;
     expect(stage.className).toContain("overflow-x-auto");
+    const stageLabels = Array.from(stage.querySelectorAll("span"));
+    expect(stageLabels).toHaveLength(7);
+    for (const label of stageLabels) {
+      expect(label.className).toContain("shrink-0");
+      expect(label.className).toContain("whitespace-nowrap");
+    }
     const tabs = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Beats")!.parentElement!;
     expect(tabs.className).toContain("overflow-x-auto"); expect(tabs.className).toContain("sm:px-5");
     const actions = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Your call")!.parentElement!;
