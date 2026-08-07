@@ -7,6 +7,7 @@ import {
   type DelegationStatus,
 } from "@paperclipai/shared";
 import { logger } from "../middleware/logger.js";
+import { normalizeDelegationCallbackResult } from "./jarvis-delegation-result.js";
 
 /**
  * Peer-agent delegation — Paperclip hands tasks to named remote agent
@@ -492,6 +493,14 @@ export async function recordDelegationResult(
     return { ok: false, error: "callback_token_mismatch" };
   }
 
+  const normalized = normalizeDelegationCallbackResult({
+    agent: row.agent,
+    metadata: meta,
+    status: input.status,
+    result: input.result,
+  });
+  if (!normalized.ok) return normalized;
+
   // Atomic terminal-safe transition: the guard lives IN the statement.
   // A `running` callback may transition only an ACTIVE row; a
   // `completed`/`failed` callback may terminally transition only an ACTIVE
@@ -504,9 +513,9 @@ export async function recordDelegationResult(
   };
   if (input.status === "completed" || input.status === "failed") {
     update.completedAt = new Date();
-    update.result = input.result ?? input.error ?? null;
-  } else if (input.result) {
-    update.result = input.result;
+    update.result = normalized.result ?? input.error ?? null;
+  } else if (normalized.result) {
+    update.result = normalized.result;
   }
 
   const transitioned = await db
@@ -544,7 +553,7 @@ export async function recordDelegationResult(
   // it can never resurrect or rewrite an active/terminal lifecycle state.
   const lateCallback = {
     status: input.status,
-    result: input.result ?? input.error ?? null,
+    result: normalized.result ?? input.error ?? null,
     receivedAt: new Date().toISOString(),
   };
   await db

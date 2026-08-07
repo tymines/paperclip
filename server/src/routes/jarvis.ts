@@ -42,6 +42,10 @@ import {
   type PeerAgentId,
 } from "../services/jarvis-delegation.js";
 import {
+  delegationCallbackBodySchema,
+  type DelegationCallbackBody,
+} from "../services/jarvis-delegation-result.js";
+import {
   isDelegationStatus,
   type DelegationStatus,
 } from "@paperclipai/shared";
@@ -1281,14 +1285,9 @@ export function jarvisRoutes(db: Db) {
    * We sidestep the actor middleware via the `_publicDelegationCallback`
    * marker so the bridge daemon can post without paperclip credentials.
    */
-  const callbackSchema = z.object({
-    status: z.enum(["running", "completed", "failed"]),
-    result: z.string().max(64_000).optional(),
-    error: z.string().max(4_000).optional(),
-  });
   router.post(
     "/companies/:companyId/jarvis/delegations/:id/result",
-    validate(callbackSchema),
+    validate(delegationCallbackBodySchema),
     async (req, res) => {
       const { companyId, id } = req.params as { companyId: string; id: string };
       const header = (req.headers.authorization ?? "").trim();
@@ -1298,7 +1297,7 @@ export function jarvisRoutes(db: Db) {
         return;
       }
       const callbackToken = match[1]!.trim();
-      const body = req.body as z.infer<typeof callbackSchema>;
+      const body = req.body as DelegationCallbackBody;
       const out = await recordDelegationResult(db, {
         delegationId: id,
         companyId,
@@ -1308,7 +1307,12 @@ export function jarvisRoutes(db: Db) {
         error: body.error,
       });
       if (!out.ok) {
-        res.status(out.error === "callback_token_mismatch" ? 403 : 404).json({
+        const status = out.error === "callback_token_mismatch"
+          ? 403
+          : out.error === "result_too_large" || out.error === "invalid_hades_review_result"
+            ? 400
+            : 404;
+        res.status(status).json({
           ok: false,
           error: out.error,
         });
