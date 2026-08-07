@@ -7,7 +7,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Lock, LockOpen } from "lucide-react";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
-import { CodexPanel } from "@/components/book-studio/CodexPanel";
 
 const API_BASE = "/api";
 async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
@@ -44,7 +43,7 @@ function beatText(b: Beat): string {
   return String(b.description ?? b.text ?? b.beat ?? "");
 }
 
-export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, chapterTitle, outlineEntry, locked, chapterStatus, onLockToggle, onNeedsRefresh, onOpenDecisionInbox }: {
+export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, chapterTitle, outlineEntry, locked, chapterStatus, onLockToggle, onNeedsRefresh, onOpenDecisionInbox, onOpenStoryBible }: {
   bookId: string;
   bookSlug: string;
   companySlug: string;
@@ -56,6 +55,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
   onLockToggle: () => void;
   onNeedsRefresh: () => void;
   onOpenDecisionInbox: () => void;
+  onOpenStoryBible: () => void;
 }) {
   const [view, setView] = useState<"beats" | "prose" | "context" | "bible">("beats");
   const [beats, setBeats] = useState<Beat[]>([]);
@@ -197,7 +197,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
         {(["beats", "prose", "context", "bible"] as const).map((v) => (
           <button
             key={v}
-            onClick={() => setView(v)}
+            onClick={() => v === "bible" ? onOpenStoryBible() : setView(v)}
             className={`bg-transparent py-2.5 font-serif text-sm border-b-2 ${view === v ? "text-[#ece9e2] border-[#e0955a]" : "text-gray-600 border-transparent hover:text-gray-400"}`}
           >
             {v === "bible" ? "Bible" : v[0].toUpperCase() + v.slice(1)}
@@ -206,7 +206,10 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
       </div>
 
       {/* views */}
-      <div className="flex-1 overflow-auto px-3 py-4 min-h-0 sm:px-5">
+      <div
+        className={`flex-1 px-3 py-4 min-h-0 sm:px-5 ${view === "prose" ? "overflow-hidden" : "overflow-auto"}`}
+        data-deck-view-scroll
+      >
         {view === "beats" && (
           <div>
             <div className="flex items-baseline justify-between border-b border-white/5 pb-2 mb-3">
@@ -260,6 +263,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
             autonomyMode="manual"
             contentRefreshKey={refreshKey}
             onChapterChange={() => {}}
+            fillAvailableHeight
           />
         )}
 
@@ -302,7 +306,6 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
           </div>
         )}
 
-        {view === "bible" && <CodexPanel bookId={bookId} companySlug={companySlug} currentChapter={chapterNumber} />}
       </div>
 
       {/* bottom bar */}

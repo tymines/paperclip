@@ -29,7 +29,7 @@ const DOT: Record<DeckChapter["state"], string> = {
   idle: "bg-white/20",
 };
 
-export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockChapter, sections, activeSection, onSelectSection, reviewCount, onOpenReviewQueue, mobileSection }: {
+export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockChapter, sections, activeSection, onSelectSection, reviewCount, onOpenReviewQueue, mobileSection, viewMode, onViewModeChange }: {
   chapters: DeckChapter[];
   activeChapter: number | null;
   onSelectChapter: (n: number) => void;
@@ -40,14 +40,39 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
   reviewCount: number;
   onOpenReviewQueue: () => void;
   mobileSection?: "chapters" | "bible";
+  viewMode?: "chapters" | "bible";
+  onViewModeChange?: (mode: "chapters" | "bible") => void;
 }) {
   const ready = chapters.filter((c) => c.state === "pass").length;
   const working = chapters.filter((c) => c.state === "run").length;
   const exceptions = chapters.filter((c) => c.state === "fail").length;
   const planned = chapters.filter((c) => c.state === "idle").length;
+  const activeRailView = mobileSection ?? viewMode ?? "chapters";
   return (
-    <aside className="bg-[#0d1016] border-r border-white/5 min-w-0 overflow-auto" aria-label="Chapter queue and story bible">
-      {mobileSection !== "bible" && <><div className="sticky top-0 bg-[#0d1016] px-4 pt-3.5 pb-2.5 border-b border-white/5 z-10">
+    <aside className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-white/5 bg-[#0d1016]" aria-label="Chapter queue and story bible">
+      {!mobileSection && (
+        <div className="grid shrink-0 grid-cols-2 border-b border-white/10 p-1" role="tablist" aria-label="Book navigation">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeRailView === "chapters"}
+            onClick={() => onViewModeChange?.("chapters")}
+            className={`min-h-9 rounded-md px-2 text-[11px] font-semibold ${activeRailView === "chapters" ? "bg-[#e0955a22] text-[#e6ad80]" : "text-gray-500 hover:bg-white/5 hover:text-gray-300"}`}
+          >
+            Chapters <span className="tabular-nums opacity-70">{chapters.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeRailView === "bible"}
+            onClick={() => onViewModeChange?.("bible")}
+            className={`min-h-9 rounded-md px-2 text-[11px] font-semibold ${activeRailView === "bible" ? "bg-[#b39dff22] text-[#c9baff]" : "text-gray-500 hover:bg-white/5 hover:text-gray-300"}`}
+          >
+            Story Bible <span className="tabular-nums opacity-70">{sections.length + 1}</span>
+          </button>
+        </div>
+      )}
+      {activeRailView === "chapters" && <><div className="shrink-0 bg-[#0d1016] px-4 pt-3.5 pb-2.5 border-b border-white/5 z-10">
         <div className="text-[9.5px] uppercase tracking-[0.16em] text-gray-500 font-bold">Manuscript queue</div>
         <div className="flex items-baseline justify-between mt-1">
           <strong className="font-serif text-base font-semibold">Chapters</strong>
@@ -62,7 +87,7 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
           {planned > 0 && <span><b className="text-gray-300 text-[13px] mr-1">{planned}</b>planned</span>}
         </div>}
       </div>
-      <nav>
+      <nav className="min-h-0 flex-1 overflow-y-auto">
         {chapters.map((c) => (
           <button
             key={c.chapterNumber}
@@ -89,8 +114,8 @@ export function DeckRail({ chapters, activeChapter, onSelectChapter, onUnlockCha
           </button>
         ))}
       </nav></>}
-      {mobileSection !== "chapters" && <div className="border-t border-white/10 mt-1.5">
-        <div className="px-4 pt-3.5 pb-2.5 border-b border-white/5">
+      {activeRailView === "bible" && <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="sticky top-0 z-10 border-b border-white/5 bg-[#0d1016] px-4 pt-3.5 pb-2.5">
           <div className="text-[9.5px] uppercase tracking-[0.16em] text-gray-500 font-bold">Story bible · codex</div>
           <div className="flex items-baseline justify-between mt-1">
             <strong className="font-serif text-base font-semibold">Bible + overview</strong>

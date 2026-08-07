@@ -270,7 +270,7 @@ export function DirectorsDeckPage() {
   const chapterStatusMap = (activeBook?.metadata?.chapterStatus ?? {}) as Record<string, string>;
 
   return (
-    <div className="@container/deck grid h-full min-w-0 grid-rows-[52px_auto_minmax(0,1fr)] overflow-x-hidden bg-[#0a0c10] text-[#ece9e2] font-sans">
+    <div className="@container/deck flex h-full min-w-0 flex-col overflow-x-hidden bg-[#0a0c10] text-[#ece9e2] font-sans">
       <DeckTopBar
         books={books.map(({ id, slug, title }) => ({ id, slug, title }))}
         activeBookId={activeBookId}
@@ -287,14 +287,16 @@ export function DirectorsDeckPage() {
         onModeChange={handleModeChange}
         onTaste={() => setOverlay("taste")}
         onRunPlan={() => setOverlay("runplan")}
+        reviewCount={reviewCount}
+        onReviewQueue={() => { setActiveSection("review-queue"); setCenterMode("bible"); }}
         onBrainstorm={() => setChatOpen(true)}
         onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
-      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[1320px]/deck:hidden" aria-label="Book tools">
+      <nav className="grid shrink-0 grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[980px]/deck:hidden" aria-label="Book tools">
         {(["chapters", "bible", "inspect", "tools"] as const).map((sheet) => <button key={sheet} className="min-h-11 px-1 text-[11px] font-semibold" onClick={() => setMobileSheet(sheet)}>{sheet === "bible" ? "Story Bible" : sheet[0].toUpperCase() + sheet.slice(1)}</button>)}
       </nav>
-      <div className="grid min-h-0 min-w-0 grid-cols-1 @min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)] @min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 @min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)] @min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]">
         <div className="hidden min-h-0 @min-[760px]/deck:block">
           <DeckRail
             chapters={deckChapters}
@@ -306,13 +308,37 @@ export function DirectorsDeckPage() {
             onSelectSection={(id) => { setActiveSection(id as StoryBibleSectionId); setCenterMode("bible"); }}
             reviewCount={reviewCount}
             onOpenReviewQueue={() => { setActiveSection("review-queue"); setCenterMode("bible"); }}
+            viewMode={centerMode === "bible" ? "bible" : "chapters"}
+            onViewModeChange={(nextMode) => {
+              if (nextMode === "bible") setActiveSection((current) => current ?? "overview");
+              setCenterMode(nextMode === "bible" ? "bible" : "chapter");
+            }}
           />
         </div>
         <main className="min-w-0 overflow-hidden bg-[#0a0c10] flex flex-col">
-          {centerMode === "bible" && activeBook && isLegacyStoryBibleSection(activeSection) ? (
-            <div className="flex-1 overflow-auto"><StoryBibleSectionEditor key={`${activeBook.id}:${activeSection}`} companySlug={companySlug} book={activeBook} section={activeSection} onBookUpdated={applyUpdatedBook} onChanged={() => void loadBookData(activeBook.id)} /></div>
-          ) : centerMode === "bible" && activeBook ? (
-            <div className="flex-1 overflow-auto"><CodexPanel key={`${activeBook.id}:${activeSection}`} bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} activeSection={activeSection as CodexSectionId} showSectionPicker={false} /></div>
+          {centerMode === "bible" && activeBook ? (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <nav className="flex shrink-0 flex-wrap gap-1 border-b border-white/10 bg-[#0d1016] px-3 py-2" aria-label="Complete Story Bible sections" data-story-bible-navigator>
+                {STORY_BIBLE_SECTIONS.map((section) => (
+                  <button
+                    key={section.id}
+                    onClick={() => setActiveSection(section.id)}
+                    className={`flex min-h-9 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] ${activeSection === section.id ? "bg-[#b39dff22] text-[#c9baff] ring-1 ring-[#b39dff55]" : "text-gray-400 hover:bg-white/5 hover:text-gray-200"}`}
+                    aria-current={activeSection === section.id ? "page" : undefined}
+                  >
+                    <span aria-hidden="true">{section.icon}</span>{section.label}
+                    {section.id === "review-queue" && reviewCount > 0 && <span className="rounded-full border border-amber-400/50 px-1.5 text-[9px] text-amber-300">{reviewCount}</span>}
+                  </button>
+                ))}
+              </nav>
+              <div className="min-h-0 flex-1 overflow-auto">
+                {isLegacyStoryBibleSection(activeSection) ? (
+                  <StoryBibleSectionEditor key={`${activeBook.id}:${activeSection}`} companySlug={companySlug} book={activeBook} section={activeSection} onBookUpdated={applyUpdatedBook} onChanged={() => void loadBookData(activeBook.id)} />
+                ) : (
+                  <CodexPanel key={`${activeBook.id}:${activeSection}`} bookId={activeBook.id} companySlug={companySlug} currentChapter={activeChapter ?? 1} activeSection={activeSection as CodexSectionId} showSectionPicker={false} />
+                )}
+              </div>
+            </div>
           ) : activeBook && activeChapter != null ? (
             <div className="flex-1 min-h-0">
               <DeckWorkspace
@@ -327,6 +353,7 @@ export function DirectorsDeckPage() {
                 onLockToggle={() => handleLockToggle(activeChapter, !activeChapterLocked)}
                 onNeedsRefresh={() => loadBookData(activeBook.id)}
                 onOpenDecisionInbox={() => setOverlay("inbox")}
+                onOpenStoryBible={() => { setActiveSection("overview"); setCenterMode("bible"); }}
               />
             </div>
           ) : (

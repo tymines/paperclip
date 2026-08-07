@@ -219,6 +219,9 @@ describe("DirectorsDeckPage — + NEW BOOK create flow", () => {
     await flush();
     await flush();
 
+    click(Array.from(container!.querySelectorAll('[role="tab"]')).find((button) => button.textContent?.includes("Chapters"))!);
+    await flush();
+
     expect(container!.textContent).toContain("Recovered Chapter");
     expect(container!.textContent).toContain("1ready");
   });
@@ -236,6 +239,6 @@ describe("DirectorsDeckPage — + NEW BOOK create flow", () => {
     expect(workspaceGrid.className).toContain("grid-cols-1");
     expect(workspaceGrid.className).toContain("@min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)]");
     expect(workspaceGrid.className).toContain("@min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]");
-    expect(container!.querySelector('nav[aria-label="Book tools"]')!.className).toContain("@min-[1320px]/deck:hidden");
+    expect(container!.querySelector('nav[aria-label="Book tools"]')!.className).toContain("@min-[980px]/deck:hidden");
   });
 });
