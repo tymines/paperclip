@@ -1511,7 +1511,10 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
           conversationId,
           operation: "brainstorm-chat",
         },
-        conversationId,
+        // Book Studio conversation ids are durable namespaced text, while
+        // jarvis_delegations.conversation_id is a UUID FK to Jarvis rooms.
+        // Keep Book Studio correlation in metadata instead of writing the
+        // incompatible id into that FK column.
         requestedByActorId: actor.actorId,
         delegationId: dispatchAttemptId,
       });
@@ -1682,7 +1685,7 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     let delegationId: string | undefined;
     try {
       const lane = await callAgentLane(db, {
-        lane: "calliope", companyId, conversationId, requestedByActorId: actor.actorId, delegationId: retryDispatchAttemptId,
+        lane: "calliope", companyId, requestedByActorId: actor.actorId, delegationId: retryDispatchAttemptId,
         task: [buildSystemPrompt(bibleContext), "", "--- CONVERSATION (oldest first) ---", ...chronological.map((entry) => `${entry.role.toUpperCase()}: ${entry.content}`), "", "Reply as Calliope to Baily's latest message. This is an idempotent retry of the same durable turn.", authorization ? `Paperclip authorized exactly ${authorization.operation} at ${authorization.destination}; do not broaden it.` : "No Book Studio mutation is authorized; do not claim a change."].join("\n"),
         metadata: { bookId, turnId, conversationId, operation: "brainstorm-chat-retry", retryCount: claimed.retryCount },
       });
