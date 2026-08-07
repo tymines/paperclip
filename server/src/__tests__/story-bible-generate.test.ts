@@ -220,6 +220,39 @@ describe("Story-bible generation through Calliope", () => {
     expect(res.body).not.toHaveProperty("draft");
   });
 
+  it("normalizes rich nested character prose into renderable text", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: JSON.stringify({
+        name: "Mara Vey",
+        role: "Protagonist",
+        description: {
+          coreConcept: "An outcast witch carrying a forbidden crown.",
+          moralComplexity: { secret: "Her healing magic feeds the prison below." },
+          emotionalArc: ["Survives alone", "Chooses trust"],
+        },
+        voiceCard: { cadence: "Sharp and guarded" },
+      }),
+      delegationId: "del-character-rich",
+      lane: "calliope",
+    });
+
+    const res = await request(createTestApp())
+      .post("/companies/c1/book-studio/books/book-1/generate/character")
+      .send({ prompt: "Create Mara" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.draft).toMatchObject({
+      name: "Mara Vey",
+      role: "Protagonist",
+      voiceCard: { cadence: "Sharp and guarded" },
+    });
+    expect(res.body.draft.description).toBe(
+      "Core Concept: An outcast witch carrying a forbidden crown.\n" +
+      "Moral Complexity: Secret: Her healing magic feeds the prison below.\n" +
+      "Emotional Arc: Survives alone; Chooses trust",
+    );
+  });
+
   it("enforces the URL company before dispatching Calliope", async () => {
     const res = await request(createTestApp("c2"))
       .post("/companies/c1/book-studio/books/book-1/generate/character")

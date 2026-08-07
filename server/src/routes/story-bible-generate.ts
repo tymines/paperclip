@@ -165,6 +165,42 @@ function normalizeEntityOutput(
 ): Record<string, unknown> {
   const out = { ...data };
 
+  const narrativeText = (value: unknown): string => {
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (Array.isArray(value)) return value.map(narrativeText).filter(Boolean).join("; ");
+    if (typeof value === "object") {
+      return Object.entries(value as Record<string, unknown>)
+        .map(([key, nested]) => {
+          const label = key
+            .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+            .replace(/^./, (char) => char.toUpperCase());
+          const text = narrativeText(nested);
+          return text ? `${label}: ${text}` : "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+    return String(value);
+  };
+
+  const normalizeTextFields = (fields: string[]) => {
+    for (const field of fields) {
+      if (out[field] !== undefined) out[field] = narrativeText(out[field]);
+    }
+  };
+
+  if (entityType === "overview") normalizeTextFields(["title", "description"]);
+  if (entityType === "character") normalizeTextFields(["name", "role", "description"]);
+  if (entityType === "location" || entityType === "world-rule") normalizeTextFields(["name", "description"]);
+  if (entityType === "style") normalizeTextFields(["pov", "tense", "sampleParagraph"]);
+  if (["lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"].includes(entityType)) {
+    normalizeTextFields(["name", "summary", "term", "definition"]);
+  }
+  if (entityType === "relationship") normalizeTextFields(["fromEntityType", "fromEntityId", "toEntityType", "toEntityId", "type", "arcStage"]);
+  if (entityType === "fact") normalizeTextFields(["statement"]);
+
   if (entityType === "character" && typeof out.voiceCard === "string") {
     out.voiceCard = { description: out.voiceCard };
   }

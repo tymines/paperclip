@@ -86,6 +86,18 @@ const ENTITY_LABELS: Record<BEntityType, string> = {
   fact: "Fact",
 };
 
+function previewText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) return value.map(previewText).filter(Boolean).join("; ");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, nested]) => `${key}: ${previewText(nested)}`)
+      .join("\n");
+  }
+  return String(value);
+}
+
 // ── Route helpers ────────────────────────────────────────────────────────────
 
 function generateRoute(entityType: BEntityType): string {
@@ -201,11 +213,11 @@ export function GenerateDraftPanel({
         {/* Character draft */}
         {entityType === "character" && (
           <>
-            <div className="text-sm font-medium text-gray-200">{(draft as Record<string, unknown>).name as string || "Unnamed"}</div>
-            <div className="text-xs text-gray-400">{(draft as Record<string, unknown>).role as string || ""}</div>
+            <div className="text-sm font-medium text-gray-200">{previewText((draft as Record<string, unknown>).name) || "Unnamed"}</div>
+            <div className="text-xs text-gray-400">{previewText((draft as Record<string, unknown>).role)}</div>
             {(draft as Record<string, unknown>).description && (
               <p className="text-[11px] text-gray-500 leading-relaxed max-h-32 overflow-y-auto">
-                {(draft as Record<string, unknown>).description as string}
+                {previewText((draft as Record<string, unknown>).description)}
               </p>
             )}
           </>
