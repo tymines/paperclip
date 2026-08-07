@@ -33,6 +33,7 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
+  const [showOutlineGenerate, setShowOutlineGenerate] = useState(false);
   const requestScopeRef = useRef(0);
 
   const prefix = `/companies/${companySlug}/book-studio/books/${book.id}`;
@@ -93,6 +94,7 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
     return <div data-story-bible-section={section}>
       <OverviewEditor key={book.id} book={book} loading={false} onUpdate={updateBook} />
       <div className="px-4 pb-4">
+        {error && <div role="alert" className="mb-3 rounded border border-red-800/60 bg-red-950/30 px-3 py-2 text-xs text-red-300">{error}</div>}
         <button onClick={() => setShowGenerate((value) => !value)} className="flex items-center gap-1.5 px-1 py-1.5 text-xs text-purple-400 hover:text-purple-200">
           <Sparkles className="h-3 w-3" /> Generate with Calliope
         </button>
@@ -104,6 +106,29 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
               metadata: { description: typeof draft.description === "string" ? draft.description : "" },
             });
             setShowGenerate(false);
+          })} />}
+        <button onClick={() => setShowOutlineGenerate((value) => !value)} className="flex items-center gap-1.5 px-1 py-1.5 text-xs text-purple-400 hover:text-purple-200">
+          <Sparkles className="h-3 w-3" /> Generate chapter outline with Calliope
+        </button>
+        {showOutlineGenerate && <GenerateDraftPanel entityType="outline-beats" bookId={book.id} companySlug={companySlug}
+          onDiscard={() => setShowOutlineGenerate(false)}
+          onAccept={(draft) => void run(async () => {
+            const chapters = Array.isArray(draft.chapters)
+              ? draft.chapters.filter((chapter): chapter is Record<string, unknown> => Boolean(chapter) && typeof chapter === "object" && !Array.isArray(chapter))
+              : [];
+            if (chapters.length === 0) throw new Error("Calliope returned no outline chapters to save.");
+            for (const chapter of chapters) {
+              await apiFetch(`${prefix}/outline`, {
+                method: "POST",
+                body: JSON.stringify({
+                  chapterNumber: Number(chapter.chapterNumber),
+                  title: typeof chapter.title === "string" ? chapter.title : "",
+                  beats: Array.isArray(chapter.beats) ? chapter.beats : [],
+                  source: "co_created",
+                }),
+              });
+            }
+            setShowOutlineGenerate(false);
           })} />}
       </div>
     </div>;
