@@ -159,6 +159,11 @@ describe("Book Studio Brainstorm Chat", () => {
       expect(res.body).toHaveProperty("userMessageId", "msg-1");
       expect(res.body).toHaveProperty("via", "calliope");
       expect(callAgentLane).toHaveBeenCalledTimes(1);
+      const laneArgs = vi.mocked(callAgentLane).mock.calls[0]![1];
+      expect(laneArgs).not.toHaveProperty("conversationId");
+      expect(laneArgs.metadata).toEqual(expect.objectContaining({
+        conversationId: "book-studio:company-1:book-1",
+      }));
     });
 
     it("returns 400 when message is empty", async () => {
