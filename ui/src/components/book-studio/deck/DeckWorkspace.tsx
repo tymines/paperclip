@@ -177,11 +177,11 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
           {chapterStatus === "exception" ? "1 exception requires a decision" : chapterStatus === "queued" ? "Passed the gate · queued for manuscript" : "Beat plan"}
         </p>
         {/* stage spine */}
-        <div className="flex items-center gap-2 mt-3.5 overflow-x-auto pb-1">
+        <div className="flex min-w-0 items-center gap-2 mt-3.5 overflow-x-auto pb-1">
           {STAGES.map((s, i) => (
             <React.Fragment key={s}>
-              {i > 0 && <div className={`flex-1 h-px mx-2 min-w-2 ${stageStates[i] === "done" || stageStates[i - 1] === "done" ? "bg-emerald-400/30" : "bg-white/10"}`} />}
-              <span className={`flex items-center gap-1.5 text-[10px] uppercase tracking-wide font-semibold ${stageCls(stageStates[i])}`}>
+              {i > 0 && <div className={`mx-2 h-px w-4 shrink-0 ${stageStates[i] === "done" || stageStates[i - 1] === "done" ? "bg-emerald-400/30" : "bg-white/10"}`} />}
+              <span className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[10px] uppercase tracking-wide font-semibold ${stageCls(stageStates[i])}`}>
                 <i className={`w-[19px] h-[19px] rounded-full border grid place-items-center text-[9px] not-italic font-bold ${stageStates[i] === "done" ? "bg-emerald-400/10 border-emerald-400/40" : stageStates[i] === "fail" ? "bg-red-400/10 border-red-400/50" : stageStates[i] === "current" ? "bg-amber-400/10 border-amber-400/50" : "border-white/15"}`}>
                   {stageStates[i] === "done" ? "✓" : stageStates[i] === "fail" ? "✗" : i + 1}
                 </i>
@@ -217,7 +217,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
             {beats.map((b, i) => (
               <article key={i} className={`grid grid-cols-[44px_1fr_auto] gap-3.5 py-3 border-b border-white/5 ${b.flagged ? "bg-gradient-to-r from-red-400/10 to-transparent" : ""}`}>
                 <div className="font-serif text-[26px] text-white/15 text-right leading-tight tabular-nums">{String(i + 1).padStart(2, "0")}</div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex gap-2 items-center mb-1">
                     <span className="text-[9.5px] uppercase tracking-[0.16em] text-[#b39dff] font-extrabold">{b.kind ?? "Beat"}</span>
                     {b.flagged && <span className="text-[9px] border border-red-400/40 text-red-400 rounded px-1.5 py-px">Canon conflict</span>}
@@ -230,7 +230,7 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
                       onBlur={(e) => { const next = beats.slice(); next[i] = { ...b, description: e.target.value }; setEditing(null); saveBeats(next); }}
                     />
                   ) : (
-                    <p className="text-[12.5px] text-[#d5d2c9] max-w-[70ch] m-0">{beatText(b)}</p>
+                    <p className="m-0 max-w-[70ch] break-words text-[12.5px] text-[#d5d2c9]">{beatText(b)}</p>
                   )}
                 </div>
                 <div className="flex flex-col gap-1">

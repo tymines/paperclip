@@ -63,6 +63,21 @@ describe("DeckTopBar", () => {
     expect(container.querySelector('[aria-label="Media"]')?.className).toContain("h-11");
   });
 
+  it("bounds book identity and defers dense controls until the deck is wide enough", () => {
+    const rendered = renderTopBar({ status: { ready: 10, working: 1, exception: 0 } }); root = rendered.root; container = rendered.container;
+    const select = container.querySelector('[aria-label="Active book"]')!;
+    expect(select.className).toContain("min-w-0");
+    expect(select.className).toContain("flex-1");
+    expect(select.className).toContain("truncate");
+    const newBook = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "+ New Book")!;
+    expect(newBook.className).toContain("@min-[1320px]/deck:inline-flex");
+    expect(newBook.className).toContain("whitespace-nowrap");
+    expect(container.querySelector('[aria-label="Brainstorm"]')?.className).toContain("@min-[1320px]/deck:w-[30px]");
+    const directorMode = Array.from(container.querySelectorAll("div")).find((node) => node.getAttribute("title")?.startsWith("Director Mode"))!;
+    expect(directorMode.className).toContain("shrink-0");
+    for (const button of directorMode.querySelectorAll("button")) expect(button.className).toContain("whitespace-nowrap");
+  });
+
   it("prefills rename, rejects whitespace, and submits the trimmed display title", async () => {
     const rendered = renderTopBar(); root = rendered.root; container = rendered.container;
     click(container.querySelector('[aria-label="Rename active book"]')!);
