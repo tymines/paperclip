@@ -124,6 +124,45 @@ describe("runBaselineReview — Hades reviewer", () => {
     });
   });
 
+  it("accepts a valid Hades review after a reasoning prefix", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: `I checked pacing and continuity before producing the requested payload.\n${criticJson()}`,
+      delegationId: "del-hades-noisy-10",
+      lane: "hades",
+    });
+
+    const report = await runBaselineReview(dbForReview(), {
+      bookId: "book-1",
+      chapterNumber: 2,
+      companyId: "co-1",
+    });
+
+    expect(report).toMatchObject({
+      verdict: "PASS",
+      criticProvider: HADES_CRITIC_PROVIDER,
+      criticDegraded: false,
+    });
+  });
+
+  it("turns ambiguous Hades JSON output into NO_VERDICT", async () => {
+    vi.mocked(callAgentLane).mockResolvedValue({
+      text: `${criticJson()}\n${criticJson({ summary: "Second object." })}`,
+      delegationId: "del-hades-ambiguous-12",
+      lane: "hades",
+    });
+
+    const report = await runBaselineReview(dbForReview(), {
+      bookId: "book-1",
+      chapterNumber: 2,
+      companyId: "co-1",
+    });
+
+    expect(report).toMatchObject({
+      verdict: "NO_VERDICT",
+      noVerdictReason: "unparseable-critic-output",
+    });
+  });
+
   it("preserves normal rubric failures from Hades", async () => {
     vi.mocked(callAgentLane).mockResolvedValue({
       text: criticJson({ scores: { ...FULL_SCORES, pacing: 4 } }),
