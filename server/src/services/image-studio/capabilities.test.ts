@@ -6,6 +6,24 @@ import type {
 } from "../image-providers/types.js";
 import { buildImageStudioCapabilityCatalog } from "./capabilities.js";
 
+const trainedPersona = {
+  id: "persona-trained",
+  isGeneral: false,
+  hasResolvableReplicateModel: true,
+};
+
+const untrainedPersona = {
+  id: "persona-untrained",
+  isGeneral: false,
+  hasResolvableReplicateModel: false,
+};
+
+const generalPersona = {
+  id: "persona-general",
+  isGeneral: true,
+  hasResolvableReplicateModel: false,
+};
+
 function fakeProvider(args: {
   host: ProviderHost;
   configured: boolean;
@@ -79,6 +97,7 @@ describe("buildImageStudioCapabilityCatalog", () => {
           models: [videoModel],
         }),
       ],
+      trainedPersona,
       now,
     );
 
@@ -117,25 +136,28 @@ describe("buildImageStudioCapabilityCatalog", () => {
   });
 
   it("distinguishes unconfigured, unverified, and unavailable catalogs", async () => {
-    const catalog = await buildImageStudioCapabilityCatalog([
-      fakeProvider({
-        host: "replicate",
-        configured: false,
-        models: [personaModel],
-      }),
-      fakeProvider({
-        host: "wavespeedai",
-        configured: true,
-        verified: false,
-        models: [{ ...personaModel, id: "wavespeed-ai/flux-dev" }],
-      }),
-      fakeProvider({
-        host: "atlascloud",
-        configured: true,
-        verified: true,
-        catalogError: new Error("private catalog failure"),
-      }),
-    ]);
+    const catalog = await buildImageStudioCapabilityCatalog(
+      [
+        fakeProvider({
+          host: "replicate",
+          configured: false,
+          models: [personaModel],
+        }),
+        fakeProvider({
+          host: "wavespeedai",
+          configured: true,
+          verified: false,
+          models: [{ ...personaModel, id: "wavespeed-ai/flux-dev" }],
+        }),
+        fakeProvider({
+          host: "atlascloud",
+          configured: true,
+          verified: true,
+          catalogError: new Error("private catalog failure"),
+        }),
+      ],
+      trainedPersona,
+    );
 
     expect(catalog.providers).toEqual(
       expect.arrayContaining([
@@ -166,5 +188,92 @@ describe("buildImageStudioCapabilityCatalog", () => {
       .toMatchObject({ enabled: false, readiness: "catalog_only" });
     expect(catalog.capabilities.find((item) => item.providerHost === "wavespeedai"))
       .toMatchObject({ enabled: false, readiness: "catalog_only" });
+  });
+
+  it("matches Replicate identity and selection truth for trained, untrained, and general personas", async () => {
+    const provider = fakeProvider({
+      host: "replicate",
+      configured: true,
+      verified: true,
+      models: [
+        personaModel,
+        {
+          ...personaModel,
+          id: "black-forest-labs/flux-dev-lora",
+          name: "Alternate Flux",
+        },
+      ],
+    });
+
+    const trained = await buildImageStudioCapabilityCatalog([provider], trainedPersona);
+    expect(trained.capabilities[0]).toMatchObject({
+      id: "general",
+      identityMethod: "trained_persona_identity",
+      enabled: true,
+      readiness: "credential_verified",
+    });
+    expect(trained.capabilities[1]).toMatchObject({
+      id: "replicate-flux-dev-lora",
+      identityMethod: "no_identity_guarantee",
+      enabled: false,
+      readiness: "blocked",
+      disabledReason:
+        "This alternate Replicate selection is not honored by the current persona generation path.",
+    });
+
+    const untrained = await buildImageStudioCapabilityCatalog([provider], untrainedPersona);
+    expect(untrained.capabilities[0]).toMatchObject({
+      identityMethod: "no_identity_guarantee",
+      enabled: false,
+      readiness: "blocked",
+      disabledReason: "This persona does not have a resolvable trained Replicate model.",
+    });
+
+    const general = await buildImageStudioCapabilityCatalog([provider], generalPersona);
+    expect(general.capabilities[0]).toMatchObject({
+      name: "Base Flux",
+      identityMethod: "no_identity_guarantee",
+      enabled: true,
+      readiness: "credential_verified",
+    });
+    expect(general.capabilities[1]).toMatchObject({
+      enabled: false,
+      readiness: "blocked",
+    });
+  });
+
+  it("bounds a hung provider while returning a healthy provider promptly", async () => {
+    const hung = fakeProvider({
+      host: "replicate",
+      configured: true,
+      verified: true,
+      models: [personaModel],
+    });
+    hung.isConfigured = vi.fn(() => new Promise<boolean>(() => {}));
+    const healthy = fakeProvider({
+      host: "wavespeedai",
+      configured: true,
+      verified: true,
+      models: [{ ...personaModel, id: "wavespeed-ai/flux-dev" }],
+    });
+
+    const started = Date.now();
+    const catalog = await buildImageStudioCapabilityCatalog(
+      [hung, healthy],
+      trainedPersona,
+      new Date("2026-08-06T20:30:00.000Z"),
+      { inspectionDeadlineMs: 30 },
+    );
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(catalog.providers.find((item) => item.host === "replicate")).toMatchObject({
+      configured: null,
+      credentialVerified: null,
+      catalogAvailable: null,
+      disabledReason: "Provider capability inspection timed out.",
+    });
+    expect(catalog.capabilities.find((item) => item.providerHost === "wavespeedai"))
+      .toMatchObject({ enabled: true, readiness: "credential_verified" });
+    expect(JSON.stringify(catalog)).not.toContain("secret");
   });
 });

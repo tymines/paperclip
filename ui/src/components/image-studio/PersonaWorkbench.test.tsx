@@ -25,7 +25,7 @@ vi.mock("./UnifiedLibrary", () => ({ UnifiedLibrary: () => null }));
 
 const apiMocks = vi.hoisted(() => ({
   getAttributeControls: vi.fn(async () => ({ controls: [] })),
-  getCapabilities: vi.fn(async () => ({
+  getCapabilities: vi.fn(async (_companyId: string, _personaId: string) => ({
     generatedAt: "2026-08-06T20:30:00.000Z",
     providers: [],
     capabilities: [],

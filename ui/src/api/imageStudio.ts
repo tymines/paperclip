@@ -254,9 +254,9 @@ export interface ImageStudioProviderCapabilityState {
   host: ProviderHost;
   name: string;
   color: string;
-  configured: boolean;
-  credentialVerified: boolean;
-  catalogAvailable: boolean;
+  configured: boolean | null;
+  credentialVerified: boolean | null;
+  catalogAvailable: boolean | null;
   disabledReason: string | null;
 }
 
@@ -494,9 +494,9 @@ export const imageStudioApi = {
     api.get<{ providers: ProviderHostStatus[] }>(`/image-studio/providers`),
 
   /** Server-owned, company-authorized generation capability truth. */
-  getCapabilities: (companyId: string) =>
+  getCapabilities: (companyId: string, personaId: string) =>
     api.get<ImageStudioCapabilityCatalog>(
-      `/companies/${companyId}/image-studio/capabilities`,
+      `/companies/${companyId}/image-studio/capabilities?personaId=${encodeURIComponent(personaId)}`,
     ),
 
   /** The data-driven structured-control catalog for the Generate panel. */

@@ -318,8 +318,8 @@ function GenerateInline({
   const initializedPersonaId = useRef<string | null>(null);
 
   const capabilitiesQ = useQuery({
-    queryKey: ["image-studio", "capabilities", capabilityCompanyId],
-    queryFn: () => imageStudioApi.getCapabilities(capabilityCompanyId as string),
+    queryKey: ["image-studio", "capabilities", capabilityCompanyId, persona.id],
+    queryFn: () => imageStudioApi.getCapabilities(capabilityCompanyId as string, persona.id),
     enabled: typeof capabilityCompanyId === "string" && capabilityCompanyId.length > 0,
     staleTime: 60_000,
   });
@@ -368,15 +368,15 @@ function GenerateInline({
   }, [controls, persona]);
 
   useEffect(() => {
-    if (
-      capabilityModels.length > 0 &&
-      !capabilityModels.some((capability) => capability.id === modelId)
-    ) {
+    const selectedCapability = capabilityModels.find(
+      (capability) => capability.id === modelId,
+    );
+    if (capabilityModels.length > 0 && !selectedCapability?.enabled) {
       const fallback =
         capabilityModels.find((capability) => capability.recommended && capability.enabled) ??
         capabilityModels.find((capability) => capability.enabled) ??
         capabilityModels[0];
-      setModelId(fallback.id);
+      if (fallback.id !== modelId) setModelId(fallback.id);
     }
   }, [capabilityModels, modelId, setModelId]);
 

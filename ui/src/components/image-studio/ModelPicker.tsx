@@ -191,6 +191,10 @@ export function ModelPicker({
     }
   }
 
+  function availabilityLabel(value: boolean | null): string {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
+
   if (loading) {
     return <p className="text-xs text-muted-foreground">Loading server capabilities...</p>;
   }
@@ -256,9 +260,13 @@ export function ModelPicker({
                   <span className="text-xs font-bold" style={{ color }}>{label}</span>
                   {provider && (
                     <span className="text-[10px] text-muted-foreground">
-                      configured: {provider.configured ? "yes" : "no"} | credential verified:{" "}
-                      {provider.credentialVerified ? "yes" : "no"} | catalog:{" "}
-                      {provider.catalogAvailable ? "available" : "unavailable"}
+                      configured: {availabilityLabel(provider.configured)} | credential verified:{" "}
+                      {availabilityLabel(provider.credentialVerified)} | catalog:{" "}
+                      {provider.catalogAvailable === null
+                        ? "unknown"
+                        : provider.catalogAvailable
+                          ? "available"
+                          : "unavailable"}
                     </span>
                   )}
                   {provider?.disabledReason && (

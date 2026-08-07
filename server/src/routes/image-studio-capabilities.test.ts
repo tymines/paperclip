@@ -48,7 +48,18 @@ function appFor(companyIds: string[]) {
   });
   app.use(
     "/api",
-    imageStudioCapabilitiesRouter([provider()]),
+    imageStudioCapabilitiesRouter([provider()], {
+      loadPersona: vi.fn(async (companyId, personaId) =>
+        companyId === "company-1" && personaId === "persona-1"
+          ? {
+              id: personaId,
+              isGeneral: false,
+              hasResolvableReplicateModel: true,
+            }
+          : null,
+      ),
+      inspectionDeadlineMs: 100,
+    }),
   );
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     const status =
@@ -64,7 +75,7 @@ function appFor(companyIds: string[]) {
 describe("GET company Image Studio capabilities", () => {
   it("returns normalized capability truth from injected fake providers", async () => {
     const response = await request(appFor(["company-1"]))
-      .get("/api/companies/company-1/image-studio/capabilities")
+      .get("/api/companies/company-1/image-studio/capabilities?personaId=persona-1")
       .expect(200);
 
     expect(response.body.capabilities).toEqual([
@@ -87,9 +98,46 @@ describe("GET company Image Studio capabilities", () => {
 
   it("rejects a board session without company access", async () => {
     const response = await request(appFor(["company-2"]))
-      .get("/api/companies/company-1/image-studio/capabilities")
+      .get("/api/companies/company-1/image-studio/capabilities?personaId=persona-1")
       .expect(403);
 
     expect(response.body.error).toBe("User does not have access to this company");
+  });
+
+  it("rejects a cross-company persona before inspecting providers", async () => {
+    const fakeProvider = provider();
+    const app = express();
+    app.use((req, _res, next) => {
+      req.actor = {
+        type: "board",
+        source: "session",
+        userId: "user-1",
+        companyIds: ["company-1"],
+        isInstanceAdmin: false,
+      };
+      next();
+    });
+    app.use(
+      "/api",
+      imageStudioCapabilitiesRouter([fakeProvider], {
+        loadPersona: vi.fn(async () => null),
+      }),
+    );
+    app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      const status =
+        typeof error === "object" && error && "status" in error
+          ? Number((error as { status: number }).status)
+          : 500;
+      res.status(status).json({ error: error instanceof Error ? error.message : "Unknown error" });
+    });
+
+    const response = await request(app)
+      .get("/api/companies/company-1/image-studio/capabilities?personaId=company-2-persona")
+      .expect(404);
+
+    expect(response.body.error).toBe("Persona not found");
+    expect(fakeProvider.isConfigured).not.toHaveBeenCalled();
+    expect(fakeProvider.verify).not.toHaveBeenCalled();
+    expect(fakeProvider.listModels).not.toHaveBeenCalled();
   });
 });
