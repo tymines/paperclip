@@ -48,6 +48,7 @@ try {
                     <div class="flex min-w-0 flex-1"><select class="min-w-0 max-w-[55%] flex-1 truncate"><option>Ch. 1: A very long chapter selector</option></select><div class="min-w-0 flex-1">Chapter identity</div><button>Lock</button></div>
                     <div id="actions" class="flex w-full min-w-0 gap-2 overflow-x-auto @min-[760px]/manuscript:w-auto @min-[760px]/manuscript:flex-wrap @min-[760px]/manuscript:overflow-visible">${["Redraft", "Mark Done", "Annotations", "Preview", "Focus"].map((label) => `<button class="shrink-0 whitespace-nowrap">${label}</button>`).join("")}</div>
                   </div>
+                  <div id="manuscript-body" class="flex min-h-72 flex-1 overflow-hidden sm:min-h-[clamp(18rem,50dvh,36rem)]"><textarea class="h-full w-full"></textarea></div>
                 </div>
               </main>
               <aside id="inspector" class="hidden min-h-0 @min-[1100px]/deck:block"></aside>
@@ -99,6 +100,7 @@ try {
           stageLocallyScrollable: byId("stages").scrollWidth >= byId("stages").clientWidth,
           stageWraps: [...byId("stages").querySelectorAll("span")].some((node) => getComputedStyle(node).whiteSpace !== "nowrap"),
           actionsOutsideToolbar: byId("actions").getBoundingClientRect().right > byId("editor-toolbar").getBoundingClientRect().right + 0.5,
+          manuscriptBodyHeight: byId("manuscript-body").getBoundingClientRect().height,
         };
       }, { viewportWidth: testCase.width, sidebarWidth: sidebar });
       const failures = [];
@@ -112,6 +114,7 @@ try {
       if (geometry.directorModeWraps) failures.push("Director Mode shrank or wrapped");
       if (geometry.stageWraps) failures.push("stage label wrapped");
       if (geometry.actionsOutsideToolbar) failures.push("actions outside toolbar");
+      if (geometry.manuscriptBodyHeight < 287.5) failures.push(`manuscript body too short: ${geometry.manuscriptBodyHeight}px`);
       results.push({ ...geometry, failures });
       await page.close();
     }

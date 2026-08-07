@@ -50,5 +50,8 @@ describe("ManuscriptEditor responsive toolbar", () => {
     const actions = Array.from(container.querySelectorAll("button")).find((button) => button.textContent?.includes("Redraft"))!.parentElement!;
     expect(actions.className).toContain("overflow-x-auto");
     expect(actions.className).toContain("@min-[760px]/manuscript:overflow-visible");
+    const manuscriptBody = container.querySelector("[data-manuscript-body]")!;
+    expect(manuscriptBody.className).toContain("min-h-72");
+    expect(manuscriptBody.className).toContain("sm:min-h-[clamp(18rem,50dvh,36rem)]");
   });
 });

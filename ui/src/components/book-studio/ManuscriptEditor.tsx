@@ -621,7 +621,10 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       )}
 
       {/* Editor / Preview (+ annotation sidebar) */}
-      <div className="flex-1 min-h-0 flex overflow-hidden">
+      <div
+        className="flex min-h-72 flex-1 overflow-hidden sm:min-h-[clamp(18rem,50dvh,36rem)]"
+        data-manuscript-body
+      >
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">
           {noChapters ? (
             <div className="flex h-full items-center justify-center p-8">
