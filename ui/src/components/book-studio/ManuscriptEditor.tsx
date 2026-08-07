@@ -40,6 +40,8 @@ interface Props {
   contentRefreshKey?: number;
   /** Reports the currently open chapter (e.g. so Review defaults to "this chapter", §5.A). */
   onChapterChange?: (chapterNumber: number | null) => void;
+  /** Fill a parent-owned viewport instead of imposing a second minimum-height scroll region. */
+  fillAvailableHeight?: boolean;
 }
 
 const API_BASE = "/api";
@@ -70,7 +72,7 @@ function markdownToHtml(md: string): string {
     .join("");
 }
 
-export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus, jumpToChapter, highlightRange, autonomyMode = "manual", contentRefreshKey = 0, onChapterChange }: Props) {
+export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMode, onToggleFocus, jumpToChapter, highlightRange, autonomyMode = "manual", contentRefreshKey = 0, onChapterChange, fillAvailableHeight = false }: Props) {
   const chapters = [...outlineEntries].sort((a, b) => a.chapterNumber - b.chapterNumber);
   const [selectedCh, setSelectedCh] = useState<number | null>(chapters[0]?.chapterNumber ?? null);
   const [content, setContent] = useState("");
@@ -622,7 +624,12 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
 
       {/* Editor / Preview (+ annotation sidebar) */}
       <div
-        className="flex min-h-72 flex-1 overflow-hidden sm:min-h-[clamp(18rem,50dvh,36rem)]"
+        className={cn(
+          "flex flex-1 overflow-hidden",
+          fillAvailableHeight
+            ? "min-h-0"
+            : "min-h-72 sm:min-h-[clamp(18rem,50dvh,36rem)]",
+        )}
         data-manuscript-body
       >
         <div className="flex-1 min-w-0 min-h-0 overflow-hidden">

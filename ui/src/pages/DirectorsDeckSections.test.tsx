@@ -57,6 +57,7 @@ describe("Director's Deck Story Bible routing", () => {
 
   it("routes every authoritative rail ID to the matching editable center and marks the same item", async () => {
     await renderPage();
+    click(Array.from(container!.querySelectorAll('[role="tab"]')).find((button) => button.textContent?.includes("Story Bible"))!); await flush();
     for (const definition of STORY_BIBLE_SECTIONS) {
       const button = container!.querySelector(`button[data-section-id="${definition.id}"]`);
       expect(button, `rail button ${definition.id}`).not.toBeNull();
@@ -67,8 +68,20 @@ describe("Director's Deck Story Bible routing", () => {
     }
   });
 
+  it("keeps every complete Story Bible section visible in the center navigator", async () => {
+    await renderPage();
+    click(Array.from(container!.querySelectorAll('[role="tab"]')).find((button) => button.textContent?.includes("Story Bible"))!); await flush();
+    click(container!.querySelector('button[data-section-id="overview"]')!); await flush();
+    const navigator = container!.querySelector("[data-story-bible-navigator]")!;
+    expect(navigator).not.toBeNull();
+    for (const definition of STORY_BIBLE_SECTIONS) {
+      expect(Array.from(navigator.querySelectorAll("button")).some((button) => button.textContent?.includes(definition.label))).toBe(true);
+    }
+  });
+
   it("keeps the selected section but immediately binds the center to the newly selected book", async () => {
     await renderPage();
+    click(Array.from(container!.querySelectorAll('[role="tab"]')).find((button) => button.textContent?.includes("Story Bible"))!); await flush();
     const characters = container!.querySelector('button[data-section-id="characters"]')!;
     click(characters); await flush();
     expect((container!.querySelector('[data-testid="legacy-center"]') as HTMLElement).dataset.book).toBe("book-1");

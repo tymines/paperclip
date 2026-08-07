@@ -47,7 +47,7 @@ function stubFetch(patchResponder?: () => { ok: boolean; status: number; payload
   return calls;
 }
 
-function renderWorkspace() {
+function renderWorkspace(onOpenStoryBible = vi.fn()) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root: Root = createRoot(container);
@@ -65,6 +65,7 @@ function renderWorkspace() {
         onLockToggle={() => {}}
         onNeedsRefresh={() => {}}
         onOpenDecisionInbox={() => {}}
+        onOpenStoryBible={onOpenStoryBible}
       />,
     );
   });
@@ -128,6 +129,27 @@ describe("DeckWorkspace — beat delete control", () => {
     expect(tabs.className).toContain("overflow-x-auto"); expect(tabs.className).toContain("sm:px-5");
     const actions = Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Your call")!.parentElement!;
     expect(actions.className).toContain("flex-wrap"); expect(actions.className).toContain("sm:px-5");
+  });
+
+  it("gives Prose one editor scrollbar and the full remaining workspace height", async () => {
+    stubFetch(); const r = renderWorkspace(); container = r.container; root = r.root; await flush();
+    click(Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Prose")!);
+    await flush();
+    const workspaceScroll = container!.querySelector("[data-deck-view-scroll]")!;
+    expect(workspaceScroll.className).toContain("overflow-hidden");
+    expect(workspaceScroll.className).not.toContain("overflow-auto");
+    const manuscriptBody = container!.querySelector("[data-manuscript-body]")!;
+    expect(manuscriptBody.className).toContain("min-h-0");
+    expect(manuscriptBody.className).not.toContain("50dvh");
+    expect(container!.querySelector("textarea")?.className).toContain("h-full");
+  });
+
+  it("opens the page-owned complete Story Bible instead of an embedded subset", async () => {
+    stubFetch();
+    const onOpenStoryBible = vi.fn();
+    const r = renderWorkspace(onOpenStoryBible); container = r.container; root = r.root; await flush();
+    click(Array.from(container!.querySelectorAll("button")).find((button) => button.textContent === "Bible")!);
+    expect(onOpenStoryBible).toHaveBeenCalledTimes(1);
   });
 
   it("deleting the middle beat splices index 1 and persists the remaining beats via PATCH /outline/:id", async () => {
