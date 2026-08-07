@@ -204,12 +204,17 @@ export interface PromptTemplate {
   updatedAt: string;
 }
 
-export type GenerationJobStatus =
-  | "queued"
-  | "submitted"
-  | "polling"
-  | "succeeded"
-  | "failed";
+export const GENERATION_JOB_STATUSES = [
+  "queued",
+  "submitting",
+  "submitted",
+  "polling",
+  "landing",
+  "succeeded",
+  "failed",
+] as const;
+
+export type GenerationJobStatus = (typeof GENERATION_JOB_STATUSES)[number];
 
 export interface GenerationJob {
   id: string;
@@ -233,6 +238,60 @@ export interface GenerationJob {
 }
 
 export type ProviderHost = "replicate" | "atlascloud" | "wavespeedai";
+
+export type CapabilityReadiness =
+  | "catalog_only"
+  | "credential_verified"
+  | "blocked";
+
+export type CapabilityIdentityMethod =
+  | "trained_persona_identity"
+  | "no_identity_guarantee";
+
+export type CapabilityRequiredInput = "prompt" | "trained_persona" | "input_image";
+
+export interface ImageStudioProviderCapabilityState {
+  host: ProviderHost;
+  name: string;
+  color: string;
+  configured: boolean | null;
+  credentialVerified: boolean | null;
+  catalogAvailable: boolean | null;
+  disabledReason: string | null;
+}
+
+export interface ImageStudioCapability {
+  id: string;
+  providerHost: ProviderHost;
+  providerName: string;
+  providerColor: string;
+  nativeModel: string | null;
+  name: string;
+  mediaKind: "image" | "video";
+  supportsLora: boolean;
+  identityMethod: CapabilityIdentityMethod;
+  requiredInputs: CapabilityRequiredInput[];
+  configured: boolean;
+  credentialVerified: boolean;
+  catalogAvailable: boolean;
+  readiness: CapabilityReadiness;
+  enabled: boolean;
+  disabledReason: string | null;
+  recommended: boolean;
+  providerFeatured: boolean;
+  priceEstimate: {
+    amountUsd: number;
+    unit: "image" | "second";
+    source: "provider_adapter_catalog";
+    observedAt: string;
+  };
+}
+
+export interface ImageStudioCapabilityCatalog {
+  generatedAt: string;
+  providers: ImageStudioProviderCapabilityState[];
+  capabilities: ImageStudioCapability[];
+}
 
 export interface GenerateBatchBody {
   prompt_text?: string;
@@ -433,6 +492,12 @@ export const imageStudioApi = {
   /** The 3 hosted providers with token status, balance, and rate limits. */
   getProviderHosts: () =>
     api.get<{ providers: ProviderHostStatus[] }>(`/image-studio/providers`),
+
+  /** Server-owned, company-authorized generation capability truth. */
+  getCapabilities: (companyId: string, personaId: string) =>
+    api.get<ImageStudioCapabilityCatalog>(
+      `/companies/${companyId}/image-studio/capabilities?personaId=${encodeURIComponent(personaId)}`,
+    ),
 
   /** The data-driven structured-control catalog for the Generate panel. */
   getAttributeControls: (opts?: {

@@ -49,8 +49,11 @@ import {
   isProviderHost,
   DEFAULT_PROVIDER_HOST,
   PROVIDER_HOSTS,
+  type ImageProvider,
   type ProviderHost,
 } from "../services/image-providers/index.js";
+import { imageStudioCapabilitiesRouter } from "../services/image-studio/capabilities-router.js";
+import type { CapabilityPersonaContext } from "../services/image-studio/capabilities.js";
 
 /** Load a global-or-company-scoped provider row by id. */
 async function loadProvider(db: Db, companyId: string, providerId: string) {
@@ -67,8 +70,54 @@ async function loadProvider(db: Db, companyId: string, providerId: string) {
   return row ?? null;
 }
 
-export function imageStudioRoutes(db: Db, storage?: StorageService) {
+export interface ImageStudioRouteOptions {
+  providers?: ImageProvider[];
+}
+
+/** Load persona capability context from this company only; never global/cross-company. */
+async function loadCapabilityPersona(
+  db: Db,
+  companyId: string,
+  personaId: string,
+): Promise<CapabilityPersonaContext | null> {
+  const [row] = await db
+    .select({
+      id: imageProviders.id,
+      type: imageProviders.type,
+      status: imageProviders.status,
+      endpoint: imageProviders.endpoint,
+      attributes: imageProviders.attributes,
+    })
+    .from(imageProviders)
+    .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
+    .limit(1);
+  if (!row) return null;
+  const isGeneral = row.attributes?.general === true;
+  if (!isGeneral && row.type !== "local_lora") return null;
+  return {
+    id: row.id,
+    isGeneral,
+    hasResolvableReplicateModel:
+      !isGeneral &&
+      row.status === "ready" &&
+      typeof row.endpoint === "string" &&
+      row.endpoint.trim().length > 0,
+  };
+}
+
+export function imageStudioRoutes(
+  db: Db,
+  storage?: StorageService,
+  options: ImageStudioRouteOptions = {},
+) {
   const router = Router();
+  const capabilityProviders = options.providers ?? listProviders();
+  router.use(
+    imageStudioCapabilitiesRouter(capabilityProviders, {
+      loadPersona: (companyId, personaId) =>
+        loadCapabilityPersona(db, companyId, personaId),
+    }),
+  );
 
   function kickGenerationQueueAfterEnqueue(): void {
     void kickGenerationQueue(db)

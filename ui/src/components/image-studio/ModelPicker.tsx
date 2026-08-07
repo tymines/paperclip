@@ -1,82 +1,86 @@
-/**
- * ModelPicker — provider-grouped multi-model picker. Models are grouped by
- * hosted provider (Replicate · Atlas Cloud · WaveSpeed AI) at the top level;
- * within each provider the featured pick is flagged ⭐ Recommended and the rest
- * are alternatives. Each card carries a provider chip (brand color) + per-render
- * cost. Two view modes: card mode (default) and a sortable table mode.
- */
 import { useState } from "react";
-import { LayoutGrid, Table2, Check, ShieldCheck, ShieldAlert, Layers, Film, Star } from "lucide-react";
+import {
+  Check,
+  Film,
+  ImageIcon,
+  Layers,
+  LayoutGrid,
+  Star,
+  Table2,
+  UserCheck,
+  UserRoundX,
+} from "lucide-react";
+import type { ImageStudioProviderCapabilityState } from "@/api/imageStudio";
 import { cn } from "@/lib/utils";
 import {
-  IMAGE_MODELS,
-  PROVIDER_META,
   PROVIDER_ORDER,
-  modelsByProvider,
+  IMAGE_MODELS,
   findModel,
+  modelsByProvider,
   type ImageModel,
   type ProviderHost,
 } from "./models";
 
-type SortKey = "name" | "provider" | "filters" | "maxResolution" | "lora" | "costPerImage";
+type SortKey = "name" | "providerHost" | "mediaKind" | "identityMethod" | "price";
 
-function ProviderChip({ host, className }: { host: ProviderHost; className?: string }) {
-  const meta = PROVIDER_META[host];
+function ProviderChip({ model }: { model: ImageModel }) {
   return (
     <span
-      data-testid={`provider-chip-${host}`}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-semibold",
-        className,
-      )}
-      style={{ backgroundColor: `${meta.color}1a`, color: meta.color }}
-      title={meta.blurb}
+      data-testid={`provider-chip-${model.providerHost}`}
+      className="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[9px] font-semibold"
+      style={{
+        backgroundColor: `${model.providerColor}1a`,
+        color: model.providerColor,
+      }}
     >
-      <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: meta.color }} />
-      {meta.label}
+      <span
+        className="h-1.5 w-1.5 rounded-full"
+        style={{ backgroundColor: model.providerColor }}
+      />
+      {model.providerName}
     </span>
   );
 }
 
-function FilterBadge({ model }: { model: ImageModel }) {
-  const minimal = model.filters === "Minimal";
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-0.5 rounded px-1 py-px text-[9px] font-medium",
-        minimal
-          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-          : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-      )}
-      title={`Safety filters: ${model.filters}`}
-    >
-      {minimal ? <ShieldCheck className="h-2.5 w-2.5" /> : <ShieldAlert className="h-2.5 w-2.5" />}
-      {model.filters}
-    </span>
-  );
-}
-
-function CapBadges({ model }: { model: ImageModel }) {
+function CapabilityBadges({ model }: { model: ImageModel }) {
+  const trainedIdentity = model.identityMethod === "trained_persona_identity";
   return (
     <div className="flex flex-wrap items-center gap-1">
-      <FilterBadge model={model} />
-      <span className="rounded bg-muted px-1 py-px text-[9px] font-medium text-muted-foreground">
-        {model.maxResolution}
+      <span
+        className={cn(
+          "inline-flex items-center gap-0.5 rounded px-1 py-px text-[9px] font-medium",
+          trainedIdentity
+            ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
+            : "bg-muted text-muted-foreground",
+        )}
+      >
+        {trainedIdentity ? (
+          <UserCheck className="h-2.5 w-2.5" />
+        ) : (
+          <UserRoundX className="h-2.5 w-2.5" />
+        )}
+        {trainedIdentity ? "Trained identity" : "Identity not guaranteed"}
       </span>
-      {model.lora && (
+      {model.supportsLora && (
         <span className="inline-flex items-center gap-0.5 rounded bg-indigo-500/10 px-1 py-px text-[9px] font-medium text-indigo-600 dark:text-indigo-400">
-          <Layers className="h-2.5 w-2.5" />
-          LoRA
+          <Layers className="h-2.5 w-2.5" /> LoRA input
         </span>
       )}
-      {model.kind === "video" && (
-        <span className="inline-flex items-center gap-0.5 rounded bg-violet-500/10 px-1 py-px text-[9px] font-medium text-violet-600 dark:text-violet-400">
+      <span className="inline-flex items-center gap-0.5 rounded bg-muted px-1 py-px text-[9px] font-medium text-muted-foreground">
+        {model.mediaKind === "video" ? (
           <Film className="h-2.5 w-2.5" />
-          Video
-        </span>
-      )}
+        ) : (
+          <ImageIcon className="h-2.5 w-2.5" />
+        )}
+        {model.mediaKind}
+      </span>
     </div>
   );
+}
+
+function priceLabel(model: ImageModel): string {
+  if (!model.priceEstimate) return "Estimate unavailable";
+  return `Est. $${model.priceEstimate.amountUsd.toFixed(3)}/${model.priceEstimate.unit}`;
 }
 
 function ModelCard({
@@ -88,43 +92,59 @@ function ModelCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const featured = model.recommended || model.providerFeatured;
+  const title = model.disabledReason ??
+    (model.priceEstimate
+      ? `Estimate source: ${model.priceEstimate.source}; observed ${model.priceEstimate.observedAt}`
+      : undefined);
+
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={!model.enabled}
       data-testid={`model-${model.id}`}
       aria-pressed={selected}
-      title={featured ? model.recommendedNote ?? model.altReason : model.altReason}
+      aria-describedby={!model.enabled ? `model-reason-${model.id}` : undefined}
+      title={title}
       className={cn(
         "relative rounded-lg border p-2.5 text-left transition-all duration-200",
-        "hover:-translate-y-0.5 hover:shadow-sm",
+        model.enabled && "hover:-translate-y-0.5 hover:shadow-sm",
+        !model.enabled && "cursor-not-allowed opacity-60",
         selected
           ? "border-indigo-400 bg-indigo-500/5 shadow-[0_0_0_2px_rgba(99,102,241,0.3)]"
-          : "border-border hover:border-indigo-300",
+          : "border-border",
       )}
     >
-      <div className="mb-1 flex items-center justify-between gap-2">
+      <div className="mb-1 flex items-center justify-between gap-2 pr-5">
         <span className="flex items-center gap-1 text-xs font-semibold">
           {model.name}
-          {model.wired && (
-            <span className="rounded bg-emerald-500/15 px-1 text-[8px] font-semibold text-emerald-600">
-              LIVE
-            </span>
-          )}
+          <span
+            className={cn(
+              "rounded px-1 text-[8px] font-semibold uppercase",
+              model.enabled
+                ? "bg-emerald-500/15 text-emerald-600"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {model.enabled ? "Credential verified" : model.readiness.replace(/_/g, " ")}
+          </span>
         </span>
         <span className="text-[10px] font-medium text-muted-foreground">
-          ${model.costPerImage.toFixed(3)}
-          {model.kind === "video" ? "/clip" : "/img"}
+          {priceLabel(model)}
         </span>
       </div>
-      <p className="mb-1.5 line-clamp-1 text-[10px] text-muted-foreground">
-        {model.recommended && model.recommendedNote ? model.recommendedNote : model.description}
-      </p>
       <div className="flex items-center justify-between gap-2">
-        <CapBadges model={model} />
-        <ProviderChip host={model.provider} />
+        <CapabilityBadges model={model} />
+        <ProviderChip model={model} />
       </div>
+      {!model.enabled && model.disabledReason && (
+        <p
+          id={`model-reason-${model.id}`}
+          className="mt-1.5 text-[10px] text-amber-700 dark:text-amber-300"
+        >
+          {model.disabledReason}
+        </p>
+      )}
       {selected && (
         <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-indigo-500 text-white">
           <Check className="h-2.5 w-2.5" />
@@ -137,45 +157,67 @@ function ModelCard({
 export function ModelPicker({
   value,
   onChange,
+  models,
+  providers = [],
+  loading = false,
 }: {
   value: string;
   onChange: (id: string) => void;
+  models?: ImageModel[];
+  providers?: ImageStudioProviderCapabilityState[];
+  loading?: boolean;
 }) {
+  const resolvedModels = models ?? IMAGE_MODELS;
   const [mode, setMode] = useState<"cards" | "table">("cards");
-  const [sortKey, setSortKey] = useState<SortKey>("costPerImage");
-  const [asc, setAsc] = useState(true);
-  const selected = findModel(value);
+  const [sortKey, setSortKey] = useState<SortKey>("price");
+  const [ascending, setAscending] = useState(true);
+  const selected = findModel(value, resolvedModels);
 
-  const sorted = [...IMAGE_MODELS].sort((a, b) => {
-    const av = a[sortKey];
-    const bv = b[sortKey];
-    const cmp =
+  const sorted = [...resolvedModels].sort((a, b) => {
+    const av = sortKey === "price" ? a.priceEstimate?.amountUsd ?? Number.POSITIVE_INFINITY : a[sortKey];
+    const bv = sortKey === "price" ? b.priceEstimate?.amountUsd ?? Number.POSITIVE_INFINITY : b[sortKey];
+    const comparison =
       typeof av === "number" && typeof bv === "number"
         ? av - bv
         : String(av).localeCompare(String(bv));
-    return asc ? cmp : -cmp;
+    return ascending ? comparison : -comparison;
   });
 
   function toggleSort(key: SortKey) {
-    if (key === sortKey) setAsc((v) => !v);
+    if (key === sortKey) setAscending((current) => !current);
     else {
       setSortKey(key);
-      setAsc(true);
+      setAscending(true);
     }
+  }
+
+  function availabilityLabel(value: boolean | null): string {
+    return value === null ? "unknown" : value ? "yes" : "no";
+  }
+
+  if (loading) {
+    return <p className="text-xs text-muted-foreground">Loading server capabilities...</p>;
+  }
+  if (resolvedModels.length === 0) {
+    return (
+      <div className="rounded-lg border border-amber-300/60 bg-amber-50/60 p-2.5 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+        No generation capabilities are currently available from the server.
+      </div>
+    );
   }
 
   return (
     <div data-testid="model-picker">
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Model · Provider
+          Server capabilities
         </span>
         <div className="inline-flex rounded-md border border-border bg-muted/40 p-0.5">
           <button
             type="button"
             onClick={() => setMode("cards")}
             className={cn(
-              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
               mode === "cards" ? "bg-background shadow-sm" : "text-muted-foreground",
             )}
             data-testid="model-mode-cards"
@@ -186,7 +228,7 @@ export function ModelPicker({
             type="button"
             onClick={() => setMode("table")}
             className={cn(
-              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors",
+              "flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium",
               mode === "table" ? "bg-background shadow-sm" : "text-muted-foreground",
             )}
             data-testid="model-mode-table"
@@ -198,64 +240,72 @@ export function ModelPicker({
 
       {mode === "cards" ? (
         <div className="space-y-3.5">
-          {PROVIDER_ORDER.map((host) => {
-            const meta = PROVIDER_META[host];
-            const models = modelsByProvider(host);
-            if (models.length === 0) return null;
-            const featured = models.filter((m) => m.recommended || m.providerFeatured);
-            const alternatives = models.filter((m) => !(m.recommended || m.providerFeatured));
+          {PROVIDER_ORDER.map((host: ProviderHost) => {
+            const provider = providers.find((entry) => entry.host === host);
+            const providerModels = modelsByProvider(resolvedModels, host);
+            if (!provider && providerModels.length === 0) return null;
+            const featured = providerModels.filter(
+              (model) => model.recommended || model.providerFeatured,
+            );
+            const alternatives = providerModels.filter(
+              (model) => !model.recommended && !model.providerFeatured,
+            );
+            const color = provider?.color ?? providerModels[0]?.providerColor ?? "#64748b";
+            const label = provider?.name ?? providerModels[0]?.providerName ?? host;
+
             return (
               <div key={host} data-testid={`provider-group-${host}`}>
-                <div className="mb-1.5 flex items-center gap-2 border-b border-border/60 pb-1">
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: meta.color }} />
-                  <span className="text-xs font-bold" style={{ color: meta.color }}>
-                    {meta.label}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">{meta.blurb}</span>
+                <div className="mb-1.5 flex flex-wrap items-center gap-2 border-b border-border/60 pb-1">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                  <span className="text-xs font-bold" style={{ color }}>{label}</span>
+                  {provider && (
+                    <span className="text-[10px] text-muted-foreground">
+                      configured: {availabilityLabel(provider.configured)} | credential verified:{" "}
+                      {availabilityLabel(provider.credentialVerified)} | catalog:{" "}
+                      {provider.catalogAvailable === null
+                        ? "unknown"
+                        : provider.catalogAvailable
+                          ? "available"
+                          : "unavailable"}
+                    </span>
+                  )}
+                  {provider?.disabledReason && (
+                    <span className="text-[10px] text-amber-700 dark:text-amber-300">
+                      {provider.disabledReason}
+                    </span>
+                  )}
                 </div>
-                {featured.map((m) => (
-                  <div key={m.id} className="mb-1.5">
-                    <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
-                      <Star className="h-3 w-3 fill-amber-400 text-amber-400" />{" "}
-                      {m.recommended ? "Recommended (default)" : "Recommended"}
-                    </p>
-                    <ModelCard model={m} selected={m.id === value} onSelect={() => onChange(m.id)} />
+                {[...featured, ...alternatives].map((model) => (
+                  <div key={model.id} className="mb-1.5">
+                    {(model.recommended || model.providerFeatured) && (
+                      <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                        <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                        {model.recommended ? "Recommended identity route" : "Provider default"}
+                      </p>
+                    )}
+                    <ModelCard
+                      model={model}
+                      selected={model.id === value}
+                      onSelect={() => onChange(model.id)}
+                    />
                   </div>
                 ))}
-                {alternatives.length > 0 && (
-                  <>
-                    <p className="mb-1 text-[10px] font-medium text-muted-foreground/70">
-                      Alternatives
-                    </p>
-                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                      {alternatives.map((m) => (
-                        <ModelCard
-                          key={m.id}
-                          model={m}
-                          selected={m.id === value}
-                          onSelect={() => onChange(m.id)}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
               </div>
             );
           })}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-left text-[11px]">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="min-w-[720px] w-full text-left text-[11px]">
             <thead className="bg-accent/20 text-[10px] uppercase text-muted-foreground">
               <tr>
                 {(
                   [
                     ["name", "Model"],
-                    ["provider", "Provider"],
-                    ["filters", "Filters"],
-                    ["maxResolution", "Max Res"],
-                    ["lora", "LoRA"],
-                    ["costPerImage", "Cost"],
+                    ["providerHost", "Provider"],
+                    ["mediaKind", "Media"],
+                    ["identityMethod", "Identity"],
+                    ["price", "Estimate"],
                   ] as [SortKey, string][]
                 ).map(([key, label]) => (
                   <th
@@ -263,54 +313,50 @@ export function ModelPicker({
                     onClick={() => toggleSort(key)}
                     className="cursor-pointer select-none px-2 py-1 font-semibold hover:text-foreground"
                   >
-                    {label}
-                    {sortKey === key ? (asc ? " ↑" : " ↓") : ""}
+                    {label}{sortKey === key ? (ascending ? " up" : " down") : ""}
                   </th>
                 ))}
+                <th className="px-2 py-1 font-semibold">Availability</th>
               </tr>
             </thead>
             <tbody>
-              {sorted.map((m) => (
+              {sorted.map((model) => (
                 <tr
-                  key={m.id}
-                  onClick={() => onChange(m.id)}
-                  data-testid={`model-row-${m.id}`}
-                  title={m.recommended ? m.recommendedNote : m.altReason}
+                  key={model.id}
+                  onClick={() => model.enabled && onChange(model.id)}
+                  data-testid={`model-row-${model.id}`}
+                  aria-disabled={!model.enabled}
+                  title={model.disabledReason ?? undefined}
                   className={cn(
-                    "cursor-pointer border-t border-border transition-colors",
-                    m.id === value ? "bg-indigo-500/10" : "hover:bg-muted/50",
+                    "border-t border-border",
+                    model.enabled ? "cursor-pointer hover:bg-muted/50" : "cursor-not-allowed opacity-60",
+                    model.id === value && "bg-indigo-500/10",
                   )}
                 >
-                  <td className="px-2 py-1 font-medium">
-                    {m.id === value && <Check className="mr-1 inline h-3 w-3 text-indigo-500" />}
-                    {(m.recommended || m.providerFeatured) && (
-                      <Star className="mr-1 inline h-3 w-3 fill-amber-400 text-amber-400" aria-label="Recommended" />
-                    )}
-                    {m.name}
+                  <td className="px-2 py-1 font-medium">{model.name}</td>
+                  <td className="px-2 py-1"><ProviderChip model={model} /></td>
+                  <td className="px-2 py-1 text-muted-foreground">{model.mediaKind}</td>
+                  <td className="px-2 py-1 text-muted-foreground">
+                    {model.identityMethod === "trained_persona_identity"
+                      ? "Trained persona"
+                      : "Not guaranteed"}
                   </td>
-                  <td className="px-2 py-1">
-                    <ProviderChip host={m.provider} />
+                  <td className="px-2 py-1 font-mono">{priceLabel(model)}</td>
+                  <td className="px-2 py-1 text-muted-foreground">
+                    {model.enabled ? "Credential verified" : model.disabledReason}
                   </td>
-                  <td className="px-2 py-1">
-                    <FilterBadge model={m} />
-                  </td>
-                  <td className="px-2 py-1 text-muted-foreground">{m.maxResolution}</td>
-                  <td className="px-2 py-1 text-muted-foreground">{m.lora ? "Yes" : "—"}</td>
-                  <td className="px-2 py-1 font-mono">${m.costPerImage.toFixed(3)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
       <p className="mt-1.5 text-[10px] text-muted-foreground/70">
-        Selected: <span className="font-medium text-foreground">{selected.name}</span> ·{" "}
-        <ProviderChip host={selected.provider} /> ·{" "}
-        {selected.provider === "replicate"
-          ? selected.wired
-            ? "renders through this persona's trained LoRA"
-            : "capability preview"
-          : "renders the prompt as text-to-image on this provider"}
+        Selected: <span className="font-medium text-foreground">{selected.name}</span>.{" "}
+        {selected.identityMethod === "trained_persona_identity"
+          ? "This route uses the trained persona identity."
+          : "This route does not guarantee the persona identity."}
       </p>
     </div>
   );
