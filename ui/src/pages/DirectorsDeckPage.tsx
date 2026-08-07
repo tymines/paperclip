@@ -60,7 +60,7 @@ function MobileSheet({ title, onClose, children }: { title: string; onClose: () 
     requestAnimationFrame(() => (focusable()[0] ?? dialogRef.current)?.focus());
     return () => { document.removeEventListener("keydown", onKeyDown); returnFocusRef.current?.focus(); };
   }, [onClose]);
-  return <div className="fixed inset-0 z-[70] @min-[1100px]/deck:hidden" role="presentation">
+  return <div className="fixed inset-0 z-[70] @min-[1320px]/deck:hidden" role="presentation">
     <button className="absolute inset-0 h-full w-full bg-black/65" aria-label={`Close ${title}`} onClick={onClose} />
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1} className="absolute inset-x-0 bottom-0 max-h-[88dvh] overflow-y-auto rounded-t-2xl border border-white/15 bg-[#0d1016] pb-[max(1rem,env(safe-area-inset-bottom))] shadow-2xl">
       <header className="sticky top-0 z-10 flex min-h-12 items-center justify-between border-b border-white/10 bg-[#0d1016] px-4"><h2 className="font-serif text-lg">{title}</h2><button className="grid h-11 w-11 place-items-center rounded-md border border-white/15" onClick={onClose} aria-label={`Close ${title}`}>×</button></header>
@@ -291,7 +291,7 @@ export function DirectorsDeckPage() {
         onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
-      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[1100px]/deck:hidden" aria-label="Book tools">
+      <nav className="grid grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[1320px]/deck:hidden" aria-label="Book tools">
         {(["chapters", "bible", "inspect", "tools"] as const).map((sheet) => <button key={sheet} className="min-h-11 px-1 text-[11px] font-semibold" onClick={() => setMobileSheet(sheet)}>{sheet === "bible" ? "Story Bible" : sheet[0].toUpperCase() + sheet.slice(1)}</button>)}
       </nav>
       <div className="grid min-h-0 min-w-0 grid-cols-1 @min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)] @min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]">

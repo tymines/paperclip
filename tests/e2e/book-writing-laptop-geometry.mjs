@@ -7,6 +7,9 @@ const cssFile = fs.readdirSync(path.resolve("ui/dist/assets"))
 if (!cssFile) throw new Error("Built UI stylesheet not found; run the UI build first.");
 
 const cases = [
+  { width: 1100, height: 768, sidebars: [0] },
+  { width: 1280, height: 800, sidebars: [0] },
+  { width: 1320, height: 800, sidebars: [0] },
   { width: 1366, height: 768, sidebars: [208, 240, 420] },
   { width: 1093, height: 614, sidebars: [208, 240, 420] },
   { width: 911, height: 512, sidebars: [208, 240, 420] },
@@ -25,17 +28,17 @@ try {
         <div id="shell" style="display:grid;grid-template-columns:${sidebar}px minmax(0,1fr);width:100vw;height:100vh">
           <aside></aside>
           <section id="deck" class="@container/deck grid h-full min-w-0 grid-rows-[52px_auto_minmax(0,1fr)] overflow-x-hidden">
-            <header id="topbar" class="flex h-[52px] min-w-0 items-center gap-2 overflow-hidden px-2 @min-[1100px]/deck:gap-3.5 @min-[1100px]/deck:px-4">
-              <div class="whitespace-nowrap">Book Studio</div><span>/</span><span class="h-[23px] w-4 shrink-0"></span>
-              <select class="min-w-0 flex-1 truncate @min-[1100px]/deck:max-w-[170px] @min-[1100px]/deck:flex-none"><option>A very long active book title that must truncate</option></select>
-              <button class="h-[28px] w-[28px] shrink-0">R</button><button class="hidden @min-[1100px]/deck:inline-flex">New Book</button><div class="flex-1"></div>
-              <div class="hidden whitespace-nowrap @min-[1100px]/deck:flex">10 ready · 0 working · 0 exception</div>
-              <div class="hidden @min-[1100px]/deck:flex"><button>Co-writer</button><button>Chapter</button><button>Act</button></div>
-              <button class="hidden @min-[1100px]/deck:inline-flex">Taste</button><button class="hidden @min-[1100px]/deck:inline-flex">Run Plan</button>
-              <button class="h-11 w-11 shrink-0 @min-[1100px]/deck:h-[30px] @min-[1100px]/deck:w-[30px]">B</button><button class="h-11 w-11 shrink-0 @min-[1100px]/deck:h-[30px] @min-[1100px]/deck:w-[30px]">M</button>
-              <button class="hidden @min-[1100px]/deck:inline-flex">Export</button>
+            <header id="topbar" class="flex h-[52px] min-w-0 items-center gap-2 overflow-hidden border-b border-white/5 bg-[#0a0c10] px-2 @min-[1320px]/deck:gap-3.5 @min-[1320px]/deck:px-4">
+              <div class="font-serif text-[15px] whitespace-nowrap text-white">Book <em class="not-italic text-white">Studio</em></div><span class="text-gray-600">/</span><span class="h-[23px] w-4 shrink-0 self-center rounded-sm border border-white/15"></span>
+              <select class="min-w-0 flex-1 truncate rounded-md border border-white/20 px-2 py-1 text-xs @min-[1320px]/deck:max-w-[170px] @min-[1320px]/deck:flex-none"><option>A very long active book title that must truncate</option></select>
+              <button class="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-md border">R</button><button id="new-book" class="hidden shrink-0 items-center whitespace-nowrap rounded-md border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide @min-[1320px]/deck:inline-flex">+ New Book</button><div class="flex-1"></div>
+              <div id="status" class="hidden shrink-0 items-center gap-2 whitespace-nowrap text-[11.5px] tabular-nums @min-[1320px]/deck:flex"><span class="h-1.5 w-1.5"></span><span>10 ready · 0 working · 0 exception</span></div>
+              <div id="director-mode" class="hidden shrink-0 overflow-hidden rounded-md border @min-[1320px]/deck:flex">${["Co-writer ·1", "Chapter ·2", "Act ·3"].map((label) => `<button class="shrink-0 whitespace-nowrap border-r px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-wide">${label}</button>`).join("")}</div>
+              <button class="hidden shrink-0 whitespace-nowrap rounded-md border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide @min-[1320px]/deck:inline-flex">Taste</button><button class="hidden shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide @min-[1320px]/deck:inline-flex">Run Plan</button>
+              <button class="grid h-11 w-11 shrink-0 place-items-center rounded-md border @min-[1320px]/deck:h-[30px] @min-[1320px]/deck:w-[30px]">B</button><button class="grid h-11 w-11 shrink-0 place-items-center rounded-md border @min-[1320px]/deck:h-[30px] @min-[1320px]/deck:w-[30px]">M</button>
+              <button class="hidden shrink-0 whitespace-nowrap rounded-md border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide @min-[1320px]/deck:inline-flex">Export</button>
             </header>
-            <nav id="tools" class="grid grid-cols-4 @min-[1100px]/deck:hidden"><button>Chapters</button><button>Story Bible</button><button>Inspect</button><button>Tools</button></nav>
+            <nav id="tools" class="grid grid-cols-4 @min-[1320px]/deck:hidden"><button>Chapters</button><button>Story Bible</button><button>Inspect</button><button>Tools</button></nav>
             <div id="panes" class="grid min-h-0 min-w-0 grid-cols-1 @min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)] @min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]">
               <aside id="rail" class="hidden min-h-0 @min-[760px]/deck:block"></aside>
               <main id="center" class="min-w-0 overflow-hidden">
@@ -68,8 +71,14 @@ try {
           const rect = node.getBoundingClientRect();
           return rect.left < topbar.left - 0.5 || rect.right > topbar.right + 0.5;
         });
+        const topbarVerticalEscape = visibleTopbarControls.some((node) => {
+          const rect = node.getBoundingClientRect();
+          return rect.top < topbar.top - 0.5 || rect.bottom > topbar.bottom + 0.5;
+        });
         const deckWidth = deck.getBoundingClientRect().width;
         const expectedPanes = deckWidth >= 1100 ? 3 : deckWidth >= 760 ? 2 : 1;
+        const denseToolbarExpected = deckWidth >= 1320;
+        const directorMode = byId("director-mode");
         return {
           viewportWidth,
           sidebarWidth,
@@ -79,6 +88,14 @@ try {
           documentOverflow: document.documentElement.scrollWidth > viewportWidth,
           intersections,
           topbarOutside,
+          topbarVerticalEscape,
+          denseToolbarExpected,
+          denseToolbarVisible: getComputedStyle(byId("new-book")).display !== "none",
+          toolsVisible: getComputedStyle(byId("tools")).display !== "none",
+          directorModeWraps: getComputedStyle(directorMode).display !== "none" && (
+            directorMode.scrollWidth > directorMode.clientWidth + 0.5
+            || [...directorMode.querySelectorAll("button")].some((button) => button.scrollWidth > button.clientWidth + 0.5 || getComputedStyle(button).whiteSpace !== "nowrap")
+          ),
           stageLocallyScrollable: byId("stages").scrollWidth >= byId("stages").clientWidth,
           stageWraps: [...byId("stages").querySelectorAll("span")].some((node) => getComputedStyle(node).whiteSpace !== "nowrap"),
           actionsOutsideToolbar: byId("actions").getBoundingClientRect().right > byId("editor-toolbar").getBoundingClientRect().right + 0.5,
@@ -89,6 +106,10 @@ try {
       if (geometry.documentOverflow) failures.push("document overflow");
       if (geometry.intersections) failures.push("pane intersection");
       if (geometry.topbarOutside) failures.push("topbar control outside header");
+      if (geometry.topbarVerticalEscape) failures.push("topbar control outside 52px vertical bounds");
+      if (geometry.denseToolbarVisible !== geometry.denseToolbarExpected) failures.push("dense toolbar visibility threshold mismatch");
+      if (geometry.toolsVisible === geometry.denseToolbarExpected) failures.push("Tools sheet trigger visibility mismatch");
+      if (geometry.directorModeWraps) failures.push("Director Mode shrank or wrapped");
       if (geometry.stageWraps) failures.push("stage label wrapped");
       if (geometry.actionsOutsideToolbar) failures.push("actions outside toolbar");
       results.push({ ...geometry, failures });

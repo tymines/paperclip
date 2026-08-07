@@ -70,8 +70,12 @@ describe("DeckTopBar", () => {
     expect(select.className).toContain("flex-1");
     expect(select.className).toContain("truncate");
     const newBook = Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "+ New Book")!;
-    expect(newBook.className).toContain("@min-[1100px]/deck:inline-flex");
-    expect(container.querySelector('[aria-label="Brainstorm"]')?.className).toContain("@min-[1100px]/deck:w-[30px]");
+    expect(newBook.className).toContain("@min-[1320px]/deck:inline-flex");
+    expect(newBook.className).toContain("whitespace-nowrap");
+    expect(container.querySelector('[aria-label="Brainstorm"]')?.className).toContain("@min-[1320px]/deck:w-[30px]");
+    const directorMode = Array.from(container.querySelectorAll("div")).find((node) => node.getAttribute("title")?.startsWith("Director Mode"))!;
+    expect(directorMode.className).toContain("shrink-0");
+    for (const button of directorMode.querySelectorAll("button")) expect(button.className).toContain("whitespace-nowrap");
   });
 
   it("prefills rename, rejects whitespace, and submits the trimmed display title", async () => {
