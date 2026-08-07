@@ -1,258 +1,136 @@
-/**
- * Image/video-model catalog for the Generate panel's multi-PROVIDER picker.
- *
- * Models are grouped by hosted provider (Replicate · Atlas Cloud · WaveSpeed AI)
- * so Tyler can A/B the same persona prompt across providers and compare quality.
- * Each model carries its provider + the provider-native model id sent to the
- * backend. This mirrors the server-side catalogs in
- * services/image-providers/*.ts — the verified model ids live there too.
- *
- * The ⭐ Recommended default stays the Replicate persona LoRA ("General"):
- * selecting it renders through the persona's own trained model. Atlas/WaveSpeed
- * models render the prompt as text-to-image on that host (the persona LoRA is
- * not portable across providers).
- */
-export type ProviderHost = "replicate" | "atlascloud" | "wavespeedai";
-export type ModelTier = "Quick & Cheap" | "Standard" | "Premium";
-export type SafetyFilter = "Minimal" | "On";
+import type {
+  ImageStudioCapability,
+  ProviderHost,
+} from "@/api/imageStudio";
 
-export interface ProviderMeta {
-  host: ProviderHost;
-  label: string;
-  /** Brand chip color (hex). */
-  color: string;
-  blurb: string;
+export type { ProviderHost } from "@/api/imageStudio";
+
+export interface ImageModel
+  extends Omit<ImageStudioCapability, "priceEstimate"> {
+  priceEstimate: ImageStudioCapability["priceEstimate"] | null;
+  /** Compatibility alias for the older Create panel. */
+  provider?: ProviderHost;
 }
 
-export const PROVIDER_META: Record<ProviderHost, ProviderMeta> = {
-  replicate: {
-    host: "replicate",
-    label: "Replicate",
-    color: "#ec4899",
-    blurb: "Persona's own trained LoRA — proven default.",
-  },
-  atlascloud: {
-    host: "atlascloud",
-    label: "Atlas Cloud",
-    color: "#3b82f6",
-    blurb: "NSFW-friendly “Turbo Spicy” image + video.",
-  },
-  wavespeedai: {
-    host: "wavespeedai",
-    label: "WaveSpeed AI",
-    color: "#10b981",
-    blurb: "Fast + cheap, multi-LoRA (up to 4).",
-  },
-};
+export const PROVIDER_ORDER: ProviderHost[] = [
+  "replicate",
+  "atlascloud",
+  "wavespeedai",
+];
 
-export const PROVIDER_ORDER: ProviderHost[] = ["replicate", "atlascloud", "wavespeedai"];
+export const RECOMMENDED_MODEL_ID = "general";
+export const DEFAULT_MODEL_ID = RECOMMENDED_MODEL_ID;
 
-export interface ImageModel {
-  /** Unique picker id (provider-scoped). */
-  id: string;
-  /** Provider-native model id sent to the backend; null = provider default. */
-  nativeModel: string | null;
-  provider: ProviderHost;
-  name: string;
-  tier: ModelTier;
-  kind: "image" | "video";
-  description: string;
-  filters: SafetyFilter;
-  audio: boolean;
-  lora: boolean;
-  maxResolution: string;
-  /** USD per render (per ~5s clip for video) — drives the live cost preview. */
-  costPerImage: number;
-  /** Fully backed end-to-end today. */
-  wired: boolean;
-  /** The single catalog-wide ⭐ Recommended pick. */
-  recommended?: boolean;
-  /** The featured pick within its provider group. */
-  providerFeatured?: boolean;
-  recommendedNote?: string;
-  altReason?: string;
-}
+type CompatibilityChoice = Pick<
+  ImageModel,
+  "id" | "providerHost" | "nativeModel" | "name"
+>;
 
-export const IMAGE_MODELS: ImageModel[] = [
-  // ── Replicate ───────────────────────────────────────────────────────────
-  {
-    id: "general",
-    nativeModel: null,
-    provider: "replicate",
-    name: "General",
-    tier: "Standard",
-    kind: "image",
-    description: "Persona LoRA · high quality 4K with full control",
-    filters: "Minimal",
-    audio: false,
-    lora: true,
-    maxResolution: "4K",
-    costPerImage: 0.04,
-    wired: true,
-    recommended: true,
-    providerFeatured: true,
-    recommendedNote: "Tested best quality on Sidney — renders through the persona's trained LoRA.",
-  },
+// Compatibility identifiers preserve saved templates and the older Create
+// surface while capability availability, identity, and price all come from the
+// server-owned endpoint. These placeholders must never be shown as available.
+const COMPATIBILITY_CHOICES: CompatibilityChoice[] = [
+  { id: "general", providerHost: "replicate", nativeModel: null, name: "Persona LoRA" },
   {
     id: "replicate-flux-dev-lora",
+    providerHost: "replicate",
     nativeModel: "black-forest-labs/flux-dev-lora",
-    provider: "replicate",
     name: "Flux Dev LoRA",
-    tier: "Standard",
-    kind: "image",
-    description: "Base flux-dev-lora inference",
-    filters: "Minimal",
-    audio: false,
-    lora: true,
-    maxResolution: "2MP",
-    costPerImage: 0.04,
-    wired: true,
-    altReason: "Base flux-dev without the persona model.",
   },
-  // ── Atlas Cloud ─────────────────────────────────────────────────────────
   {
     id: "atlas-seedream",
+    providerHost: "atlascloud",
     nativeModel: "bytedance/seedream-v5.0-lite",
-    provider: "atlascloud",
     name: "Seedream 5 Lite",
-    tier: "Quick & Cheap",
-    kind: "image",
-    description: "Cheap, fast text-to-image",
-    filters: "Minimal",
-    audio: false,
-    lora: false,
-    maxResolution: "2K",
-    costPerImage: 0.02,
-    wired: true,
-    providerFeatured: true,
-    altReason: "Atlas default — cheapest A/B render.",
   },
   {
     id: "atlas-qwen",
+    providerHost: "atlascloud",
     nativeModel: "qwen/qwen-image-2.0/text-to-image",
-    provider: "atlascloud",
     name: "Qwen Image 2.0",
-    tier: "Standard",
-    kind: "image",
-    description: "Sharper text + fine detail",
-    filters: "Minimal",
-    audio: false,
-    lora: false,
-    maxResolution: "2K",
-    costPerImage: 0.05,
-    wired: true,
-    altReason: "Sharper text + fine detail.",
   },
   {
     id: "atlas-wan-image",
+    providerHost: "atlascloud",
     nativeModel: "alibaba/wan-2.7/text-to-image",
-    provider: "atlascloud",
     name: "WAN 2.7 (image)",
-    tier: "Premium",
-    kind: "image",
-    description: "Premium WAN aesthetic",
-    filters: "Minimal",
-    audio: false,
-    lora: false,
-    maxResolution: "2K",
-    costPerImage: 0.05,
-    wired: true,
-    altReason: "WAN aesthetic, premium quality.",
   },
   {
     id: "atlas-wan-spicy-i2v",
+    providerHost: "atlascloud",
     nativeModel: "atlascloud/wan-2.2-turbo-spicy/image-to-video-lora",
-    provider: "atlascloud",
-    name: "WAN 2.2 Turbo Spicy I2V",
-    tier: "Premium",
-    kind: "video",
-    description: "Spicy image-to-video with LoRA",
-    filters: "Minimal",
-    audio: false,
-    lora: true,
-    maxResolution: "720p",
-    costPerImage: 0.13,
-    wired: true,
-    altReason: "NSFW image-to-video — $0.026/s.",
+    name: "WAN 2.2 I2V",
   },
-  // ── WaveSpeed AI ────────────────────────────────────────────────────────
   {
     id: "wave-flux",
+    providerHost: "wavespeedai",
     nativeModel: "wavespeed-ai/flux-dev",
-    provider: "wavespeedai",
-    name: "Flux Dev (Ultra Fast)",
-    tier: "Quick & Cheap",
-    kind: "image",
-    description: "~1s renders, very cheap",
-    filters: "Minimal",
-    audio: false,
-    lora: false,
-    maxResolution: "2MP",
-    costPerImage: 0.012,
-    wired: true,
-    providerFeatured: true,
-    altReason: "WaveSpeed default — fastest + cheapest.",
+    name: "Flux Dev",
   },
   {
     id: "wave-flux-lora",
+    providerHost: "wavespeedai",
     nativeModel: "wavespeed-ai/flux-dev-lora",
-    provider: "wavespeedai",
-    name: "Flux Dev LoRA (multi)",
-    tier: "Standard",
-    kind: "image",
-    description: "Stack up to 4 LoRAs at once",
-    filters: "Minimal",
-    audio: false,
-    lora: true,
-    maxResolution: "2MP",
-    costPerImage: 0.02,
-    wired: true,
-    altReason: "Multi-LoRA — up to 4 simultaneously.",
+    name: "Flux Dev LoRA",
   },
   {
     id: "wave-wan-i2v",
+    providerHost: "wavespeedai",
     nativeModel: "wavespeed-ai/wan-2.2/i2v-720p-ultra-fast",
-    provider: "wavespeedai",
-    name: "WAN 2.2 I2V (Ultra Fast)",
-    tier: "Premium",
-    kind: "video",
-    description: "Cheap burst image-to-video",
-    filters: "Minimal",
-    audio: false,
-    lora: false,
-    maxResolution: "720p",
-    costPerImage: 0.1,
-    wired: true,
-    altReason: "Cheap burst image-to-video.",
+    name: "WAN 2.2 I2V",
   },
 ];
 
-export const MODEL_TIERS: ModelTier[] = ["Quick & Cheap", "Standard", "Premium"];
-
-/** The single ⭐ Recommended model id (catalog-wide default). */
-export const RECOMMENDED_MODEL_ID = IMAGE_MODELS.find((m) => m.recommended)?.id ?? "general";
-
-/** Default selection = the Recommended pick. */
-export const DEFAULT_MODEL_ID = RECOMMENDED_MODEL_ID;
-
-/** Models for one provider, in catalog order. */
-export function modelsByProvider(host: ProviderHost): ImageModel[] {
-  return IMAGE_MODELS.filter((m) => m.provider === host);
+function compatibilityModel(choice: CompatibilityChoice): ImageModel {
+  return {
+    ...choice,
+    provider: choice.providerHost,
+    providerName: choice.providerHost,
+    providerColor: "#64748b",
+    mediaKind: choice.id.includes("i2v") ? "video" : "image",
+    supportsLora: false,
+    identityMethod: "no_identity_guarantee",
+    requiredInputs: ["prompt"],
+    configured: false,
+    credentialVerified: false,
+    catalogAvailable: false,
+    readiness: "blocked",
+    enabled: false,
+    disabledReason: "Generation capabilities have not loaded.",
+    recommended: choice.id === RECOMMENDED_MODEL_ID,
+    providerFeatured: false,
+    priceEstimate: null,
+  };
 }
 
 /**
- * Recommended model for a template: the first entry of compatible_models (if any
- * is a known model), else the catalog Recommended pick.
+ * Deprecated compatibility-only model identifiers. Generation pickers must use
+ * `GET /companies/:companyId/image-studio/capabilities` instead.
  */
+export const IMAGE_MODELS: ImageModel[] = COMPATIBILITY_CHOICES.map(compatibilityModel);
+
+export function modelsByProvider(
+  models: ImageModel[],
+  host: ProviderHost,
+): ImageModel[] {
+  return models.filter((model) => model.providerHost === host);
+}
+
 export function recommendedModelId(compatibleModels?: string[] | null): string {
-  const first = (compatibleModels ?? []).find((id) => IMAGE_MODELS.some((m) => m.id === id));
+  const first = (compatibleModels ?? []).find((id) =>
+    IMAGE_MODELS.some((model) => model.id === id),
+  );
   return first ?? RECOMMENDED_MODEL_ID;
 }
 
-/** Per-image fee breakdown for the cost-preview tooltip. */
-export const LORA_FEE = 0;
-export const UPSCALE_FEE = 0;
-
-export function findModel(id: string): ImageModel {
-  return IMAGE_MODELS.find((m) => m.id === id) ?? IMAGE_MODELS[0];
+export function findModel(
+  id: string,
+  models: ImageModel[] = IMAGE_MODELS,
+): ImageModel {
+  return (
+    models.find((model) => model.id === id) ??
+    models.find((model) => model.recommended) ??
+    models[0] ??
+    IMAGE_MODELS[0]
+  );
 }

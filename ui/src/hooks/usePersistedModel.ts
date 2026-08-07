@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { RECOMMENDED_MODEL_ID } from "@/components/image-studio/models";
 
 /**
@@ -12,10 +12,16 @@ export function usePersistedModel(
   fallback: string = RECOMMENDED_MODEL_ID,
 ): readonly [string, (id: string) => void] {
   const key = `image-studio:model:${personaId ?? "none"}:${tool}`;
-  const [model, setModelState] = useState<string>(() => {
+  const readModel = useCallback(() => {
     if (typeof window === "undefined") return fallback;
     return localStorage.getItem(key) ?? fallback;
-  });
+  }, [fallback, key]);
+  const [model, setModelState] = useState<string>(readModel);
+
+  useEffect(() => {
+    setModelState(readModel());
+  }, [readModel]);
+
   const setModel = useCallback(
     (id: string) => {
       setModelState(id);

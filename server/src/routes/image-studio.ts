@@ -49,8 +49,10 @@ import {
   isProviderHost,
   DEFAULT_PROVIDER_HOST,
   PROVIDER_HOSTS,
+  type ImageProvider,
   type ProviderHost,
 } from "../services/image-providers/index.js";
+import { imageStudioCapabilitiesRouter } from "../services/image-studio/capabilities-router.js";
 
 /** Load a global-or-company-scoped provider row by id. */
 async function loadProvider(db: Db, companyId: string, providerId: string) {
@@ -67,8 +69,18 @@ async function loadProvider(db: Db, companyId: string, providerId: string) {
   return row ?? null;
 }
 
-export function imageStudioRoutes(db: Db, storage?: StorageService) {
+export interface ImageStudioRouteOptions {
+  providers?: ImageProvider[];
+}
+
+export function imageStudioRoutes(
+  db: Db,
+  storage?: StorageService,
+  options: ImageStudioRouteOptions = {},
+) {
   const router = Router();
+  const capabilityProviders = options.providers ?? listProviders();
+  router.use(imageStudioCapabilitiesRouter(capabilityProviders));
 
   function kickGenerationQueueAfterEnqueue(): void {
     void kickGenerationQueue(db)

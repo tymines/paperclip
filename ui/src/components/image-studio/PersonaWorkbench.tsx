@@ -28,6 +28,7 @@ import {
   GitCompare,
 } from "lucide-react";
 import { useSearchParams } from "@/lib/router";
+import { useCompany } from "@/context/CompanyContext";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/useIsMobile";
 import { usePersistedModel } from "@/hooks/usePersistedModel";
@@ -35,6 +36,7 @@ import {
   imageStudioApi,
   type ImageProvider,
   type AttributeControl,
+  type ImageStudioProviderCapabilityState,
   type PromptTemplate,
   type Selections,
 } from "@/api/imageStudio";
@@ -66,7 +68,7 @@ import { UndresserInline } from "./UndresserInline";
 import { UnifiedLibrary } from "./UnifiedLibrary";
 import { type TemplateApply } from "./UseTemplatePicker";
 import { assemblePrompt, detectConflicts, randomizeSelections } from "./assemble";
-import { findModel, DEFAULT_MODEL_ID, LORA_FEE, UPSCALE_FEE } from "./models";
+import { findModel, type ImageModel } from "./models";
 
 const ASPECT_RATIOS = ["1:1", "3:4", "4:3", "16:9", "9:16"] as const;
 
@@ -293,7 +295,9 @@ function GenerateInline({
   }) => void;
 }) {
   const queryClient = useQueryClient();
+  const { selectedCompany } = useCompany();
   const isMobile = useIsMobile();
+  const capabilityCompanyId = persona.companyId ?? selectedCompany?.id ?? null;
   const [selections, setSelections] = useState<Selections>({});
   const [defaultKeys, setDefaultKeys] = useState<Set<string>>(new Set());
   const [freeText, setFreeText] = useState("");
@@ -310,7 +314,23 @@ function GenerateInline({
   const [editing, setEditing] = useState(false);
   const [editedPrompt, setEditedPrompt] = useState("");
   const [saveOpen, setSaveOpen] = useState(false);
-  const initialized = useRef(false);
+  const [subTab, setSubTab] = useState<"compose" | "library">("compose");
+  const initializedPersonaId = useRef<string | null>(null);
+
+  const capabilitiesQ = useQuery({
+    queryKey: ["image-studio", "capabilities", capabilityCompanyId],
+    queryFn: () => imageStudioApi.getCapabilities(capabilityCompanyId as string),
+    enabled: typeof capabilityCompanyId === "string" && capabilityCompanyId.length > 0,
+    staleTime: 60_000,
+  });
+  const capabilityModels = useMemo<ImageModel[]>(
+    () => capabilitiesQ.data?.capabilities ?? [],
+    [capabilitiesQ.data],
+  );
+  const capabilityProviders = useMemo<ImageStudioProviderCapabilityState[]>(
+    () => capabilitiesQ.data?.providers ?? [],
+    [capabilitiesQ.data],
+  );
 
   const controlsQ = useQuery({
     queryKey: ["image-studio", "attribute-controls"],
@@ -321,18 +341,61 @@ function GenerateInline({
   const orderedControls = useMemo(() => [...controls].sort((a, b) => a.sortOrder - b.sortOrder), [controls]);
 
   useEffect(() => {
-    if (controls.length > 0 && !initialized.current) {
+    initializedPersonaId.current = null;
+    setSelections({});
+    setDefaultKeys(new Set());
+    setFreeText("");
+    setSearch("");
+    setCompareMode(false);
+    setCount(4);
+    setLoraScale(1);
+    setSteps(28);
+    setAspectRatio("3:4");
+    setSeed("");
+    setEditing(false);
+    setEditedPrompt("");
+    setSaveOpen(false);
+    setSubTab("compose");
+  }, [persona.id]);
+
+  useEffect(() => {
+    if (controls.length > 0 && initializedPersonaId.current !== persona.id) {
       const defs = defaultsFromPersona(controls, persona);
       setSelections(defs);
       setDefaultKeys(new Set(Object.keys(defs)));
-      initialized.current = true;
+      initializedPersonaId.current = persona.id;
     }
   }, [controls, persona]);
 
+  useEffect(() => {
+    if (
+      capabilityModels.length > 0 &&
+      !capabilityModels.some((capability) => capability.id === modelId)
+    ) {
+      const fallback =
+        capabilityModels.find((capability) => capability.recommended && capability.enabled) ??
+        capabilityModels.find((capability) => capability.enabled) ??
+        capabilityModels[0];
+      setModelId(fallback.id);
+    }
+  }, [capabilityModels, modelId, setModelId]);
+
   const prompt = useMemo(() => assemblePrompt(persona, selections, freeText, controls), [persona, selections, freeText, controls]);
   const conflicts = useMemo(() => detectConflicts(selections, freeText, controls), [selections, freeText, controls]);
-  const model = findModel(modelId);
-  const totalCost = count * model.costPerImage;
+  const model = findModel(modelId, capabilityModels);
+  const unitEstimate = model.priceEstimate?.amountUsd ?? null;
+  const totalCost = unitEstimate == null ? null : count * unitEstimate;
+  const compareProviders = capabilityProviders
+    .filter((provider) =>
+      provider.credentialVerified &&
+      capabilityModels.some(
+        (capability) =>
+          capability.providerHost === provider.host &&
+          capability.mediaKind === "image" &&
+          capability.enabled,
+      ),
+    )
+    .map((provider) => provider.host);
 
   function setSelection(key: string, value: string | undefined) {
     setSelections((prev) => {
@@ -377,8 +440,6 @@ function GenerateInline({
     setSubTab("compose");
   }
 
-  const [subTab, setSubTab] = useState<"compose" | "library">("compose");
-
   const generateMut = useMutation({
     mutationFn: () => {
       const ratingOut: "sfw" | "explicit" = showExplicit ? "explicit" : rating;
@@ -391,7 +452,11 @@ function GenerateInline({
       // result to the { batch_id } shape onSuccess expects.
       if (compareMode) {
         return imageStudioApi
-          .generateCompare(persona.id, { ...promptBody, ...common })
+          .generateCompare(persona.id, {
+            ...promptBody,
+            ...common,
+            providers: compareProviders,
+          })
           .then((r) => ({
             batch_id: r.batch_id,
             job_ids: Object.values(r.jobs_by_provider).flat(),
@@ -399,7 +464,11 @@ function GenerateInline({
           }));
       }
       // Single-provider: route to the picked model's provider + native model.
-      const routed = { ...common, provider_host: model.provider, model: model.nativeModel };
+      const routed = {
+        ...common,
+        provider_host: model.providerHost,
+        model: model.nativeModel,
+      };
       return imageStudioApi.generateBatch(persona.id, { ...promptBody, ...routed });
     },
     onSuccess: (res) => {
@@ -473,10 +542,17 @@ function GenerateInline({
           data-testid="free-text"
         />
       </div>
-      <ModelPicker value={modelId} onChange={setModelId} />
+      <ModelPicker
+        value={modelId}
+        onChange={setModelId}
+        models={capabilityModels}
+        providers={capabilityProviders}
+        loading={capabilitiesQ.isLoading}
+      />
       <button
         type="button"
         onClick={() => setCompareMode((v) => !v)}
+        disabled={compareProviders.length < 2}
         aria-pressed={compareMode}
         data-testid="compare-toggle"
         className={cn(
@@ -484,6 +560,7 @@ function GenerateInline({
           compareMode
             ? "border-indigo-400 bg-indigo-500/5"
             : "border-border hover:border-indigo-300",
+          compareProviders.length < 2 && "cursor-not-allowed opacity-60",
         )}
       >
         <span className="flex items-center gap-2">
@@ -491,7 +568,9 @@ function GenerateInline({
           <span>
             <span className="block text-xs font-semibold">Compare across providers</span>
             <span className="block text-[10px] text-muted-foreground">
-              Fire this prompt on all 3 providers · tag results by provider
+              {compareProviders.length >= 2
+                ? `Compare ${compareProviders.length} credential-verified image providers; identity is not guaranteed on non-persona routes`
+                : "At least two credential-verified image providers are required"}
             </span>
           </span>
         </span>
@@ -588,14 +667,26 @@ function GenerateInline({
             <TooltipTrigger asChild>
               <span className="flex cursor-help items-center gap-1 text-xs text-muted-foreground" data-testid="cost-preview">
                 <Info className="h-3 w-3" />
-                {count} × ${model.costPerImage.toFixed(3)} = <span className="font-semibold text-foreground">${totalCost.toFixed(2)}</span>
+                {unitEstimate == null || totalCost == null
+                  ? "Cost estimate unavailable"
+                  : `${count} x est. $${unitEstimate.toFixed(3)} = $${totalCost.toFixed(2)}`}
               </span>
             </TooltipTrigger>
             <TooltipContent className="text-[11px]">
-              <div>Model ({model.name}): ${model.costPerImage.toFixed(3)}/img</div>
-              <div>LoRA fee: ${LORA_FEE.toFixed(3)}/img (included)</div>
-              <div>Upscale fee: ${UPSCALE_FEE.toFixed(3)}/img</div>
-              <div className="mt-0.5 border-t border-border pt-0.5 font-semibold">{count} images → ${totalCost.toFixed(2)}</div>
+              {model.priceEstimate ? (
+                <>
+                  <div>
+                    Estimate ({model.name}): ${model.priceEstimate.amountUsd.toFixed(3)}/{model.priceEstimate.unit}
+                  </div>
+                  <div>Source: {model.priceEstimate.source}</div>
+                  <div>Observed: {model.priceEstimate.observedAt}</div>
+                  <div className="mt-0.5 border-t border-border pt-0.5 font-semibold">
+                    {count} outputs: estimated ${totalCost?.toFixed(2)}
+                  </div>
+                </>
+              ) : (
+                <div>No price estimate was supplied by the server.</div>
+              )}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -603,7 +694,16 @@ function GenerateInline({
           <Button variant="outline" size="sm" onClick={() => setSaveOpen(true)} data-testid="save-template">
             <Save className="mr-1.5 h-3.5 w-3.5" /> Save
           </Button>
-          <Button onClick={() => generateMut.mutate()} disabled={generateMut.isPending || (!prompt && !editedPrompt)} data-testid="generate-submit">
+          <Button
+            onClick={() => generateMut.mutate()}
+            disabled={
+              generateMut.isPending ||
+              !model.enabled ||
+              (!prompt && !editedPrompt)
+            }
+            title={!model.enabled ? model.disabledReason ?? "Capability unavailable" : undefined}
+            data-testid="generate-submit"
+          >
             {generateMut.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
             Generate {count}
           </Button>
@@ -671,6 +771,18 @@ export function PersonaWorkbench({
   const [gender, setGender] = useState<"female" | "male">("female");
   const [libNotice, setLibNotice] = useState<string | null>(null);
   const actionsRef = useRef<WorkbenchActions>({ surpriseMe: () => {}, reset: () => {}, applyTemplate: () => {} });
+
+  useEffect(() => {
+    setTabState("generate");
+    setShowExplicit(rating === "explicit");
+    setGender("female");
+    setLibNotice(null);
+    actionsRef.current = {
+      surpriseMe: () => {},
+      reset: () => {},
+      applyTemplate: () => {},
+    };
+  }, [persona.id, rating]);
 
   function selectTab(next: WorkbenchTab) {
     setTabState(next);
@@ -763,6 +875,7 @@ export function PersonaWorkbench({
           Library are lighter and mount on demand. */}
       <div className={cn(tab === "generate" ? "block" : "hidden")}>
         <GenerateInline
+          key={persona.id}
           persona={persona}
           showExplicit={showExplicit}
           rating={rating}
