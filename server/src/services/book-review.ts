@@ -25,6 +25,7 @@ import {
 import { and } from "drizzle-orm";
 import { chapterContentHash } from "./book-prose-writer.js";
 import { callAgentLane } from "./book-agent-lanes.js";
+import { extractSingleJsonObject } from "./book-review-json.js";
 
 /** Provenance stamped on reports and review runs when Hades answered. */
 export const HADES_CRITIC_PROVIDER = "Hades / Kimi K3";
@@ -69,15 +70,6 @@ export interface BaselineReport {
   noVerdictReason?: string;
   /** Reserved compatibility field; Hades lane errors now propagate and fail closed. */
   agentLaneError?: string;
-}
-
-function extractJson(raw: string): unknown {
-  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const src = fence ? fence[1].trim() : raw;
-  const start = src.indexOf("{");
-  const end = src.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) throw new Error("no JSON object in critic output");
-  return JSON.parse(src.slice(start, end + 1));
 }
 
 /**
@@ -164,7 +156,7 @@ export async function runBaselineReview(
     findings?: Array<{ excerpt?: string; note?: string; category?: string; kind?: string }>;
   };
   try {
-    parsed = extractJson(critic.text) as typeof parsed;
+    parsed = extractSingleJsonObject(critic.text) as typeof parsed;
   } catch {
     // Missing evidence ⇒ NO_VERDICT (§6.4): halts, surfaces, never silently passes.
     return {
