@@ -236,6 +236,9 @@ describe("Image Studio focused UI repairs", () => {
     await flushReact();
     await flushReact();
 
+    expect(container.querySelector('[data-testid="creator-os-shell"]')?.className)
+      .toContain("grid-cols-[minmax(0,1fr)]");
+
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-create"]')!.click();
     });
