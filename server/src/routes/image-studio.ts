@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
@@ -28,6 +28,7 @@ import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { socialPosts } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import {
+  contentGeneratorCapability,
   contentGeneratorUnavailablePayload,
   generateContentIdeas,
 } from "../services/influencer-studio/content-generator.js";
@@ -74,6 +75,7 @@ import {
 } from "../services/image-providers/index.js";
 import { imageStudioCapabilitiesRouter } from "../services/image-studio/capabilities-router.js";
 import type { CapabilityPersonaContext } from "../services/image-studio/capabilities.js";
+import type { CreatorGenerationWorkerReadiness } from "@paperclipai/shared";
 import { requireImageStudioAuthentication } from "../services/image-studio/route-auth.js";
 
 /** Load a global-or-company-scoped provider row by id. */
@@ -93,6 +95,7 @@ async function loadProvider(db: Db, companyId: string, providerId: string) {
 
 export interface ImageStudioRouteOptions {
   providers?: ImageProvider[];
+  generationWorkerReadiness?: CreatorGenerationWorkerReadiness;
 }
 
 /** Load global or company-owned persona capability context; never cross-company. */
@@ -147,6 +150,7 @@ export function imageStudioRoutes(
     imageStudioCapabilitiesRouter(capabilityProviders, {
       loadPersona: (companyId, personaId) =>
         loadCapabilityPersona(db, companyId, personaId),
+      generationWorkerReadiness: options.generationWorkerReadiness,
     }),
   );
 
@@ -615,13 +619,30 @@ export function imageStudioRoutes(
   // Personas are global (company_id IS NULL) or company-scoped, so these
   // routes key off the persona id rather than a company in the path.
 
-  async function loadPersona(personaId: string) {
+  async function loadPersona(req: Request, personaId: string, allowGlobalTemplate = false) {
+    const unrestrictedBoard = req.actor.type === "board" && (req.actor.source === "local_implicit" || req.actor.isInstanceAdmin);
+    const allowedCompanyIds = req.actor.type === "agent"
+      ? (req.actor.companyId ? [req.actor.companyId] : [])
+      : req.actor.type === "board"
+        ? (req.actor.companyIds ?? [])
+        : [];
+    const ownedVisibility = unrestrictedBoard
+      ? isNotNull(imageProviders.companyId)
+      : allowedCompanyIds.length > 0
+        ? inArray(imageProviders.companyId, allowedCompanyIds)
+        : sql<boolean>`false`;
+    const visibility = allowGlobalTemplate
+      ? or(ownedVisibility, isNull(imageProviders.companyId))
+      : ownedVisibility;
     const [row] = await db
       .select()
       .from(imageProviders)
-      .where(eq(imageProviders.id, personaId))
+      .where(and(eq(imageProviders.id, personaId), visibility))
       .limit(1);
-    return row ?? null;
+    if (!row) return null;
+    const visibleOwned = row.companyId !== null && (unrestrictedBoard || allowedCompanyIds.includes(row.companyId));
+    if (!visibleOwned && !(allowGlobalTemplate && row.companyId === null)) return null;
+    return row;
   }
 
   /** Coerce an arbitrary body field into a clean Record<string,string>. */
@@ -654,7 +675,7 @@ export function imageStudioRoutes(
   // Returns the assembled prompt for the live preview, plus any soft conflicts.
   router.post("/image-studio/personas/:personaId/preview-prompt", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId, true);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -678,7 +699,7 @@ export function imageStudioRoutes(
   // Edits a persona's long-form bio + structured attribute defaults.
   router.patch("/image-studio/personas/:personaId", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -724,7 +745,7 @@ export function imageStudioRoutes(
   // / deep-links where the providers list isn't already loaded).
   router.get("/image-studio/personas/:personaId", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId, true);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -738,7 +759,7 @@ export function imageStudioRoutes(
     "/image-studio/personas/:personaId/generations",
     async (req, res) => {
       const { personaId } = req.params;
-      const persona = await loadPersona(personaId);
+      const persona = await loadPersona(req, personaId, true);
       if (!persona || persona.type !== "local_lora") {
         res.status(404).json({ error: "Persona not found" });
         return;
@@ -806,7 +827,7 @@ export function imageStudioRoutes(
     "/image-studio/personas/:personaId/generations",
     async (req, res) => {
       const { personaId } = req.params;
-      const persona = await loadPersona(personaId);
+      const persona = await loadPersona(req, personaId);
       if (!persona || persona.type !== "local_lora") {
         res.status(404).json({ error: "Persona not found" });
         return;
@@ -853,6 +874,14 @@ export function imageStudioRoutes(
   // Prune a bad output. Best-effort removes the underlying image + thumbnail.
   router.delete("/image-studio/generations/:id", async (req, res) => {
     const { id } = req.params;
+    const existing = await db.select({ personaId: personaGenerations.personaId })
+      .from(personaGenerations)
+      .where(eq(personaGenerations.id, id))
+      .then((rows) => rows[0] ?? null);
+    if (!existing || !await loadPersona(req, existing.personaId)) {
+      res.status(404).json({ error: "Generation not found" });
+      return;
+    }
     const [deleted] = await db
       .delete(personaGenerations)
       .where(eq(personaGenerations.id, id))
@@ -963,7 +992,7 @@ export function imageStudioRoutes(
   // generation_jobs row per expansion (capped at 24), then kicks the queue.
   router.post("/image-studio/personas/:personaId/generate", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -1241,7 +1270,7 @@ export function imageStudioRoutes(
   // provider gets its own jobs under a shared batch_id, tagged by provider_host.
   router.post("/image-studio/personas/:personaId/generate-compare", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -1344,7 +1373,7 @@ export function imageStudioRoutes(
   // categories fire as one batch so the UI shows a single progress meter.
   router.post("/image-studio/personas/:personaId/batch-generate", async (req, res) => {
     const { personaId } = req.params;
-    const persona = await loadPersona(personaId);
+    const persona = await loadPersona(req, personaId);
     if (!persona || persona.type !== "local_lora") {
       res.status(404).json({ error: "Persona not found" });
       return;
@@ -1520,7 +1549,7 @@ export function imageStudioRoutes(
 
     let prompt = tpl.templateText;
     if (personaId && Object.keys(preset).length > 0) {
-      const persona = await loadPersona(personaId);
+      const persona = await loadPersona(req, personaId, true);
       if (persona) {
         const { catalog } = await loadCatalog(db);
         prompt = assemblePrompt(
@@ -1580,7 +1609,7 @@ export function imageStudioRoutes(
     "/image-studio/personas/:personaId/prompt-templates",
     async (req, res) => {
       const { personaId } = req.params;
-      const persona = await loadPersona(personaId);
+      const persona = await loadPersona(req, personaId);
       if (!persona || persona.type !== "local_lora") {
         res.status(404).json({ error: "Persona not found" });
         return;
@@ -1693,9 +1722,15 @@ export function imageStudioRoutes(
     }
   }, RATE_LIMIT_TTL_MS).unref();
 
+  router.get("/companies/:companyId/image-studio/content-generation-capability", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    res.json(contentGeneratorCapability());
+  });
+
   // POST /companies/:companyId/image-studio/personas/:personaId/generate-content
   // Body: { topic: string, count?: number }
-  // Uses Gemini to generate social media post ideas matching the persona's style.
+  // Disabled until an approved server-owned non-Gemini text capability exists.
   router.post("/companies/:companyId/image-studio/personas/:personaId/generate-content", async (req, res, next) => {
     try {
       const { companyId, personaId } = req.params;

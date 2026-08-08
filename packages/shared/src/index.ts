@@ -1,4 +1,6 @@
 export { agentAdapterTypeSchema, optionalAgentAdapterTypeSchema } from "./adapter-type.js";
+export * from "./types/creator-os.js";
+export * from "./validators/creator-os.js";
 export { PRODUCT_IDENTIFIERS } from "./brand.js";
 export {
   COMPANY_STATUSES,

@@ -33,14 +33,15 @@ describe("CreatorOsNavigation", () => {
     expect(container.querySelector('[data-testid="creator-nav-overview"]')?.getAttribute("aria-current")).toBeNull();
   });
 
-  it("labels later-phase destinations truthfully while keeping navigation real", async () => {
+  it("marks operational destinations available and keeps navigation real", async () => {
     const onNavigate = vi.fn();
     await act(async () => {
       root.render(<CreatorOsNavigation active="overview" onNavigate={onNavigate} />);
     });
 
     const flows = container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-flows"]')!;
-    expect(flows.getAttribute("aria-label")).toContain("foundation only");
+    expect(flows.getAttribute("aria-label")).toBe("Flows");
+    expect(container.querySelector('[data-testid="creator-nav-social"]')?.getAttribute("aria-label")).toBe("Social");
     await act(async () => flows.click());
     expect(onNavigate).toHaveBeenCalledWith("flows");
   });

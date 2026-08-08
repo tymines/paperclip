@@ -17,7 +17,6 @@ import {
   type ImageProvider,
   type PersonaGeneration,
 } from "../api/imageStudio";
-import { ApiError } from "../api/client";
 
 vi.mock("../context/CompanyContext", () => ({
   useCompany: () => ({
@@ -269,9 +268,9 @@ describe("Image Studio focused UI repairs", () => {
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-flows"]')!.click();
     });
-    expect(container.textContent).toContain("no route to run, rerun, approve, or publish");
+    expect(container.textContent).toContain("Saving never generates");
     expect(container.querySelector<HTMLButtonElement>('[data-testid="open-studio-33333333-3333-4333-8333-333333333333"]')?.getAttribute("aria-pressed")).toBe("true");
-    expect(container.querySelector<HTMLButtonElement>('[data-testid="creator-foundation-state"] button')?.disabled).toBe(true);
+    expect(container.querySelector('[data-testid="creator-flows"]')).not.toBeNull();
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-create"]')!.click();
@@ -287,23 +286,28 @@ describe("Image Studio focused UI repairs", () => {
     }
   });
 
-  it("preserves generated ideas and explains typed generator unavailability", async () => {
-    const generatedIdea = {
-      title: "Behind the scenes",
-      caption: "A saved idea that must remain visible.",
-      suggestedHashtags: ["#studio"],
-    };
+  it("keeps global personas read-only in operational lanes", async () => {
+    vi.spyOn(imageStudioApi, "listProviders").mockResolvedValue({ providers: [{ ...persona, companyId: null }] });
+    vi.spyOn(imageStudioApi, "listTrainingJobs").mockResolvedValue({ jobs: [] });
+    vi.spyOn(imageStudioApi, "listGenerations").mockResolvedValue({ generations: [], nextCursor: null });
+
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><ImageStudio /></QueryClientProvider>));
+    await flushReact();
+    await flushReact();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-flows"]')!.click());
+
+    expect(container.textContent).toContain("read-only templates");
+    expect(container.querySelector('[data-testid="creator-flows"]')).toBeNull();
+  });
+
+  it("disables Content Ideas with the precise missing non-Gemini capability", async () => {
     vi.spyOn(imageStudioApi, "listDrafts").mockResolvedValue({ drafts: [] });
-    vi.spyOn(imageStudioApi, "generateContent")
-      .mockResolvedValueOnce({ ideas: [generatedIdea] })
-      .mockRejectedValueOnce(new ApiError("Generator unavailable", 503, {
-        code: "content_generator_unavailable",
-        retryable: false,
-      }))
-      .mockRejectedValueOnce(new ApiError("Generator temporarily unavailable", 503, {
-        code: "content_generator_unavailable",
-        retryable: true,
-      }));
+    vi.spyOn(imageStudioApi, "getContentGeneratorCapability").mockResolvedValue({
+      enabled: false,
+      code: "content_generator_unavailable",
+      reason: "Content Ideas is disabled: no approved server-owned non-Gemini text-generation capability is configured.",
+    });
+    const generateSpy = vi.spyOn(imageStudioApi, "generateContent");
 
     await act(async () => {
       root.render(
@@ -319,28 +323,13 @@ describe("Image Studio focused UI repairs", () => {
     await flushReact();
 
     const topic = container.querySelector<HTMLInputElement>('[data-testid="content-topic-input"]')!;
-    await act(async () => {
-      setNativeValue(topic, "launch");
-    });
     const generate = container.querySelector<HTMLButtonElement>(
       '[data-testid="content-generate-submit"]',
     )!;
-
-    await act(async () => generate.click());
-    await flushReact();
-    expect(container.textContent).toContain(generatedIdea.title);
-
-    await act(async () => generate.click());
-    await flushReact();
-    expect(container.textContent).toContain(generatedIdea.title);
-    expect(container.querySelector('[data-testid="content-generation-error"]')?.textContent)
-      .toContain("Configure a content generator, then try again.");
-
-    await act(async () => generate.click());
-    await flushReact();
-    expect(container.textContent).toContain(generatedIdea.title);
-    expect(container.querySelector('[data-testid="content-generation-error"]')?.textContent)
-      .toContain("Try again shortly.");
+    expect(topic.disabled).toBe(true);
+    expect(generate.disabled).toBe(true);
+    expect(container.textContent).toContain("no approved server-owned non-Gemini text-generation capability");
+    expect(generateSpy).not.toHaveBeenCalled();
   });
 
   it("tracks an explicit Library generation callback and refreshes the gallery without auto-submitting", async () => {

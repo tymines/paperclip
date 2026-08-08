@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock the services
 vi.mock("../services/influencer-studio/content-generator.js", () => ({
+  contentGeneratorCapability: () => ({ enabled: false, code: "content_generator_unavailable", reason: "not configured" }),
+  contentGeneratorUnavailablePayload: () => ({ error: "not configured", code: "content_generator_unavailable", retryable: false }),
   generateContentIdeas: vi.fn(),
 }));
 
@@ -36,11 +38,11 @@ function createMockDb() {
   };
 }
 
-function makeApp(routesFn, mockDb, opts?) {
+function makeApp(routesFn, mockDb, opts?, actor = { type: "board", userId: "test-board-user", source: "local_implicit" }) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.actor = { actorType: "board", actorId: "test-board-user", agentId: null };
+    req.actor = actor;
     next();
   });
   app.use(routesFn(mockDb, opts));
@@ -64,6 +66,34 @@ describe("Influencer Studio Routes", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("persona tenant visibility", () => {
+    it.each([
+      ["board", { type: "board", userId: "board-1", source: "session", companyIds: ["owned-company"], isInstanceAdmin: false }],
+      ["agent", { type: "agent", agentId: "agent-1", companyId: "owned-company", source: "agent_key" }],
+    ])("returns the same not-found result for foreign and nonexistent personas to a %s actor", async (_kind, actor) => {
+      const { mockDb, mockQuery } = createMockDb();
+      mockQuery.limit
+        .mockResolvedValueOnce([{ id: "foreign-persona", companyId: "foreign-company", type: "local_lora" }])
+        .mockResolvedValueOnce([]);
+      const app = makeApp(imageStudioRoutesFn, mockDb, undefined, actor);
+      const foreign = await request(app).get("/image-studio/personas/foreign-persona");
+      const missing = await request(app).get("/image-studio/personas/missing-persona");
+      expect(foreign.status).toBe(404);
+      expect(missing.status).toBe(404);
+      expect(foreign.body).toEqual(missing.body);
+      expect(foreign.body).toEqual({ error: "Persona not found" });
+    });
+
+    it("preserves explicitly allowed global persona templates", async () => {
+      const { mockDb, mockQuery } = createMockDb();
+      mockQuery.limit.mockResolvedValueOnce([{ id: "global-persona", companyId: null, type: "local_lora" }]);
+      const actor = { type: "board", userId: "board-1", source: "session", companyIds: ["owned-company"], isInstanceAdmin: false };
+      const response = await request(makeApp(imageStudioRoutesFn, mockDb, undefined, actor)).get("/image-studio/personas/global-persona");
+      expect(response.status).toBe(200);
+      expect(response.body.provider.id).toBe("global-persona");
+    });
   });
 
   describe("POST generate-content", () => {

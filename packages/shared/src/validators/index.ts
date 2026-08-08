@@ -10,6 +10,7 @@ export {
   type PatchInstanceExperimentalSettings,
   type IssueGraphLivenessAutoRecoveryRequest,
 } from "./instance.js";
+export * from "./creator-os.js";
 
 export {
   upsertBudgetPolicySchema,

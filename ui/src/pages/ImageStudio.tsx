@@ -51,9 +51,7 @@ import {
   CircleDollarSign,
   CircleUserRound,
   Clock3,
-  GalleryHorizontalEnd,
   GraduationCap,
-  Megaphone,
   ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -69,6 +67,7 @@ import {
   CreatorOsNavigation,
   type CreatorOsDestination,
 } from "@/components/image-studio/creator-os/CreatorOsNavigation";
+import { CreatorOperationalLanes } from "@/components/image-studio/creator-os/CreatorOperationalLanes";
 
 /* -------------------------------------------------------------------------- */
 /* Paperclip Design System v1.0 tokens (locked)                               */
@@ -1275,6 +1274,11 @@ export function ContentPanel({
   const [scheduledAt, setScheduledAt] = useState("");
   const [draftsMinimized, setDraftsMinimized] = useState(false);
   const queryClient = useQueryClient();
+  const contentCapabilityQ = useQuery({
+    queryKey: ["influencer", "content-capability", companyId],
+    queryFn: () => imageStudioApi.getContentGeneratorCapability(companyId),
+  });
+  const contentGenerationEnabled = contentCapabilityQ.data?.enabled === true;
 
   const generateMut = useMutation({
     mutationFn: () =>
@@ -1326,6 +1330,7 @@ export function ContentPanel({
           <input
             type="text"
             value={topic}
+            disabled={!contentGenerationEnabled}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="e.g., New collection launch, behind the scenes, Q&A..."
             data-testid="content-topic-input"
@@ -1336,13 +1341,13 @@ export function ContentPanel({
               border: `1px solid ${DS.border}`,
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && topic.trim()) generateMut.mutate();
+              if (e.key === "Enter" && topic.trim() && contentGenerationEnabled) generateMut.mutate();
             }}
           />
           <button
             type="button"
             onClick={() => generateMut.mutate()}
-            disabled={generateMut.isPending || !topic.trim()}
+            disabled={!contentGenerationEnabled || generateMut.isPending || !topic.trim()}
             data-testid="content-generate-submit"
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-medium transition-opacity disabled:opacity-50"
             style={{ background: DS.primary, color: "#fff" }}
@@ -1355,6 +1360,14 @@ export function ContentPanel({
             {generateMut.isPending ? "Generating..." : "Generate Ideas"}
           </button>
         </div>
+        {!contentGenerationEnabled && (
+          <p className="flex items-center gap-1.5 text-[12px]" style={{ color: DS.warning }} role="status">
+            <TriangleAlert className="h-3 w-3" />
+            {contentCapabilityQ.data?.reason ?? (contentCapabilityQ.isError
+              ? "Content Ideas capability could not be verified, so generation is disabled."
+              : "Checking Content Ideas capability…")}
+          </p>
+        )}
         {generateMut.isError && (
           <p
             className="flex items-center gap-1.5 text-[12px]"
@@ -2023,6 +2036,8 @@ export function ImageStudio() {
   const activeStatus = activePersona
     ? personaStatus(activePersona, jobsByPersona.get(activePersona.id))
     : null;
+  const operationalDestination = ["flows", "campaigns", "review", "social"].includes(destination);
+  const hasCompanyOwnedOperationalPersona = !!activePersona && activePersona.companyId === companyId;
 
   return (
     <div
@@ -2124,10 +2139,14 @@ export function ImageStudio() {
       {destination === "library" && activePersona && <LibraryPanel key={activePersona.id} persona={activePersona} />}
       {destination === "training" && activePersona && <TrainingPanel personas={personas} jobs={jobsQ.data?.jobs ?? []} jobsByPersona={jobsByPersona} loading={jobsQ.isLoading} error={jobsQ.isError} onTrain={setTrainingPersona} />}
       {destination === "jobs" && activePersona && <JobsPanel jobs={jobsQ.data?.jobs ?? []} personas={personas} loading={jobsQ.isLoading} error={jobsQ.isError} />}
-      {destination === "flows" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Provider-neutral recipes" title="Creative Flows" description="A typed reusable recipe foundation inspired by the selected flow-builder concept." /><CreatorOsEmptyState icon={Boxes} title="Flow execution is not available yet" description="This UI has no route to run, rerun, approve, or publish a flow." examples={["Product reel", "Talking avatar", "Story carousel", "Lifestyle photo set", "Social post package"]} /></div>}
-      {destination === "campaigns" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Goals, plans, and optional publishing dates" title="Campaigns" description="Campaigns intentionally have no deadlines." /><CreatorOsEmptyState icon={Megaphone} title="No campaign store is connected" description="This foundation does not persist fictional campaigns, budgets, calendars, or performance numbers." /></div>}
-      {destination === "review" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Approval workspace" title="Review" description="Compare and approval workflows will appear only when backed by durable review records." /><CreatorOsEmptyState icon={GalleryHorizontalEnd} title="No review queue route is available" description="No approval or rejection state is fabricated here." /></div>}
-      {destination === "social" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Publishing foundation" title="Social" description="Account connections, scheduling, publishing, engagement, and analytics remain approval-gated later-phase work." /><CreatorOsEmptyState icon={Send} title="Social publishing is unavailable" description="No account is shown as connected and no post can be scheduled or published from this foundation." /></div>}
+      {companyId && operationalDestination && hasCompanyOwnedOperationalPersona && activePersona && (
+        <CreatorOperationalLanes destination={destination} companyId={companyId} personaId={activePersona.id} />
+      )}
+      {activePersona && operationalDestination && !hasCompanyOwnedOperationalPersona && (
+        <section className="rounded-2xl border border-amber-400/25 bg-amber-500/10 p-6 text-sm text-amber-100" role="status">
+          Shared personas are read-only templates. Instantiate this persona for the selected company before using operational lanes.
+        </section>
+      )}
 
         </main>
       </div>

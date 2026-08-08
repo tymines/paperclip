@@ -29,6 +29,7 @@ import { gateRoutes } from "./routes/gate.js";
 import { gymObservabilityRoutes } from "./routes/gym-observability.js";
 import { agentBridgeRoutes } from "./routes/agent-bridge.js";
 import { socialRoutes } from "./routes/social.js";
+import { creatorOsRoutes } from "./routes/creator-os.js";
 import type { SocialScheduler } from "./workers/social-scheduler.js";
 import type { SocialDmPoller } from "./workers/social-dm-poller.js";
 import { approvalRoutes } from "./routes/approvals.js";
@@ -111,6 +112,8 @@ import { pluginRegistryService } from "./services/plugin-registry.js";
 import { createHostClientHandlers } from "@paperclipai/plugin-sdk";
 import type { BetterAuthSessionResult } from "./auth/better-auth.js";
 import { createCachedViteHtmlRenderer } from "./vite-html-renderer.js";
+import { kickGenerationQueue } from "./services/replicate-generator.js";
+import { CREATOR_OS_GENERATION_WORKER_UNAVAILABLE_REASON } from "@paperclipai/shared";
 
 type UiMode = "none" | "static" | "vite-dev";
 const FEEDBACK_EXPORT_FLUSH_INTERVAL_MS = 5_000;
@@ -187,6 +190,7 @@ export async function createApp(
     socialDmPoller?: SocialDmPoller;
     betterAuthHandler?: express.RequestHandler;
     resolveSession?: (req: ExpressRequest) => Promise<BetterAuthSessionResult | null>;
+    imageStudioGenerationWorkerEnabled?: boolean;
   },
 ) {
   const app = express();
@@ -288,11 +292,19 @@ export async function createApp(
   api.use(gymObservabilityRoutes(db));
   api.use(agentBridgeRoutes(db));
   api.use(socialRoutes(db, { scheduler: opts.socialScheduler, dmPoller: opts.socialDmPoller }));
+  const generationWorkerReadiness = opts.imageStudioGenerationWorkerEnabled
+    ? { enabled: true, disabledReason: null }
+    : { enabled: false, disabledReason: CREATOR_OS_GENERATION_WORKER_UNAVAILABLE_REASON };
+  api.use(creatorOsRoutes(db, {
+    generationWorkerReadiness,
+    kickGenerationQueue: () => kickGenerationQueue(db),
+    onQueueKickError: () => logger.error("creator-os generation queue kick failed"),
+  }));
   api.use(socialMediaRoutes(db, opts.storageService));
   api.use(bulkUploadRoutes(db, opts.storageService));
   api.use(designRoutes(db));
   api.use(designAssetsRoutes(db));
-  api.use(imageStudioRoutes(db, opts.storageService));
+  api.use(imageStudioRoutes(db, opts.storageService, { generationWorkerReadiness }));
   api.use(credentialRoutes(db));
   api.use(userProfileRoutes(db));
   api.use(sidebarBadgeRoutes(db));

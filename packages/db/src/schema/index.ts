@@ -148,6 +148,22 @@ export {
   type NewGenerationJob,
 } from "./generation_jobs.js";
 export {
+  creatorFlows,
+  creatorFlowSteps,
+  creatorFlowRuns,
+  creatorFlowRunSteps,
+  creatorCampaigns,
+  creatorCampaignItems,
+  creatorReviewRequests,
+  type CreatorFlow,
+  type CreatorFlowStep,
+  type CreatorFlowRun,
+  type CreatorFlowRunStep,
+  type CreatorCampaign,
+  type CreatorCampaignItem,
+  type CreatorReviewRequest,
+} from "./creator_os.js";
+export {
   attributeControls,
   type AttributeControl,
   type NewAttributeControl,

@@ -3,6 +3,7 @@ import type {
   ModelInfo,
   ProviderHost,
 } from "../image-providers/types.js";
+import type { CreatorGenerationWorkerReadiness } from "@paperclipai/shared";
 
 export type CapabilityReadiness =
   | "catalog_only"
@@ -56,6 +57,7 @@ export interface ImageStudioCapabilityCatalog {
   generatedAt: string;
   providers: ImageStudioProviderCapabilityState[];
   capabilities: ImageStudioCapability[];
+  generationWorker?: CreatorGenerationWorkerReadiness;
 }
 
 export interface CapabilityPersonaContext {

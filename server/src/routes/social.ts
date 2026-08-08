@@ -514,6 +514,10 @@ export function socialRoutes(
       if (!existing || existing.companyId !== companyId) {
         throw notFound("Social post not found");
       }
+      if (["scheduled", "publishing", "published"].includes(req.body.status)) {
+        const targets = await svc.getPostTargets(postId);
+        if (targets.length === 0) throw badRequest("Scheduled or published posts require at least one target account");
+      }
       const post = await svc.updatePost(postId, req.body);
       if (!post) throw notFound("Social post not found");
       const actor = getActorInfo(req);

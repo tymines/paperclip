@@ -182,6 +182,14 @@ export function createSocialScheduler(opts: SocialSchedulerOptions): SocialSched
         WHERE status = 'scheduled'
           AND scheduled_at IS NOT NULL
           AND scheduled_at <= NOW()
+          AND EXISTS (
+            SELECT 1 FROM social_post_targets target
+            WHERE target.post_id = social_posts.id
+          )
+          AND (
+            metadata->>'source' IS DISTINCT FROM 'creator-os'
+            OR NULLIF(metadata->>'creatorPublishConfirmedAt', '') IS NOT NULL
+          )
         ORDER BY scheduled_at ASC
         LIMIT ${limit}
         FOR UPDATE SKIP LOCKED
