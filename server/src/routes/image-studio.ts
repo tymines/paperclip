@@ -2,7 +2,7 @@ import { Router } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, isNotNull, inArray, desc, asc, sql } from "drizzle-orm";
+import { and, eq, or, isNull, isNotNull, inArray, desc, asc, lt, sql } from "drizzle-orm";
 import {
   imageProviders,
   personaGroups,
@@ -22,6 +22,10 @@ import {
 import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
 import { logGenerationTickWarnings } from "../services/image-studio/generation-logging.js";
+import {
+  decodeGalleryCursor,
+  encodeGalleryCursor,
+} from "../services/image-studio/gallery-pagination.js";
 import {
   expandPromptVariations,
   kickGenerationQueue,
@@ -712,7 +716,8 @@ export function imageStudioRoutes(
     res.json({ provider: persona });
   });
 
-  // GET /image-studio/personas/:personaId/generations?source=test|production&limit=20
+  // GET /image-studio/personas/:personaId/generations
+  //   ?source=test|production&limit=20&cursor=<opaque>
   router.get(
     "/image-studio/personas/:personaId/generations",
     async (req, res) => {
@@ -728,20 +733,46 @@ export function imageStudioRoutes(
       const limit = Number.isFinite(limitRaw)
         ? Math.min(Math.max(limitRaw, 1), 100)
         : 20;
+      const cursorRaw = typeof req.query.cursor === "string" ? req.query.cursor.trim() : "";
 
       const filters = [eq(personaGenerations.personaId, personaId)];
       if (source === "test" || source === "production") {
         filters.push(eq(personaGenerations.source, source));
       }
+      if (cursorRaw) {
+        let cursor;
+        try {
+          cursor = decodeGalleryCursor(cursorRaw);
+        } catch {
+          throw badRequest("Invalid gallery cursor");
+        }
+        filters.push(
+          or(
+            lt(personaGenerations.createdAt, cursor.createdAt),
+            and(
+              eq(personaGenerations.createdAt, cursor.createdAt),
+              lt(personaGenerations.id, cursor.id),
+            ),
+          )!,
+        );
+      }
 
-      const generations = await db
+      const rows = await db
         .select()
         .from(personaGenerations)
         .where(and(...filters))
-        .orderBy(desc(personaGenerations.createdAt))
-        .limit(limit);
+        .orderBy(desc(personaGenerations.createdAt), desc(personaGenerations.id))
+        .limit(limit + 1);
 
-      res.json({ generations });
+      const hasMore = rows.length > limit;
+      const generations = hasMore ? rows.slice(0, limit) : rows;
+      const last = generations.at(-1);
+      const nextCursor =
+        hasMore && last
+          ? encodeGalleryCursor({ createdAt: last.createdAt, id: last.id })
+          : null;
+
+      res.json({ generations, nextCursor });
     },
   );
 
