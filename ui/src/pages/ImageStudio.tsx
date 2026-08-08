@@ -6,7 +6,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   imageStudioApi,
   uploadUrl,
@@ -718,12 +718,14 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
   const [filter, setFilter] = useState<GalleryFilter>("all");
   const [newestFirst, setNewestFirst] = useState(true);
   const [view, setView] = useState<"grid" | "list">("grid");
-  const [limit, setLimit] = useState(40);
   const [selected, setSelected] = useState<PersonaGeneration | null>(null);
 
-  const genQ = useQuery({
+  const genQ = useInfiniteQuery({
     queryKey: ["image-studio", "generations", persona.id],
-    queryFn: () => imageStudioApi.listGenerations(persona.id, { limit: 120 }),
+    queryFn: ({ pageParam }) =>
+      imageStudioApi.listGenerations(persona.id, { limit: 40, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   });
 
   const deleteMut = useMutation({
@@ -734,7 +736,16 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
     },
   });
 
-  const generations = genQ.data?.generations ?? [];
+  const generations = useMemo(() => {
+    const seen = new Set<string>();
+    return (genQ.data?.pages ?? []).flatMap((page) =>
+      page.generations.filter((generation) => {
+        if (seen.has(generation.id)) return false;
+        seen.add(generation.id);
+        return true;
+      }),
+    );
+  }, [genQ.data]);
   const counts = useMemo(() => {
     let test = 0;
     let prod = 0;
@@ -752,10 +763,8 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
       const delta = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       return newestFirst ? delta : -delta;
     });
-    return sorted.slice(0, limit);
-  }, [generations, filter, newestFirst, limit]);
-
-  const total = filter === "all" ? counts.all : counts[filter];
+    return sorted;
+  }, [generations, filter, newestFirst]);
 
   const chip = (value: GalleryFilter, label: string, n: number) => {
     const active = filter === value;
@@ -922,15 +931,16 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
         </div>
       )}
 
-      {!genQ.isLoading && visible.length < total && (
+      {!genQ.isLoading && genQ.hasNextPage && (
         <div className="mt-3 flex justify-center">
           <button
             type="button"
-            onClick={() => setLimit((l) => l + 40)}
+            onClick={() => void genQ.fetchNextPage()}
+            disabled={genQ.isFetchingNextPage}
             className="rounded-lg px-4 py-1.5 text-[12px] font-medium"
             style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
           >
-            Load more
+            {genQ.isFetchingNextPage ? "Loadingâ€¦" : "Load more"}
           </button>
         </div>
       )}

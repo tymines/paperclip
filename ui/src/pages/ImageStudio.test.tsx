@@ -182,7 +182,10 @@ describe("Image Studio focused UI repairs", () => {
       providers: [persona, secondPersona],
     });
     vi.spyOn(imageStudioApi, "listTrainingJobs").mockResolvedValue({ jobs: [] });
-    vi.spyOn(imageStudioApi, "listGenerations").mockResolvedValue({ generations: [] });
+    vi.spyOn(imageStudioApi, "listGenerations").mockResolvedValue({
+      generations: [],
+      nextCursor: null,
+    });
 
     await act(async () => {
       root.render(
@@ -284,6 +287,7 @@ describe("Image Studio focused UI repairs", () => {
     const stillImage = generation("still-image", "images/still.png", "thumbnails/still.jpg");
     vi.spyOn(imageStudioApi, "listGenerations").mockResolvedValue({
       generations: [noThumbnailVideo, posterVideo, stillImage],
+      nextCursor: null,
     });
 
     await act(async () => {
@@ -336,5 +340,40 @@ describe("Image Studio focused UI repairs", () => {
       container.querySelector<HTMLImageElement>('[data-testid="gallery-viewer-image"]')
         ?.getAttribute("src"),
     ).toBe("/api/uploads/images/still.png");
+  });
+
+  it("loads gallery pages from the server without the old 100-item ceiling", async () => {
+    const firstPage = generation("first-page", "images/first.png", null);
+    const secondPage = generation("second-page", "images/second.png", null);
+    const listSpy = vi.spyOn(imageStudioApi, "listGenerations").mockImplementation(
+      async (_personaId, options) =>
+        options?.cursor === "cursor-2"
+          ? { generations: [secondPage], nextCursor: null }
+          : { generations: [firstPage], nextCursor: "cursor-2" },
+    );
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ContentGallery persona={persona} />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="gallery-item-first-page"]')).not.toBeNull();
+    const loadMore = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Load more",
+    );
+    expect(loadMore).toBeDefined();
+
+    await act(async () => loadMore!.click());
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="gallery-item-second-page"]')).not.toBeNull();
+    expect(listSpy).toHaveBeenLastCalledWith(PERSONA_UUID, {
+      limit: 40,
+      cursor: "cursor-2",
+    });
   });
 });
