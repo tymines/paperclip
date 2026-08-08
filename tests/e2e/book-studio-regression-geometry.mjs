@@ -49,17 +49,17 @@ try {
             </aside></div>
             <main id="center" class="flex min-h-0 min-w-0 flex-col overflow-hidden">
               <div class="flex min-h-0 flex-1 flex-col">
-                <header class="shrink-0 p-3"><h1 class="m-0">Chapter 1</h1><div>Locked · Beat plan</div></header>
+                <header id="chapter-header" class="shrink-0 p-3 [@media(max-height:700px)]:hidden"><h1 class="m-0">Chapter 1</h1><div>Locked · Beat plan</div></header>
                 <div class="flex shrink-0 gap-4 overflow-x-auto p-2">Compile Draft Critique Revise De-AI Canon</div>
                 <div class="flex shrink-0 gap-4 p-2"><button>Beats</button><button>Prose</button><button>Context</button><button>Bible</button></div>
-                <div id="view-scroll" class="flex min-h-0 flex-1 overflow-hidden px-3 py-4 sm:px-5">
+                <div id="view-scroll" class="flex min-h-0 flex-1 overflow-hidden px-3 py-4 sm:px-5 [@media(max-height:700px)]:py-1.5">
                   <div id="manuscript" class="flex h-full min-h-0 min-w-0 flex-1 flex-col">
                     <div class="flex shrink-0 flex-wrap gap-2 border-b p-3"><select><option>Chapter 1</option></select><strong>Chapter title</strong><button>Redraft</button><button>Annotations</button><button>Preview</button><button>Focus</button></div>
                     <div id="manuscript-body" class="flex min-h-0 flex-1 overflow-hidden"><textarea id="editor" class="h-full w-full resize-none p-4">${Array.from({ length: 100 }, (_, i) => `Manuscript line ${i + 1}`).join("\n")}</textarea></div>
                     <div class="shrink-0 border-t p-2">1,789 words · Saved</div>
                   </div>
                 </div>
-                <footer class="flex shrink-0 gap-2 p-3"><button>Your call</button><button>Draft</button><button>Re-run gate</button></footer>
+                <footer class="flex shrink-0 gap-2 p-3 [@media(max-height:700px)]:py-1.5"><button>Your call</button><button>Draft</button><button>Re-run gate</button></footer>
               </div>
             </main>
             <aside id="inspector" class="hidden @min-[1100px]/deck:block"></aside>
@@ -99,6 +99,7 @@ try {
         bibleVisible: !byId("bible-panel").hidden,
         bibleLabels,
         manuscriptBodyHeight: byId("manuscript-body").getBoundingClientRect().height,
+        chapterHeaderVisible: getComputedStyle(byId("chapter-header")).display !== "none",
         centerHeight: byId("center").getBoundingClientRect().height,
         viewHeight: byId("view-scroll").getBoundingClientRect().height,
         manuscriptHeight: byId("manuscript").getBoundingClientRect().height,
@@ -119,6 +120,7 @@ try {
     if (geometry.outerEditorOverflow !== "hidden") failures.push("outer prose container can scroll");
     if (!geometry.centerScrollOwners.includes("editor") || geometry.centerScrollOwners.length !== 1) failures.push(`expected editor-only scroll owner, got ${geometry.centerScrollOwners.join(", ")}`);
     if (geometry.manuscriptBodyHeight < 180) failures.push(`manuscript body too short: ${geometry.manuscriptBodyHeight}px`);
+    if (testCase.height <= 700 && geometry.chapterHeaderVisible) failures.push("short-height prose header should collapse");
     results.push({ ...testCase, ...geometry, failures });
     await page.close();
   }

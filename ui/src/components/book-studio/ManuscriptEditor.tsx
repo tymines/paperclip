@@ -474,7 +474,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
   return (
     <div className="@container/manuscript flex h-full min-h-0 min-w-0 flex-col">
       {/* Toolbar */}
-      <div className="flex shrink-0 flex-col gap-2 border-b border-gray-800 px-3 py-3 @min-[760px]/manuscript:flex-row @min-[760px]/manuscript:items-center @min-[760px]/manuscript:justify-between @min-[760px]/manuscript:gap-x-3 @min-[760px]/manuscript:px-5">
+      <div className="flex shrink-0 flex-col gap-2 border-b border-gray-800 px-3 py-3 @min-[760px]/manuscript:flex-row @min-[760px]/manuscript:items-center @min-[760px]/manuscript:justify-between @min-[760px]/manuscript:gap-x-3 @min-[760px]/manuscript:px-5 [@media(max-height:700px)]:py-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-2 @min-[760px]/manuscript:gap-3">
           {!noChapters && (
             <select
@@ -690,7 +690,7 @@ export function ManuscriptEditor({ bookId, companySlug, outlineEntries, focusMod
       </div>
 
       {/* Status bar */}
-      <div className="flex items-center justify-between border-t border-gray-800 px-5 py-2 shrink-0">
+      <div className="flex items-center justify-between border-t border-gray-800 px-5 py-2 shrink-0 [@media(max-height:700px)]:py-1">
         <span className="text-xs text-gray-600">
           {lockNotice ? (
             <span className="text-amber-400">{lockNotice}</span>
