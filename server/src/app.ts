@@ -90,6 +90,7 @@ import { pluginUiStaticRoutes } from "./routes/plugin-ui-static.js";
 import { designRoutes } from "./routes/design.js";
 import { designAssetsRoutes } from "./routes/design-assets.js";
 import { imageStudioRoutes } from "./routes/image-studio.js";
+import { uploadsAuthenticationGuard } from "./middleware/uploads-auth.js";
 import { uploadsRoot } from "./services/image-studio/uploads.js";
 import { credentialRoutes } from "./routes/credentials.js";
 import { applyUiBranding } from "./ui-branding.js";
@@ -396,14 +397,17 @@ export async function createApp(
     }),
   );
   // User-uploaded media (Image Studio persona gallery, etc.) is served
-  // read-only from the instance uploads dir. Mounted ahead of the guarded
-  // `/api` router so plain <img> GETs need no session/origin handshake.
+  // read-only from the instance uploads dir. Keep it ahead of the guarded
+  // `/api` router so plain <img> requests work, but still require the actor
+  // established by actorMiddleware above. Company-level media ownership is a
+  // separate contract; this prevents unauthenticated reads of the whole store.
   app.use(
     "/api/project-shots",
     express.static(process.env.HOME + "/.openclaw/project-shots", { index: false, maxAge: "30s", fallthrough: false }),
   );
   app.use(
     "/api/uploads",
+    uploadsAuthenticationGuard(),
     express.static(uploadsRoot(), {
       index: false,
       maxAge: "1h",
