@@ -430,13 +430,14 @@ export const imageStudioApi = {
   /** List a persona's gallery generations (newest first). */
   listGenerations: (
     personaId: string,
-    opts?: { source?: GenerationSource; limit?: number },
+    opts?: { source?: GenerationSource; limit?: number; cursor?: string },
   ) => {
     const params = new URLSearchParams();
     if (opts?.source) params.set("source", opts.source);
     if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.cursor) params.set("cursor", opts.cursor);
     const qs = params.toString();
-    return api.get<{ generations: PersonaGeneration[] }>(
+    return api.get<{ generations: PersonaGeneration[]; nextCursor: string | null }>(
       `/image-studio/personas/${personaId}/generations${qs ? `?${qs}` : ""}`,
     );
   },

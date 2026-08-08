@@ -2,7 +2,19 @@ import { Router } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, isNotNull, inArray, desc, asc, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  or,
+  isNull,
+  isNotNull,
+  inArray,
+  desc,
+  asc,
+  getTableColumns,
+  lt,
+  sql,
+} from "drizzle-orm";
 import {
   imageProviders,
   personaGroups,
@@ -15,10 +27,17 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { socialPosts } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
-import { generateContentIdeas } from "../services/influencer-studio/content-generator.js";
+import {
+  contentGeneratorUnavailablePayload,
+  generateContentIdeas,
+} from "../services/influencer-studio/content-generator.js";
 import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
 import { logGenerationTickWarnings } from "../services/image-studio/generation-logging.js";
+import {
+  decodeGalleryCursor,
+  encodeGalleryCursor,
+} from "../services/image-studio/gallery-pagination.js";
 import {
   expandPromptVariations,
   kickGenerationQueue,
@@ -54,6 +73,7 @@ import {
 } from "../services/image-providers/index.js";
 import { imageStudioCapabilitiesRouter } from "../services/image-studio/capabilities-router.js";
 import type { CapabilityPersonaContext } from "../services/image-studio/capabilities.js";
+import { requireImageStudioAuthentication } from "../services/image-studio/route-auth.js";
 
 /** Load a global-or-company-scoped provider row by id. */
 async function loadProvider(db: Db, companyId: string, providerId: string) {
@@ -74,7 +94,7 @@ export interface ImageStudioRouteOptions {
   providers?: ImageProvider[];
 }
 
-/** Load persona capability context from this company only; never global/cross-company. */
+/** Load global or company-owned persona capability context; never cross-company. */
 async function loadCapabilityPersona(
   db: Db,
   companyId: string,
@@ -87,11 +107,20 @@ async function loadCapabilityPersona(
       status: imageProviders.status,
       endpoint: imageProviders.endpoint,
       attributes: imageProviders.attributes,
+      companyId: imageProviders.companyId,
     })
     .from(imageProviders)
-    .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
+    .where(
+      and(
+        eq(imageProviders.id, personaId),
+        or(eq(imageProviders.companyId, companyId), isNull(imageProviders.companyId)),
+      ),
+    )
     .limit(1);
   if (!row) return null;
+  // Retain a defensive ownership check even though the SQL predicate already
+  // prevents a company-scoped persona from crossing tenant boundaries.
+  if (row.companyId !== null && row.companyId !== companyId) return null;
   const isGeneral = row.attributes?.general === true;
   if (!isGeneral && row.type !== "local_lora") return null;
   return {
@@ -111,6 +140,7 @@ export function imageStudioRoutes(
   options: ImageStudioRouteOptions = {},
 ) {
   const router = Router();
+  router.use(requireImageStudioAuthentication);
   const capabilityProviders = options.providers ?? listProviders();
   router.use(
     imageStudioCapabilitiesRouter(capabilityProviders, {
@@ -698,7 +728,8 @@ export function imageStudioRoutes(
     res.json({ provider: persona });
   });
 
-  // GET /image-studio/personas/:personaId/generations?source=test|production&limit=20
+  // GET /image-studio/personas/:personaId/generations
+  //   ?source=test|production&limit=20&cursor=<opaque>
   router.get(
     "/image-studio/personas/:personaId/generations",
     async (req, res) => {
@@ -714,20 +745,51 @@ export function imageStudioRoutes(
       const limit = Number.isFinite(limitRaw)
         ? Math.min(Math.max(limitRaw, 1), 100)
         : 20;
+      const cursorRaw = typeof req.query.cursor === "string" ? req.query.cursor.trim() : "";
+      const createdAtMicros = sql<string>`floor(extract(epoch from ${personaGenerations.createdAt}) * 1000000)`;
 
       const filters = [eq(personaGenerations.personaId, personaId)];
       if (source === "test" || source === "production") {
         filters.push(eq(personaGenerations.source, source));
       }
+      if (cursorRaw) {
+        let cursor;
+        try {
+          cursor = decodeGalleryCursor(cursorRaw);
+        } catch {
+          throw badRequest("Invalid gallery cursor");
+        }
+        filters.push(
+          or(
+            lt(createdAtMicros, cursor.createdAtMicros),
+            and(
+              eq(createdAtMicros, cursor.createdAtMicros),
+              lt(personaGenerations.id, cursor.id),
+            ),
+          )!,
+        );
+      }
 
-      const generations = await db
-        .select()
+      const rows = await db
+        .select({
+          ...getTableColumns(personaGenerations),
+          createdAtMicros,
+        })
         .from(personaGenerations)
         .where(and(...filters))
-        .orderBy(desc(personaGenerations.createdAt))
-        .limit(limit);
+        .orderBy(desc(createdAtMicros), desc(personaGenerations.id))
+        .limit(limit + 1);
 
-      res.json({ generations });
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const generations = page.map(({ createdAtMicros: _cursorKey, ...generation }) => generation);
+      const last = page.at(-1);
+      const nextCursor =
+        hasMore && last
+          ? encodeGalleryCursor({ createdAtMicros: last.createdAtMicros, id: last.id })
+          : null;
+
+      res.json({ generations, nextCursor });
     },
   );
 
@@ -1662,11 +1724,17 @@ export function imageStudioRoutes(
         contentGenRateMap.set(personaId, { count: 1, windowStart: now });
       }
 
-      const ideas = await generateContentIdeas(
-        { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },
-        topic.trim(),
-        Math.min(Math.max(1, count), 20),
-      );
+      let ideas;
+      try {
+        ideas = await generateContentIdeas(
+          { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },
+          topic.trim(),
+          Math.min(Math.max(1, count), 20),
+        );
+      } catch (error) {
+        res.status(503).json(contentGeneratorUnavailablePayload(error));
+        return;
+      }
 
       res.json({ ideas });
     } catch (err) {

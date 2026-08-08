@@ -5,13 +5,11 @@
  * model endpoint so the gallery generates against it.
  *
  * Used by the POST .../personas/:id/train route once a Replicate token is set.
- * Zipping shells out to the system `zip` (present on macOS/Linux hosts).
+ * Archives are built in-process so training works consistently across hosts.
  */
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { and, eq, like } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -27,16 +25,7 @@ import {
   type ProviderHost,
 } from "../image-providers/index.js";
 import { personaTrainingProfile, defaultHyperparams, downloadLora } from "./training.js";
-
-const execFileAsync = promisify(execFile);
-
-async function zipDir(dir: string, slug: string): Promise<string> {
-  const zipPath = path.join(os.tmpdir(), `${slug}-training-${process.pid}.zip`);
-  await fs.rm(zipPath, { force: true });
-  // -j would flatten; trainer accepts a flat zip of images. Use relative paths.
-  await execFileAsync("zip", ["-rq", zipPath, ".", "-x", ".*"], { cwd: dir });
-  return zipPath;
-}
+import { createTrainingImagesArchive } from "./training-archive.js";
 
 const STAGE_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp"]);
 
@@ -134,7 +123,7 @@ export async function startPersonaTraining(
   if (!trainer) throw new Error(`No trainer '${args.trainerId}' on ${provider.name}.`);
 
   const profile = personaTrainingProfile(args.persona.name);
-  const zipPath = await zipDir(args.photosDir, profile.slug);
+  const zipPath = await createTrainingImagesArchive(args.photosDir, profile.slug);
   const zipBuf = await fs.readFile(zipPath);
 
   // Replicate publishes to a model you own; derive the destination owner/name
