@@ -2,7 +2,19 @@ import { Router } from "express";
 import { promises as fs } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Db } from "@paperclipai/db";
-import { and, eq, or, isNull, isNotNull, inArray, desc, asc, lt, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  or,
+  isNull,
+  isNotNull,
+  inArray,
+  desc,
+  asc,
+  getTableColumns,
+  lt,
+  sql,
+} from "drizzle-orm";
 import {
   imageProviders,
   personaGroups,
@@ -734,6 +746,7 @@ export function imageStudioRoutes(
         ? Math.min(Math.max(limitRaw, 1), 100)
         : 20;
       const cursorRaw = typeof req.query.cursor === "string" ? req.query.cursor.trim() : "";
+      const createdAtMicros = sql<string>`floor(extract(epoch from ${personaGenerations.createdAt}) * 1000000)`;
 
       const filters = [eq(personaGenerations.personaId, personaId)];
       if (source === "test" || source === "production") {
@@ -748,9 +761,9 @@ export function imageStudioRoutes(
         }
         filters.push(
           or(
-            lt(personaGenerations.createdAt, cursor.createdAt),
+            lt(createdAtMicros, cursor.createdAtMicros),
             and(
-              eq(personaGenerations.createdAt, cursor.createdAt),
+              eq(createdAtMicros, cursor.createdAtMicros),
               lt(personaGenerations.id, cursor.id),
             ),
           )!,
@@ -758,18 +771,22 @@ export function imageStudioRoutes(
       }
 
       const rows = await db
-        .select()
+        .select({
+          ...getTableColumns(personaGenerations),
+          createdAtMicros,
+        })
         .from(personaGenerations)
         .where(and(...filters))
-        .orderBy(desc(personaGenerations.createdAt), desc(personaGenerations.id))
+        .orderBy(desc(createdAtMicros), desc(personaGenerations.id))
         .limit(limit + 1);
 
       const hasMore = rows.length > limit;
-      const generations = hasMore ? rows.slice(0, limit) : rows;
-      const last = generations.at(-1);
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const generations = page.map(({ createdAtMicros: _cursorKey, ...generation }) => generation);
+      const last = page.at(-1);
       const nextCursor =
         hasMore && last
-          ? encodeGalleryCursor({ createdAt: last.createdAt, id: last.id })
+          ? encodeGalleryCursor({ createdAtMicros: last.createdAtMicros, id: last.id })
           : null;
 
       res.json({ generations, nextCursor });

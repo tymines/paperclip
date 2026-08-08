@@ -411,6 +411,7 @@ export async function createApp(
     express.static(uploadsRoot(), {
       index: false,
       maxAge: "1h",
+      cacheControl: false,
       fallthrough: false,
     }),
   );

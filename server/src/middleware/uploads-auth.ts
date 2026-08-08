@@ -8,8 +8,11 @@ import { assertAuthenticated } from "../routes/authz.js";
  * relies on actorMiddleware having resolved the browser session first.
  */
 export function uploadsAuthenticationGuard(): RequestHandler {
-  return (req, _res, next) => {
+  return (req, res, next) => {
     assertAuthenticated(req);
+    // Authenticated media must never enter a shared CDN or reverse-proxy cache.
+    // Keep a short private browser cache for gallery performance.
+    res.setHeader("Cache-Control", "private, max-age=3600");
     next();
   };
 }
