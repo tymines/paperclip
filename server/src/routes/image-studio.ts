@@ -52,6 +52,7 @@ import {
 import {
   personaTrainingProfile,
   countTrainingPhotos,
+  hasTrainingPhotos,
   defaultHyperparams,
 } from "../services/image-studio/training.js";
 import {
@@ -486,6 +487,9 @@ export function imageStudioRoutes(
         photosDir = staged?.dir ?? profile.defaultPhotosDir;
       }
       const photos = await countTrainingPhotos(photosDir);
+      if (!hasTrainingPhotos(photos.count)) {
+        throw badRequest("At least one training photo is required before starting LoRA training.");
+      }
 
       // Fire the run when the chosen provider is configured. Without a key,
       // create a 'pending' row that is never billed (the key lands later via the

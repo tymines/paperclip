@@ -78,6 +78,7 @@ export function UnifiedLibrary({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search all templates…"
+          aria-label="Search all templates"
           className="w-full rounded-md border border-border bg-background py-1.5 pl-7 pr-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
           data-testid="library-search"
         />
@@ -88,9 +89,9 @@ export function UnifiedLibrary({
         {!lockTool && (
           <div className="flex flex-wrap items-center gap-1" data-testid="library-tool-chips">
             <span className="text-[10px] font-semibold uppercase text-muted-foreground">Tool</span>
-            <button type="button" onClick={() => setTool(null)} className={chip(tool === null)}>All</button>
+            <button type="button" onClick={() => setTool(null)} aria-pressed={tool === null} className={chip(tool === null)}>All</button>
             {TOOLS.map((t) => (
-              <button key={t.key} type="button" onClick={() => setTool(t.key)} className={chip(tool === t.key)}>
+              <button key={t.key} type="button" onClick={() => setTool(t.key)} aria-pressed={tool === t.key} className={chip(tool === t.key)}>
                 {t.label}
               </button>
             ))}
@@ -99,7 +100,7 @@ export function UnifiedLibrary({
         <div className="flex items-center gap-1">
           <span className="text-[10px] font-semibold uppercase text-muted-foreground">Rating</span>
           {(["all", "sfw", "explicit"] as const).map((r) => (
-            <button key={r} type="button" onClick={() => setRating(r)} className={chip(rating === r)}>
+            <button key={r} type="button" onClick={() => setRating(r)} aria-pressed={rating === r} className={chip(rating === r)}>
               {r === "all" ? "All" : r === "sfw" ? "SFW" : "18+"}
             </button>
           ))}
@@ -107,9 +108,9 @@ export function UnifiedLibrary({
         {personas.length > 1 && (
           <div className="flex items-center gap-1">
             <span className="text-[10px] font-semibold uppercase text-muted-foreground">Persona</span>
-            <button type="button" onClick={() => setPersonaId(null)} className={chip(personaId === null)}>All</button>
+            <button type="button" onClick={() => setPersonaId(null)} aria-pressed={personaId === null} className={chip(personaId === null)}>All</button>
             {personas.map((p) => (
-              <button key={p.id} type="button" onClick={() => setPersonaId(p.id)} className={chip(personaId === p.id)}>
+              <button key={p.id} type="button" onClick={() => setPersonaId(p.id)} aria-pressed={personaId === p.id} className={chip(personaId === p.id)}>
                 {p.name}
               </button>
             ))}

@@ -20,7 +20,13 @@ vi.mock("./ModelPicker", () => ({
 }));
 vi.mock("./TemplateLibraryTab", () => ({ TemplateLibraryTab: () => null }));
 vi.mock("./PhotoShootCategoryGrid", () => ({ PhotoShootCategoryGrid: () => null }));
-vi.mock("./UndresserInline", () => ({ UndresserInline: () => null }));
+vi.mock("./UndresserInline", () => ({
+  UndresserInline: ({ models, capabilitiesLoading }: { models?: unknown[]; capabilitiesLoading?: boolean }) => (
+    <span data-testid="undresser-capabilities">
+      {Array.isArray(models) && capabilitiesLoading === false ? "capabilities-provided" : "capabilities-missing"}
+    </span>
+  ),
+}));
 vi.mock("./UnifiedLibrary", () => ({ UnifiedLibrary: () => null }));
 
 const apiMocks = vi.hoisted(() => ({
@@ -112,6 +118,39 @@ it("clears transient Generate state when the selected persona changes", async ()
   const nextFreeText = container.querySelector<HTMLTextAreaElement>("[data-testid='free-text']");
   expect(nextFreeText?.value).toBe("");
   expect(nextFreeText).not.toBe(freeText);
+
+  await act(async () => root.unmount());
+  client.clear();
+  container.remove();
+});
+
+it("shares the loaded capability result with the Undresser workspace", async () => {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+
+  await act(async () => {
+    root.render(
+      <MemoryRouter>
+        <QueryClientProvider client={client}>
+          <PersonaWorkbench persona={persona("persona-a")} onBatchStarted={() => {}} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+  });
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+  await act(async () => {
+    container.querySelector<HTMLButtonElement>('[data-testid="tab-undresser"]')!.click();
+  });
+
+  expect(container.querySelector('[data-testid="undresser-capabilities"]')?.textContent)
+    .toBe("capabilities-provided");
 
   await act(async () => root.unmount());
   client.clear();

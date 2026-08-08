@@ -439,14 +439,19 @@ export function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOp
       >
         {(["image", "video"] as const).map((m) => {
           const active = mode === m;
+          const disabled = m === "video";
           const Icon = m === "image" ? ImageIcon : Video;
           return (
             <button
               key={m}
               type="button"
-              onClick={() => setMode(m)}
+              onClick={() => !disabled && setMode(m)}
+              disabled={disabled}
+              aria-pressed={active}
+              aria-label={m === "image" ? "Image generation" : "Video generation unavailable"}
+              title={disabled ? "Video generation is not available in the current Studio route." : undefined}
               data-testid={`mode-${m}`}
-              className="flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-semibold capitalize transition-colors"
+              className="flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-[13px] font-semibold capitalize transition-colors disabled:cursor-not-allowed disabled:opacity-50"
               style={
                 active
                   ? { background: DS.primary, color: "#04122E" }
@@ -562,6 +567,8 @@ export function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOp
                         key={c}
                         type="button"
                         onClick={() => setCount(c)}
+                        aria-pressed={active}
+                        aria-label={`Generate ${c} image${c === 1 ? "" : "s"}`}
                         data-testid={`count-${c}`}
                         className="rounded-lg py-1.5 text-[12px] font-semibold transition-colors"
                         style={
@@ -614,6 +621,7 @@ export function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOp
             <button
               type="button"
               onClick={() => { const next = !advancedOpen; if (onAdvancedChange) onAdvancedChange(next); else setLocalAdvancedOpen(next); }}
+              aria-expanded={advancedOpen}
               className="flex items-center justify-between rounded-lg px-3 py-2 text-[12px] font-medium transition-colors"
               style={{ background: DS.surface, border: `1px solid ${DS.border}`, color: DS.textMuted }}
               data-testid="advanced-toggle"
@@ -773,6 +781,7 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
         key={value}
         type="button"
         onClick={() => setFilter(value)}
+        aria-pressed={active}
         data-testid={`filter-${value}`}
         className="flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors"
         style={
@@ -807,6 +816,7 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
           <button
             type="button"
             onClick={() => setNewestFirst((v) => !v)}
+            aria-label={`Sort gallery: ${newestFirst ? "newest first" : "oldest first"}`}
             className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px]"
             style={{ background: DS.surface, color: DS.textMuted, border: `1px solid ${DS.border}` }}
           >
@@ -822,6 +832,10 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
                   key={v}
                   type="button"
                   onClick={() => setView(v)}
+                  aria-label={`${v === "grid" ? "Grid" : "List"} view`}
+                  aria-pressed={active}
+                  title={`${v === "grid" ? "Grid" : "List"} view`}
+                  data-testid={`gallery-view-${v}`}
                   className="px-2 py-1"
                   style={{ background: active ? DS.primary : DS.surface, color: active ? "#04122E" : DS.textMuted }}
                 >

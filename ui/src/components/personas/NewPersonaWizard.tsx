@@ -21,6 +21,7 @@ import { useNavigate } from "@/lib/router";
 import { applyCompanyPrefix } from "@/lib/company-routes";
 import { imageStudioApi } from "@/api/imageStudio";
 import { assetsApi } from "@/api/assets";
+import { useOptionalToastActions } from "@/context/ToastContext";
 import {
   Dialog,
   DialogContent,
@@ -72,6 +73,7 @@ export function NewPersonaWizard({
 }) {
   const { selectedCompanyId, selectedCompany } = useCompany();
   const queryClient = useQueryClient();
+  const toastActions = useOptionalToastActions();
   const navigate = useNavigate();
   const prefix = selectedCompany?.issuePrefix ?? null;
 
@@ -83,6 +85,8 @@ export function NewPersonaWizard({
   const [photos, setPhotos] = useState<{ name: string; url: string }[]>([]);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const preservePersonaRef = useRef(false);
+  const discardingPersonaRef = useRef<string | null>(null);
 
   const controlsQ = useQuery({
     queryKey: ["image-studio", "attribute-controls"],
@@ -159,10 +163,38 @@ export function NewPersonaWizard({
     setPhotos([]);
     setError(null);
     setTrainerKey(null);
+    preservePersonaRef.current = false;
   }
 
-  function close() {
+  function close(options?: { preserve?: boolean }) {
+    if (options?.preserve) preservePersonaRef.current = true;
+    const draftId = personaId;
+    const companyId = selectedCompanyId;
+    const shouldDiscard = Boolean(
+      draftId &&
+      companyId &&
+      photos.length === 0 &&
+      !preservePersonaRef.current &&
+      discardingPersonaRef.current !== draftId,
+    );
     onOpenChange(false);
+    if (shouldDiscard && draftId && companyId) {
+      discardingPersonaRef.current = draftId;
+      void imageStudioApi
+        .deleteProvider(companyId, draftId)
+        .then(() => queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] }))
+        .catch((cause) => {
+          const message = cause instanceof Error ? cause.message : "The empty persona draft could not be removed.";
+          toastActions?.pushToast({
+            title: "Draft cleanup failed",
+            body: message,
+            tone: "error",
+          });
+        })
+        .finally(() => {
+          if (discardingPersonaRef.current === draftId) discardingPersonaRef.current = null;
+        });
+    }
     // Defer reset so the closing animation doesn't flash an empty step 1.
     setTimeout(reset, 200);
   }
@@ -176,6 +208,7 @@ export function NewPersonaWizard({
         attributes: attrs,
       }),
     onSuccess: (res) => {
+      preservePersonaRef.current = false;
       setPersonaId(res.provider.id);
       queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] });
       setStep(2);
@@ -216,7 +249,7 @@ export function NewPersonaWizard({
       queryClient.invalidateQueries({ queryKey: ["image-studio", "providers"] });
       queryClient.invalidateQueries({ queryKey: ["image-studio", "training"] });
       const id = personaId;
-      close();
+      close({ preserve: true });
       if (id) navigate(applyCompanyPrefix(`/personas/${id}`, prefix));
     },
     onError: (e) => setError((e as Error)?.message ?? "Failed to start training."),
@@ -477,8 +510,12 @@ export function NewPersonaWizard({
           </Button>
           <div className="flex items-center gap-2">
             {step === 2 && (
-              <Button variant="outline" onClick={() => setStep(3)} data-testid="np-skip">
-                Skip — train later
+              <Button
+                variant="outline"
+                onClick={() => close({ preserve: true })}
+                data-testid="np-skip"
+              >
+                Save for later
               </Button>
             )}
             {step === 1 && (
@@ -495,18 +532,27 @@ export function NewPersonaWizard({
                 data-testid="np-next"
               >
                 {createMut.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-                Next
+                Create persona &amp; continue
               </Button>
             )}
             {step === 2 && (
-              <Button onClick={() => setStep(3)} data-testid="np-continue">
+              <Button
+                onClick={() => setStep(3)}
+                disabled={photos.length === 0}
+                title={photos.length === 0 ? "Upload at least one training photo before continuing." : undefined}
+                data-testid="np-continue"
+              >
                 Continue
               </Button>
             )}
             {step === 3 && (
               <Button
-                onClick={() => trainMut.mutate()}
-                disabled={trainMut.isPending || !selectedTrainer}
+                onClick={() => {
+                  preservePersonaRef.current = true;
+                  trainMut.mutate();
+                }}
+                disabled={trainMut.isPending || !selectedTrainer || photos.length === 0}
+                title={photos.length === 0 ? "Upload at least one training photo before starting training." : undefined}
                 data-testid="np-train"
               >
                 {trainMut.isPending ? (

@@ -96,6 +96,11 @@ export interface PhotoCount {
   count: number;
 }
 
+/** A training run must have at least one resolved image before it can be submitted. */
+export function hasTrainingPhotos(count: number): boolean {
+  return Number.isInteger(count) && count > 0;
+}
+
 /** Count image files in a training photos directory (non-recursive). */
 export async function countTrainingPhotos(dir: string): Promise<PhotoCount> {
   try {
