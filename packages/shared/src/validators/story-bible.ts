@@ -16,8 +16,8 @@ export const updateStoryBibleCharacterSchema = z.object({
   description: z.string().optional(),
   voiceCard: z.record(z.unknown()).optional(),
   locked: z.boolean().optional(),
-  source: z.enum(["authored", "co_created", "imported"]).optional(),
-});
+  expectedRevision: z.number().int().positive(),
+}).strict();
 
 export type CreateStoryBibleCharacter = z.infer<typeof createStoryBibleCharacterSchema>;
 export type UpdateStoryBibleCharacter = z.infer<typeof updateStoryBibleCharacterSchema>;
@@ -38,8 +38,8 @@ export const updateStoryBibleWorldLocationSchema = z.object({
   rules: z.record(z.unknown()).optional(),
   sensoryNotes: z.record(z.unknown()).optional(),
   locked: z.boolean().optional(),
-  source: z.enum(["authored", "co_created", "imported"]).optional(),
-});
+  expectedRevision: z.number().int().positive(),
+}).strict();
 
 export type CreateStoryBibleWorldLocation = z.infer<typeof createStoryBibleWorldLocationSchema>;
 export type UpdateStoryBibleWorldLocation = z.infer<typeof updateStoryBibleWorldLocationSchema>;
@@ -64,8 +64,8 @@ export const updateStoryBibleStyleSchema = z.object({
   bannedCliches: z.array(z.string()).optional(),
   tropes: z.array(z.string()).optional(),
   locked: z.boolean().optional(),
-  source: z.enum(["authored", "co_created", "imported"]).optional(),
-});
+  expectedRevision: z.number().int().positive(),
+}).strict();
 
 export type CreateStoryBibleStyle = z.infer<typeof createStoryBibleStyleSchema>;
 export type UpdateStoryBibleStyle = z.infer<typeof updateStoryBibleStyleSchema>;
@@ -85,7 +85,8 @@ export const updateStoryBibleOutlineSchema = z.object({
   beats: z.array(z.record(z.unknown())).optional(),
   locked: z.boolean().optional(),
   source: z.enum(["authored", "co_created", "imported"]).optional(),
-});
+  expectedRevision: z.number().int().positive(),
+}).strict();
 
 export type CreateStoryBibleOutline = z.infer<typeof createStoryBibleOutlineSchema>;
 export type UpdateStoryBibleOutline = z.infer<typeof updateStoryBibleOutlineSchema>;

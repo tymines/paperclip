@@ -35,14 +35,14 @@ describe("Book Studio direct-add authorization", () => {
 
   it("snapshots an exact current target identity for later lock/stale validation", () => {
     const authorization = deriveBookChatAuthorization("update character Mira: New description")!;
-    const resolved = resolveBookChatAuthorization(authorization, { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [{ id: "char-1", name: "Mira", locked: false, updatedAt: "2026-08-04T12:00:00.000Z" }], locations: [], styles: [], outlines: [] });
-    expect(resolved).toMatchObject({ target: { id: "char-1", locked: false } });
+    const resolved = resolveBookChatAuthorization(authorization, { book: { id: "book-1", locked: false, revision: 2 }, characters: [{ id: "char-1", name: "Mira", locked: false, revision: 7 }], locations: [], styles: [], outlines: [] });
+    expect(resolved).toMatchObject({ target: { id: "char-1", locked: false, revision: 7 } });
   });
 });
 
 function mockDb(options: { companyId?: string; character?: any; style?: any; outline?: any; bookMetadata?: Record<string, unknown>; updateReturningEmpty?: boolean } = {}) {
   const state = {
-    book: { id: "book-1", companyId: options.companyId ?? "company-1", title: "Book", slug: "book", metadata: options.bookMetadata ?? {}, updatedAt: new Date("2026-08-04T10:00:00Z") },
+    book: { id: "book-1", companyId: options.companyId ?? "company-1", title: "Book", slug: "book", metadata: options.bookMetadata ?? {}, revision: 1, updatedAt: new Date("2026-08-04T10:00:00Z") },
     characters: options.character ? [options.character] : [], locations: [] as any[], styles: options.style ? [options.style] : [], outlines: options.outline ? [options.outline] : [],
   };
   const rows = (table: unknown) => table === books ? (state.book ? [state.book] : []) : table === storyBibleCharacters ? state.characters : table === storyBibleWorldLocations ? state.locations : table === storyBibleStyle ? state.styles : table === storyBibleOutline ? state.outlines : [];
@@ -52,14 +52,14 @@ function mockDb(options: { companyId?: string; character?: any; style?: any; out
     select: vi.fn(() => ({ from: (table: unknown) => ({ where: () => ({ limit: async () => rows(table).slice(0, 1) }) }) })),
     update: vi.fn((table: unknown) => ({ set: (changes: any) => ({ where: () => ({ returning: async () => {
       if (options.updateReturningEmpty) return [];
-      if (table === books) Object.assign(state.book, changes);
-      if (table === storyBibleCharacters && state.characters[0]) Object.assign(state.characters[0], changes);
-      if (table === storyBibleStyle && state.styles[0]) Object.assign(state.styles[0], changes);
-      if (table === storyBibleOutline && state.outlines[0]) Object.assign(state.outlines[0], changes);
+      if (table === books) Object.assign(state.book, changes, { revision: state.book.revision + 1 });
+      if (table === storyBibleCharacters && state.characters[0]) Object.assign(state.characters[0], changes, { revision: state.characters[0].revision + 1 });
+      if (table === storyBibleStyle && state.styles[0]) Object.assign(state.styles[0], changes, { revision: state.styles[0].revision + 1 });
+      if (table === storyBibleOutline && state.outlines[0]) Object.assign(state.outlines[0], changes, { revision: state.outlines[0].revision + 1 });
       return [{ id: table === books ? state.book.id : rows(table)[0]?.id }];
     } }) }) })),
     insert: vi.fn((table: unknown) => ({ values: (values: any) => ({ returning: async () => {
-      const created = { id: `new-${rows(table).length + 1}`, locked: false, updatedAt: new Date(), ...values }; rows(table).push(created); return [created];
+      const created = { id: `new-${rows(table).length + 1}`, locked: false, revision: 1, updatedAt: new Date(), ...values }; rows(table).push(created); return [created];
     } }) })),
   };
   return { db, state };
@@ -70,7 +70,7 @@ describe("Book Studio direct-add executor", () => {
 
   it("applies an overview addition atomically and activity-logs turn provenance", async () => {
     const { db, state } = mockDb({ bookMetadata: { description: "Old" } });
-    const authorization = resolveBookChatAuthorization(deriveBookChatAuthorization("append overview: New"), { book: { id: state.book.id, locked: false, updatedAt: state.book.updatedAt.toISOString() }, characters: [], locations: [], styles: [], outlines: [] })!;
+    const authorization = resolveBookChatAuthorization(deriveBookChatAuthorization("append overview: New"), { book: { id: state.book.id, locked: false, revision: state.book.revision }, characters: [], locations: [], styles: [], outlines: [] })!;
     const result = await applyBookChatAuthorization(db, { companyId: "company-1", bookId: "book-1", turnId: "turn-1", actor, authorization });
     expect(result).toMatchObject({ status: "applied", section: "overview", destination: "Overview description" });
     expect(state.book.metadata).toMatchObject({ description: "Old\n\nNew" });
@@ -101,23 +101,23 @@ describe("Book Studio direct-add executor", () => {
 
   it("updates an exact unlocked Style target without reducing governed fields", async () => {
     const updatedAt = new Date("2026-08-04T12:00:00Z");
-    const current = { id: "style-1", bookId: "book-1", pov: "close third", tense: "past", comps: "Old", sampleParagraph: "Old", bannedCliches: ["woke up"], tropes: ["found family"], locked: false, updatedAt };
+    const current = { id: "style-1", bookId: "book-1", pov: "close third", tense: "past", comps: "Old", sampleParagraph: "Old", bannedCliches: ["woke up"], tropes: ["found family"], locked: false, revision: 4, updatedAt };
     const { db, state } = mockDb({ style: current });
     const authorization = resolveBookChatAuthorization(
       deriveBookChatAuthorization("update style entry: pov=close third; tense=past; comps=Gormenghast; sample=Rain worried the windows."),
-      { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [], locations: [], styles: [{ id: current.id, pov: current.pov, tense: current.tense, locked: false, updatedAt: updatedAt.toISOString() }], outlines: [] },
+      { book: { id: "book-1", locked: false, revision: 1 }, characters: [], locations: [], styles: [{ id: current.id, pov: current.pov, tense: current.tense, locked: false, revision: current.revision }], outlines: [] },
     )!;
     expect(await applyBookChatAuthorization(db, { companyId: "company-1", bookId: "book-1", turnId: "turn-style", actor, authorization })).toMatchObject({ status: "applied", section: "style" });
     expect(state.styles[0]).toMatchObject({ comps: "Gormenghast", bannedCliches: ["woke up"], tropes: ["found family"] });
   });
 
-  it("preserves the target timestamp through JSON storage before applying", async () => {
+  it("preserves the target revision through JSON storage before applying", async () => {
     const updatedAt = new Date("2026-08-04T12:00:00Z");
-    const current = { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: false, updatedAt };
+    const current = { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: false, revision: 9, updatedAt };
     const { db, state } = mockDb({ character: current });
     const resolved = resolveBookChatAuthorization(
       deriveBookChatAuthorization("update character Mira: New description"),
-      { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [{ id: current.id, name: current.name, locked: false, updatedAt: updatedAt.toISOString() }], locations: [], styles: [], outlines: [] },
+      { book: { id: "book-1", locked: false, revision: 1 }, characters: [{ id: current.id, name: current.name, locked: false, revision: current.revision }], locations: [], styles: [], outlines: [] },
     )!;
     const stored = JSON.parse(JSON.stringify(resolved));
     expect(await applyBookChatAuthorization(db, { companyId: "company-1", bookId: "book-1", turnId: "turn-json", actor, authorization: stored })).toMatchObject({ status: "applied" });
@@ -126,11 +126,11 @@ describe("Book Studio direct-add executor", () => {
 
   it("fails closed when a target changes between validation and the conditional update", async () => {
     const updatedAt = new Date("2026-08-04T12:00:00Z");
-    const current = { id: "style-1", bookId: "book-1", pov: "close third", tense: "past", comps: "Old", sampleParagraph: "Old", bannedCliches: [], tropes: [], locked: false, updatedAt };
+    const current = { id: "style-1", bookId: "book-1", pov: "close third", tense: "past", comps: "Old", sampleParagraph: "Old", bannedCliches: [], tropes: [], locked: false, revision: 3, updatedAt };
     const { db } = mockDb({ style: current, updateReturningEmpty: true });
     const authorization = resolveBookChatAuthorization(
       deriveBookChatAuthorization("update style entry: pov=close third; tense=past; comps=New; sample=New sample."),
-      { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [], locations: [], styles: [{ id: current.id, pov: current.pov, tense: current.tense, locked: false, updatedAt: updatedAt.toISOString() }], outlines: [] },
+      { book: { id: "book-1", locked: false, revision: 1 }, characters: [], locations: [], styles: [{ id: current.id, pov: current.pov, tense: current.tense, locked: false, revision: current.revision }], outlines: [] },
     )!;
     expect(await applyBookChatAuthorization(db, { companyId: "company-1", bookId: "book-1", turnId: "turn-race", actor, authorization })).toMatchObject({ status: "failed", error: expect.stringContaining("changed or was locked") });
     expect(logActivity).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ turnId: "turn-race" }) }));
@@ -138,11 +138,11 @@ describe("Book Studio direct-add executor", () => {
 
   it("updates only the exact numbered Outline beat and returns its chapter destination", async () => {
     const updatedAt = new Date("2026-08-04T12:00:00Z");
-    const current = { id: "outline-1", bookId: "book-1", chapterNumber: 3, title: "Map", beats: [{ description: "First", note: "keep" }, { description: "Old second" }], locked: false, updatedAt };
+    const current = { id: "outline-1", bookId: "book-1", chapterNumber: 3, title: "Map", beats: [{ description: "First", note: "keep" }, { description: "Old second" }], locked: false, revision: 5, updatedAt };
     const { db, state } = mockDb({ outline: current });
     const authorization = resolveBookChatAuthorization(
       deriveBookChatAuthorization("update outline beat 2 in chapter 3: Mira burns the false map."),
-      { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [], locations: [], styles: [], outlines: [{ id: current.id, chapterNumber: 3, locked: false, updatedAt: updatedAt.toISOString() }] },
+      { book: { id: "book-1", locked: false, revision: 1 }, characters: [], locations: [], styles: [], outlines: [{ id: current.id, chapterNumber: 3, locked: false, revision: current.revision }] },
     )!;
     expect(await applyBookChatAuthorization(db, { companyId: "company-1", bookId: "book-1", turnId: "turn-outline", actor, authorization })).toMatchObject({ status: "applied", section: "outline", chapterNumber: 3 });
     expect(state.outlines[0].beats).toEqual([{ description: "First", note: "keep" }, { description: "Mira burns the false map." }]);
@@ -151,13 +151,13 @@ describe("Book Studio direct-add executor", () => {
   it("fails closed for locked, stale, and cross-company targets before mutation", async () => {
     const updatedAt = new Date("2026-08-04T12:00:00Z");
     const base = deriveBookChatAuthorization("update character Mira: Changed")!;
-    const lockedAuth = resolveBookChatAuthorization(base, { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [{ id: "char-1", name: "Mira", locked: true, updatedAt: updatedAt.toISOString() }], locations: [], styles: [], outlines: [] })!;
-    const locked = mockDb({ character: { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: true, updatedAt } });
+    const lockedAuth = resolveBookChatAuthorization(base, { book: { id: "book-1", locked: false, revision: 1 }, characters: [{ id: "char-1", name: "Mira", locked: true, revision: 1 }], locations: [], styles: [], outlines: [] })!;
+    const locked = mockDb({ character: { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: true, revision: 1, updatedAt } });
     expect(await applyBookChatAuthorization(locked.db, { companyId: "company-1", bookId: "book-1", turnId: "turn-l", actor, authorization: lockedAuth })).toMatchObject({ status: "failed", error: expect.stringContaining("locked") });
     expect(locked.state.characters[0].description).toBe("Old");
 
-    const staleAuth = resolveBookChatAuthorization(base, { book: { id: "book-1", locked: false, updatedAt: "2026-08-04T10:00:00.000Z" }, characters: [{ id: "char-1", name: "Mira", locked: false, updatedAt: updatedAt.toISOString() }], locations: [], styles: [], outlines: [] })!;
-    const stale = mockDb({ character: { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: false, updatedAt: new Date("2026-08-04T13:00:00Z") } });
+    const staleAuth = resolveBookChatAuthorization(base, { book: { id: "book-1", locked: false, revision: 1 }, characters: [{ id: "char-1", name: "Mira", locked: false, revision: 1 }], locations: [], styles: [], outlines: [] })!;
+    const stale = mockDb({ character: { id: "char-1", bookId: "book-1", name: "Mira", description: "Old", locked: false, revision: 2, updatedAt: new Date("2026-08-04T13:00:00Z") } });
     expect(await applyBookChatAuthorization(stale.db, { companyId: "company-1", bookId: "book-1", turnId: "turn-s", actor, authorization: staleAuth })).toMatchObject({ status: "failed", error: expect.stringContaining("changed") });
     expect(stale.state.characters[0].description).toBe("Old");
 

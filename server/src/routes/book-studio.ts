@@ -429,7 +429,8 @@ function entityRoutes(
 
     // Spec v1 §7 ④: bible-entry locks are human-only. Toggling `locked`
     // requires a human actor, and a locked entry refuses AI edits outright.
-    const patchData = parsed.data as Record<string, unknown>;
+    const { expectedRevision, ...validatedPatch } = parsed.data as Record<string, unknown> & { expectedRevision: number };
+    const patchData = validatedPatch as Record<string, unknown>;
     if ("locked" in patchData) {
       assertHumanActor(req);
     }
@@ -438,11 +439,33 @@ function entityRoutes(
       throw lockedError("bible-entry", `${entityLabel} is locked — AI edits refused. A human must unlock it first.`);
     }
 
+    if (Object.keys(patchData).length === 0) throw badRequest("Nothing to update");
+
+    const updatePredicates = [
+      eq(table.id, id),
+      eq(table.bookId, bookId),
+      eq(table.revision, expectedRevision),
+    ];
+    if (actorInfo.actorType !== "user" && !("locked" in patchData)) {
+      updatePredicates.push(eq(table.locked, false));
+    }
+
     const [updated] = await db
       .update(table)
-      .set({ ...parsed.data, updatedAt: new Date() })
-      .where(eq(table.id, id))
+      .set({ ...patchData, updatedAt: new Date() })
+      .where(and(...updatePredicates))
       .returning();
+
+    if (!updated) {
+      if (actorInfo.actorType !== "user") {
+        const current = await db.select().from(table)
+          .where(and(eq(table.id, id), eq(table.bookId, bookId))).then((rows) => rows[0]);
+        if ((current as Record<string, unknown> | undefined)?.locked === true) {
+          throw lockedError("bible-entry", `${entityLabel} was locked while editing — nothing was saved.`);
+        }
+      }
+      throw conflict(`${entityLabel} changed after editing began; reload it before saving.`);
+    }
 
     // Vault write-through
     try {
@@ -453,7 +476,7 @@ function entityRoutes(
         .then((r) => r[0]);
 
       if (book) {
-        const merged = { ...existing, ...parsed.data };
+        const merged = { ...existing, ...patchData };
         const frontmatter = {
           id: updated.id,
           book_id: bookId,
@@ -652,7 +675,11 @@ export function bookStudioRoutes(db: Db) {
     assertCompanyAccess(req, companyId);
 
     const existing = await requireCompanyBook(db, companyId, bookId);
-    const { title, metadata } = req.body ?? {};
+    const { title, metadata, expectedRevision, ...unsupported } = req.body ?? {};
+    if (Object.keys(unsupported).length > 0) throw badRequest(`Unsupported fields: ${Object.keys(unsupported).join(", ")}`);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
+      throw badRequest("expectedRevision must be a positive integer");
+    }
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (title !== undefined) {
       if (typeof title !== "string" || !title.trim()) throw badRequest("title cannot be empty");
@@ -668,8 +695,12 @@ export function bookStudioRoutes(db: Db) {
     const actor = getActorInfo(req);
     const updated = await db.transaction(async (tx) => {
       const [row] = await tx.update(books).set(updates)
-        .where(and(eq(books.id, bookId), eq(books.companyId, companyId))).returning();
-      if (!row) throw notFound("Book not found");
+        .where(and(
+          eq(books.id, bookId),
+          eq(books.companyId, companyId),
+          eq(books.revision, expectedRevision),
+        )).returning();
+      if (!row) throw conflict("Book overview changed after editing began; reload it before saving.");
       await logActivity(tx as unknown as Db, {
       companyId,
       actorType: actor.actorType,
@@ -1459,11 +1490,11 @@ bookBibleRouter.post("/review-runs", async (req, res) => {
     const conversationId = `book-studio:${companyId}:${bookId}`;
     const actor = getActorInfo(req);
     const authorization = actor.actorType === "user" ? resolveBookChatAuthorization(deriveBookChatAuthorization(message), {
-      book: { id: book.id, locked: false, updatedAt: book.updatedAt.toISOString() },
-      characters: characters.map((item) => ({ id: item.id, name: item.name, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
-      locations: locations.map((item) => ({ id: item.id, name: item.name, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
-      styles: styles.map((item) => ({ id: item.id, pov: item.pov, tense: item.tense, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
-      outlines: outlines.map((item) => ({ id: item.id, chapterNumber: item.chapterNumber, locked: item.locked, updatedAt: item.updatedAt.toISOString() })),
+      book: { id: book.id, locked: false, revision: book.revision },
+      characters: characters.map((item) => ({ id: item.id, name: item.name, locked: item.locked, revision: item.revision })),
+      locations: locations.map((item) => ({ id: item.id, name: item.name, locked: item.locked, revision: item.revision })),
+      styles: styles.map((item) => ({ id: item.id, pov: item.pov, tense: item.tense, locked: item.locked, revision: item.revision })),
+      outlines: outlines.map((item) => ({ id: item.id, chapterNumber: item.chapterNumber, locked: item.locked, revision: item.revision })),
     }) : null;
 
     // Persist pending user state before dispatch so an interrupted turn remains visible.

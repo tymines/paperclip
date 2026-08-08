@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, integer, boolean } from "drizzle-orm/pg-core";
 import { books } from "./books.js";
 
 export const storyBibleWorldLocations = pgTable("story_bible_world_locations", {
@@ -12,6 +12,7 @@ export const storyBibleWorldLocations = pgTable("story_bible_world_locations", {
   source: text("source").notNull().default("authored"),
   // migration 0155: location image + misc UI metadata (imageUrl, imageJobId, imageLocked)
   metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
+  revision: integer("revision").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

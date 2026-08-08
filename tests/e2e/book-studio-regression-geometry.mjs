@@ -15,6 +15,7 @@ const cases = [
   { width: 1366, height: 768, sidebar: 208 },
   { width: 1440, height: 900, sidebar: 240 },
   { width: 1093, height: 614, sidebar: 208 },
+  { width: 390, height: 844, sidebar: 0 },
   { width: 430, height: 932, sidebar: 0 },
 ];
 

@@ -4,7 +4,7 @@
 // (editable steering cards) · Prose (existing ManuscriptEditor) · Context
 // ("what the writer saw" — consulted entities + spoiler-gated facts) · Bible
 // (2b CodexPanel) · bottom bar: Your call · Draft Fast/Craft · Re-run gate.
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Lock, LockOpen } from "lucide-react";
 import { ManuscriptEditor } from "@/components/book-studio/ManuscriptEditor";
 
@@ -43,17 +43,18 @@ function beatText(b: Beat): string {
   return String(b.description ?? b.text ?? b.beat ?? "");
 }
 
-export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, chapterTitle, outlineEntry, locked, chapterStatus, onLockToggle, onNeedsRefresh, onOpenDecisionInbox, onOpenStoryBible }: {
+export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, chapterTitle, outlineEntry, locked, chapterStatus, onLockToggle, onNeedsRefresh, onOutlineUpdated, onOpenDecisionInbox, onOpenStoryBible }: {
   bookId: string;
   bookSlug: string;
   companySlug: string;
   chapterNumber: number;
   chapterTitle: string;
-  outlineEntry: { id: string; chapterNumber: number; title: string; beats: Beat[] } | null;
+  outlineEntry: { id: string; chapterNumber: number; title: string; revision: number; beats: Beat[] } | null;
   locked: boolean;
   chapterStatus: string | null;
   onLockToggle: () => void;
   onNeedsRefresh: () => void;
+  onOutlineUpdated: (entry: { id: string; chapterNumber: number; title: string; revision: number; beats: Beat[] }) => void;
   onOpenDecisionInbox: () => void;
   onOpenStoryBible: () => void;
 }) {
@@ -65,10 +66,14 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
   const [draftMenu, setDraftMenu] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const revisionRef = useRef(outlineEntry?.revision ?? 1);
 
   const prefix = `/companies/${companySlug}/book-studio/books/${bookId}`;
 
-  useEffect(() => { setBeats(outlineEntry?.beats ?? []); }, [outlineEntry?.id, chapterNumber]);
+  useEffect(() => {
+    setBeats(outlineEntry?.beats ?? []);
+    revisionRef.current = outlineEntry?.revision ?? 1;
+  }, [outlineEntry?.id, outlineEntry?.revision, chapterNumber]);
 
   useEffect(() => {
     if (view !== "context") return;
@@ -80,12 +85,23 @@ export function DeckWorkspace({ bookId, bookSlug, companySlug, chapterNumber, ch
 
   const saveBeats = useCallback(async (next: Beat[]) => {
     if (!outlineEntry) return;
+    const prior = beats;
     setBeats(next);
-    await apiFetch(`${prefix}/outline/${outlineEntry.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ beats: next.map((b) => ({ kind: b.kind ?? "Beat", description: beatText(b) })) }),
-    }).then(() => flash("Beats saved")).catch((e) => flash(e.status === 409 ? "🔒 Chapter locked — beats refuse edits" : `Save failed: ${e.message}`));
-  }, [outlineEntry, prefix]);
+    try {
+      const result = await apiFetch<{ "outline-entry": { id: string; chapterNumber: number; title: string; revision: number; beats: Beat[] } }>(`${prefix}/outline/${outlineEntry.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ beats: next.map((b) => ({ kind: b.kind ?? "Beat", description: beatText(b) })), expectedRevision: revisionRef.current }),
+      });
+      const updated = result["outline-entry"];
+      revisionRef.current = updated.revision;
+      setBeats(updated.beats);
+      onOutlineUpdated(updated);
+      flash("Beats saved");
+    } catch (e) {
+      setBeats(prior);
+      flash((e as { status?: number }).status === 409 ? "🔒 Beats changed elsewhere — reload before editing" : `Save failed: ${(e as Error).message}`);
+    }
+  }, [beats, outlineEntry, onOutlineUpdated, prefix]);
 
   function moveBeat(i: number, d: number) {
     const j = i + d;

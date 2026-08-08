@@ -84,10 +84,11 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
     }
   };
 
-  const updateBook = async (data: { title?: string; metadata?: Record<string, unknown> }) => {
-    const result = await apiFetch<{ book: BookData }>(prefix, { method: "PATCH", body: JSON.stringify(data) });
+  const updateBook = async (data: { title?: string; metadata?: Record<string, unknown>; expectedRevision?: number }): Promise<BookData> => {
+    const result = await apiFetch<{ book: BookData }>(prefix, { method: "PATCH", body: JSON.stringify({ ...data, expectedRevision: data.expectedRevision ?? book.revision }) });
     onBookUpdated(result.book);
     onChanged?.();
+    return result.book;
   };
 
   if (section === "overview") {
@@ -175,17 +176,17 @@ export function StoryBibleSectionEditor({ companySlug, book, section, onBookUpda
       {!loading && empty && !showCreate && <div className="rounded border border-dashed border-gray-800 px-4 py-8 text-center text-xs text-gray-500">No {label.toLowerCase()} records yet.</div>}
       {!loading && section === "characters" && characters.map((character) => (
         <div className="mb-2" key={character.id}><CharacterCardComponent char={character} bookId={book.id} companySlug={companySlug} bookSlug={bookSlug}
-          onUpdate={(id, data) => void run(async () => { await apiFetch(`${prefix}/characters/${id}`, { method: "PATCH", body: JSON.stringify(data) }); setCharacters((rows) => rows.map((row) => row.id === id ? { ...row, ...data } : row)); })}
+          onUpdate={async (id, data) => { const result = await apiFetch<{ character: CharacterEntity }>(`${prefix}/characters/${id}`, { method: "PATCH", body: JSON.stringify({ ...data, expectedRevision: data.expectedRevision ?? character.revision }) }); setCharacters((rows) => rows.map((row) => row.id === id ? result.character : row)); onChanged?.(); return result.character; }}
           onDelete={(id) => void run(async () => { await apiFetch(`${prefix}/characters/${id}`, { method: "DELETE" }); setCharacters((rows) => rows.filter((row) => row.id !== id)); })} /></div>
       ))}
       {!loading && section === "world-locations" && locations.map((location) => (
         <div className="mb-2" key={location.id}><LocationCardComponent loc={location} bookId={book.id} companySlug={companySlug} bookSlug={bookSlug}
-          onUpdate={(id, data) => void run(async () => { await apiFetch(`${prefix}/world-locations/${id}`, { method: "PATCH", body: JSON.stringify(data) }); setLocations((rows) => rows.map((row) => row.id === id ? { ...row, ...data } : row)); })}
+          onUpdate={async (id, data) => { const result = await apiFetch<{ "world-location": WorldLocationEntity }>(`${prefix}/world-locations/${id}`, { method: "PATCH", body: JSON.stringify({ ...data, expectedRevision: data.expectedRevision ?? location.revision }) }); setLocations((rows) => rows.map((row) => row.id === id ? result["world-location"] : row)); onChanged?.(); return result["world-location"]; }}
           onDelete={(id) => void run(async () => { await apiFetch(`${prefix}/world-locations/${id}`, { method: "DELETE" }); setLocations((rows) => rows.filter((row) => row.id !== id)); })} /></div>
       ))}
       {!loading && section === "style" && styles.map((entry) => (
         <div className="mb-2" key={entry.id}><StyleCardComponent entry={entry} bookId={book.id} companySlug={companySlug} bookSlug={bookSlug}
-          onUpdate={(id, data) => void run(async () => { await apiFetch(`${prefix}/style/${id}`, { method: "PATCH", body: JSON.stringify(data) }); setStyles((rows) => rows.map((row) => row.id === id ? { ...row, ...data } : row)); })}
+          onUpdate={async (id, data) => { const result = await apiFetch<{ "style-entry": StyleEntity }>(`${prefix}/style/${id}`, { method: "PATCH", body: JSON.stringify({ ...data, expectedRevision: data.expectedRevision ?? entry.revision }) }); setStyles((rows) => rows.map((row) => row.id === id ? result["style-entry"] : row)); onChanged?.(); return result["style-entry"]; }}
           onDelete={(id) => void run(async () => { await apiFetch(`${prefix}/style/${id}`, { method: "DELETE" }); setStyles((rows) => rows.filter((row) => row.id !== id)); })} /></div>
       ))}
 

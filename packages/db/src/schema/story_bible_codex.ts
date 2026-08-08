@@ -19,6 +19,7 @@ const entityColumns = {
   details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
+  revision: integer("revision").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 };
@@ -81,6 +82,7 @@ export const bibleRelationships = pgTable(
     rules: jsonb("rules").$type<string[]>().notNull().default([]),
     locked: boolean("locked").notNull().default(false),
     source: text("source").notNull().default("authored"),
+    revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -106,6 +108,7 @@ export const bibleFacts = pgTable(
     sourceScene: text("source_scene").notNull().default(""),
     provenance: text("provenance").notNull().default("authored"), // authored | co-created | auto-extracted
     locked: boolean("locked").notNull().default(false),
+    revision: integer("revision").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

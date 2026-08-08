@@ -28,8 +28,9 @@ function stubFetch(patchResponder?: () => { ok: boolean; status: number; payload
     const url = String(input);
     const method = options?.method ?? "GET";
     calls.push({ url, method, body: options?.body ? JSON.parse(String(options.body)) : undefined });
-    if (method === "PATCH" && patchResponder) {
-      const r = patchResponder();
+    if (method === "PATCH") {
+      const body = options?.body ? JSON.parse(String(options.body)) : {};
+      const r = patchResponder?.() ?? { ok: true, status: 200, payload: { "outline-entry": { id: "outline-1", chapterNumber: 1, title: "Chapter 1", revision: 2, beats: body.beats } } };
       return {
         ok: r.ok,
         status: r.status,
@@ -59,11 +60,12 @@ function renderWorkspace(onOpenStoryBible = vi.fn()) {
         companySlug="acme"
         chapterNumber={1}
         chapterTitle="Chapter 1"
-        outlineEntry={{ id: "outline-1", chapterNumber: 1, title: "Chapter 1", beats: BEATS }}
+        outlineEntry={{ id: "outline-1", chapterNumber: 1, title: "Chapter 1", revision: 1, beats: BEATS }}
         locked={false}
         chapterStatus={null}
         onLockToggle={() => {}}
         onNeedsRefresh={() => {}}
+        onOutlineUpdated={() => {}}
         onOpenDecisionInbox={() => {}}
         onOpenStoryBible={onOpenStoryBible}
       />,
@@ -172,7 +174,8 @@ describe("DeckWorkspace — beat delete control", () => {
     const patch = calls.find((c) => c.method === "PATCH");
     expect(patch).toBeDefined();
     expect(patch!.url).toBe("/api/companies/acme/book-studio/books/book-1/outline/outline-1");
-    const body = patch!.body as { beats: { kind: string; description: string }[] };
+    const body = patch!.body as { beats: { kind: string; description: string }[]; expectedRevision: number };
+    expect(body.expectedRevision).toBe(1);
     expect(body.beats).toHaveLength(2);
     expect(body.beats.map((b) => b.description)).toEqual(["Alpha beat", "Charlie beat"]);
   });
@@ -186,6 +189,6 @@ describe("DeckWorkspace — beat delete control", () => {
     click(deleteButtons()[0]);
     await flush();
 
-    expect(container!.textContent).toContain("Chapter locked — beats refuse edits");
+    expect(container!.textContent).toContain("Beats changed elsewhere — reload before editing");
   });
 });

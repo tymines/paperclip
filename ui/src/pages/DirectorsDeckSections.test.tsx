@@ -19,16 +19,19 @@ vi.mock("@/components/book-studio/CodexPanel", () => ({
 import { DirectorsDeckPage } from "./DirectorsDeckPage";
 
 const BOOKS = [
-  { id: "book-1", companyId: "acme", slug: "one", title: "One", metadata: { chapterStatus: { "1": "exception" } }, createdAt: "", updatedAt: "" },
-  { id: "book-2", companyId: "acme", slug: "two", title: "Two", metadata: {}, createdAt: "", updatedAt: "" },
+  { id: "book-1", companyId: "acme", slug: "one", title: "One", metadata: { chapterStatus: { "1": "exception" } }, revision: 1, createdAt: "", updatedAt: "" },
+  { id: "book-2", companyId: "acme", slug: "two", title: "Two", metadata: {}, revision: 1, createdAt: "", updatedAt: "" },
 ];
 
 function stubFetch() {
-  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
     const url = String(input);
     let payload: unknown = {};
-    if (url.endsWith("/book-studio/books")) payload = { books: BOOKS };
-    else if (url.includes("/outline")) payload = { outline: [{ id: "outline-1", chapterNumber: 1, title: "Opening", locked: false, beats: [] }] };
+    if (options?.method === "PATCH" && url.endsWith("/books/book-1")) {
+      const body = JSON.parse(String(options.body ?? "{}"));
+      payload = { book: { ...BOOKS[0], metadata: body.metadata ?? BOOKS[0].metadata, revision: 2 } };
+    } else if (url.endsWith("/book-studio/books")) payload = { books: BOOKS };
+    else if (url.includes("/outline")) payload = { outline: [{ id: "outline-1", chapterNumber: 1, title: "Opening", locked: false, revision: 1, beats: [] }] };
     else if (url.includes("/chapters")) payload = { chapters: [{ id: "chapter-1", chapterNumber: 1, title: "Opening", content: "Once", locked: false }] };
     else if (url.includes("/characters")) payload = { characters: [] };
     else if (url.includes("/world-locations")) payload = { "world-locations": [] };

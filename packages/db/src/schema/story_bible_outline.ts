@@ -9,6 +9,7 @@ export const storyBibleOutline = pgTable("story_bible_outline", {
   beats: jsonb("beats").$type<Record<string, unknown>[]>().notNull().default([]),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
+  revision: integer("revision").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

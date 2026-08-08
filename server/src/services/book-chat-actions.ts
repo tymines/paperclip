@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { books, storyBibleCharacters, storyBibleChatMessages, storyBibleOutline, storyBibleStyle, storyBibleWorldLocations } from "@paperclipai/db";
 import { logActivity } from "./index.js";
 
-type TargetSnapshot = { id: string; name?: string; chapterNumber?: number; pov?: string; tense?: string; locked: boolean; updatedAt?: string | null };
+type TargetSnapshot = { id: string; name?: string; chapterNumber?: number; pov?: string; tense?: string; locked: boolean; revision: number };
 
 export type BookChatAuthorization =
   | { operation: "overview.set" | "overview.append"; destination: "overview"; content: string; humanMessage: string; target?: TargetSnapshot }
@@ -111,12 +111,10 @@ export function resolveBookChatAuthorization(
   return authorization;
 }
 
-function assertSnapshot(current: { id: string; locked: boolean; updatedAt?: Date | null } | undefined, target: TargetSnapshot | undefined, label: string) {
+function assertSnapshot(current: { id: string; locked: boolean; revision: number } | undefined, target: TargetSnapshot | undefined, label: string) {
   if (!current || !target || current.id !== target.id) throw new Error(`${label} changed or no longer exists; nothing changed.`);
   if (current.locked || target.locked) throw new Error(`${label} is locked; nothing changed.`);
-  const expected = target.updatedAt ?? undefined;
-  const actual = current.updatedAt?.toISOString();
-  if (expected && actual !== expected) throw new Error(`${label} changed while Calliope was responding; nothing changed.`);
+  if (current.revision !== target.revision) throw new Error(`${label} changed while Calliope was responding; nothing changed.`);
 }
 
 export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
@@ -148,10 +146,10 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
 
       if (authorization.operation === "overview.set" || authorization.operation === "overview.append") {
         const target = authorization.target;
-        if (!target?.updatedAt || target.id !== book.id || book.updatedAt.toISOString() !== target.updatedAt) throw new Error("Book overview changed while Calliope was responding; nothing changed.");
+        if (!target || target.id !== book.id || book.revision !== target.revision) throw new Error("Book overview changed while Calliope was responding; nothing changed.");
         const current = String((book.metadata as Record<string, unknown>)?.description ?? "");
         const description = authorization.operation === "overview.set" ? authorization.content : [current.trim(), authorization.content].filter(Boolean).join("\n\n");
-        const changed = await tx.update(books).set({ metadata: { ...(book.metadata as Record<string, unknown>), description }, updatedAt: new Date() }).where(and(eq(books.id, bookId), eq(books.companyId, companyId), eq(books.updatedAt, new Date(target.updatedAt)))).returning({ id: books.id });
+        const changed = await tx.update(books).set({ metadata: { ...(book.metadata as Record<string, unknown>), description }, updatedAt: new Date() }).where(and(eq(books.id, bookId), eq(books.companyId, companyId), eq(books.revision, target.revision))).returning({ id: books.id });
         if (changed.length !== 1) throw new Error("Book overview changed while Calliope was responding; nothing changed.");
         entityId = bookId; destination = "Overview description";
       } else if (authorization.operation === "character.create" || authorization.operation === "character.update") {
@@ -160,7 +158,7 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
           if (!target) throw new Error(`Character ${authorization.name} could not be identified uniquely; nothing changed.`);
           const [current] = await tx.select().from(storyBibleCharacters).where(and(eq(storyBibleCharacters.id, target.id), eq(storyBibleCharacters.bookId, bookId))).limit(1);
           assertSnapshot(current, target, `Character ${authorization.name}`);
-          const changed = await tx.update(storyBibleCharacters).set({ description: authorization.content, updatedAt: new Date() }).where(and(eq(storyBibleCharacters.id, current.id), eq(storyBibleCharacters.bookId, bookId), eq(storyBibleCharacters.locked, false), eq(storyBibleCharacters.updatedAt, new Date(target.updatedAt!)))).returning({ id: storyBibleCharacters.id });
+          const changed = await tx.update(storyBibleCharacters).set({ description: authorization.content, updatedAt: new Date() }).where(and(eq(storyBibleCharacters.id, current.id), eq(storyBibleCharacters.bookId, bookId), eq(storyBibleCharacters.locked, false), eq(storyBibleCharacters.revision, target.revision))).returning({ id: storyBibleCharacters.id });
           if (changed.length !== 1) throw new Error(`Character ${authorization.name} changed or was locked; nothing changed.`);
           entityId = current.id;
         } else {
@@ -176,7 +174,7 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
           if (!target) throw new Error(`Location ${authorization.name} could not be identified uniquely; nothing changed.`);
           const [current] = await tx.select().from(storyBibleWorldLocations).where(and(eq(storyBibleWorldLocations.id, target.id), eq(storyBibleWorldLocations.bookId, bookId))).limit(1);
           assertSnapshot(current, target, `Location ${authorization.name}`);
-          const changed = await tx.update(storyBibleWorldLocations).set({ description: authorization.content, updatedAt: new Date() }).where(and(eq(storyBibleWorldLocations.id, current.id), eq(storyBibleWorldLocations.bookId, bookId), eq(storyBibleWorldLocations.locked, false), eq(storyBibleWorldLocations.updatedAt, new Date(target.updatedAt!)))).returning({ id: storyBibleWorldLocations.id });
+          const changed = await tx.update(storyBibleWorldLocations).set({ description: authorization.content, updatedAt: new Date() }).where(and(eq(storyBibleWorldLocations.id, current.id), eq(storyBibleWorldLocations.bookId, bookId), eq(storyBibleWorldLocations.locked, false), eq(storyBibleWorldLocations.revision, target.revision))).returning({ id: storyBibleWorldLocations.id });
           if (changed.length !== 1) throw new Error(`Location ${authorization.name} changed or was locked; nothing changed.`);
           entityId = current.id;
         } else {
@@ -192,7 +190,7 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
           if (!target) throw new Error(`Style entry ${authorization.fields.pov}/${authorization.fields.tense} could not be identified uniquely; nothing changed.`);
           const [current] = await tx.select().from(storyBibleStyle).where(and(eq(storyBibleStyle.id, target.id), eq(storyBibleStyle.bookId, bookId))).limit(1);
           assertSnapshot(current, target, `Style entry ${authorization.fields.pov}/${authorization.fields.tense}`);
-          const changed = await tx.update(storyBibleStyle).set({ ...authorization.fields, updatedAt: new Date() }).where(and(eq(storyBibleStyle.id, current.id), eq(storyBibleStyle.bookId, bookId), eq(storyBibleStyle.locked, false), eq(storyBibleStyle.updatedAt, new Date(target.updatedAt!)))).returning({ id: storyBibleStyle.id });
+          const changed = await tx.update(storyBibleStyle).set({ ...authorization.fields, updatedAt: new Date() }).where(and(eq(storyBibleStyle.id, current.id), eq(storyBibleStyle.bookId, bookId), eq(storyBibleStyle.locked, false), eq(storyBibleStyle.revision, target.revision))).returning({ id: storyBibleStyle.id });
           if (changed.length !== 1) throw new Error(`Style entry ${authorization.fields.pov}/${authorization.fields.tense} changed or was locked; nothing changed.`);
           entityId = current.id;
         } else {
@@ -214,7 +212,7 @@ export async function applyBookChatAuthorizationInTransaction(tx: Db, args: {
         } else {
           beats.push({ description: authorization.content });
         }
-        const changed = await tx.update(storyBibleOutline).set({ beats, updatedAt: new Date() }).where(and(eq(storyBibleOutline.id, current.id), eq(storyBibleOutline.bookId, bookId), eq(storyBibleOutline.locked, false), eq(storyBibleOutline.updatedAt, new Date(authorization.target!.updatedAt!)))).returning({ id: storyBibleOutline.id });
+        const changed = await tx.update(storyBibleOutline).set({ beats, updatedAt: new Date() }).where(and(eq(storyBibleOutline.id, current.id), eq(storyBibleOutline.bookId, bookId), eq(storyBibleOutline.locked, false), eq(storyBibleOutline.revision, authorization.target!.revision))).returning({ id: storyBibleOutline.id });
         if (changed.length !== 1) throw new Error(`Outline chapter ${authorization.chapterNumber} changed or was locked; nothing changed.`);
         entityId = current.id; destination = `Outline chapter ${authorization.chapterNumber}`;
       }

@@ -7,6 +7,7 @@ export interface StoryBibleCharacter {
   voiceCard: Record<string, unknown>;
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -20,6 +21,7 @@ export interface StoryBibleWorldLocation {
   sensoryNotes: Record<string, unknown>;
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -34,6 +36,7 @@ export interface StoryBibleStyle {
   bannedCliches: string[];
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,6 +49,7 @@ export interface StoryBibleOutline {
   beats: Record<string, unknown>[];
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -64,7 +68,7 @@ export interface StoryBibleCharacterUpdateInput {
   description?: string;
   voiceCard?: Record<string, unknown>;
   locked?: boolean;
-  source?: string;
+  expectedRevision: number;
 }
 
 export interface StoryBibleWorldLocationCreateInput {
@@ -81,7 +85,7 @@ export interface StoryBibleWorldLocationUpdateInput {
   rules?: Record<string, unknown>;
   sensoryNotes?: Record<string, unknown>;
   locked?: boolean;
-  source?: string;
+  expectedRevision: number;
 }
 
 export interface StoryBibleStyleCreateInput {
@@ -90,6 +94,7 @@ export interface StoryBibleStyleCreateInput {
   comps?: string;
   sampleParagraph?: string;
   bannedCliches?: string[];
+  tropes?: string[];
   source?: string;
 }
 
@@ -99,8 +104,9 @@ export interface StoryBibleStyleUpdateInput {
   comps?: string;
   sampleParagraph?: string;
   bannedCliches?: string[];
+  tropes?: string[];
   locked?: boolean;
-  source?: string;
+  expectedRevision: number;
 }
 
 export interface StoryBibleOutlineCreateInput {
@@ -116,6 +122,7 @@ export interface StoryBibleOutlineUpdateInput {
   beats?: Record<string, unknown>[];
   locked?: boolean;
   source?: string;
+  expectedRevision: number;
 }
 
 // ── Chat Message ────────────────────────────────────────────────────────────
