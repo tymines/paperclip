@@ -25,8 +25,10 @@ vi.mock("../context/CompanyContext", () => ({
   }),
 }));
 
+const routerState = vi.hoisted(() => ({ search: "" }));
+
 vi.mock("@/lib/router", () => ({
-  useSearchParams: () => [new URLSearchParams()],
+  useSearchParams: () => [new URLSearchParams(routerState.search), vi.fn()],
   useNavigate: () => vi.fn(),
 }));
 
@@ -104,6 +106,17 @@ describe("Image Studio focused UI repairs", () => {
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    routerState.search = "";
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -222,6 +235,11 @@ describe("Image Studio focused UI repairs", () => {
     await flushReact();
     await flushReact();
 
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-create"]')!.click();
+    });
+    await flushReact();
+
     const prompt = container.querySelector<HTMLTextAreaElement>('[data-testid="prompt-input"]')!;
     await act(async () => {
       setNativeValue(prompt, "persona-one draft prompt");
@@ -243,6 +261,18 @@ describe("Image Studio focused UI repairs", () => {
     expect(container.textContent).not.toContain("Hosted generation backend");
     expect(container.querySelector<HTMLTextAreaElement>('[data-testid="prompt-input"]')?.value).toBe("");
     expect(container.querySelector('[data-testid="generate-submit"]')).not.toBeNull();
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-flows"]')!.click();
+    });
+    expect(container.textContent).toContain("no route to run, rerun, approve, or publish");
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="open-studio-33333333-3333-4333-8333-333333333333"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="creator-foundation-state"] button')?.disabled).toBe(true);
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-create"]')!.click();
+    });
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="prompt-input"]')?.value).toBe("");
   });
 
   it("preserves generated ideas and explains typed generator unavailability", async () => {
@@ -300,6 +330,26 @@ describe("Image Studio focused UI repairs", () => {
     expect(container.querySelector('[data-testid="content-generation-error"]')?.textContent)
       .toContain("Try again shortly.");
   });
+
+  it.each(["generate", "photoshoot", "undresser", "library"])(
+    "opens the legacy ?tab=%s deep link inside Create",
+    async (legacyTab) => {
+      routerState.search = `?tab=${legacyTab}`;
+      vi.spyOn(imageStudioApi, "listProviders").mockResolvedValue({ providers: [persona] });
+      vi.spyOn(imageStudioApi, "listTrainingJobs").mockResolvedValue({ jobs: [] });
+      vi.spyOn(imageStudioApi, "listGenerations").mockResolvedValue({ generations: [], nextCursor: null });
+      vi.spyOn(imageStudioApi, "listPromptTemplates").mockResolvedValue({ templates: [] });
+
+      await act(async () => {
+        root.render(<QueryClientProvider client={queryClient}><ImageStudio /></QueryClientProvider>);
+      });
+      await flushReact();
+      await flushReact();
+
+      expect(container.querySelector('[data-testid="creator-create"]')).not.toBeNull();
+      expect(container.querySelector(`[data-testid="tab-${legacyTab}"]`)?.getAttribute("aria-selected")).toBe("true");
+    },
+  );
 
   it("renders video assets semantically and keeps image thumbnails and viewer behavior", async () => {
     const noThumbnailVideo = generation("video-no-thumb", "videos/no-thumb.mp4", null);

@@ -46,6 +46,15 @@ import {
   Trash2,
   Star,
   Tag as TagIcon,
+  ArrowRight,
+  Boxes,
+  CircleDollarSign,
+  CircleUserRound,
+  Clock3,
+  GalleryHorizontalEnd,
+  GraduationCap,
+  Megaphone,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -56,6 +65,10 @@ import {
 import { TrainPersonaModal } from "@/components/image-studio/TrainPersonaModal";
 import { NewPersonaWizard } from "@/components/personas/NewPersonaWizard";
 import { findModel, DEFAULT_MODEL_ID } from "@/components/image-studio/models";
+import {
+  CreatorOsNavigation,
+  type CreatorOsDestination,
+} from "@/components/image-studio/creator-os/CreatorOsNavigation";
 
 /* -------------------------------------------------------------------------- */
 /* Paperclip Design System v1.0 tokens (locked)                               */
@@ -74,7 +87,7 @@ const DS = {
   text: "#F5F8FF",
   textMuted: "#A3B0C2",
   textFaint: "#68758A",
-  primary: "#3B82FF",
+  primary: "#8B5CF6",
   success: "#2FE38A",
   warning: "#F4B940",
   critical: "#FF5B5B",
@@ -261,6 +274,8 @@ function PersonaRowCard({
       <button
         type="button"
         onClick={onOpen}
+        aria-pressed={selected}
+        aria-label={`${persona.name}, ${status.label}`}
         className="flex min-w-0 items-center gap-2 text-left"
         data-testid={`open-studio-${persona.id}`}
         title={`${persona.name} — ${status.label} · Flux + LoRA`}
@@ -700,7 +715,11 @@ export function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOp
               style={{ background: DS.surface, border: `1px solid ${DS.border}` }}
               data-testid="advanced-workbench"
             >
-              <PersonaWorkbench persona={persona} onBatchStarted={(id) => setBatchId(id)} />
+              <PersonaWorkbench
+                persona={persona}
+                onBatchStarted={(id) => setBatchId(id)}
+                syncTabToUrl
+              />
             </div>
           )}
         </>
@@ -1548,9 +1567,14 @@ function PersonaWorkspace({
   status: PersonaStatus;
   companyId: string;
 }) {
+  const [workspaceSearchParams] = useSearchParams();
   const [tab, setTab] = useState<WorkspaceTab>("studio");
   const [galleryMinimized, setGalleryMinimized] = useState(false);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(() =>
+    ["generate", "photoshoot", "undresser", "library"].includes(
+      workspaceSearchParams.get("tab") ?? "",
+    ),
+  );
 
   return (
     <section style={surfaceCard} className="overflow-hidden">
@@ -1598,13 +1622,13 @@ function PersonaWorkspace({
       {tab === "studio" ? (
         <div className={cn("grid grid-cols-1 gap-3 p-3", !advancedOpen && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
           <div
-            className={cn("rounded-xl p-3", advancedOpen && "overflow-y-auto max-h-[75vh]")}
+            className={cn("rounded-xl p-3", advancedOpen && "lg:max-h-[75vh] lg:overflow-y-auto")}
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <GenerateContentPanel persona={persona} advancedOpen={advancedOpen} onAdvancedChange={setAdvancedOpen} />
           </div>
           <div
-            className={cn("rounded-xl p-3", advancedOpen && "max-h-[75vh] overflow-y-auto")}
+            className={cn("rounded-xl p-3", advancedOpen && "lg:max-h-[75vh] lg:overflow-y-auto")}
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <div className="mb-2 flex items-center gap-2">
@@ -1635,6 +1659,227 @@ function PersonaWorkspace({
   );
 }
 
+function DestinationHeading({
+  eyebrow,
+  title,
+  description,
+  action,
+}: {
+  eyebrow: string;
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-violet-400/15 bg-gradient-to-r from-violet-600/10 via-[#101322] to-fuchsia-500/[0.04] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-violet-300">{eyebrow}</p>
+        <h2 className="mt-1 text-xl font-semibold text-white sm:text-2xl">{title}</h2>
+        <p className="mt-1 max-w-3xl text-[12px] leading-relaxed text-slate-400 sm:text-[13px]">{description}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+
+function CreatorOsEmptyState({
+  icon: Icon,
+  title,
+  description,
+  examples,
+}: {
+  icon: typeof Boxes;
+  title: string;
+  description: string;
+  examples?: string[];
+}) {
+  return (
+    <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-5 sm:p-7" data-testid="creator-foundation-state">
+      <div className="flex max-w-2xl flex-col items-start gap-3">
+        <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-violet-400/20 bg-violet-500/10 text-violet-300">
+          <Icon className="h-5 w-5" />
+        </span>
+        <div>
+          <h3 className="text-base font-semibold text-slate-100">{title}</h3>
+          <p className="mt-1 text-[13px] leading-relaxed text-slate-400">{description}</p>
+        </div>
+        {examples && (
+          <div className="flex flex-wrap gap-2">
+            {examples.map((example) => (
+              <span key={example} className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-[10px] text-slate-400">
+                {example}
+              </span>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          disabled
+          aria-describedby="creator-foundation-explanation"
+          className="mt-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] font-medium text-slate-500 disabled:cursor-not-allowed"
+        >
+          Not available in this release
+        </button>
+        <p id="creator-foundation-explanation" className="text-[10px] text-slate-600">
+          This foundation has no current server route and cannot save, run, publish, or spend.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function OverviewPanel({
+  activePersona,
+  activeStatus,
+  personas,
+  providers,
+  jobs,
+  loading,
+  error,
+  onNavigate,
+}: {
+  activePersona: ImageProvider | null;
+  activeStatus: PersonaStatus | null;
+  personas: ImageProvider[];
+  providers: ImageProvider[];
+  jobs: LoraTrainingJob[];
+  loading: boolean;
+  error: boolean;
+  onNavigate: (destination: CreatorOsDestination) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex min-h-56 items-center justify-center gap-2 rounded-2xl border border-slate-800 bg-[#0c1019] text-sm text-slate-400" data-testid="creator-overview-loading">
+        <Loader2 className="h-4 w-4 animate-spin text-violet-300" /> Loading Creator OS data…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded-2xl border border-red-400/25 bg-red-500/[0.06] p-5" data-testid="creator-overview-error">
+        <div className="flex items-center gap-2 text-sm font-semibold text-red-200"><TriangleAlert className="h-4 w-4" /> Creator data could not be loaded</div>
+        <p className="mt-2 text-[12px] text-red-200/70">No provider, persona, job, or asset totals are being inferred while the request is unavailable.</p>
+      </div>
+    );
+  }
+  if (!activePersona || !activeStatus) {
+    return (
+      <div className="rounded-2xl border border-dashed border-slate-700 bg-[#0c1019] p-8 text-center" data-testid="creator-overview-empty">
+        <CircleUserRound className="mx-auto h-8 w-8 text-slate-600" />
+        <h3 className="mt-3 text-sm font-semibold text-slate-200">No personas yet</h3>
+        <p className="mt-1 text-[12px] text-slate-500">Create a persona draft to begin. No generation or training will start automatically.</p>
+      </div>
+    );
+  }
+
+  const readyPersonas = personas.filter((persona) => personaStatus(persona, jobs.find((job) => job.personaId === persona.id)).ready).length;
+  const activeTrainingJobs = jobs.filter((job) => !["ready", "failed"].includes(job.status)).length;
+  return (
+    <div className="space-y-3" data-testid="creator-overview">
+      <DestinationHeading
+        eyebrow="Creator command center"
+        title={`Welcome back — ${activePersona.name} is selected`}
+        description="Continue from real persona, provider, training, and asset data. Campaign, approval, and spend totals stay absent until backed by current routes."
+        action={(
+          <button type="button" onClick={() => onNavigate("create")} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 px-4 text-[12px] font-semibold text-white shadow-lg shadow-violet-950/40">
+            <Sparkles className="h-4 w-4" /> Create content
+          </button>
+        )}
+      />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {[
+          ["Active persona", activePersona.name, activeStatus.label, CircleUserRound],
+          ["Personas ready", `${readyPersonas} of ${personas.length}`, "From current persona state", ShieldCheck],
+          ["Provider entries", String(providers.length), "Configured catalog records", Server],
+          ["Training in progress", String(activeTrainingJobs), jobs.length ? `${jobs.length} job records` : "No training jobs", Clock3],
+        ].map(([label, value, note, Icon]) => (
+          <div key={String(label)} className="rounded-2xl border border-slate-800 bg-gradient-to-b from-[#121725] to-[#0b0f17] p-4">
+            <div className="flex items-center justify-between"><span className="text-[10px] uppercase tracking-[0.14em] text-slate-500">{String(label)}</span><Icon className="h-4 w-4 text-violet-400" /></div>
+            <p className="mt-3 truncate text-lg font-semibold text-slate-100">{String(value)}</p>
+            <p className="mt-0.5 text-[10px] text-slate-500">{String(note)}</p>
+          </div>
+        ))}
+      </div>
+      <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3 sm:p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <div><h3 className="text-sm font-semibold text-slate-100">Recent assets</h3><p className="text-[10px] text-slate-500">Loaded from {activePersona.name}’s real gallery</p></div>
+          <button type="button" onClick={() => onNavigate("library")} className="inline-flex items-center gap-1 text-[11px] font-medium text-violet-300">Open Library <ArrowRight className="h-3 w-3" /></button>
+        </div>
+        <ContentGallery persona={activePersona} />
+      </section>
+    </div>
+  );
+}
+
+function PersonasPanel({ persona, status, onTrain }: { persona: ImageProvider; status: PersonaStatus; onTrain: () => void }) {
+  const [tab, setTab] = useState<"profile" | "knowledge" | "settings">("profile");
+  return (
+    <div className="space-y-3" data-testid="creator-personas">
+      <DestinationHeading
+        eyebrow="Persona lab"
+        title={`${persona.name} — Persona Lab`}
+        description="Edit the existing identity definition and knowledge, inspect settings, or enter the current hosted training workflow. No rights or consent checklist is added."
+        action={<button type="button" onClick={onTrain} className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-violet-400/30 bg-violet-500/15 px-4 text-[12px] font-semibold text-violet-100"><GraduationCap className="h-4 w-4" /> Training options</button>}
+      />
+      <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0c1019]">
+        <div role="tablist" aria-label="Persona Lab sections" className="flex overflow-x-auto border-b border-slate-800 px-3">
+          {(["profile", "knowledge", "settings"] as const).map((item) => (
+            <button key={item} type="button" role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={cn("min-h-11 shrink-0 border-b-2 px-3 text-[12px] font-medium capitalize", tab === item ? "border-violet-400 text-white" : "border-transparent text-slate-500")}>{item}</button>
+          ))}
+        </div>
+        {tab === "profile" ? <ProfileTab persona={persona} /> : tab === "knowledge" ? <KnowledgeTab persona={persona} /> : <SettingsTab persona={persona} />}
+      </section>
+      <p className="px-1 text-[10px] text-slate-600">Current state: {status.label}. Persona releases, evaluations, and immutable lineage remain later-phase until backed by current routes.</p>
+    </div>
+  );
+}
+
+function LibraryPanel({ persona }: { persona: ImageProvider }) {
+  return (
+    <div className="space-y-3" data-testid="creator-library">
+      <DestinationHeading eyebrow="Template & asset library" title="Build from what already works" description="Browse the preserved template catalog, choose a compatible tool/model/persona, and load an editable draft. Selecting a template never submits a job or overwrites the template." />
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+        <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
+          <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">All templates</h3><p className="text-[10px] text-slate-500">Current SFW/18+ and tool classifications are preserved.</p></div>
+          <PersonaWorkbench persona={persona} onBatchStarted={() => {}} defaultTab="library" />
+        </section>
+        <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
+          <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">Persona assets</h3><p className="text-[10px] text-slate-500">Original gallery records for {persona.name}</p></div>
+          <ContentGallery persona={persona} />
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function TrainingPanel({ personas, jobs, jobsByPersona, onTrain }: { personas: ImageProvider[]; jobs: LoraTrainingJob[]; jobsByPersona: Map<string, LoraTrainingJob>; onTrain: (persona: ImageProvider) => void }) {
+  return (
+    <div className="space-y-3" data-testid="creator-training">
+      <DestinationHeading eyebrow="Hosted training" title="Persona training" description="Use the existing guarded hosted-training entry point and current provider capability data." />
+      <div className="grid gap-3 md:grid-cols-2">
+        {personas.map((persona) => {
+          const status = personaStatus(persona, jobsByPersona.get(persona.id));
+          return <div key={persona.id} className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-[#0c1019] p-4"><PersonaAvatar persona={persona} size={44} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-100">{persona.name}</p><p className="text-[11px]" style={{ color: status.color }}>{status.label}</p></div><button type="button" onClick={() => onTrain(persona)} className="rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[11px] font-medium text-violet-200">Open training</button></div>;
+        })}
+      </div>
+      {personas.length === 0 && <CreatorOsEmptyState icon={GraduationCap} title="No personas available for training" description="Create a persona draft first. This page will not create training data or call a provider on its own." />}
+      <p className="px-1 text-[10px] text-slate-600">{jobs.length} current training job record{jobs.length === 1 ? "" : "s"}.</p>
+    </div>
+  );
+}
+
+function JobsPanel({ jobs, personas }: { jobs: LoraTrainingJob[]; personas: ImageProvider[] }) {
+  const names = new Map(personas.map((persona) => [persona.id, persona.name]));
+  return (
+    <div className="space-y-3" data-testid="creator-jobs">
+      <DestinationHeading eyebrow="Operational truth" title="Jobs & Costs" description="Current training job records are shown below. Generation estimates stay in Create; a unified spend ledger is not claimed because this release has no current route for it." />
+      <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0c1019]">
+        {jobs.length === 0 ? <div className="p-8 text-center"><CircleDollarSign className="mx-auto h-7 w-7 text-slate-600" /><p className="mt-2 text-sm text-slate-300">No training job records</p><p className="mt-1 text-[11px] text-slate-500">Generation activity remains visible in its active Create batch and gallery.</p></div> : jobs.map((job) => <div key={job.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-800 p-4 last:border-0"><div><p className="text-[12px] font-medium text-slate-200">{names.get(job.personaId) ?? "Persona training"}</p><p className="mt-0.5 text-[10px] text-slate-500">Hosted training job</p></div><div className="text-right"><p className="text-[11px] font-semibold capitalize text-violet-300">{job.status}</p><p className="text-[10px] text-slate-500">{job.progress}%</p></div></div>)}
+      </section>
+    </div>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 /* Page                                                                       */
 /* -------------------------------------------------------------------------- */
@@ -1643,12 +1888,16 @@ export function ImageStudio() {
   const companyId = selectedCompanyId ?? null;
   const [searchParams] = useSearchParams();
   const deepLinkPersona = searchParams.get("persona");
+  const legacyToolTab = searchParams.get("tab");
 
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [destination, setDestination] = useState<CreatorOsDestination>(() =>
+    legacyToolTab && ["generate", "photoshoot", "undresser", "library"].includes(legacyToolTab)
+      ? "create"
+      : "overview",
+  );
   const [trainingPersona, setTrainingPersona] = useState<ImageProvider | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
-
-  const queryClient = useQueryClient();
 
   const providersQ = useQuery({
     queryKey: ["image-studio", "providers", companyId],
@@ -1701,17 +1950,25 @@ export function ImageStudio() {
   }, [personas, deepLinkPersona, activeId, jobsByPersona]);
 
   const activePersona = personas.find((p) => p.id === activeId) ?? null;
+  const activeStatus = activePersona
+    ? personaStatus(activePersona, jobsByPersona.get(activePersona.id))
+    : null;
 
   return (
     <div
-      className="flex min-h-full flex-col gap-3 p-4"
-      style={{ background: DS.canvas }}
+      className="min-h-full bg-[#060810] p-2 text-slate-100 sm:p-3 lg:p-4"
       data-pp-page-v2="ai-influencer-studio"
     >
+      <div className="grid min-w-0 overflow-hidden rounded-[22px] border border-violet-400/15 bg-[#090c14] shadow-2xl shadow-black/40 lg:grid-cols-[210px_minmax(0,1fr)]">
+        <aside className="border-b border-slate-800 bg-[#080b12] p-2.5 lg:border-b-0 lg:border-r lg:p-3">
+          <div className="mb-3 hidden items-center gap-2 px-2 lg:flex"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600"><Sparkles className="h-4 w-4" /></span><div><p className="text-[9px] uppercase tracking-[0.24em] text-violet-300">Olympus</p><p className="text-[11px] font-semibold text-white">Creator OS</p></div></div>
+          <CreatorOsNavigation active={destination} onNavigate={setDestination} />
+        </aside>
+        <main className="min-w-0 space-y-3 p-2.5 sm:p-3 lg:p-4">
       {/* Header — compact inline band (TYL-194 L1: ≤56px) */}
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
         <h1 className="text-[20px] font-semibold leading-tight" style={{ color: DS.text }}>
-          AI Influencer Studio
+          AI Influencer Studio — Creator OS
         </h1>
         <p className="text-[12px]" style={{ color: DS.textMuted }}>
           Create and run AI personas — images and video for social content.
@@ -1756,14 +2013,46 @@ export function ImageStudio() {
       </section>
 
       {/* Selected persona workspace */}
-      {activePersona && (
+      {destination === "overview" && (
+        <OverviewPanel
+          activePersona={activePersona}
+          activeStatus={activeStatus}
+          personas={personas}
+          providers={providers}
+          jobs={jobsQ.data?.jobs ?? []}
+          loading={providersQ.isLoading || jobsQ.isLoading}
+          error={providersQ.isError || jobsQ.isError}
+          onNavigate={setDestination}
+        />
+      )}
+
+      {destination !== "overview" && !activePersona && (
+        <CreatorOsEmptyState icon={CircleUserRound} title="Select or create a persona" description="This destination needs a current persona. Creating a draft does not start a hosted job." />
+      )}
+
+      {destination === "create" && activePersona && activeStatus && (
+        <div className="space-y-3" data-testid="creator-create">
+          <DestinationHeading eyebrow="Creation workspace" title={`Create with ${activePersona.name}`} description="Guided generation, advanced structured controls, PhotoShoot, Undresser, capability and cost display, template handoff, and the real gallery remain intact." />
         <PersonaWorkspace
           key={activePersona.id}
           persona={activePersona}
-          status={personaStatus(activePersona, jobsByPersona.get(activePersona.id))}
+          status={activeStatus}
           companyId={companyId ?? ""}
         />
+        </div>
       )}
+
+      {destination === "personas" && activePersona && activeStatus && <PersonasPanel key={activePersona.id} persona={activePersona} status={activeStatus} onTrain={() => setTrainingPersona(activePersona)} />}
+      {destination === "library" && activePersona && <LibraryPanel key={activePersona.id} persona={activePersona} />}
+      {destination === "training" && activePersona && <TrainingPanel personas={personas} jobs={jobsQ.data?.jobs ?? []} jobsByPersona={jobsByPersona} onTrain={setTrainingPersona} />}
+      {destination === "jobs" && activePersona && <JobsPanel jobs={jobsQ.data?.jobs ?? []} personas={personas} />}
+      {destination === "flows" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Provider-neutral recipes" title="Creative Flows" description="A typed reusable recipe foundation inspired by the selected flow-builder concept." /><CreatorOsEmptyState icon={Boxes} title="Flow execution is not available yet" description="This UI has no route to run, rerun, approve, or publish a flow." examples={["Product reel", "Talking avatar", "Story carousel", "Lifestyle photo set", "Social post package"]} /></div>}
+      {destination === "campaigns" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Goals, plans, and optional publishing dates" title="Campaigns" description="Campaigns intentionally have no deadlines." /><CreatorOsEmptyState icon={Megaphone} title="No campaign store is connected" description="This foundation does not persist fictional campaigns, budgets, calendars, or performance numbers." /></div>}
+      {destination === "review" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Approval workspace" title="Review" description="Compare and approval workflows will appear only when backed by durable review records." /><CreatorOsEmptyState icon={GalleryHorizontalEnd} title="No review queue route is available" description="No approval or rejection state is fabricated here." /></div>}
+      {destination === "social" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Publishing foundation" title="Social" description="Account connections, scheduling, publishing, engagement, and analytics remain approval-gated later-phase work." /><CreatorOsEmptyState icon={Send} title="Social publishing is unavailable" description="No account is shown as connected and no post can be scheduled or published from this foundation." /></div>}
+
+        </main>
+      </div>
 
       {trainingPersona && (
         <TrainPersonaModal

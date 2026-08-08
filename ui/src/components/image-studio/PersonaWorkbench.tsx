@@ -744,6 +744,7 @@ export function PersonaWorkbench({
   persona,
   onBatchStarted,
   syncTabToUrl = false,
+  defaultTab = "generate",
 }: {
   persona: ImageProvider;
   onBatchStarted: (batchId: string) => void;
@@ -751,6 +752,8 @@ export function PersonaWorkbench({
       the URL. Only the auto-expanded card opts in, so multiple open workbenches
       don't fight over the query param. */
   syncTabToUrl?: boolean;
+  /** Initial tool for composed surfaces such as the Creator OS Library. */
+  defaultTab?: WorkbenchTab;
 }) {
   const { selectedCompany } = useCompany();
   const rating = personaRating(persona);
@@ -772,7 +775,7 @@ export function PersonaWorkbench({
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTabState] = useState<WorkbenchTab>(() => {
     const fromUrl = searchParams.get("tab");
-    return syncTabToUrl && isWorkbenchTab(fromUrl) ? fromUrl : "generate";
+    return syncTabToUrl && isWorkbenchTab(fromUrl) ? fromUrl : defaultTab;
   });
   const [showExplicit, setShowExplicit] = useState(rating === "explicit");
   const [gender, setGender] = useState<"female" | "male">("female");
@@ -782,7 +785,8 @@ export function PersonaWorkbench({
   const actionsRef = useRef<WorkbenchActions>({ surpriseMe: () => {}, reset: () => {}, applyTemplate: () => {} });
 
   useEffect(() => {
-    setTabState("generate");
+    const fromUrl = searchParams.get("tab");
+    setTabState(syncTabToUrl && isWorkbenchTab(fromUrl) ? fromUrl : defaultTab);
     setShowExplicit(rating === "explicit");
     setGender("female");
     setLibNotice(null);
@@ -792,7 +796,7 @@ export function PersonaWorkbench({
       reset: () => {},
       applyTemplate: () => {},
     };
-  }, [persona.id, rating]);
+  }, [persona.id, rating, defaultTab, syncTabToUrl]);
 
   function selectTab(next: WorkbenchTab) {
     setTabState(next);
