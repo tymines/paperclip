@@ -2029,7 +2029,10 @@ export function ImageStudio() {
       className="min-h-full bg-[#060810] p-2 text-slate-100 sm:p-3 lg:p-4"
       data-pp-page-v2="ai-influencer-studio"
     >
-      <div className="grid min-w-0 overflow-hidden rounded-[22px] border border-violet-400/15 bg-[#090c14] shadow-2xl shadow-black/40 lg:grid-cols-[210px_minmax(0,1fr)]">
+      <div
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden rounded-[22px] border border-violet-400/15 bg-[#090c14] shadow-2xl shadow-black/40 lg:grid-cols-[210px_minmax(0,1fr)]"
+        data-testid="creator-os-shell"
+      >
         <aside className="border-b border-slate-800 bg-[#080b12] p-2.5 lg:border-b-0 lg:border-r lg:p-3">
           <div className="mb-3 hidden items-center gap-2 px-2 lg:flex"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600"><Sparkles className="h-4 w-4" /></span><div><p className="text-[9px] uppercase tracking-[0.24em] text-violet-300">Olympus</p><p className="text-[11px] font-semibold text-white">Creator OS</p></div></div>
           <CreatorOsNavigation active={destination} onNavigate={setDestination} />
