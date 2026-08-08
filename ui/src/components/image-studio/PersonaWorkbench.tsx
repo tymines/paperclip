@@ -777,6 +777,8 @@ export function PersonaWorkbench({
   const [showExplicit, setShowExplicit] = useState(rating === "explicit");
   const [gender, setGender] = useState<"female" | "male">("female");
   const [libNotice, setLibNotice] = useState<string | null>(null);
+  const [photoShootTemplate, setPhotoShootTemplate] = useState<{ id: string; requestId: number } | null>(null);
+  const photoShootTemplateRequestRef = useRef(0);
   const actionsRef = useRef<WorkbenchActions>({ surpriseMe: () => {}, reset: () => {}, applyTemplate: () => {} });
 
   useEffect(() => {
@@ -784,6 +786,7 @@ export function PersonaWorkbench({
     setShowExplicit(rating === "explicit");
     setGender("female");
     setLibNotice(null);
+    setPhotoShootTemplate(null);
     actionsRef.current = {
       surpriseMe: () => {},
       reset: () => {},
@@ -812,8 +815,10 @@ export function PersonaWorkbench({
       selectTab("generate");
       actionsRef.current.applyTemplate(template, apply);
     } else if (apply.tool === "photoshoot") {
+      photoShootTemplateRequestRef.current += 1;
+      setPhotoShootTemplate({ id: template.id, requestId: photoShootTemplateRequestRef.current });
       selectTab("photoshoot");
-      setLibNotice(`Loaded "${template.name}" intent — pick PhotoShoot categories to fire it.`);
+      setLibNotice(`Loaded "${template.name}" with 5 images. Review the selection, then click Generate when ready.`);
     } else {
       setLibNotice(`"${template.name}" targets ${apply.tool.replace(/_/g, " ")} — prompt is ready for that surface.`);
     }
@@ -865,6 +870,15 @@ export function PersonaWorkbench({
         </div>
       </div>
 
+      {libNotice && (
+        <div
+          className="mb-3 rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+          data-testid="library-notice"
+        >
+          {libNotice}
+        </div>
+      )}
+
       {/* Generate-only secondary actions. */}
       {tab === "generate" && (
         <div className="mb-3 flex items-center gap-1.5">
@@ -898,7 +912,13 @@ export function PersonaWorkbench({
           <p className="text-[11px] text-muted-foreground">Pick categories + counts — they all fire as one batch.</p>
           <GenderFilter value={gender} onChange={setGender} />
         </div>
-        <PhotoShootCategoryGrid persona={persona} showExplicit={showExplicit} gender={gender} onBatchStarted={onBatchStarted} />
+        <PhotoShootCategoryGrid
+          persona={persona}
+          showExplicit={showExplicit}
+          gender={gender}
+          onBatchStarted={onBatchStarted}
+          initialTemplate={photoShootTemplate}
+        />
       </div>
       {tab === "undresser" && (
         <UndresserInline
@@ -914,14 +934,6 @@ export function PersonaWorkbench({
           <p className="text-[11px] text-muted-foreground">
             Every template across all tools. Click one, pick a model, and it runs on the matching tab.
           </p>
-          {libNotice && (
-            <div
-              className="rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
-              data-testid="library-notice"
-            >
-              {libNotice}
-            </div>
-          )}
           <UnifiedLibrary personas={[persona]} onApply={applyLibraryTemplate} />
         </div>
       )}
