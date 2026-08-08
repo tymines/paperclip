@@ -17,6 +17,7 @@ import {
   type GenerationJob,
   type ContentIdea,
 } from "../api/imageStudio";
+import { ApiError } from "../api/client";
 import { useCompany } from "../context/CompanyContext";
 import { useSearchParams } from "@/lib/router";
 import { relativeTime } from "../lib/utils";
@@ -388,7 +389,7 @@ function BatchProgress({
   );
 }
 
-function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onAdvancedChange }: { persona: ImageProvider; advancedOpen?: boolean; onAdvancedChange?: (open: boolean) => void }) {
+export function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onAdvancedChange }: { persona: ImageProvider; advancedOpen?: boolean; onAdvancedChange?: (open: boolean) => void }) {
   const queryClient = useQueryClient();
   const [mode, setMode] = useState<"image" | "video">("image");
   const [prompt, setPrompt] = useState("");
@@ -424,7 +425,10 @@ function GenerateContentPanel({ persona, advancedOpen: externalAdvancedOpen, onA
   const labelCls = "mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.1em]";
 
   return (
-    <div className="flex flex-col gap-3">
+    <div
+      className="flex flex-col gap-3 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-0"
+      data-testid="generate-content-panel"
+    >
       <SectionLabel>Generate Content</SectionLabel>
 
       {/* Image / Video toggle */}
@@ -709,7 +713,7 @@ function isVideo(g: PersonaGeneration): boolean {
   return /\.(mp4|webm|mov)$/i.test(g.imagePath ?? "");
 }
 
-function ContentGallery({ persona }: { persona: ImageProvider }) {
+export function ContentGallery({ persona }: { persona: ImageProvider }) {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState<GalleryFilter>("all");
   const [newestFirst, setNewestFirst] = useState(true);
@@ -854,6 +858,7 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
                 key={g.id}
                 type="button"
                 onClick={() => setSelected(g)}
+                data-testid={`gallery-item-${g.id}`}
                 className="group relative overflow-hidden rounded-[14px]"
                 style={{
                   border: `1px solid ${DS.border}`,
@@ -862,13 +867,26 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
                 }}
                 title={g.prompt ?? undefined}
               >
-                <img
-                  src={uploadUrl(g.thumbnailPath ?? g.imagePath)}
-                  alt={g.prompt ?? "generation"}
-                  loading="lazy"
-                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                  style={view === "list" ? { height: 64, width: 64, borderRadius: 12 } : undefined}
-                />
+                {video ? (
+                  <video
+                    src={uploadUrl(g.imagePath)}
+                    poster={g.thumbnailPath ? uploadUrl(g.thumbnailPath) : undefined}
+                    aria-label={g.prompt ?? "video generation"}
+                    muted
+                    playsInline
+                    preload={g.thumbnailPath ? "none" : "metadata"}
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    style={view === "list" ? { height: 64, width: 64, borderRadius: 12 } : undefined}
+                  />
+                ) : (
+                  <img
+                    src={uploadUrl(g.thumbnailPath ?? g.imagePath)}
+                    alt={g.prompt ?? "generation"}
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                    style={view === "list" ? { height: 64, width: 64, borderRadius: 12 } : undefined}
+                  />
+                )}
                 {/* tag */}
                 <span
                   className="absolute left-1.5 top-1.5 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
@@ -923,6 +941,7 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
           className="fixed inset-0 z-50 flex items-center justify-center p-6"
           style={{ background: "rgba(6,9,15,0.8)" }}
           onClick={() => setSelected(null)}
+          data-testid="gallery-viewer"
         >
           <div
             className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-2xl"
@@ -930,11 +949,25 @@ function ContentGallery({ persona }: { persona: ImageProvider }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ background: DS.surface }}>
-              <img
-                src={uploadUrl(selected.imagePath)}
-                alt={selected.prompt ?? "generation"}
-                className="mx-auto max-h-[55vh] w-auto object-contain"
-              />
+              {isVideo(selected) ? (
+                <video
+                  src={uploadUrl(selected.imagePath)}
+                  poster={selected.thumbnailPath ? uploadUrl(selected.thumbnailPath) : undefined}
+                  aria-label={selected.prompt ?? "video generation"}
+                  controls
+                  playsInline
+                  preload="metadata"
+                  className="mx-auto max-h-[55vh] w-auto object-contain"
+                  data-testid="gallery-viewer-video"
+                />
+              ) : (
+                <img
+                  src={uploadUrl(selected.imagePath)}
+                  alt={selected.prompt ?? "generation"}
+                  className="mx-auto max-h-[55vh] w-auto object-contain"
+                  data-testid="gallery-viewer-image"
+                />
+              )}
             </div>
             <div className="flex flex-col gap-3 p-4">
               {selected.prompt && (
@@ -1074,13 +1107,7 @@ function KnowledgeTab({ persona }: { persona: ImageProvider }) {
   );
 }
 
-function SettingsTab({
-  persona,
-  companyId,
-}: {
-  persona: ImageProvider;
-  companyId: string;
-}) {
+export function SettingsTab({ persona }: { persona: ImageProvider }) {
   const queryClient = useQueryClient();
   const favMut = useMutation({
     mutationFn: (fav: boolean) => imageStudioApi.updatePersona(persona.id, { is_favorite: fav }),
@@ -1127,16 +1154,30 @@ function SettingsTab({
           {persona.isFavorite ? "Favorited" : "Mark favorite"}
         </button>
       </div>
-
-      <p className="text-[11px]" style={{ color: DS.textFaint }}>
-        Company {companyId} · persona id {persona.id}
-      </p>
     </div>
   );
 }
 
+type ContentGeneratorUnavailableBody = {
+  code?: unknown;
+  retryable?: unknown;
+};
+
+function contentGenerationFailureMessage(error: unknown): string {
+  if (error instanceof ApiError) {
+    const body = error.body as ContentGeneratorUnavailableBody | null;
+    if (body?.code === "content_generator_unavailable") {
+      if (body.retryable === true) {
+        return "Content idea generation is temporarily unavailable. Your existing ideas are preserved. Try again shortly.";
+      }
+      return "Content idea generation is unavailable because no generator is configured. Your existing ideas are preserved. Configure a content generator, then try again.";
+    }
+  }
+  return error instanceof Error ? error.message : "Failed to generate ideas.";
+}
+
 /* Influencer Studio — Content generation + draft scheduling tab */
-function ContentPanel({
+export function ContentPanel({
   persona,
   companyId,
 }: {
@@ -1204,6 +1245,7 @@ function ContentPanel({
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="e.g., New collection launch, behind the scenes, Q&A..."
+            data-testid="content-topic-input"
             className="min-w-0 flex-1 rounded-lg px-3 py-2 text-[13px] outline-none"
             style={{
               background: DS.surface,
@@ -1218,6 +1260,7 @@ function ContentPanel({
             type="button"
             onClick={() => generateMut.mutate()}
             disabled={generateMut.isPending || !topic.trim()}
+            data-testid="content-generate-submit"
             className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-[13px] font-medium transition-opacity disabled:opacity-50"
             style={{ background: DS.primary, color: "#fff" }}
           >
@@ -1230,9 +1273,13 @@ function ContentPanel({
           </button>
         </div>
         {generateMut.isError && (
-          <p className="flex items-center gap-1.5 text-[12px]" style={{ color: DS.critical }}>
+          <p
+            className="flex items-center gap-1.5 text-[12px]"
+            style={{ color: DS.critical }}
+            data-testid="content-generation-error"
+          >
             <TriangleAlert className="h-3 w-3" />
-            {(generateMut.error as Error)?.message ?? "Failed to generate ideas."}
+            {contentGenerationFailureMessage(generateMut.error)}
           </p>
         )}
       </div>
@@ -1558,7 +1605,7 @@ function PersonaWorkspace({
       ) : tab === "content" ? (
         <ContentPanel persona={persona} companyId={companyId} status={status} />
       ) : (
-        <SettingsTab persona={persona} companyId={companyId} />
+        <SettingsTab persona={persona} />
       )}
     </section>
   );
@@ -1687,6 +1734,7 @@ export function ImageStudio() {
       {/* Selected persona workspace */}
       {activePersona && (
         <PersonaWorkspace
+          key={activePersona.id}
           persona={activePersona}
           status={personaStatus(activePersona, jobsByPersona.get(activePersona.id))}
           companyId={companyId ?? ""}
