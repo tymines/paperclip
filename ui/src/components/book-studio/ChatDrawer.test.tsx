@@ -137,6 +137,16 @@ describe("ChatDrawer v4", () => {
     expect(fetchMock.mock.calls[1][1].method).toBe("POST");
   });
 
+  it("shows an accessible animated Calliope working state while a turn is pending", async () => {
+    fetchMock.mockResolvedValueOnce(response({ messages: [turn({ status: "pending", reply: "" })] }));
+    await render(); await flush();
+    const status = container.querySelector<HTMLElement>('[role="status"][data-calliope-working]');
+    expect(status?.getAttribute("aria-label")).toBe("Calliope is thinking");
+    expect(status?.textContent).toContain("Working on your message");
+    expect(status?.querySelector(".animate-pulse")).not.toBeNull();
+    expect(container.querySelector('[aria-live="polite"]')?.getAttribute("aria-busy")).toBe("true");
+  });
+
   it("does not offer a retry for an indeterminate delegation", async () => {
     fetchMock.mockResolvedValueOnce(response({ messages: [turn({ status: "failed", reply: "", retryable: false, error: "lane outcome unknown" })] }));
     await render();
