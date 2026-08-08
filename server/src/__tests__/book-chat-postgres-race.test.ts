@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
-import { createDb, storyBibleChatMessages, type Db } from "@paperclipai/db";
-import { claimBrainstormRetry, persistBrainstormFailure } from "../routes/book-studio.js";
+import { books, createDb, jarvisDelegations, storyBibleChatMessages, type Db } from "@paperclipai/db";
+import { claimBrainstormRetry, persistBrainstormCompletion, persistBrainstormFailure } from "../routes/book-studio.js";
+import { reconcileBookChatTurns } from "../services/book-chat-recovery.js";
 
 const adminUrl = process.env.BOOK_STUDIO_POSTGRES_TEST_URL;
 const runPostgres = describe.skipIf(!adminUrl);
+const companyId = "00000000-0000-4000-8000-000000000001";
 const bookId = "10000000-0000-4000-8000-000000000001";
 const turnId = "20000000-0000-4000-8000-000000000001";
 const userMessageId = "30000000-0000-4000-8000-000000000001";
@@ -53,8 +55,29 @@ runPostgres("Book Studio chat serialization (real PostgreSQL 17)", { timeout: 30
     racer = createDb(testUrl);
     observer = createDb(testUrl);
     await db.execute(sql.raw(`
-      create table story_bible_chat_messages (
+      create table books (
         id uuid primary key,
+        company_id uuid not null
+      );
+      create table jarvis_delegations (
+        id uuid primary key,
+        company_id uuid not null,
+        conversation_id uuid,
+        agent text not null,
+        task text not null,
+        status text not null default 'queued',
+        result text,
+        metadata jsonb,
+        worker_status text,
+        team_run_id uuid,
+        requested_by_actor_id text,
+        created_at timestamptz not null default now(),
+        completed_at timestamptz
+      )
+    `));
+    await db.execute(sql.raw(`
+      create table story_bible_chat_messages (
+        id uuid primary key default gen_random_uuid(),
         book_id uuid not null,
         turn_id uuid,
         role text not null,
@@ -74,10 +97,11 @@ runPostgres("Book Studio chat serialization (real PostgreSQL 17)", { timeout: 30
         unique (book_id, turn_id, role)
       )
     `));
+    await db.execute(sql`insert into books (id, company_id) values (${bookId}, ${companyId})`);
   });
 
   beforeEach(async () => {
-    await db.execute(sql.raw("truncate table story_bible_chat_messages"));
+    await db.execute(sql.raw("truncate table story_bible_chat_messages, jarvis_delegations"));
   });
 
   afterAll(async () => {
@@ -201,5 +225,68 @@ runPostgres("Book Studio chat serialization (real PostgreSQL 17)", { timeout: 30
     await expect(failure).resolves.toBe(false);
     const [row] = await db.select().from(storyBibleChatMessages).where(eq(storyBibleChatMessages.id, userMessageId));
     expect(row).toMatchObject({ status: "pending", dispatchAttemptId: nextAttemptId, delegationId: nextAttemptId, error: null });
+  });
+
+  it("leaves a just-completed delegation for the owning POST instead of racing it", async () => {
+    const createdAt = new Date("2026-08-08T00:00:00.000Z");
+    await insertTurn({ status: "pending", error: null, retryable: true, createdAt });
+    await db.insert(jarvisDelegations).values({
+      id: originalAttemptId,
+      companyId,
+      agent: "calliope",
+      task: "Answer the current Book Studio turn",
+      status: "completed",
+      result: "Calliope completed successfully.",
+      completedAt: new Date("2026-08-08T00:00:20.000Z"),
+    });
+
+    await expect(reconcileBookChatTurns(db, {
+      companyId,
+      bookId,
+      now: new Date("2026-08-08T00:01:00.000Z"),
+    })).resolves.toEqual({ reconciled: 0 });
+
+    await expect(persistBrainstormCompletion(db, {
+      companyId,
+      bookId,
+      turnId,
+      userMessageId,
+      actor: { actorType: "user", actorId: "board-user" },
+      authorization: null,
+      reply: "Calliope completed successfully.",
+      conversationId,
+      dispatchAttemptId: originalAttemptId,
+      delegationId: originalAttemptId,
+    })).resolves.toMatchObject({ reply: "Calliope completed successfully." });
+
+    const rows = await db.select().from(storyBibleChatMessages).where(eq(storyBibleChatMessages.turnId, turnId));
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.role === "user")).toMatchObject({ status: "completed", via: "calliope", error: null });
+    expect(rows.find((row) => row.role === "assistant")).toMatchObject({ status: "completed", via: "calliope", content: "Calliope completed successfully." });
+  });
+
+  it("restores a completed delegation result after genuine process-loss grace", async () => {
+    const createdAt = new Date("2026-08-08T00:00:00.000Z");
+    await insertTurn({ status: "pending", error: null, retryable: true, createdAt });
+    await db.insert(jarvisDelegations).values({
+      id: originalAttemptId,
+      companyId,
+      agent: "calliope",
+      task: "Answer the current Book Studio turn",
+      status: "completed",
+      result: "Recovered Calliope reply.",
+      completedAt: new Date("2026-08-08T00:00:20.000Z"),
+    });
+
+    await expect(reconcileBookChatTurns(db, {
+      companyId,
+      bookId,
+      now: new Date("2026-08-08T00:10:00.000Z"),
+    })).resolves.toEqual({ reconciled: 1 });
+
+    const rows = await db.select().from(storyBibleChatMessages).where(eq(storyBibleChatMessages.turnId, turnId));
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.role === "user")).toMatchObject({ status: "completed", via: "calliope", error: null });
+    expect(rows.find((row) => row.role === "assistant")).toMatchObject({ status: "completed", via: "calliope", content: "Recovered Calliope reply." });
   });
 });
