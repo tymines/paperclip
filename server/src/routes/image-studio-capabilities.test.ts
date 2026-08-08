@@ -50,7 +50,8 @@ function appFor(companyIds: string[]) {
     "/api",
     imageStudioCapabilitiesRouter([provider()], {
       loadPersona: vi.fn(async (companyId, personaId) =>
-        companyId === "company-1" && personaId === "persona-1"
+        companyId === "company-1" &&
+        (personaId === "persona-1" || personaId === "global-persona")
           ? {
               id: personaId,
               isGeneral: false,
@@ -94,6 +95,20 @@ describe("GET company Image Studio capabilities", () => {
       }),
     ]);
     expect(JSON.stringify(response.body)).not.toContain("must stay server-only");
+  });
+
+  it("accepts a company-authorized global built-in persona", async () => {
+    const response = await request(appFor(["company-1"]))
+      .get("/api/companies/company-1/image-studio/capabilities?personaId=global-persona")
+      .expect(200);
+
+    expect(response.body.capabilities).toEqual([
+      expect.objectContaining({
+        id: "general",
+        enabled: true,
+        identityMethod: "trained_persona_identity",
+      }),
+    ]);
   });
 
   it("rejects a board session without company access", async () => {

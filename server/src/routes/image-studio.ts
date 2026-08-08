@@ -15,7 +15,10 @@ import { assertCompanyAccess, getActorInfo } from "./authz.js";
 import { badRequest, notFound, serviceUnavailable } from "../errors.js";
 import { socialPosts } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
-import { generateContentIdeas } from "../services/influencer-studio/content-generator.js";
+import {
+  contentGeneratorUnavailablePayload,
+  generateContentIdeas,
+} from "../services/influencer-studio/content-generator.js";
 import { logActivity } from "../services/index.js";
 import { resolveUploadPath } from "../services/image-studio/uploads.js";
 import { logGenerationTickWarnings } from "../services/image-studio/generation-logging.js";
@@ -54,6 +57,7 @@ import {
 } from "../services/image-providers/index.js";
 import { imageStudioCapabilitiesRouter } from "../services/image-studio/capabilities-router.js";
 import type { CapabilityPersonaContext } from "../services/image-studio/capabilities.js";
+import { requireImageStudioAuthentication } from "../services/image-studio/route-auth.js";
 
 /** Load a global-or-company-scoped provider row by id. */
 async function loadProvider(db: Db, companyId: string, providerId: string) {
@@ -74,7 +78,7 @@ export interface ImageStudioRouteOptions {
   providers?: ImageProvider[];
 }
 
-/** Load persona capability context from this company only; never global/cross-company. */
+/** Load global or company-owned persona capability context; never cross-company. */
 async function loadCapabilityPersona(
   db: Db,
   companyId: string,
@@ -87,11 +91,20 @@ async function loadCapabilityPersona(
       status: imageProviders.status,
       endpoint: imageProviders.endpoint,
       attributes: imageProviders.attributes,
+      companyId: imageProviders.companyId,
     })
     .from(imageProviders)
-    .where(and(eq(imageProviders.id, personaId), eq(imageProviders.companyId, companyId)))
+    .where(
+      and(
+        eq(imageProviders.id, personaId),
+        or(eq(imageProviders.companyId, companyId), isNull(imageProviders.companyId)),
+      ),
+    )
     .limit(1);
   if (!row) return null;
+  // Retain a defensive ownership check even though the SQL predicate already
+  // prevents a company-scoped persona from crossing tenant boundaries.
+  if (row.companyId !== null && row.companyId !== companyId) return null;
   const isGeneral = row.attributes?.general === true;
   if (!isGeneral && row.type !== "local_lora") return null;
   return {
@@ -111,6 +124,7 @@ export function imageStudioRoutes(
   options: ImageStudioRouteOptions = {},
 ) {
   const router = Router();
+  router.use(requireImageStudioAuthentication);
   const capabilityProviders = options.providers ?? listProviders();
   router.use(
     imageStudioCapabilitiesRouter(capabilityProviders, {
@@ -1662,11 +1676,17 @@ export function imageStudioRoutes(
         contentGenRateMap.set(personaId, { count: 1, windowStart: now });
       }
 
-      const ideas = await generateContentIdeas(
-        { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },
-        topic.trim(),
-        Math.min(Math.max(1, count), 20),
-      );
+      let ideas;
+      try {
+        ideas = await generateContentIdeas(
+          { name: persona.name, bio: persona.bio, attributes: persona.attributes ?? {} },
+          topic.trim(),
+          Math.min(Math.max(1, count), 20),
+        );
+      } catch (error) {
+        res.status(503).json(contentGeneratorUnavailablePayload(error));
+        return;
+      }
 
       res.json({ ideas });
     } catch (err) {
