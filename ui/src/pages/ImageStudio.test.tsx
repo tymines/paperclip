@@ -9,6 +9,7 @@ import {
   ContentGallery,
   GenerateContentPanel,
   ImageStudio,
+  LibraryBatchTracker,
   SettingsTab,
 } from "./ImageStudio";
 import {
@@ -273,6 +274,14 @@ describe("Image Studio focused UI repairs", () => {
       container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-create"]')!.click();
     });
     expect(container.querySelector<HTMLTextAreaElement>('[data-testid="prompt-input"]')?.value).toBe("");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="advanced-toggle"]')!.click());
+    const generatorColumn = container.querySelector('[data-testid="generate-content-panel"]')?.parentElement;
+    const galleryColumn = generatorColumn?.nextElementSibling;
+    for (const column of [generatorColumn, galleryColumn]) {
+      expect(column?.className).not.toContain("max-h-[75vh]");
+      expect(column?.className).not.toContain("overflow-y-auto");
+    }
   });
 
   it("preserves generated ideas and explains typed generator unavailability", async () => {
@@ -331,6 +340,54 @@ describe("Image Studio focused UI repairs", () => {
       .toContain("Try again shortly.");
   });
 
+  it("tracks an explicit Library generation callback and refreshes the gallery without auto-submitting", async () => {
+    const generateSpy = vi.spyOn(imageStudioApi, "generateBatch");
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    vi.spyOn(imageStudioApi, "getBatch").mockResolvedValue({
+      jobs: [{
+        id: "job-1",
+        personaId: PERSONA_UUID,
+        promptTemplateId: "template-1",
+        batchId: "library-batch",
+        promptText: "Explicitly submitted Library draft",
+        loraScale: "0.8",
+        steps: 28,
+        guidance: null,
+        aspectRatio: "3:4",
+        seed: null,
+        status: "succeeded",
+        replicatePredictionId: "prediction-1",
+        outputPath: "images/result.png",
+        contentRating: "sfw",
+        costUsd: "0.04",
+        errorMessage: null,
+        createdAt: "2026-08-08T12:00:00.000Z",
+        completedAt: "2026-08-08T12:01:00.000Z",
+      }],
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <LibraryBatchTracker personaId={PERSONA_UUID}>
+            {(onBatchStarted) => (
+              <button type="button" data-testid="explicit-library-submit" onClick={() => onBatchStarted("library-batch")}>Submit approved draft</button>
+            )}
+          </LibraryBatchTracker>
+        </QueryClientProvider>,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="batch-progress"]')).toBeNull();
+    expect(generateSpy).not.toHaveBeenCalled();
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="explicit-library-submit"]')!.click());
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="batch-progress"]')?.textContent).toContain("Generated 1/1");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["image-studio", "generations", PERSONA_UUID] });
+    expect(generateSpy).not.toHaveBeenCalled();
+  });
+
   it.each(["generate", "photoshoot", "undresser", "library"])(
     "opens the legacy ?tab=%s deep link inside Create",
     async (legacyTab) => {
@@ -350,6 +407,50 @@ describe("Image Studio focused UI repairs", () => {
       expect(container.querySelector(`[data-testid="tab-${legacyTab}"]`)?.getAttribute("aria-selected")).toBe("true");
     },
   );
+
+  it("keeps provider, job, and gallery query failures distinct from zero-data states", async () => {
+    vi.spyOn(imageStudioApi, "listProviders").mockResolvedValue({ providers: [persona] });
+    vi.spyOn(imageStudioApi, "listTrainingJobs").mockRejectedValue(new Error("jobs unavailable"));
+    vi.spyOn(imageStudioApi, "listGenerations").mockRejectedValue(new Error("gallery unavailable"));
+    vi.spyOn(imageStudioApi, "listPromptTemplates").mockResolvedValue({ templates: [] });
+
+    await act(async () => {
+      root.render(<QueryClientProvider client={queryClient}><ImageStudio /></QueryClientProvider>);
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.querySelector('[data-testid="creator-overview-error"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="creator-overview-empty"]')).toBeNull();
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-training"]')!.click());
+    expect(container.querySelector('[data-testid="training-jobs-error"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("0 current training job records");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-jobs"]')!.click());
+    expect(container.querySelector('[data-testid="jobs-error"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("No training job records");
+
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="creator-nav-library"]')!.click());
+    await flushReact();
+    expect(container.querySelector('[data-testid="gallery-error"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("No generations yet");
+  });
+
+  it("does not turn a provider query failure into a zero-persona rail", async () => {
+    vi.spyOn(imageStudioApi, "listProviders").mockRejectedValue(new Error("providers unavailable"));
+    vi.spyOn(imageStudioApi, "listTrainingJobs").mockResolvedValue({ jobs: [] });
+
+    await act(async () => {
+      root.render(<QueryClientProvider client={queryClient}><ImageStudio /></QueryClientProvider>);
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(container.textContent).toContain("Personas unavailable");
+    expect(container.querySelector('[data-testid="creator-overview-error"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("No personas yet. Create a draft to begin.");
+  });
 
   it("renders video assets semantically and keeps image thumbnails and viewer behavior", async () => {
     const noThumbnailVideo = generation("video-no-thumb", "videos/no-thumb.mp4", null);

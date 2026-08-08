@@ -373,6 +373,23 @@ function BatchProgress({
     }
   }, [succeeded, personaId, queryClient]);
 
+  if (batchQ.isError) {
+    return (
+      <div
+        className="mt-3 flex items-center justify-between gap-2 rounded-xl px-3 py-2"
+        style={{ background: "rgba(255,91,91,0.08)", border: "1px solid rgba(255,91,91,0.25)" }}
+        data-testid="batch-progress-error"
+      >
+        <span className="flex items-center gap-2 text-[12px]" style={{ color: DS.critical }}>
+          <TriangleAlert className="h-3.5 w-3.5" /> Batch status unavailable
+        </span>
+        <button type="button" onClick={() => void batchQ.refetch()} className="text-[11px]" style={{ color: DS.text }}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div
       className="mt-3 flex items-center justify-between gap-2 rounded-xl px-3 py-2"
@@ -870,6 +887,27 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
         <div className="flex items-center gap-2 py-6 text-[13px]" style={{ color: DS.textMuted }}>
           <Loader2 className="h-4 w-4 animate-spin" />
           Loading gallery…
+        </div>
+      ) : genQ.isError ? (
+        <div
+          className="flex flex-col items-center justify-center gap-2 rounded-xl border border-red-400/25 bg-red-500/[0.06] px-4 py-6 text-center"
+          data-testid="gallery-error"
+        >
+          <TriangleAlert className="h-5 w-5" style={{ color: DS.critical }} />
+          <p className="text-[13px] font-medium" style={{ color: DS.text }}>
+            Gallery unavailable
+          </p>
+          <p className="text-[11px]" style={{ color: DS.textFaint }}>
+            Asset records could not be loaded. No empty gallery is being inferred.
+          </p>
+          <button
+            type="button"
+            onClick={() => void genQ.refetch()}
+            className="rounded-lg px-3 py-1.5 text-[11px] font-medium"
+            style={{ color: DS.text, border: `1px solid ${DS.border2}` }}
+          >
+            Try again
+          </button>
         </div>
       ) : visible.length === 0 ? (
         <div
@@ -1622,13 +1660,13 @@ function PersonaWorkspace({
       {tab === "studio" ? (
         <div className={cn("grid grid-cols-1 gap-3 p-3", !advancedOpen && "lg:grid-cols-[320px_minmax(0,1fr)]")}>
           <div
-            className={cn("rounded-xl p-3", advancedOpen && "lg:max-h-[75vh] lg:overflow-y-auto")}
+            className="rounded-xl p-3"
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <GenerateContentPanel persona={persona} advancedOpen={advancedOpen} onAdvancedChange={setAdvancedOpen} />
           </div>
           <div
-            className={cn("rounded-xl p-3", advancedOpen && "lg:max-h-[75vh] lg:overflow-y-auto")}
+            className="rounded-xl p-3"
             style={{ background: DS.surface2, border: `1px solid ${DS.border}` }}
           >
             <div className="mb-2 flex items-center gap-2">
@@ -1834,47 +1872,77 @@ function PersonasPanel({ persona, status, onTrain }: { persona: ImageProvider; s
   );
 }
 
+export function LibraryBatchTracker({
+  personaId,
+  children,
+}: {
+  personaId: string;
+  children: (onBatchStarted: (batchId: string) => void) => ReactNode;
+}) {
+  const [batchId, setBatchId] = useState<string | null>(null);
+  return (
+    <>
+      {batchId && (
+        <BatchProgress
+          personaId={personaId}
+          batchId={batchId}
+          onClear={() => setBatchId(null)}
+        />
+      )}
+      {children(setBatchId)}
+    </>
+  );
+}
+
 function LibraryPanel({ persona }: { persona: ImageProvider }) {
   return (
     <div className="space-y-3" data-testid="creator-library">
       <DestinationHeading eyebrow="Template & asset library" title="Build from what already works" description="Browse the preserved template catalog, choose a compatible tool/model/persona, and load an editable draft. Selecting a template never submits a job or overwrites the template." />
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
-          <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">All templates</h3><p className="text-[10px] text-slate-500">Current SFW/18+ and tool classifications are preserved.</p></div>
-          <PersonaWorkbench persona={persona} onBatchStarted={() => {}} defaultTab="library" />
-        </section>
-        <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
-          <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">Persona assets</h3><p className="text-[10px] text-slate-500">Original gallery records for {persona.name}</p></div>
-          <ContentGallery persona={persona} />
-        </section>
-      </div>
+      <LibraryBatchTracker personaId={persona.id}>
+        {(onBatchStarted) => (
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
+            <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
+              <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">All templates</h3><p className="text-[10px] text-slate-500">Current SFW/18+ and tool classifications are preserved.</p></div>
+              <PersonaWorkbench persona={persona} onBatchStarted={onBatchStarted} defaultTab="library" />
+            </section>
+            <section className="rounded-2xl border border-slate-800 bg-[#0c1019] p-3">
+              <div className="mb-2"><h3 className="text-sm font-semibold text-slate-100">Persona assets</h3><p className="text-[10px] text-slate-500">Original gallery records for {persona.name}</p></div>
+              <ContentGallery persona={persona} />
+            </section>
+          </div>
+        )}
+      </LibraryBatchTracker>
     </div>
   );
 }
 
-function TrainingPanel({ personas, jobs, jobsByPersona, onTrain }: { personas: ImageProvider[]; jobs: LoraTrainingJob[]; jobsByPersona: Map<string, LoraTrainingJob>; onTrain: (persona: ImageProvider) => void }) {
+function TrainingPanel({ personas, jobs, jobsByPersona, loading, error, onTrain }: { personas: ImageProvider[]; jobs: LoraTrainingJob[]; jobsByPersona: Map<string, LoraTrainingJob>; loading: boolean; error: boolean; onTrain: (persona: ImageProvider) => void }) {
   return (
     <div className="space-y-3" data-testid="creator-training">
       <DestinationHeading eyebrow="Hosted training" title="Persona training" description="Use the existing guarded hosted-training entry point and current provider capability data." />
-      <div className="grid gap-3 md:grid-cols-2">
+      {loading ? (
+        <div className="flex items-center gap-2 rounded-2xl border border-slate-800 bg-[#0c1019] p-5 text-[12px] text-slate-400" data-testid="training-jobs-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading training jobs…</div>
+      ) : error ? (
+        <div className="rounded-2xl border border-red-400/25 bg-red-500/[0.06] p-5" data-testid="training-jobs-error"><p className="flex items-center gap-2 text-[13px] font-medium text-red-200"><TriangleAlert className="h-4 w-4" /> Training jobs unavailable</p><p className="mt-1 text-[11px] text-red-200/70">No zero-job state is being inferred.</p></div>
+      ) : <><div className="grid gap-3 md:grid-cols-2">
         {personas.map((persona) => {
           const status = personaStatus(persona, jobsByPersona.get(persona.id));
           return <div key={persona.id} className="flex items-center gap-3 rounded-2xl border border-slate-800 bg-[#0c1019] p-4"><PersonaAvatar persona={persona} size={44} /><div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-100">{persona.name}</p><p className="text-[11px]" style={{ color: status.color }}>{status.label}</p></div><button type="button" onClick={() => onTrain(persona)} className="rounded-lg border border-violet-400/25 bg-violet-500/10 px-3 py-2 text-[11px] font-medium text-violet-200">Open training</button></div>;
         })}
       </div>
       {personas.length === 0 && <CreatorOsEmptyState icon={GraduationCap} title="No personas available for training" description="Create a persona draft first. This page will not create training data or call a provider on its own." />}
-      <p className="px-1 text-[10px] text-slate-600">{jobs.length} current training job record{jobs.length === 1 ? "" : "s"}.</p>
+      <p className="px-1 text-[10px] text-slate-600">{jobs.length} current training job record{jobs.length === 1 ? "" : "s"}.</p></>}
     </div>
   );
 }
 
-function JobsPanel({ jobs, personas }: { jobs: LoraTrainingJob[]; personas: ImageProvider[] }) {
+function JobsPanel({ jobs, personas, loading, error }: { jobs: LoraTrainingJob[]; personas: ImageProvider[]; loading: boolean; error: boolean }) {
   const names = new Map(personas.map((persona) => [persona.id, persona.name]));
   return (
     <div className="space-y-3" data-testid="creator-jobs">
       <DestinationHeading eyebrow="Operational truth" title="Jobs & Costs" description="Current training job records are shown below. Generation estimates stay in Create; a unified spend ledger is not claimed because this release has no current route for it." />
       <section className="overflow-hidden rounded-2xl border border-slate-800 bg-[#0c1019]">
-        {jobs.length === 0 ? <div className="p-8 text-center"><CircleDollarSign className="mx-auto h-7 w-7 text-slate-600" /><p className="mt-2 text-sm text-slate-300">No training job records</p><p className="mt-1 text-[11px] text-slate-500">Generation activity remains visible in its active Create batch and gallery.</p></div> : jobs.map((job) => <div key={job.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-800 p-4 last:border-0"><div><p className="text-[12px] font-medium text-slate-200">{names.get(job.personaId) ?? "Persona training"}</p><p className="mt-0.5 text-[10px] text-slate-500">Hosted training job</p></div><div className="text-right"><p className="text-[11px] font-semibold capitalize text-violet-300">{job.status}</p><p className="text-[10px] text-slate-500">{job.progress}%</p></div></div>)}
+        {loading ? <div className="flex items-center justify-center gap-2 p-8 text-[12px] text-slate-400" data-testid="jobs-loading"><Loader2 className="h-4 w-4 animate-spin" /> Loading job records…</div> : error ? <div className="p-8 text-center" data-testid="jobs-error"><TriangleAlert className="mx-auto h-7 w-7 text-red-300" /><p className="mt-2 text-sm text-red-200">Job records unavailable</p><p className="mt-1 text-[11px] text-red-200/70">No zero-job or zero-cost state is being inferred.</p></div> : jobs.length === 0 ? <div className="p-8 text-center"><CircleDollarSign className="mx-auto h-7 w-7 text-slate-600" /><p className="mt-2 text-sm text-slate-300">No training job records</p><p className="mt-1 text-[11px] text-slate-500">Generation activity remains visible in its active Create batch and gallery.</p></div> : jobs.map((job) => <div key={job.id} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-slate-800 p-4 last:border-0"><div><p className="text-[12px] font-medium text-slate-200">{names.get(job.personaId) ?? "Persona training"}</p><p className="mt-0.5 text-[10px] text-slate-500">Hosted training job</p></div><div className="text-right"><p className="text-[11px] font-semibold capitalize text-violet-300">{job.status}</p><p className="text-[10px] text-slate-500">{job.progress}%</p></div></div>)}
       </section>
     </div>
   );
@@ -1982,6 +2050,11 @@ export function ImageStudio() {
             <Loader2 className="h-4 w-4 animate-spin" />
             Loading personas…
           </div>
+        ) : providersQ.isError ? (
+          <div className="flex items-center gap-2 py-2 text-[13px]" style={{ color: DS.critical }} data-testid="persona-rail-error">
+            <TriangleAlert className="h-4 w-4" />
+            Personas unavailable — no zero-persona state is being inferred.
+          </div>
         ) : (
           <div className="flex items-center gap-2 overflow-x-auto pb-0.5 scrollbar-auto-hide">
             <span className="flex shrink-0 items-center gap-1.5 pl-1 pr-1">
@@ -2044,8 +2117,8 @@ export function ImageStudio() {
 
       {destination === "personas" && activePersona && activeStatus && <PersonasPanel key={activePersona.id} persona={activePersona} status={activeStatus} onTrain={() => setTrainingPersona(activePersona)} />}
       {destination === "library" && activePersona && <LibraryPanel key={activePersona.id} persona={activePersona} />}
-      {destination === "training" && activePersona && <TrainingPanel personas={personas} jobs={jobsQ.data?.jobs ?? []} jobsByPersona={jobsByPersona} onTrain={setTrainingPersona} />}
-      {destination === "jobs" && activePersona && <JobsPanel jobs={jobsQ.data?.jobs ?? []} personas={personas} />}
+      {destination === "training" && activePersona && <TrainingPanel personas={personas} jobs={jobsQ.data?.jobs ?? []} jobsByPersona={jobsByPersona} loading={jobsQ.isLoading} error={jobsQ.isError} onTrain={setTrainingPersona} />}
+      {destination === "jobs" && activePersona && <JobsPanel jobs={jobsQ.data?.jobs ?? []} personas={personas} loading={jobsQ.isLoading} error={jobsQ.isError} />}
       {destination === "flows" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Provider-neutral recipes" title="Creative Flows" description="A typed reusable recipe foundation inspired by the selected flow-builder concept." /><CreatorOsEmptyState icon={Boxes} title="Flow execution is not available yet" description="This UI has no route to run, rerun, approve, or publish a flow." examples={["Product reel", "Talking avatar", "Story carousel", "Lifestyle photo set", "Social post package"]} /></div>}
       {destination === "campaigns" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Goals, plans, and optional publishing dates" title="Campaigns" description="Campaigns intentionally have no deadlines." /><CreatorOsEmptyState icon={Megaphone} title="No campaign store is connected" description="This foundation does not persist fictional campaigns, budgets, calendars, or performance numbers." /></div>}
       {destination === "review" && activePersona && <div className="space-y-3"><DestinationHeading eyebrow="Approval workspace" title="Review" description="Compare and approval workflows will appear only when backed by durable review records." /><CreatorOsEmptyState icon={GalleryHorizontalEnd} title="No review queue route is available" description="No approval or rejection state is fabricated here." /></div>}
