@@ -435,6 +435,9 @@ describe("Image Studio focused UI repairs", () => {
     await flushReact();
     expect(container.querySelector('[data-testid="gallery-error"]')).not.toBeNull();
     expect(container.textContent).not.toContain("No generations yet");
+    expect(container.querySelector('[data-testid="filter-all"]')).toBeNull();
+    expect(container.querySelector('[data-testid="filter-test"]')).toBeNull();
+    expect(container.querySelector('[data-testid="filter-production"]')).toBeNull();
   });
 
   it("does not turn a provider query failure into a zero-persona rail", async () => {

@@ -844,6 +844,7 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
   return (
     <div className="flex h-full flex-col">
       {/* Single-row toolbar (TYL-194 L4): filters + sort + view in one ~32px strip */}
+      {!genQ.isLoading && !genQ.isError && (
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         {chip("all", "All", counts.all)}
         {chip("test", "Test", counts.test)}
@@ -882,6 +883,7 @@ export function ContentGallery({ persona }: { persona: ImageProvider }) {
           </div>
         </div>
       </div>
+      )}
 
       {genQ.isLoading ? (
         <div className="flex items-center gap-2 py-6 text-[13px]" style={{ color: DS.textMuted }}>
