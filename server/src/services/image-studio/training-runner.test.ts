@@ -2,11 +2,32 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrainingImagesArchive } from "./training-archive.js";
 
 const cleanupPaths: string[] = [];
+
+function readStoredZipEntries(archive: Buffer): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 4 <= archive.length && archive.readUInt32LE(offset) === 0x04034b50) {
+    const flags = archive.readUInt16LE(offset + 6);
+    const method = archive.readUInt16LE(offset + 8);
+    const compressedSize = archive.readUInt32LE(offset + 18);
+    const nameLength = archive.readUInt16LE(offset + 26);
+    const extraLength = archive.readUInt16LE(offset + 28);
+    expect(flags & 0x0800).toBe(0x0800);
+    expect(method).toBe(0);
+
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = archive.subarray(nameStart, nameStart + nameLength).toString("utf8");
+    entries.set(name, archive.subarray(dataStart, dataStart + compressedSize));
+    offset = dataStart + compressedSize;
+  }
+  expect(archive.readUInt32LE(offset)).toBe(0x02014b50);
+  return entries;
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -32,11 +53,11 @@ describe("createTrainingImagesArchive", () => {
     );
     cleanupPaths.push(archivePath);
 
-    const entries = unzipSync(new Uint8Array(await fs.readFile(archivePath)));
-    expect(Object.keys(entries)).toEqual(["portrait.JPG", "pose.png"]);
-    expect(Object.keys(entries).every((name) => !name.includes("/") && !name.includes("\\")))
+    const entries = readStoredZipEntries(await fs.readFile(archivePath));
+    expect([...entries.keys()]).toEqual(["portrait.JPG", "pose.png"]);
+    expect([...entries.keys()].every((name) => !name.includes("/") && !name.includes("\\")))
       .toBe(true);
-    expect(Buffer.from(entries["portrait.JPG"]!).toString("utf8")).toBe("portrait");
-    expect(Buffer.from(entries["pose.png"]!).toString("utf8")).toBe("pose");
+    expect(entries.get("portrait.JPG")?.toString("utf8")).toBe("portrait");
+    expect(entries.get("pose.png")?.toString("utf8")).toBe("pose");
   });
 });
