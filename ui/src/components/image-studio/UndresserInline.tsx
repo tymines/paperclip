@@ -12,36 +12,72 @@
  *
  * Paperclip v1 is single-operator (Tyler only) — no consent gate.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Upload, Loader2, Shirt } from "lucide-react";
 import { usePersistedModel } from "@/hooks/usePersistedModel";
-import { imageStudioApi, type ImageProvider } from "@/api/imageStudio";
+import {
+  imageStudioApi,
+  type ImageProvider,
+  type ImageStudioProviderCapabilityState,
+} from "@/api/imageStudio";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ModelPicker } from "./ModelPicker";
+import { findModel, type ImageModel } from "./models";
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("Unable to read the source image."));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function UndresserInline({
   persona,
   showExplicit,
+  models,
+  providers,
+  capabilitiesLoading,
 }: {
   persona: ImageProvider;
   showExplicit: boolean;
+  models: ImageModel[];
+  providers: ImageStudioProviderCapabilityState[];
+  capabilitiesLoading: boolean;
 }) {
-  const [fileName, setFileName] = useState<string>("");
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
   const [count, setCount] = useState(1);
   const [modelId, setModelId] = usePersistedModel(persona.id, "female_undresser");
   const [result, setResult] = useState<string | null>(null);
+  const configuredUndresserModel = (persona.defaultParams as Record<string, unknown> | null)?.undresser_model;
+  const backendConfigured = typeof configuredUndresserModel === "string" && configuredUndresserModel.trim().length > 0;
+  const selectedModel = findModel(modelId, models);
+  const selectedModelAvailable = models.some((model) => model.id === modelId && model.enabled);
+  const capabilitiesReady = !capabilitiesLoading && models.length > 0;
+
+  useEffect(() => {
+    if (models.length === 0 || selectedModelAvailable) return;
+    const fallback = models.find((model) => model.recommended && model.enabled) ?? models.find((model) => model.enabled);
+    if (fallback && fallback.id !== modelId) setModelId(fallback.id);
+  }, [modelId, models, selectedModelAvailable, setModelId]);
 
   const genMut = useMutation({
-    mutationFn: () =>
-      imageStudioApi.femaleUndresserGenerate({
-        source_file: fileName || null,
+    mutationFn: async () => {
+      if (!sourceFile) throw new Error("Choose a source image first.");
+      if (!backendConfigured) throw new Error("Undresser generation is not configured for this persona yet.");
+      const sourceImage = await readFileAsDataUrl(sourceFile);
+      return imageStudioApi.femaleUndresserGenerate({
+        source_file: sourceFile.name,
+        source_image: sourceImage,
         persona_id: persona.id,
         model: modelId,
         count,
         content_rating: showExplicit ? "explicit" : "sfw",
-      }),
+      });
+    },
     onSuccess: (res) => setResult(res.message ?? res.status),
   });
 
@@ -64,12 +100,12 @@ export function UndresserInline({
             </span>
             <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground hover:border-indigo-300">
               <Upload className="h-4 w-4 shrink-0" />
-              {fileName || "Upload JPG/PNG/JFIF/HEIC (<5MB)"}
+              {sourceFile?.name || "Upload JPG/PNG/JFIF/HEIC (<5MB)"}
               <input
                 type="file"
                 accept=".jpg,.jpeg,.png,.jfif,.heic"
                 className="hidden"
-                onChange={(e) => setFileName(e.target.files?.[0]?.name ?? "")}
+                onChange={(e) => setSourceFile(e.target.files?.[0] ?? null)}
                 data-testid="undresser-source"
               />
             </label>
@@ -91,7 +127,13 @@ export function UndresserInline({
 
         {/* Settings rail */}
         <div className="space-y-3">
-          <ModelPicker value={modelId} onChange={setModelId} />
+          <ModelPicker
+            value={modelId}
+            onChange={setModelId}
+            models={models}
+            providers={providers}
+            loading={capabilitiesLoading}
+          />
           <label className="block space-y-1">
             <span className="text-[11px] text-muted-foreground">Number of images</span>
             <Input
@@ -106,11 +148,30 @@ export function UndresserInline({
         </div>
       </div>
 
+      {!backendConfigured && (
+        <p className="rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          Undresser generation is not configured for this persona yet. Upload and model controls are available for preparation, but generation remains disabled until an approved provider model is assigned.
+        </p>
+      )}
+
       {/* Sticky generate bar (safe-area aware) — matches the Generate tab. */}
       <div className="sticky bottom-0 z-10 flex items-center justify-end gap-2 border-t border-border bg-card/95 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
         <Button
           onClick={() => genMut.mutate()}
-          disabled={genMut.isPending || !fileName}
+          disabled={
+            genMut.isPending ||
+            !sourceFile ||
+            !backendConfigured ||
+            !capabilitiesReady ||
+            !selectedModel.enabled
+          }
+          title={
+            !backendConfigured
+              ? "Undresser generation is not configured for this persona."
+              : !capabilitiesReady
+                ? "Generation capabilities are still loading or unavailable."
+              : (selectedModel.disabledReason ?? undefined)
+          }
           data-testid="undresser-generate"
         >
           {genMut.isPending ? (

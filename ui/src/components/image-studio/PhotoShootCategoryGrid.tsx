@@ -7,7 +7,7 @@
  * on templates < 14 days old, and a sticky safe-area fire bar. Filtered by the
  * caller's SFW/18+ and Female/Male selections.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, Check, ChevronLeft, ChevronRight, Sparkle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -121,6 +121,8 @@ function CategoryCard({
               key={q}
               type="button"
               onClick={() => onSetCount(count === q ? 0 : q)}
+              aria-pressed={count === q}
+              aria-label={`${q} images for ${t.name}`}
               data-testid={`photoshoot-qty-${t.id}-${q}`}
               className={cn(
                 "flex-1 rounded px-1 py-0.5 text-[11px] font-medium transition-colors",
@@ -139,6 +141,7 @@ function CategoryCard({
             placeholder="…"
             className="w-9 rounded border border-border bg-background px-1 py-0.5 text-center text-[11px]"
             title="Custom quantity"
+            aria-label={`Custom quantity for ${t.name}`}
           />
         </div>
         <p className="mt-1 text-[9px] leading-tight text-muted-foreground">Choose how many to generate or enter your own</p>
@@ -152,14 +155,17 @@ export function PhotoShootCategoryGrid({
   showExplicit,
   gender,
   onBatchStarted,
+  initialTemplate,
 }: {
   persona: ImageProvider;
   showExplicit: boolean;
   gender: "female" | "male";
   onBatchStarted: (batchId: string) => void;
+  initialTemplate?: { id: string; requestId: number } | null;
 }) {
   const queryClient = useQueryClient();
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const appliedTemplateRequestRef = useRef<number | null>(null);
 
   const templatesQ = useQuery({
     queryKey: ["image-studio", "templates", persona.id],
@@ -175,6 +181,18 @@ export function PhotoShootCategoryGrid({
       }),
     [templatesQ.data, showExplicit, gender],
   );
+
+  useEffect(() => {
+    if (
+      !initialTemplate ||
+      appliedTemplateRequestRef.current === initialTemplate.requestId ||
+      !categories.some((template) => template.id === initialTemplate.id)
+    ) {
+      return;
+    }
+    appliedTemplateRequestRef.current = initialTemplate.requestId;
+    setCounts((previous) => ({ ...previous, [initialTemplate.id]: 5 }));
+  }, [categories, initialTemplate]);
 
   const selectedCount = Object.values(counts).reduce((a, b) => a + b, 0);
   const selectedCats = Object.values(counts).filter((c) => c > 0).length;

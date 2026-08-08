@@ -152,6 +152,31 @@ describe("Image Studio focused UI repairs", () => {
     }
   });
 
+  it("keeps unavailable video truthful and exposes selection state for generator controls", async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <GenerateContentPanel persona={persona} />
+        </QueryClientProvider>,
+      );
+    });
+
+    const imageMode = container.querySelector<HTMLButtonElement>('[data-testid="mode-image"]')!;
+    const videoMode = container.querySelector<HTMLButtonElement>('[data-testid="mode-video"]')!;
+    expect(imageMode.getAttribute("aria-pressed")).toBe("true");
+    expect(videoMode.disabled).toBe(true);
+    expect(videoMode.getAttribute("aria-label")).toBe("Video generation unavailable");
+    expect(videoMode.title).toContain("not available");
+
+    const countTwo = container.querySelector<HTMLButtonElement>('[data-testid="count-2"]')!;
+    const countFour = container.querySelector<HTMLButtonElement>('[data-testid="count-4"]')!;
+    expect(countTwo.getAttribute("aria-pressed")).toBe("true");
+    expect(countFour.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => countFour.click());
+    expect(countFour.getAttribute("aria-pressed")).toBe("true");
+    expect(countTwo.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("keeps useful settings while hiding raw company and persona UUIDs", async () => {
     await act(async () => {
       root.render(
@@ -321,6 +346,15 @@ describe("Image Studio focused UI repairs", () => {
     )!;
     expect(imagePreview.getAttribute("src")).toBe("/api/uploads/thumbnails/still.jpg");
     expect(imagePreview.getAttribute("loading")).toBe("lazy");
+
+    const gridView = container.querySelector<HTMLButtonElement>('[data-testid="gallery-view-grid"]')!;
+    const listView = container.querySelector<HTMLButtonElement>('[data-testid="gallery-view-list"]')!;
+    expect(gridView.getAttribute("aria-label")).toBe("Grid view");
+    expect(gridView.getAttribute("aria-pressed")).toBe("true");
+    expect(listView.getAttribute("aria-label")).toBe("List view");
+    await act(async () => listView.click());
+    expect(listView.getAttribute("aria-pressed")).toBe("true");
+    expect(gridView.getAttribute("aria-pressed")).toBe("false");
 
     await act(async () => noThumbnailItem.click());
     const viewerVideo = container.querySelector<HTMLVideoElement>(

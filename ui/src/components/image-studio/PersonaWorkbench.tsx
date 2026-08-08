@@ -118,6 +118,7 @@ export function ExplicitToggle({
       <button
         type="button"
         onClick={() => onChange(false)}
+        aria-pressed={!value}
         data-testid="rating-sfw"
         className={cn(
           "relative z-10 flex-1 rounded-full py-0.5 transition-colors",
@@ -129,6 +130,7 @@ export function ExplicitToggle({
       <button
         type="button"
         onClick={() => onChange(true)}
+        aria-pressed={value}
         data-testid="rating-explicit"
         className={cn(
           "relative z-10 flex-1 rounded-full py-0.5 transition-colors",
@@ -283,6 +285,9 @@ function GenerateInline({
   rating,
   onBatchStarted,
   registerActions,
+  capabilityModels,
+  capabilityProviders,
+  capabilitiesLoading,
 }: {
   persona: ImageProvider;
   showExplicit: boolean;
@@ -293,11 +298,12 @@ function GenerateInline({
     reset: () => void;
     applyTemplate: (t: PromptTemplate, apply?: TemplateApply) => void;
   }) => void;
+  capabilityModels: ImageModel[];
+  capabilityProviders: ImageStudioProviderCapabilityState[];
+  capabilitiesLoading: boolean;
 }) {
   const queryClient = useQueryClient();
-  const { selectedCompany } = useCompany();
   const isMobile = useIsMobile();
-  const capabilityCompanyId = persona.companyId ?? selectedCompany?.id ?? null;
   const [selections, setSelections] = useState<Selections>({});
   const [defaultKeys, setDefaultKeys] = useState<Set<string>>(new Set());
   const [freeText, setFreeText] = useState("");
@@ -316,21 +322,6 @@ function GenerateInline({
   const [saveOpen, setSaveOpen] = useState(false);
   const [subTab, setSubTab] = useState<"compose" | "library">("compose");
   const initializedPersonaId = useRef<string | null>(null);
-
-  const capabilitiesQ = useQuery({
-    queryKey: ["image-studio", "capabilities", capabilityCompanyId, persona.id],
-    queryFn: () => imageStudioApi.getCapabilities(capabilityCompanyId as string, persona.id),
-    enabled: typeof capabilityCompanyId === "string" && capabilityCompanyId.length > 0,
-    staleTime: 60_000,
-  });
-  const capabilityModels = useMemo<ImageModel[]>(
-    () => capabilitiesQ.data?.capabilities ?? [],
-    [capabilitiesQ.data],
-  );
-  const capabilityProviders = useMemo<ImageStudioProviderCapabilityState[]>(
-    () => capabilitiesQ.data?.providers ?? [],
-    [capabilitiesQ.data],
-  );
 
   const controlsQ = useQuery({
     queryKey: ["image-studio", "attribute-controls"],
@@ -547,7 +538,7 @@ function GenerateInline({
         onChange={setModelId}
         models={capabilityModels}
         providers={capabilityProviders}
-        loading={capabilitiesQ.isLoading}
+        loading={capabilitiesLoading}
       />
       <button
         type="button"
@@ -761,7 +752,23 @@ export function PersonaWorkbench({
       don't fight over the query param. */
   syncTabToUrl?: boolean;
 }) {
+  const { selectedCompany } = useCompany();
   const rating = personaRating(persona);
+  const capabilityCompanyId = persona.companyId ?? selectedCompany?.id ?? null;
+  const capabilitiesQ = useQuery({
+    queryKey: ["image-studio", "capabilities", capabilityCompanyId, persona.id],
+    queryFn: () => imageStudioApi.getCapabilities(capabilityCompanyId as string, persona.id),
+    enabled: typeof capabilityCompanyId === "string" && capabilityCompanyId.length > 0,
+    staleTime: 60_000,
+  });
+  const capabilityModels = useMemo<ImageModel[]>(
+    () => capabilitiesQ.data?.capabilities ?? [],
+    [capabilitiesQ.data],
+  );
+  const capabilityProviders = useMemo<ImageStudioProviderCapabilityState[]>(
+    () => capabilitiesQ.data?.providers ?? [],
+    [capabilitiesQ.data],
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const [tab, setTabState] = useState<WorkbenchTab>(() => {
     const fromUrl = searchParams.get("tab");
@@ -770,6 +777,8 @@ export function PersonaWorkbench({
   const [showExplicit, setShowExplicit] = useState(rating === "explicit");
   const [gender, setGender] = useState<"female" | "male">("female");
   const [libNotice, setLibNotice] = useState<string | null>(null);
+  const [photoShootTemplate, setPhotoShootTemplate] = useState<{ id: string; requestId: number } | null>(null);
+  const photoShootTemplateRequestRef = useRef(0);
   const actionsRef = useRef<WorkbenchActions>({ surpriseMe: () => {}, reset: () => {}, applyTemplate: () => {} });
 
   useEffect(() => {
@@ -777,6 +786,7 @@ export function PersonaWorkbench({
     setShowExplicit(rating === "explicit");
     setGender("female");
     setLibNotice(null);
+    setPhotoShootTemplate(null);
     actionsRef.current = {
       surpriseMe: () => {},
       reset: () => {},
@@ -805,8 +815,10 @@ export function PersonaWorkbench({
       selectTab("generate");
       actionsRef.current.applyTemplate(template, apply);
     } else if (apply.tool === "photoshoot") {
+      photoShootTemplateRequestRef.current += 1;
+      setPhotoShootTemplate({ id: template.id, requestId: photoShootTemplateRequestRef.current });
       selectTab("photoshoot");
-      setLibNotice(`Loaded "${template.name}" intent — pick PhotoShoot categories to fire it.`);
+      setLibNotice(`Loaded "${template.name}" with 5 images. Review the selection, then click Generate when ready.`);
     } else {
       setLibNotice(`"${template.name}" targets ${apply.tool.replace(/_/g, " ")} — prompt is ready for that surface.`);
     }
@@ -858,6 +870,15 @@ export function PersonaWorkbench({
         </div>
       </div>
 
+      {libNotice && (
+        <div
+          className="mb-3 rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+          data-testid="library-notice"
+        >
+          {libNotice}
+        </div>
+      )}
+
       {/* Generate-only secondary actions. */}
       {tab === "generate" && (
         <div className="mb-3 flex items-center gap-1.5">
@@ -881,6 +902,9 @@ export function PersonaWorkbench({
           rating={rating}
           onBatchStarted={onBatchStarted}
           registerActions={(a) => (actionsRef.current = a)}
+          capabilityModels={capabilityModels}
+          capabilityProviders={capabilityProviders}
+          capabilitiesLoading={capabilitiesQ.isLoading}
         />
       </div>
       <div className={cn(tab === "photoshoot" ? "block" : "hidden")}>
@@ -888,22 +912,28 @@ export function PersonaWorkbench({
           <p className="text-[11px] text-muted-foreground">Pick categories + counts — they all fire as one batch.</p>
           <GenderFilter value={gender} onChange={setGender} />
         </div>
-        <PhotoShootCategoryGrid persona={persona} showExplicit={showExplicit} gender={gender} onBatchStarted={onBatchStarted} />
+        <PhotoShootCategoryGrid
+          persona={persona}
+          showExplicit={showExplicit}
+          gender={gender}
+          onBatchStarted={onBatchStarted}
+          initialTemplate={photoShootTemplate}
+        />
       </div>
-      {tab === "undresser" && <UndresserInline persona={persona} showExplicit={showExplicit} />}
+      {tab === "undresser" && (
+        <UndresserInline
+          persona={persona}
+          showExplicit={showExplicit}
+          models={capabilityModels}
+          providers={capabilityProviders}
+          capabilitiesLoading={capabilitiesQ.isLoading}
+        />
+      )}
       {tab === "library" && (
         <div className="space-y-2">
           <p className="text-[11px] text-muted-foreground">
             Every template across all tools. Click one, pick a model, and it runs on the matching tab.
           </p>
-          {libNotice && (
-            <div
-              className="rounded-md border border-amber-300/60 bg-amber-50/60 p-2 text-xs text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
-              data-testid="library-notice"
-            >
-              {libNotice}
-            </div>
-          )}
           <UnifiedLibrary personas={[persona]} onApply={applyLibraryTemplate} />
         </div>
       )}
@@ -926,6 +956,8 @@ export function GenderFilter({
           key={g}
           type="button"
           onClick={() => onChange(g)}
+          aria-pressed={value === g}
+          aria-label={`${g} persona presentation`}
           data-testid={`gender-${g}`}
           className={cn(
             "rounded px-2.5 py-0.5 font-medium capitalize transition-colors",
