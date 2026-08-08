@@ -138,6 +138,8 @@ describe("DeckWorkspace — beat delete control", () => {
     const workspaceScroll = container!.querySelector("[data-deck-view-scroll]")!;
     expect(workspaceScroll.className).toContain("overflow-hidden");
     expect(workspaceScroll.className).not.toContain("overflow-auto");
+    expect(workspaceScroll.className).toContain("[@media(max-height:700px)]:py-1.5");
+    expect(container!.querySelector("[data-deck-chapter-header]")?.className).toContain("[@media(max-height:700px)]:hidden");
     const manuscriptBody = container!.querySelector("[data-manuscript-body]")!;
     expect(manuscriptBody.className).toContain("min-h-0");
     expect(manuscriptBody.className).not.toContain("50dvh");
