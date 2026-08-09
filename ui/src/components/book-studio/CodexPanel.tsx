@@ -7,6 +7,7 @@ import {
   Plus, Lock, LockOpen, Trash2, ScrollText, Users2, Gem, Cog, Clock,
   GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles, Inbox, Edit3, Save, X,
 } from "lucide-react";
+import { InlineEntitySelector, type InlineEntityOption } from "../InlineEntitySelector";
 import { GenerateDraftPanel, type BEntityType } from "./GenerateDraftPanel";
 
 const API_BASE = "/api";
@@ -59,6 +60,11 @@ interface Relationship {
   updatedAt: string;
 }
 
+interface RelationshipEntity {
+  id: string;
+  name: string;
+}
+
 interface Fact {
   id: string;
   statement: string;
@@ -107,6 +113,53 @@ const CODEX_SECTIONS = [
 export type CodexSectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts" | "review-queue";
 
 const REL_ENTITY_TYPES = ["character", "location", "lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"];
+
+function relationshipTypeLabel(entityType: string) {
+  return entityType === "factions" ? "faction"
+    : entityType === "objects" ? "object"
+      : entityType === "systems" ? "system"
+        : entityType === "threads" ? "thread"
+          : entityType === "themes" ? "theme"
+            : entityType;
+}
+
+function RelationshipEntityPicker({
+  side,
+  entityType,
+  value,
+  entities,
+  onChange,
+}: {
+  side: "From" | "To";
+  entityType: string;
+  value: string;
+  entities: RelationshipEntity[];
+  onChange: (id: string) => void;
+}) {
+  const label = relationshipTypeLabel(entityType);
+  const options: InlineEntityOption[] = entities.map((entity) => ({
+    id: entity.id,
+    label: entity.name,
+    searchText: `${entity.name} ${label}`,
+  }));
+
+  return (
+    <div className="min-w-0 flex-1">
+      <span className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500">{side} {label}</span>
+      <InlineEntitySelector
+        value={value}
+        options={options}
+        placeholder={`Choose ${label}`}
+        noneLabel={`Choose ${label}`}
+        searchPlaceholder={`Search ${label} names...`}
+        emptyMessage={`No ${label} entries yet.`}
+        onChange={onChange}
+        className="w-full justify-between border-gray-800 bg-gray-900 px-2 py-1.5 text-xs text-gray-200"
+        disablePortal
+      />
+    </div>
+  );
+}
 
 // ── Small pieces ──────────────────────────────────────────────────────
 
@@ -159,6 +212,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
     onSectionChange?.(next);
   };
   const [entities, setEntities] = useState<CodexEntity[]>([]);
+  const [relationshipEntities, setRelationshipEntities] = useState<Record<string, RelationshipEntity[]>>({});
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [knownFacts, setKnownFacts] = useState<Fact[]>([]);
   const [withheldFacts, setWithheldFacts] = useState<WithheldFact[]>([]);
@@ -185,9 +239,22 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
     setError(null);
     try {
       if (section === "relationships") {
-        const res = await apiFetch<{ available: boolean; relationships: Relationship[] }>(`${prefix}/codex-relationships`);
+        const [res, charactersRes, locationsRes, codexResults] = await Promise.all([
+          apiFetch<{ available: boolean; relationships: Relationship[] }>(`${prefix}/codex-relationships`),
+          apiFetch<{ characters?: RelationshipEntity[] }>(`${prefix}/characters`),
+          apiFetch<{ "world-locations"?: RelationshipEntity[] }>(`${prefix}/world-locations`),
+          Promise.all(CODEX_SECTIONS.map(async ({ id }) => ({
+            id,
+            entities: (await apiFetch<{ entities?: CodexEntity[] }>(`${prefix}/codex/${id}`)).entities ?? [],
+          }))),
+        ]);
         setAvailable(res.available);
         setRelationships(res.relationships ?? []);
+        setRelationshipEntities({
+          character: charactersRes.characters ?? [],
+          location: locationsRes["world-locations"] ?? [],
+          ...Object.fromEntries(codexResults.map((result) => [result.id, result.entities])),
+        });
       } else if (section === "facts") {
         const res = await apiFetch<{ available: boolean; known: Fact[]; withheld: WithheldFact[] }>(`${prefix}/codex-facts?chapter=${factChapter}`);
         setAvailable(res.available);
@@ -211,8 +278,11 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   const entityName = useMemo(() => {
     const map = new Map<string, string>();
     for (const e of entities) map.set(e.id, e.name);
+    for (const group of Object.values(relationshipEntities)) {
+      for (const entity of group) map.set(entity.id, entity.name);
+    }
     return (id: string) => map.get(id) ?? id.slice(0, 8);
-  }, [entities]);
+  }, [entities, relationshipEntities]);
 
   async function toggleLock(kind: "entity" | "relationship" | "fact", id: string, locked: boolean) {
     const url = kind === "entity" ? `${prefix}/codex/${section}/${id}`
@@ -289,6 +359,9 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
         const result = await apiFetch<{ entity: CodexEntity }>(`${prefix}/codex/${section}/${editing.id}`, { method: "PATCH", body: JSON.stringify(body) });
         setEntities((rows) => rows.map((row) => row.id === editing.id ? result.entity : row));
       } else if (editing.kind === "relationship") {
+        if (!editing.draft.fromEntityId?.trim() || !editing.draft.toEntityId?.trim()) {
+          throw new Error("Choose both relationship entries by name before saving.");
+        }
         const result = await apiFetch<{ relationship: Relationship }>(`${prefix}/codex-relationships/${editing.id}`, { method: "PATCH", body: JSON.stringify({
           fromEntityType: editing.draft.fromEntityType, fromEntityId: editing.draft.fromEntityId?.trim(),
           toEntityType: editing.draft.toEntityType, toEntityId: editing.draft.toEntityId?.trim(),
@@ -334,6 +407,10 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   }
 
   async function submitRelationship() {
+    if (!relForm.fromEntityId.trim() || !relForm.toEntityId.trim()) {
+      setError("Choose both relationship entries by name before adding the relationship.");
+      return;
+    }
     await apiFetch(`${prefix}/codex-relationships`, {
       method: "POST",
       body: JSON.stringify({
@@ -544,8 +621,14 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
             )}
             {relationships.map((r) => editing?.kind === "relationship" && editing.id === r.id ? (
               <div key={r.id} className="space-y-2 rounded border border-blue-700/60 bg-gray-900/70 p-2.5">
-                <div className="flex flex-wrap gap-2"><select aria-label="From entity type" className={inputCls} value={editing.draft.fromEntityType} onChange={(event) => editField("fromEntityType", event.target.value)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select><input aria-label="From entity ID" className={inputCls} value={editing.draft.fromEntityId} onChange={(event) => editField("fromEntityId", event.target.value)} /></div>
-                <div className="flex flex-wrap gap-2"><select aria-label="To entity type" className={inputCls} value={editing.draft.toEntityType} onChange={(event) => editField("toEntityType", event.target.value)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select><input aria-label="To entity ID" className={inputCls} value={editing.draft.toEntityId} onChange={(event) => editField("toEntityId", event.target.value)} /></div>
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="From entity type" className={inputCls} value={editing.draft.fromEntityType} onChange={(event) => setEditing((current) => current ? { ...current, draft: { ...current.draft, fromEntityType: event.target.value, fromEntityId: "" } } : current)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
+                  <RelationshipEntityPicker side="From" entityType={editing.draft.fromEntityType} value={editing.draft.fromEntityId} entities={relationshipEntities[editing.draft.fromEntityType] ?? []} onChange={(id) => editField("fromEntityId", id)} />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="To entity type" className={inputCls} value={editing.draft.toEntityType} onChange={(event) => setEditing((current) => current ? { ...current, draft: { ...current.draft, toEntityType: event.target.value, toEntityId: "" } } : current)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
+                  <RelationshipEntityPicker side="To" entityType={editing.draft.toEntityType} value={editing.draft.toEntityId} entities={relationshipEntities[editing.draft.toEntityType] ?? []} onChange={(id) => editField("toEntityId", id)} />
+                </div>
                 <input aria-label="Relationship type" className={inputCls} value={editing.draft.type} onChange={(event) => editField("type", event.target.value)} />
                 <input aria-label="Arc stage" className={inputCls} value={editing.draft.arcStage} onChange={(event) => editField("arcStage", event.target.value)} />
                 <input aria-label="Relationship meter" type="number" min={-100} max={100} className={inputCls} value={editing.draft.meter} onChange={(event) => editField("meter", event.target.value)} />
@@ -578,13 +661,13 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
             ))}
             {showAdd ? (
               <div className="border border-gray-700 rounded p-2.5 space-y-2 bg-gray-900/60">
-                <div className="flex gap-2">
-                  <select className={inputCls} value={relForm.fromEntityType} onChange={(e) => setRelForm({ ...relForm, fromEntityType: e.target.value })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-                  <input className={inputCls} placeholder="From entity ID" value={relForm.fromEntityId} onChange={(e) => setRelForm({ ...relForm, fromEntityId: e.target.value })} />
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="From entity type" className={inputCls} value={relForm.fromEntityType} onChange={(e) => setRelForm({ ...relForm, fromEntityType: e.target.value, fromEntityId: "" })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+                  <RelationshipEntityPicker side="From" entityType={relForm.fromEntityType} value={relForm.fromEntityId} entities={relationshipEntities[relForm.fromEntityType] ?? []} onChange={(id) => setRelForm({ ...relForm, fromEntityId: id })} />
                 </div>
-                <div className="flex gap-2">
-                  <select className={inputCls} value={relForm.toEntityType} onChange={(e) => setRelForm({ ...relForm, toEntityType: e.target.value })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-                  <input className={inputCls} placeholder="To entity ID" value={relForm.toEntityId} onChange={(e) => setRelForm({ ...relForm, toEntityId: e.target.value })} />
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="To entity type" className={inputCls} value={relForm.toEntityType} onChange={(e) => setRelForm({ ...relForm, toEntityType: e.target.value, toEntityId: "" })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+                  <RelationshipEntityPicker side="To" entityType={relForm.toEntityType} value={relForm.toEntityId} entities={relationshipEntities[relForm.toEntityType] ?? []} onChange={(id) => setRelForm({ ...relForm, toEntityId: id })} />
                 </div>
                 <div className="flex gap-2">
                   <input className={inputCls} placeholder="Type (e.g. secret allegiance)" value={relForm.type} onChange={(e) => setRelForm({ ...relForm, type: e.target.value })} />

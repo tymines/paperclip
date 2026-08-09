@@ -71,6 +71,34 @@ describe("CodexPanel editing", () => {
     }
   });
 
+  it("uses searchable names instead of raw IDs for relationship endpoints", async () => {
+    const relationship = {
+      id: "rel-1", bookId: "book-1", fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "location", toEntityId: "w-1", type: "knows", arcStage: "open",
+      meter: 0, rules: [], locked: false, revision: 1, updatedAt: persisted.updatedAt,
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/codex-relationships")) return response({ available: true, relationships: [relationship] });
+      if (url.endsWith("/characters")) return response({ characters: [{ id: "c-1", name: "Mara" }] });
+      if (url.endsWith("/world-locations")) return response({ "world-locations": [{ id: "w-1", name: "Silver Keep" }] });
+      return response({ available: true, entities: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await act(async () => root.render(<CodexPanel bookId="book-1" companySlug="co-1" activeSection="relationships" showSectionPicker={false} />));
+    await flush();
+
+    expect(host.textContent).toContain("Mara");
+    expect(host.textContent).toContain("Silver Keep");
+    expect(host.querySelector('input[aria-label="From entity ID"]')).toBeNull();
+    expect(host.querySelector('input[aria-label="To entity ID"]')).toBeNull();
+
+    await act(async () => [...host.querySelectorAll("button")].find((button) => button.textContent?.trim() === "Edit")!.click());
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent?.includes("Mara"))).toBe(true);
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent?.includes("Silver Keep"))).toBe(true);
+  });
+
   it("keeps Edit visible and Cancel restores persisted values without a request", async () => {
     const fetchMock = vi.fn(async () => response({ available: true, entities: [persisted] }));
     vi.stubGlobal("fetch", fetchMock);
