@@ -20,7 +20,9 @@ node services/worldview-collector/server.mjs
 | Var | Default | Meaning |
 |-----|---------|---------|
 | `WORLDVIEW_PORT` | `8788` | Listen port |
+| `WORLDVIEW_HOST` | `0.0.0.0` | LAN bind; firewall port 8788 to the Paperclip host only at deploy time |
 | `WORLDVIEW_POLL_MS` | `300000` | Upstream refresh interval (5 min) |
+| `WORLDVIEW_HISTORY_DIR` | `.history` | Compressed seven-day snapshot ring; UI exposes the latest 24h |
 
 The Paperclip tab reads `VITE_WORLDVIEW_API_URL` (default `http://localhost:8788`).
 To host on Box 2: run this there and set
@@ -32,12 +34,21 @@ To host on Box 2: run this there and set
 - `GET /api/news` — global news via **GDELT DOC 2.0** (no key)
 - `GET /api/geopolitical` — headlines via **public RSS** (BBC/Al Jazeera/UN/DW, no key)
 - `GET /api/sources` — catalog of every feed and which API key it needs
+- `GET /api/history?at=<ISO>` — nearest real USGS/FIRMS/EONET/GDELT snapshots in the prior 24h, with explicit gap markers; flights are always `live_only`
 
 ## Resource footprint (this collector)
 
-Tiny by design: a single Node process, in-memory cache only (no DB, no Redis),
-fixed small key set. Idle RAM ~40-60 MB RSS; CPU near-zero between polls; one
-upstream burst every `WORLDVIEW_POLL_MS`. Disk: source file only (no node_modules).
+Tiny by design: a single Node process, no DB or Redis, and a fixed small cache.
+The history module writes gzip JSON snapshots and prunes files older than seven
+days. No outage is backfilled; missing snapshots remain visible gaps.
+
+## Deployment gate
+
+`deploy/install-launchd-macos.sh` is a deployment-held artifact. It installs
+KeepAlive/RunAtLoad, a `/health` watchdog, and bounded log rotation on the Mac
+host Tyler selects. Host selection, LAN firewall allowlisting, server
+`WORLDVIEW_COLLECTOR_URL` repoint, and Windows collector decommission remain
+explicit deploy-time gates and are not performed by this repository change.
 
 ## Data honesty
 

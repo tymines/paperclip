@@ -94,7 +94,7 @@ async function refreshEonet() {
     const items = [];
     for (const ev of j.events || []) {
       const cat = ev.categories?.[0];
-      // latest point geometry
+      // Preserve provider track history; the latest point remains the entity anchor.
       const geoms = (ev.geometry || []).filter((g) => g.type === "Point");
       const g = geoms[geoms.length - 1];
       if (!g) continue;
@@ -109,6 +109,9 @@ async function refreshEonet() {
         url: ev.sources?.[0]?.url || ev.link || "",
         magnitude: g.magnitudeValue ?? null,
         magnitudeUnit: g.magnitudeUnit || null,
+        track: geoms.map((point) => ({
+          lon: point.coordinates[0], lat: point.coordinates[1], date: point.date || null,
+        })),
       });
     }
     setC("eonet", { status: "live", source: src, items, note: null });
@@ -373,6 +376,11 @@ export function extrasFreshness() {
   out.conflicts = { status: "live", count: CONFLICT_ZONES.length, static: true };
   out["live-news"] = { status: "live", count: LIVE_NEWS.length, static: true };
   return out;
+}
+
+/** Real cached payloads exposed to the history writer; never synthesizes rows. */
+export function extrasSnapshots() {
+  return { quakes: getC("quakes"), eonet: getC("eonet") };
 }
 
 /** Source-catalog rows (all keyless) for /api/sources. */

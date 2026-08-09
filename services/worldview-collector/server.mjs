@@ -39,13 +39,17 @@ import {
   refreshExtras,
   extrasHandle,
   extrasFreshness,
+  extrasSnapshots,
   EXTRA_ENDPOINTS,
   EXTRA_SOURCE_ROWS,
 } from "./feeds-extra.mjs";
+import { createHistoryStore } from "./history.mjs";
 
 const PORT = Number(process.env.WORLDVIEW_PORT || 8788);
+const HOST = process.env.WORLDVIEW_HOST || "0.0.0.0";
 const POLL_MS = Number(process.env.WORLDVIEW_POLL_MS || 5 * 60 * 1000); // 5 min
 const UA = "PaperclipWorldView/1.0 (+collector; contact augi)";
+const history = await createHistoryStore();
 
 // ---- NASA FIRMS config (satellite active-fire / thermal anomalies) ----------
 // Free MAP_KEY from https://firms.modaps.eosdis.nasa.gov/api/area/. Without a
@@ -1370,7 +1374,15 @@ const server = http.createServer((req, res) => {
       freshness[k] = c ? { status: c.status, fetchedAt: c.fetchedAt, count: c.items.length } : { status: "pending" };
     }
     Object.assign(freshness, extrasFreshness());
-    return send(res, 200, { ok: true, service: "worldview-collector", pollMs: POLL_MS, freshness });
+    return send(res, 200, { ok: true, service: "worldview-collector", host: HOST, pollMs: POLL_MS, freshness, history: history.stats() });
+  }
+  if (path === "/api/history") {
+    const raw = new URL(req.url || "/", "http://collector.local").searchParams.get("at");
+    const at = raw ? Date.parse(raw) : NaN;
+    if (!Number.isFinite(at) || at > Date.now() || Date.now() - at > 24 * 60 * 60 * 1000) {
+      return send(res, 400, { status: "error", error: "history_at_must_be_within_24h" });
+    }
+    return send(res, 200, history.frame(at));
   }
   if (path === "/api/news") return send(res, 200, getCache("news") || { status: "pending", items: [] });
   if (path === "/api/geopolitical") return send(res, 200, getCache("geopolitical") || { status: "pending", items: [] });
@@ -1407,9 +1419,16 @@ async function refreshAll() {
   // The AI brief consumes the feeds refreshed above, so run it AFTER they settle
   // (it self-throttles to GROQ_BRIEF_MIN_INTERVAL_MS, so this is cheap per cycle).
   await refreshAiBrief();
+  const extras = extrasSnapshots();
+  await Promise.allSettled([
+    history.record("news", getCache("news")),
+    history.record("firms", getCache("firms")),
+    history.record("quakes", extras.quakes),
+    history.record("eonet", extras.eonet),
+  ]);
 }
-server.listen(PORT, () => {
-  console.log("[worldview-collector] listening on :" + PORT + " (poll " + POLL_MS + "ms)");
+server.listen(PORT, HOST, () => {
+  console.log("[worldview-collector] listening on " + HOST + ":" + PORT + " (poll " + POLL_MS + "ms)");
   refreshAll();
   setInterval(refreshAll, POLL_MS);
 });
