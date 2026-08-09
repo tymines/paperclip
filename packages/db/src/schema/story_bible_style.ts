@@ -1,4 +1,4 @@
-import { pgTable, uuid, text, timestamp, jsonb, boolean } from "drizzle-orm/pg-core";
+import { pgTable, uuid, text, timestamp, jsonb, integer, boolean } from "drizzle-orm/pg-core";
 import { books } from "./books.js";
 
 export const storyBibleStyle = pgTable("story_bible_style", {
@@ -12,6 +12,7 @@ export const storyBibleStyle = pgTable("story_bible_style", {
   tropes: jsonb("tropes").$type<string[]>().notNull().default([]),
   locked: boolean("locked").notNull().default(false),
   source: text("source").notNull().default("authored"),
+  revision: integer("revision").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

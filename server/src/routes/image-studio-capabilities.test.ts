@@ -60,6 +60,7 @@ function appFor(companyIds: string[]) {
           : null,
       ),
       inspectionDeadlineMs: 100,
+      generationWorkerReadiness: { enabled: false, disabledReason: "worker-disabled-for-test" },
     }),
   );
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
@@ -87,6 +88,7 @@ describe("GET company Image Studio capabilities", () => {
         readiness: "credential_verified",
       }),
     ]);
+    expect(response.body.generationWorker).toEqual({ enabled: false, disabledReason: "worker-disabled-for-test" });
     expect(response.body.providers).toEqual([
       expect.objectContaining({
         configured: true,

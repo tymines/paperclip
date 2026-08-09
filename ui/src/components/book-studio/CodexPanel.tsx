@@ -5,8 +5,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Plus, Lock, LockOpen, Trash2, ScrollText, Users2, Gem, Cog, Clock,
-  GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles, Inbox,
+  GitBranch, Lightbulb, BookA, Link2, ShieldCheck, Sparkles, Inbox, Edit3, Save, X,
 } from "lucide-react";
+import { InlineEntitySelector, type InlineEntityOption } from "../InlineEntitySelector";
 import { GenerateDraftPanel, type BEntityType } from "./GenerateDraftPanel";
 
 const API_BASE = "/api";
@@ -35,11 +36,13 @@ interface CodexEntity {
   details: Record<string, unknown>;
   locked: boolean;
   source: string;
+  revision: number;
   chapterNumber?: number | null;
   payoffState?: string;
   payoffChapter?: number | null;
   term?: string;
   definition?: string;
+  updatedAt: string;
 }
 
 interface Relationship {
@@ -53,6 +56,13 @@ interface Relationship {
   meter: number;
   rules: string[];
   locked: boolean;
+  revision: number;
+  updatedAt: string;
+}
+
+interface RelationshipEntity {
+  id: string;
+  name: string;
 }
 
 interface Fact {
@@ -61,6 +71,11 @@ interface Fact {
   knownAsOf: number;
   provenance: string;
   locked: boolean;
+  revision: number;
+  entityRefs?: { entityType: string; entityId: string }[];
+  sourceChapter?: number | null;
+  sourceScene?: string;
+  updatedAt: string;
 }
 
 interface WithheldFact {
@@ -69,6 +84,8 @@ interface WithheldFact {
   provenance: string;
   locked: boolean;
 }
+
+type EditKind = "entity" | "relationship" | "fact";
 
 interface QueueItem {
   id: string;
@@ -96,6 +113,53 @@ const CODEX_SECTIONS = [
 export type CodexSectionId = (typeof CODEX_SECTIONS)[number]["id"] | "relationships" | "facts" | "review-queue";
 
 const REL_ENTITY_TYPES = ["character", "location", "lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"];
+
+function relationshipTypeLabel(entityType: string) {
+  return entityType === "factions" ? "faction"
+    : entityType === "objects" ? "object"
+      : entityType === "systems" ? "system"
+        : entityType === "threads" ? "thread"
+          : entityType === "themes" ? "theme"
+            : entityType;
+}
+
+function RelationshipEntityPicker({
+  side,
+  entityType,
+  value,
+  entities,
+  onChange,
+}: {
+  side: "From" | "To";
+  entityType: string;
+  value: string;
+  entities: RelationshipEntity[];
+  onChange: (id: string) => void;
+}) {
+  const label = relationshipTypeLabel(entityType);
+  const options: InlineEntityOption[] = entities.map((entity) => ({
+    id: entity.id,
+    label: entity.name,
+    searchText: `${entity.name} ${label}`,
+  }));
+
+  return (
+    <div className="min-w-0 flex-1">
+      <span className="mb-1 block text-[10px] uppercase tracking-wide text-gray-500">{side} {label}</span>
+      <InlineEntitySelector
+        value={value}
+        options={options}
+        placeholder={`Choose ${label}`}
+        noneLabel={`Choose ${label}`}
+        searchPlaceholder={`Search ${label} names...`}
+        emptyMessage={`No ${label} entries yet.`}
+        onChange={onChange}
+        className="w-full justify-between border-gray-800 bg-gray-900 px-2 py-1.5 text-xs text-gray-200"
+        disablePortal
+      />
+    </div>
+  );
+}
 
 // ── Small pieces ──────────────────────────────────────────────────────
 
@@ -148,6 +212,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
     onSectionChange?.(next);
   };
   const [entities, setEntities] = useState<CodexEntity[]>([]);
+  const [relationshipEntities, setRelationshipEntities] = useState<Record<string, RelationshipEntity[]>>({});
   const [relationships, setRelationships] = useState<Relationship[]>([]);
   const [knownFacts, setKnownFacts] = useState<Fact[]>([]);
   const [withheldFacts, setWithheldFacts] = useState<WithheldFact[]>([]);
@@ -163,18 +228,33 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   const [form, setForm] = useState<Record<string, string>>({});
   const [relForm, setRelForm] = useState({ fromEntityType: "character", fromEntityId: "", toEntityType: "character", toEntityId: "", type: "", arcStage: "", meter: "0", rules: "" });
   const [factForm, setFactForm] = useState({ statement: "", knownAsOf: String(currentChapter ?? 1) });
+  const [editing, setEditing] = useState<{ kind: EditKind; id: string; draft: Record<string, string>; expectedRevision: number } | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const prefix = `/companies/${companySlug}/book-studio/books/${bookId}`;
 
-  useEffect(() => { setShowGenerate(false); }, [section]);
+  useEffect(() => { setShowGenerate(false); setEditing(null); }, [section, bookId, companySlug]);
 
   const load = useCallback(async () => {
     setError(null);
     try {
       if (section === "relationships") {
-        const res = await apiFetch<{ available: boolean; relationships: Relationship[] }>(`${prefix}/codex-relationships`);
+        const [res, charactersRes, locationsRes, codexResults] = await Promise.all([
+          apiFetch<{ available: boolean; relationships: Relationship[] }>(`${prefix}/codex-relationships`),
+          apiFetch<{ characters?: RelationshipEntity[] }>(`${prefix}/characters`),
+          apiFetch<{ "world-locations"?: RelationshipEntity[] }>(`${prefix}/world-locations`),
+          Promise.all(CODEX_SECTIONS.map(async ({ id }) => ({
+            id,
+            entities: (await apiFetch<{ entities?: CodexEntity[] }>(`${prefix}/codex/${id}`)).entities ?? [],
+          }))),
+        ]);
         setAvailable(res.available);
         setRelationships(res.relationships ?? []);
+        setRelationshipEntities({
+          character: charactersRes.characters ?? [],
+          location: locationsRes["world-locations"] ?? [],
+          ...Object.fromEntries(codexResults.map((result) => [result.id, result.entities])),
+        });
       } else if (section === "facts") {
         const res = await apiFetch<{ available: boolean; known: Fact[]; withheld: WithheldFact[] }>(`${prefix}/codex-facts?chapter=${factChapter}`);
         setAvailable(res.available);
@@ -198,15 +278,112 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   const entityName = useMemo(() => {
     const map = new Map<string, string>();
     for (const e of entities) map.set(e.id, e.name);
+    for (const group of Object.values(relationshipEntities)) {
+      for (const entity of group) map.set(entity.id, entity.name);
+    }
     return (id: string) => map.get(id) ?? id.slice(0, 8);
-  }, [entities]);
+  }, [entities, relationshipEntities]);
 
   async function toggleLock(kind: "entity" | "relationship" | "fact", id: string, locked: boolean) {
     const url = kind === "entity" ? `${prefix}/codex/${section}/${id}`
       : kind === "relationship" ? `${prefix}/codex-relationships/${id}`
       : `${prefix}/codex-facts/${id}`;
-    await apiFetch(url, { method: "PATCH", body: JSON.stringify({ locked: !locked }) }).catch((e) => setError(e.message));
-    load();
+    const record = kind === "entity" ? entities.find((item) => item.id === id)
+      : kind === "relationship" ? relationships.find((item) => item.id === id)
+        : knownFacts.find((item) => item.id === id);
+    if (!record) return;
+    try {
+      if (kind === "entity") {
+        const result = await apiFetch<{ entity: CodexEntity }>(url, { method: "PATCH", body: JSON.stringify({ locked: !locked, expectedRevision: record.revision }) });
+        setEntities((rows) => rows.map((row) => row.id === id ? result.entity : row));
+      } else if (kind === "relationship") {
+        const result = await apiFetch<{ relationship: Relationship }>(url, { method: "PATCH", body: JSON.stringify({ locked: !locked, expectedRevision: record.revision }) });
+        setRelationships((rows) => rows.map((row) => row.id === id ? result.relationship : row));
+      } else {
+        const result = await apiFetch<{ fact: Fact }>(url, { method: "PATCH", body: JSON.stringify({ locked: !locked, expectedRevision: record.revision }) });
+        setKnownFacts((rows) => rows.map((row) => row.id === id ? result.fact : row));
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  function beginEntityEdit(entity: CodexEntity) {
+    setError(null);
+    setEditing({ kind: "entity", id: entity.id, expectedRevision: entity.revision, draft: {
+      name: entity.name, summary: entity.summary, details: JSON.stringify(entity.details ?? {}, null, 2),
+      chapterNumber: entity.chapterNumber == null ? "" : String(entity.chapterNumber),
+      payoffState: entity.payoffState ?? "open", payoffChapter: entity.payoffChapter == null ? "" : String(entity.payoffChapter),
+      term: entity.term ?? entity.name, definition: entity.definition ?? "",
+    } });
+  }
+
+  function beginRelationshipEdit(relationship: Relationship) {
+    setError(null);
+    setEditing({ kind: "relationship", id: relationship.id, expectedRevision: relationship.revision, draft: {
+      fromEntityType: relationship.fromEntityType, fromEntityId: relationship.fromEntityId,
+      toEntityType: relationship.toEntityType, toEntityId: relationship.toEntityId,
+      type: relationship.type, arcStage: relationship.arcStage, meter: String(relationship.meter), rules: relationship.rules.join("\n"),
+    } });
+  }
+
+  async function beginFactEdit(id: string) {
+    setError(null);
+    try {
+      const result = await apiFetch<{ fact: Fact }>(`${prefix}/codex-facts/${id}`);
+      const fact = result.fact;
+      setEditing({ kind: "fact", id: fact.id, expectedRevision: fact.revision, draft: {
+        statement: fact.statement, knownAsOf: String(fact.knownAsOf),
+        entityRefs: JSON.stringify(fact.entityRefs ?? [], null, 2),
+        sourceChapter: fact.sourceChapter == null ? "" : String(fact.sourceChapter), sourceScene: fact.sourceScene ?? "",
+      } });
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+  }
+
+  async function saveEdit() {
+    if (!editing) return;
+    setSavingEdit(true);
+    setError(null);
+    try {
+      if (editing.kind === "entity") {
+        const body: Record<string, unknown> = {
+          name: editing.draft.name?.trim(), summary: editing.draft.summary ?? "",
+          details: JSON.parse(editing.draft.details || "{}"), expectedRevision: editing.expectedRevision,
+        };
+        if (section === "timeline") body.chapterNumber = editing.draft.chapterNumber ? Number(editing.draft.chapterNumber) : null;
+        if (section === "threads") {
+          body.payoffState = editing.draft.payoffState;
+          body.payoffChapter = editing.draft.payoffChapter ? Number(editing.draft.payoffChapter) : null;
+        }
+        if (section === "glossary") { body.term = editing.draft.term?.trim(); body.definition = editing.draft.definition ?? ""; }
+        const result = await apiFetch<{ entity: CodexEntity }>(`${prefix}/codex/${section}/${editing.id}`, { method: "PATCH", body: JSON.stringify(body) });
+        setEntities((rows) => rows.map((row) => row.id === editing.id ? result.entity : row));
+      } else if (editing.kind === "relationship") {
+        if (!editing.draft.fromEntityId?.trim() || !editing.draft.toEntityId?.trim()) {
+          throw new Error("Choose both relationship entries by name before saving.");
+        }
+        const result = await apiFetch<{ relationship: Relationship }>(`${prefix}/codex-relationships/${editing.id}`, { method: "PATCH", body: JSON.stringify({
+          fromEntityType: editing.draft.fromEntityType, fromEntityId: editing.draft.fromEntityId?.trim(),
+          toEntityType: editing.draft.toEntityType, toEntityId: editing.draft.toEntityId?.trim(),
+          type: editing.draft.type ?? "", arcStage: editing.draft.arcStage ?? "", meter: Number(editing.draft.meter),
+          rules: (editing.draft.rules ?? "").split("\n").map((rule) => rule.trim()).filter(Boolean), expectedRevision: editing.expectedRevision,
+        }) });
+        setRelationships((rows) => rows.map((row) => row.id === editing.id ? result.relationship : row));
+      } else {
+        const result = await apiFetch<{ fact: Fact }>(`${prefix}/codex-facts/${editing.id}`, { method: "PATCH", body: JSON.stringify({
+          statement: editing.draft.statement?.trim(), knownAsOf: Number(editing.draft.knownAsOf),
+          entityRefs: JSON.parse(editing.draft.entityRefs || "[]"),
+          sourceChapter: editing.draft.sourceChapter ? Number(editing.draft.sourceChapter) : null,
+          sourceScene: editing.draft.sourceScene ?? "", expectedRevision: editing.expectedRevision,
+        }) });
+        setKnownFacts((rows) => rows.map((row) => row.id === editing.id ? result.fact : row));
+        setWithheldFacts((rows) => rows.filter((row) => row.id !== editing.id));
+        await load();
+      }
+      setEditing(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally { setSavingEdit(false); }
   }
 
   async function remove(kind: "entity" | "relationship" | "fact", id: string, locked: boolean) {
@@ -230,6 +407,10 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
   }
 
   async function submitRelationship() {
+    if (!relForm.fromEntityId.trim() || !relForm.toEntityId.trim()) {
+      setError("Choose both relationship entries by name before adding the relationship.");
+      return;
+    }
     await apiFetch(`${prefix}/codex-relationships`, {
       method: "POST",
       body: JSON.stringify({
@@ -303,6 +484,14 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
 
   const inputCls = "w-full bg-gray-900 border border-gray-800 rounded px-2 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:border-blue-700 focus:outline-none";
 
+  const editField = (key: string, value: string) => setEditing((current) => current ? { ...current, draft: { ...current.draft, [key]: value } } : current);
+  const editActions = editing && (
+    <div className="sticky bottom-0 flex flex-wrap gap-2 border-t border-gray-800 bg-gray-900/95 pt-2">
+      <button onClick={() => void saveEdit()} disabled={savingEdit} className="flex items-center gap-1 rounded bg-blue-700 px-3 py-1.5 text-xs text-white hover:bg-blue-600 disabled:opacity-50"><Save className="h-3 w-3" />{savingEdit ? "Saving…" : "Save"}</button>
+      <button onClick={() => setEditing(null)} disabled={savingEdit} className="flex items-center gap-1 rounded border border-gray-700 px-3 py-1.5 text-xs text-gray-300 hover:text-white"><X className="h-3 w-3" />Cancel</button>
+    </div>
+  );
+
   return (
     <div className="flex flex-col h-full">
       {/* Section picker */}
@@ -362,7 +551,17 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
             {entities.length === 0 && available && (
               <div className="text-xs text-gray-500 italic py-2">No entries yet — canon starts here.</div>
             )}
-            {entities.map((e) => (
+            {entities.map((e) => editing?.kind === "entity" && editing.id === e.id ? (
+              <div key={e.id} className="space-y-2 rounded border border-blue-700/60 bg-gray-900/70 p-2.5">
+                <input aria-label="Name" className={inputCls} value={editing.draft.name ?? ""} onChange={(event) => editField("name", event.target.value)} />
+                <textarea aria-label="Summary" className={inputCls} rows={3} value={editing.draft.summary ?? ""} onChange={(event) => editField("summary", event.target.value)} />
+                <textarea aria-label="Details JSON" className={inputCls} rows={5} value={editing.draft.details ?? "{}"} onChange={(event) => editField("details", event.target.value)} />
+                {section === "timeline" && <input aria-label="Chapter number" type="number" min={1} className={inputCls} value={editing.draft.chapterNumber ?? ""} onChange={(event) => editField("chapterNumber", event.target.value)} />}
+                {section === "threads" && <div className="flex flex-wrap gap-2"><select aria-label="Payoff state" className={inputCls} value={editing.draft.payoffState ?? "open"} onChange={(event) => editField("payoffState", event.target.value)}><option value="open">open</option><option value="paid">paid</option><option value="abandoned">abandoned</option></select><input aria-label="Payoff chapter" type="number" min={1} className={inputCls} value={editing.draft.payoffChapter ?? ""} onChange={(event) => editField("payoffChapter", event.target.value)} /></div>}
+                {section === "glossary" && <><input aria-label="Term" className={inputCls} value={editing.draft.term ?? ""} onChange={(event) => editField("term", event.target.value)} /><textarea aria-label="Definition" className={inputCls} rows={3} value={editing.draft.definition ?? ""} onChange={(event) => editField("definition", event.target.value)} /></>}
+                {editActions}
+              </div>
+            ) : (
               <div key={e.id} className="border border-gray-800 rounded p-2.5 bg-gray-900/40">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
@@ -379,6 +578,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <button onClick={() => beginEntityEdit(e)} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-blue-300"><Edit3 className="h-3 w-3" />Edit</button>
                     <LockChip locked={e.locked} onToggle={() => toggleLock("entity", e.id, e.locked)} />
                     <button onClick={() => remove("entity", e.id, e.locked)} className="text-gray-600 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
@@ -419,7 +619,23 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
             {relationships.length === 0 && available && (
               <div className="text-xs text-gray-500 italic py-2">No relationships yet — they become gate constraints.</div>
             )}
-            {relationships.map((r) => (
+            {relationships.map((r) => editing?.kind === "relationship" && editing.id === r.id ? (
+              <div key={r.id} className="space-y-2 rounded border border-blue-700/60 bg-gray-900/70 p-2.5">
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="From entity type" className={inputCls} value={editing.draft.fromEntityType} onChange={(event) => setEditing((current) => current ? { ...current, draft: { ...current.draft, fromEntityType: event.target.value, fromEntityId: "" } } : current)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
+                  <RelationshipEntityPicker side="From" entityType={editing.draft.fromEntityType} value={editing.draft.fromEntityId} entities={relationshipEntities[editing.draft.fromEntityType] ?? []} onChange={(id) => editField("fromEntityId", id)} />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="To entity type" className={inputCls} value={editing.draft.toEntityType} onChange={(event) => setEditing((current) => current ? { ...current, draft: { ...current.draft, toEntityType: event.target.value, toEntityId: "" } } : current)}>{REL_ENTITY_TYPES.map((type) => <option key={type}>{type}</option>)}</select>
+                  <RelationshipEntityPicker side="To" entityType={editing.draft.toEntityType} value={editing.draft.toEntityId} entities={relationshipEntities[editing.draft.toEntityType] ?? []} onChange={(id) => editField("toEntityId", id)} />
+                </div>
+                <input aria-label="Relationship type" className={inputCls} value={editing.draft.type} onChange={(event) => editField("type", event.target.value)} />
+                <input aria-label="Arc stage" className={inputCls} value={editing.draft.arcStage} onChange={(event) => editField("arcStage", event.target.value)} />
+                <input aria-label="Relationship meter" type="number" min={-100} max={100} className={inputCls} value={editing.draft.meter} onChange={(event) => editField("meter", event.target.value)} />
+                <textarea aria-label="Relationship rules" rows={4} className={inputCls} value={editing.draft.rules} onChange={(event) => editField("rules", event.target.value)} />
+                {editActions}
+              </div>
+            ) : (
               <div key={r.id} className="border border-gray-800 rounded p-2.5 bg-gray-900/40">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-xs text-gray-200 min-w-0">
@@ -431,6 +647,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <MeterBar meter={r.meter} />
+                    <button onClick={() => beginRelationshipEdit(r)} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-blue-300"><Edit3 className="h-3 w-3" />Edit</button>
                     <LockChip locked={r.locked} onToggle={() => toggleLock("relationship", r.id, r.locked)} />
                     <button onClick={() => remove("relationship", r.id, r.locked)} className="text-gray-600 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
@@ -444,13 +661,13 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
             ))}
             {showAdd ? (
               <div className="border border-gray-700 rounded p-2.5 space-y-2 bg-gray-900/60">
-                <div className="flex gap-2">
-                  <select className={inputCls} value={relForm.fromEntityType} onChange={(e) => setRelForm({ ...relForm, fromEntityType: e.target.value })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-                  <input className={inputCls} placeholder="From entity ID" value={relForm.fromEntityId} onChange={(e) => setRelForm({ ...relForm, fromEntityId: e.target.value })} />
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="From entity type" className={inputCls} value={relForm.fromEntityType} onChange={(e) => setRelForm({ ...relForm, fromEntityType: e.target.value, fromEntityId: "" })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+                  <RelationshipEntityPicker side="From" entityType={relForm.fromEntityType} value={relForm.fromEntityId} entities={relationshipEntities[relForm.fromEntityType] ?? []} onChange={(id) => setRelForm({ ...relForm, fromEntityId: id })} />
                 </div>
-                <div className="flex gap-2">
-                  <select className={inputCls} value={relForm.toEntityType} onChange={(e) => setRelForm({ ...relForm, toEntityType: e.target.value })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-                  <input className={inputCls} placeholder="To entity ID" value={relForm.toEntityId} onChange={(e) => setRelForm({ ...relForm, toEntityId: e.target.value })} />
+                <div className="grid gap-2 sm:grid-cols-[minmax(8rem,0.45fr)_minmax(0,1fr)]">
+                  <select aria-label="To entity type" className={inputCls} value={relForm.toEntityType} onChange={(e) => setRelForm({ ...relForm, toEntityType: e.target.value, toEntityId: "" })}>{REL_ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
+                  <RelationshipEntityPicker side="To" entityType={relForm.toEntityType} value={relForm.toEntityId} entities={relationshipEntities[relForm.toEntityType] ?? []} onChange={(id) => setRelForm({ ...relForm, toEntityId: id })} />
                 </div>
                 <div className="flex gap-2">
                   <input className={inputCls} placeholder="Type (e.g. secret allegiance)" value={relForm.type} onChange={(e) => setRelForm({ ...relForm, type: e.target.value })} />
@@ -484,7 +701,16 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
               />
               <span>— the writer never sees beyond this.</span>
             </div>
-            {knownFacts.map((f) => (
+            {knownFacts.map((f) => editing?.kind === "fact" && editing.id === f.id ? (
+              <div key={f.id} className="space-y-2 rounded border border-blue-700/60 bg-gray-900/70 p-2.5">
+                <textarea aria-label="Fact statement" rows={3} className={inputCls} value={editing.draft.statement} onChange={(event) => editField("statement", event.target.value)} />
+                <input aria-label="Known as of chapter" type="number" min={1} className={inputCls} value={editing.draft.knownAsOf} onChange={(event) => editField("knownAsOf", event.target.value)} />
+                <textarea aria-label="Entity references JSON" rows={4} className={inputCls} value={editing.draft.entityRefs} onChange={(event) => editField("entityRefs", event.target.value)} />
+                <input aria-label="Source chapter" type="number" min={1} className={inputCls} value={editing.draft.sourceChapter} onChange={(event) => editField("sourceChapter", event.target.value)} />
+                <input aria-label="Source scene" className={inputCls} value={editing.draft.sourceScene} onChange={(event) => editField("sourceScene", event.target.value)} />
+                {editActions}
+              </div>
+            ) : (
               <div key={f.id} className="border border-gray-800 rounded p-2.5 bg-gray-900/40 flex items-start justify-between gap-2">
                 <div>
                   <p className="text-[11px] text-gray-300">{f.statement}</p>
@@ -495,6 +721,7 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <button onClick={() => void beginFactEdit(f.id)} className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-blue-300"><Edit3 className="h-3 w-3" />Edit</button>
                   <LockChip locked={f.locked} onToggle={() => toggleLock("fact", f.id, f.locked)} />
                   <button onClick={() => remove("fact", f.id, f.locked)} className="text-gray-600 hover:text-red-400"><Trash2 className="w-3.5 h-3.5" /></button>
                 </div>
@@ -505,11 +732,21 @@ export function CodexPanel({ bookId, companySlug, currentChapter, activeSection,
                 <div className="text-[10px] uppercase tracking-wide text-gray-600 pb-1">Withheld from the writer (author-only)</div>
                 <div className="flex flex-wrap gap-1.5">
                   {withheldFacts.map((f) => (
-                    <span key={f.id} title="Withheld — statement hidden until its reveal chapter" className="text-[10px] px-2 py-1 rounded border border-purple-800/60 bg-purple-950/30 text-purple-300">
-                      🙈 reveals ch.{f.knownAsOf}{f.locked ? " · 🔒" : ""}
-                    </span>
+                    <button key={f.id} onClick={() => void beginFactEdit(f.id)} title="Board-only edit; writer context remains gated" className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-purple-800/60 bg-purple-950/30 text-purple-300 hover:border-purple-500">
+                      <Edit3 className="h-3 w-3" />Edit withheld · reveals ch.{f.knownAsOf}{f.locked ? " · locked" : ""}
+                    </button>
                   ))}
                 </div>
+              </div>
+            )}
+            {editing?.kind === "fact" && withheldFacts.some((fact) => fact.id === editing.id) && (
+              <div className="space-y-2 rounded border border-blue-700/60 bg-gray-900/70 p-2.5">
+                <textarea aria-label="Fact statement" rows={3} className={inputCls} value={editing.draft.statement} onChange={(event) => editField("statement", event.target.value)} />
+                <input aria-label="Known as of chapter" type="number" min={1} className={inputCls} value={editing.draft.knownAsOf} onChange={(event) => editField("knownAsOf", event.target.value)} />
+                <textarea aria-label="Entity references JSON" rows={4} className={inputCls} value={editing.draft.entityRefs} onChange={(event) => editField("entityRefs", event.target.value)} />
+                <input aria-label="Source chapter" type="number" min={1} className={inputCls} value={editing.draft.sourceChapter} onChange={(event) => editField("sourceChapter", event.target.value)} />
+                <input aria-label="Source scene" className={inputCls} value={editing.draft.sourceScene} onChange={(event) => editField("sourceScene", event.target.value)} />
+                {editActions}
               </div>
             )}
             {showAdd ? (

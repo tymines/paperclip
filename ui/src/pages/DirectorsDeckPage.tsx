@@ -37,7 +37,7 @@ async function apiFetch<T>(url: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
-interface OutlineEntry { id: string; chapterNumber: number; title: string; locked: boolean; beats?: Beat[] }
+interface OutlineEntry { id: string; chapterNumber: number; title: string; locked: boolean; revision: number; beats?: Beat[] }
 interface ChapterRow { id: string; chapterNumber: number; title: string; content: string; locked: boolean }
 
 const CODEX_TYPES = new Set(["lore", "factions", "objects", "systems", "timeline", "threads", "themes", "glossary"]);
@@ -76,6 +76,7 @@ export function DirectorsDeckPage() {
   const [books, setBooks] = useState<BookData[]>([]);
   const [booksLoading, setBooksLoading] = useState(true);
   const [booksError, setBooksError] = useState<string | null>(null);
+  const [controlError, setControlError] = useState<string | null>(null);
   const [activeBookId, setActiveBookId] = useState<string | null>(null);
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
   const [chapters, setChapters] = useState<ChapterRow[]>([]);
@@ -222,41 +223,72 @@ export function DirectorsDeckPage() {
 
   async function handleRenameBook(title: string) {
     if (!activeBook) throw new Error("Select a book before renaming it.");
-    const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books/${activeBook.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ title }),
-    });
-    applyUpdatedBook(book);
+    setControlError(null);
+    try {
+      const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books/${activeBook.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title, expectedRevision: activeBook.revision }),
+      });
+      applyUpdatedBook(book);
+    } catch (err) {
+      setControlError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   }
 
   async function handleModeChange(m: DirectorMode) {
-    setMode(m);
     if (!activeBook) return;
     // Director Mode = the old autonomy dial, renamed (§2): co→manual,
     // chapter→assisted, act→autopilot — stored alongside the legacy field.
     const autonomyMode = m === "co" ? "manual" : m === "chapter" ? "assisted" : "autopilot";
-    await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}`, {
+    setControlError(null);
+    try {
+      const { book } = await apiFetch<{ book: BookData }>(`/companies/${companySlug}/book-studio/books/${activeBook.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ metadata: { directorMode: m, autonomyMode }, expectedRevision: activeBook.revision }),
+      });
+      applyUpdatedBook(book);
+      setMode((((book.metadata?.directorMode as DirectorMode | undefined) ?? m)));
+    } catch (err) {
+      setControlError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function updateOutlineLock(n: number, locked: boolean) {
+    if (!activeBook) return;
+    const current = outline.find((entry) => entry.chapterNumber === n);
+    if (!current) return;
+    const result = await apiFetch<{ "outline-entry": OutlineEntry }>(`/companies/${companySlug}/book-studio/books/${activeBook.id}/outline/${current.id}`, {
       method: "PATCH",
-      body: JSON.stringify({ metadata: { directorMode: m, autonomyMode } }),
-    }).catch(() => {});
+      body: JSON.stringify({ locked, expectedRevision: current.revision }),
+    });
+    setOutline((rows) => rows.map((row) => row.id === current.id ? result["outline-entry"] : row));
   }
 
   async function handleUnlockChapter(n: number) {
     if (!activeBook) return;
-    await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}/chapters/${n}/lock`, {
-      method: "PATCH",
-      body: JSON.stringify({ locked: false }),
-    }).catch(() => {});
-    loadBookData(activeBook.id);
+    setControlError(null);
+    try {
+      await updateOutlineLock(n, false);
+      await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}/chapters/${n}/lock`, {
+        method: "PATCH",
+        body: JSON.stringify({ locked: false }),
+      });
+      void loadBookData(activeBook.id);
+    } catch (err) { setControlError(err instanceof Error ? err.message : String(err)); }
   }
 
   async function handleLockToggle(n: number, locked: boolean) {
     if (!activeBook) return;
-    await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}/chapters/${n}/lock`, {
-      method: "PATCH",
-      body: JSON.stringify({ locked }),
-    }).catch(() => {});
-    loadBookData(activeBook.id);
+    setControlError(null);
+    try {
+      await updateOutlineLock(n, locked);
+      await apiFetch(`/companies/${companySlug}/book-studio/books/${activeBook.id}/chapters/${n}/lock`, {
+        method: "PATCH",
+        body: JSON.stringify({ locked }),
+      });
+      void loadBookData(activeBook.id);
+    } catch (err) { setControlError(err instanceof Error ? err.message : String(err)); }
   }
 
   const activeOutline = useMemo(
@@ -293,6 +325,7 @@ export function DirectorsDeckPage() {
         onMedia={() => setMediaOpen((open) => !open)}
         onExport={() => setOverlay("export")}
       />
+      {controlError && <div role="alert" className="shrink-0 border-b border-red-500/30 bg-red-950/60 px-4 py-2 text-xs text-red-200">{controlError}</div>}
       <nav className="grid shrink-0 grid-cols-4 gap-px border-b border-white/10 bg-[#0d1016] @min-[980px]/deck:hidden" aria-label="Book tools">
         {(["chapters", "bible", "inspect", "tools"] as const).map((sheet) => <button key={sheet} className="min-h-11 px-1 text-[11px] font-semibold" onClick={() => setMobileSheet(sheet)}>{sheet === "bible" ? "Story Bible" : sheet[0].toUpperCase() + sheet.slice(1)}</button>)}
       </nav>
@@ -347,11 +380,12 @@ export function DirectorsDeckPage() {
                 companySlug={companySlug}
                 chapterNumber={activeChapter}
                 chapterTitle={activeOutline?.title || chapters.find((c) => c.chapterNumber === activeChapter)?.title || `Chapter ${activeChapter}`}
-                outlineEntry={activeOutline ? { id: activeOutline.id, chapterNumber: activeOutline.chapterNumber, title: activeOutline.title, beats: activeOutline.beats ?? [] } : null}
+                outlineEntry={activeOutline ? { id: activeOutline.id, chapterNumber: activeOutline.chapterNumber, title: activeOutline.title, revision: activeOutline.revision, beats: activeOutline.beats ?? [] } : null}
                 locked={activeChapterLocked}
                 chapterStatus={chapterStatusMap[String(activeChapter)] ?? null}
                 onLockToggle={() => handleLockToggle(activeChapter, !activeChapterLocked)}
                 onNeedsRefresh={() => loadBookData(activeBook.id)}
+                onOutlineUpdated={(updated) => setOutline((rows) => rows.map((row) => row.id === updated.id ? { ...row, ...updated } : row))}
                 onOpenDecisionInbox={() => setOverlay("inbox")}
                 onOpenStoryBible={() => { setActiveSection("overview"); setCenterMode("bible"); }}
               />

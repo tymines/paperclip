@@ -22,20 +22,22 @@ vi.mock("../services/book-bible-codex.js", async (importOriginal) => {
 });
 
 import {
-  bibleLore, bibleThreads, bibleGlossary, bibleRelationships, bibleFacts, storyBibleCharacters,
+  bibleLore, bibleThreads, bibleGlossary, bibleRelationships, bibleFacts, storyBibleCharacters, books,
 } from "@paperclipai/db";
 
 const REL_ERR = () => Object.assign(new Error('relation "bible_facts" does not exist'), { code: "42P01" });
 
-const FACT_CH2 = { id: "f-1", bookId: "book-1", statement: "Kaelen is incapable of subterfuge", entityRefs: [], knownAsOf: 2, sourceChapter: 2, sourceScene: "", provenance: "authored", locked: false, createdAt: new Date(), updatedAt: new Date() };
-const FACT_CH8 = { id: "f-2", bookId: "book-1", statement: "Kaelen is the heir", entityRefs: [], knownAsOf: 8, sourceChapter: null, sourceScene: "", provenance: "auto-extracted", locked: true, createdAt: new Date(), updatedAt: new Date() };
+const FACT_CH2 = { id: "f-1", bookId: "book-1", statement: "Kaelen is incapable of subterfuge", entityRefs: [], knownAsOf: 2, sourceChapter: 2, sourceScene: "", provenance: "authored", locked: false, revision: 1, createdAt: new Date(), updatedAt: new Date() };
+const FACT_CH8 = { id: "f-2", bookId: "book-1", statement: "Kaelen is the heir", entityRefs: [], knownAsOf: 8, sourceChapter: null, sourceScene: "", provenance: "auto-extracted", locked: true, revision: 1, createdAt: new Date(), updatedAt: new Date() };
 
 interface MockState {
   entities: Record<string, any[]>;
   relationships: any[];
   facts: any[];
   characters: any[];
+  books: any[];
   failOnCodex: boolean;
+  failUpdates: boolean;
 }
 
 function mockDb(opts?: Partial<MockState>) {
@@ -44,7 +46,9 @@ function mockDb(opts?: Partial<MockState>) {
     relationships: opts?.relationships ?? [],
     facts: opts?.facts ?? [FACT_CH2, FACT_CH8],
     characters: opts?.characters ?? [],
+    books: opts?.books ?? [{ id: "book-1", companyId: "co-1", title: "Book" }],
     failOnCodex: opts?.failOnCodex ?? false,
+    failUpdates: opts?.failUpdates ?? false,
   };
   const tableState = (table: unknown): any[] => {
     if (table === bibleLore) return state.entities.lore;
@@ -53,6 +57,7 @@ function mockDb(opts?: Partial<MockState>) {
     if (table === bibleRelationships) return state.relationships;
     if (table === bibleFacts) return state.facts;
     if (table === storyBibleCharacters) return state.characters;
+    if (table === books) return state.books;
     return [];
   };
   const maybeFail = (table: unknown) => {
@@ -74,7 +79,7 @@ function mockDb(opts?: Partial<MockState>) {
     insert: (table: unknown) => ({
       values: (v: any) => {
         maybeFail(table);
-        const row = { createdAt: new Date(), updatedAt: new Date(), locked: false, ...v };
+        const row = { createdAt: new Date(), updatedAt: new Date(), locked: false, revision: 1, ...v };
         tableState(table).push(row);
         const p: any = Promise.resolve([row]);
         p.returning = () => Promise.resolve([row]);
@@ -85,8 +90,16 @@ function mockDb(opts?: Partial<MockState>) {
       set: (v: any) => ({
         where: () => {
           maybeFail(table);
+          if (state.failUpdates) {
+            const p: any = Promise.resolve([]);
+            p.returning = () => Promise.resolve([]);
+            return p;
+          }
           const rows = tableState(table);
-          for (const r of rows) Object.assign(r, v);
+          for (const r of rows) {
+            const { revision: _revisionExpression, ...plainChanges } = v;
+            Object.assign(r, plainChanges, { revision: (r.revision ?? 1) + 1 });
+          }
           const p: any = Promise.resolve(rows);
           p.returning = () => Promise.resolve(rows.slice(0, 1));
           return p;
@@ -154,17 +167,35 @@ describe("codex entity CRUD", () => {
     expect(res.status).toBe(201);
     expect(res.body.entity.payoffState).toBe("open");
   });
+
+  it("returns 404 for a foreign book before reading codex rows", async () => {
+    const app = await createTestApp(mockDb({ books: [] }));
+    expect((await request(app).get(`${BASE}/codex/lore`)).status).toBe(404);
+  });
+
+  it("denies a cross-company agent before reading the book", async () => {
+    const app = await createTestApp(mockDb(), { type: "agent", agentId: "agent-1", companyId: "co-2" });
+    expect((await request(app).get(`${BASE}/codex/lore`)).status).toBe(403);
+  });
+
+  it("returns 409 for a stale edit and rejects provenance/order changes", async () => {
+    const row = { id: "l-1", bookId: "book-1", name: "Lore", summary: "", details: {}, locked: false, source: "imported", revision: 1, updatedAt: new Date() };
+    const app = await createTestApp(mockDb({ entities: { lore: [row], threads: [], glossary: [] }, failUpdates: true }));
+    expect((await request(app).patch(`${BASE}/codex/lore/l-1`).send({ summary: "stale", expectedRevision: row.revision })).status).toBe(409);
+    expect((await request(app).patch(`${BASE}/codex/lore/l-1`).send({ source: "authored", expectedRevision: row.revision })).status).toBe(400);
+    expect((await request(app).patch(`${BASE}/codex/timeline/l-1`).send({ orderIndex: 99, expectedRevision: row.revision })).status).toBe(400);
+  });
 });
 
 // ── §7 locks on codex entries ──────────────────────────────────────────
 
 describe("codex lock enforcement (Spec v1 §7)", () => {
-  const LOCKED_LORE = { id: "l-1", bookId: "book-1", name: "Locked Lore", summary: "", details: {}, locked: true, source: "authored", createdAt: new Date(), updatedAt: new Date() };
+  const LOCKED_LORE = { id: "l-1", bookId: "book-1", name: "Locked Lore", summary: "", details: {}, locked: true, source: "authored", revision: 1, createdAt: new Date(), updatedAt: new Date() };
 
   it("an AI actor cannot edit a locked entry (409 LOCKED)", async () => {
     const db = mockDb({ entities: { lore: [{ ...LOCKED_LORE }], threads: [], glossary: [] } });
     const app = await createTestApp(db, { type: "agent", agentId: "agent-1", companyId: "co-1" });
-    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ summary: "AI rewrite" });
+    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ summary: "AI rewrite", expectedRevision: LOCKED_LORE.revision });
     expect(res.status).toBe(409);
     expect(res.body.code).toBe("LOCKED");
   });
@@ -179,14 +210,14 @@ describe("codex lock enforcement (Spec v1 §7)", () => {
   it("only the human author toggles locked (AI → 403)", async () => {
     const db = mockDb({ entities: { lore: [{ ...LOCKED_LORE, locked: false }], threads: [], glossary: [] } });
     const app = await createTestApp(db, { type: "agent", agentId: "agent-1", companyId: "co-1" });
-    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ locked: true });
+    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ locked: true, expectedRevision: LOCKED_LORE.revision });
     expect(res.status).toBe(403);
   });
 
   it("the human author edits a locked entry freely", async () => {
     const db = mockDb({ entities: { lore: [{ ...LOCKED_LORE }], threads: [], glossary: [] } });
     const app = await createTestApp(db);
-    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ summary: "Human edit" });
+    const res = await request(app).patch(`${BASE}/codex/lore/l-1`).send({ summary: "Human edit", expectedRevision: LOCKED_LORE.revision });
     expect(res.status).toBe(200);
   });
 });
@@ -205,10 +236,12 @@ describe("codex relationships", () => {
       toEntityType: "lore", toEntityId: "l-9",
       type: "secret allegiance", arcStage: "strained", meter: -40,
       rules: ["never reveals membership before ch.9"],
+      source: "co-created",
     });
     expect(res.status).toBe(201);
     expect(res.body.relationship.meter).toBe(-40);
     expect(res.body.relationship.rules).toHaveLength(1);
+    expect(res.body.relationship.source).toBe("co-created");
   });
 
   it("rejects dangling or cross-book relationship endpoints", async () => {
@@ -223,6 +256,18 @@ describe("codex relationships", () => {
     expect(db.__state.relationships).toHaveLength(0);
   });
 
+  it("rejects a relationship from an entity to itself", async () => {
+    const db = mockDb({ characters: [{ id: "c-1", bookId: "book-1", name: "Kaelen" }] });
+    const app = await createTestApp(db);
+    const res = await request(app).post(`${BASE}/codex-relationships`).send({
+      fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "character", toEntityId: "c-1", meter: 0,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("different entities");
+    expect(db.__state.relationships).toHaveLength(0);
+  });
+
   it("rejects a meter outside −100…+100", async () => {
     const app = await createTestApp(mockDb());
     const res = await request(app).post(`${BASE}/codex-relationships`).send({
@@ -230,6 +275,54 @@ describe("codex relationships", () => {
       toEntityType: "character", toEntityId: "c-2", meter: 150,
     });
     expect(res.status).toBe(400);
+  });
+
+  it("rejects non-string type and arcStage plus an unsupported source on create", async () => {
+    const app = await createTestApp(mockDb());
+    const payload = {
+      fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "character", toEntityId: "c-2", meter: 0,
+    };
+    expect((await request(app).post(`${BASE}/codex-relationships`).send({ ...payload, type: 7 })).status).toBe(400);
+    expect((await request(app).post(`${BASE}/codex-relationships`).send({ ...payload, arcStage: { name: "early" } })).status).toBe(400);
+    expect((await request(app).post(`${BASE}/codex-relationships`).send({ ...payload, source: "generated" })).status).toBe(400);
+  });
+
+  it("rejects non-string type and arcStage on update without changing the relationship", async () => {
+    const relationship = {
+      id: "r-1", bookId: "book-1", fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "character", toEntityId: "c-2", type: "allies", arcStage: "early",
+      meter: 20, rules: [], source: "authored", locked: false, revision: 1, updatedAt: new Date(),
+    };
+    const db = mockDb({ relationships: [relationship] });
+    const app = await createTestApp(db);
+    const expectedRevision = relationship.revision;
+    expect((await request(app).patch(`${BASE}/codex-relationships/r-1`).send({ type: 7, expectedRevision })).status).toBe(400);
+    expect((await request(app).patch(`${BASE}/codex-relationships/r-1`).send({ arcStage: ["late"], expectedRevision })).status).toBe(400);
+    expect(db.__state.relationships[0]).toMatchObject({ type: "allies", arcStage: "early" });
+  });
+
+  it("rejects an edit that would make a relationship self-referential", async () => {
+    const relationship = {
+      id: "r-1", bookId: "book-1", fromEntityType: "character", fromEntityId: "c-1",
+      toEntityType: "character", toEntityId: "c-2", type: "allies", arcStage: "early",
+      meter: 20, rules: [], source: "authored", locked: false, revision: 1, updatedAt: new Date(),
+    };
+    const db = mockDb({
+      characters: [
+        { id: "c-1", bookId: "book-1", name: "Kaelen" },
+        { id: "c-2", bookId: "book-1", name: "Mira" },
+      ],
+      relationships: [relationship],
+    });
+    const app = await createTestApp(db);
+    const res = await request(app).patch(`${BASE}/codex-relationships/r-1`).send({
+      toEntityId: "c-1",
+      expectedRevision: relationship.revision,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain("different entities");
+    expect(db.__state.relationships[0]).toMatchObject({ fromEntityId: "c-1", toEntityId: "c-2" });
   });
 });
 
@@ -253,10 +346,39 @@ describe("codex facts — atomic + spoiler-gated", () => {
     expect(JSON.stringify(res.body.withheld)).not.toContain("heir");
   });
 
-  it("a locked fact refuses AI edits (409)", async () => {
-    const app = await createTestApp(mockDb({ facts: [{ ...FACT_CH8 }] }), { type: "agent", agentId: "agent-1", companyId: "co-1" });
-    const res = await request(app).patch(`${BASE}/codex-facts/f-2`).send({ statement: "retcon" });
-    expect(res.status).toBe(409);
+  it("denies an agent full-record fact PATCH before any update", async () => {
+    const db = mockDb({ facts: [{ ...FACT_CH8 }] });
+    const app = await createTestApp(db, { type: "agent", agentId: "agent-1", companyId: "co-1" });
+    const res = await request(app).patch(`${BASE}/codex-facts/f-2`).send({ statement: "retcon", expectedRevision: FACT_CH8.revision });
+    expect(res.status).toBe(403);
+    expect(db.__state.facts[0].statement).toBe(FACT_CH8.statement);
+  });
+
+  it("allows a board human to update a full-record fact", async () => {
+    const db = mockDb({ facts: [{ ...FACT_CH8 }] });
+    const app = await createTestApp(db);
+    const res = await request(app).patch(`${BASE}/codex-facts/f-2`).send({ statement: "Kaelen is the hidden heir", expectedRevision: FACT_CH8.revision });
+    expect(res.status).toBe(200);
+    expect(res.body.fact.statement).toBe("Kaelen is the hidden heir");
+    expect(db.__state.facts[0].statement).toBe("Kaelen is the hidden heir");
+  });
+
+  it("allows only a board human to read a withheld fact's full record", async () => {
+    const board = await createTestApp(mockDb({ facts: [{ ...FACT_CH8 }] }));
+    const full = await request(board).get(`${BASE}/codex-facts/f-2`);
+    expect(full.status).toBe(200);
+    expect(full.body.fact.statement).toContain("heir");
+    const agent = await createTestApp(mockDb({ facts: [{ ...FACT_CH8 }] }), { type: "agent", agentId: "agent-1", companyId: "co-1" });
+    expect((await request(agent).get(`${BASE}/codex-facts/f-2`)).status).toBe(403);
+  });
+
+  it("rejects invalid fact fields and immutable provenance updates", async () => {
+    const app = await createTestApp(mockDb({ facts: [{ ...FACT_CH2 }] }));
+    const expectedRevision = FACT_CH2.revision;
+    expect((await request(app).patch(`${BASE}/codex-facts/f-1`).send({ statement: " ", expectedRevision })).status).toBe(400);
+    expect((await request(app).patch(`${BASE}/codex-facts/f-1`).send({ knownAsOf: 0, expectedRevision })).status).toBe(400);
+    expect((await request(app).patch(`${BASE}/codex-facts/f-1`).send({ entityRefs: [{ entityType: "dragon", entityId: "x" }], expectedRevision })).status).toBe(400);
+    expect((await request(app).patch(`${BASE}/codex-facts/f-1`).send({ provenance: "authored", expectedRevision })).status).toBe(400);
   });
 });
 

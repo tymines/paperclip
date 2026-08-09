@@ -1,4 +1,5 @@
 export type { Company } from "./company.js";
+export * from "./creator-os.js";
 export type {
   Book,
   BookAutonomyMode,

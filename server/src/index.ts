@@ -34,6 +34,7 @@ import { setupLiveEventsWebSocketServer } from "./realtime/live-events-ws.js";
 import { setupRoomWebSocketServer } from "./realtime/room-events-ws.js";
 import {
   feedbackService,
+  creatorOsService,
   heartbeatService,
   instanceSettingsService,
   reconcilePersistedRuntimeServicesOnStartup,
@@ -755,6 +756,7 @@ export async function startServer(): Promise<StartedServer> {
     pluginWorkerManager,
     socialScheduler,
     socialDmPoller,
+    imageStudioGenerationWorkerEnabled: config.imageStudioGenerationWorkerEnabled,
   });
   const server = createServer(app as unknown as Parameters<typeof createServer>[0]);
   let imageStudioGenerationInterval: NodeJS.Timeout | null = null;
@@ -949,21 +951,23 @@ export async function startServer(): Promise<StartedServer> {
   // Startup reconciliation is GET-only for durable handles and never submits
   // queued rows; recurring ticks submit only explicitly eligible new rows.
   if (config.imageStudioGenerationWorkerEnabled) {
+    const creatorOs = creatorOsService(db as any);
     logger.info(
       { intervalMs: config.imageStudioGenerationWorkerIntervalMs },
       "image-studio generation worker enabled",
     );
     void reconcileGenerationsOnStartup(db as any)
-      .then((result) => {
+      .then(async (result) => {
         logGenerationTickWarnings(logger, result, "startup");
         logger.info(result, "image-studio generation startup reconciliation completed");
+        await creatorOs.reconcileActiveRuns();
       })
       .catch(() => {
         logger.error("image-studio generation startup reconciliation failed");
       });
     imageStudioGenerationInterval = setInterval(() => {
       void pollGenerations(db as any)
-        .then((result) => {
+        .then(async (result) => {
           logGenerationTickWarnings(logger, result, "scheduled");
           if (
             result.submitted > 0 ||
@@ -974,6 +978,7 @@ export async function startServer(): Promise<StartedServer> {
           ) {
             logger.info(result, "image-studio generation queue tick advanced jobs");
           }
+          await creatorOs.reconcileActiveRuns();
         })
         .catch(() => {
           logger.error("image-studio generation queue tick failed");

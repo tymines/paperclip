@@ -69,6 +69,33 @@ function stubFetch(postResponder: () => { ok: boolean; status: number; payload: 
   return calls;
 }
 
+function stubExistingBook(patchResponder: (body: Record<string, unknown>) => { ok: boolean; status: number; payload: unknown }) {
+  const calls: FetchCall[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, options?: RequestInit) => {
+    const url = String(input);
+    const method = options?.method ?? "GET";
+    const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+    calls.push({ url, method, body });
+    if (method === "PATCH" && url.endsWith("/books/book-1")) {
+      const result = patchResponder(body as Record<string, unknown>);
+      return { ok: result.ok, status: result.status, json: async () => result.payload, text: async () => JSON.stringify(result.payload) } as Response;
+    }
+    let payload: unknown = {};
+    if (url.endsWith("/book-studio/books")) payload = { books: [{ id: "book-1", companyId: "acme", slug: "book", title: "Old Title", metadata: {}, revision: 7, createdAt: "", updatedAt: "" }] };
+    else if (url.includes("/outline")) payload = { outline: [] };
+    else if (url.includes("/chapters")) payload = { chapters: [] };
+    else if (url.includes("/characters")) payload = { characters: [] };
+    else if (url.includes("/world-locations")) payload = { "world-locations": [] };
+    else if (url.includes("/style")) payload = { style: [] };
+    else if (url.includes("/bible-review-queue")) payload = { pendingCount: 0 };
+    else if (url.includes("/codex-relationships")) payload = { available: false, relationships: [] };
+    else if (url.includes("/codex-facts")) payload = { available: false, known: [] };
+    else if (url.includes("/codex/")) payload = { available: false, entities: [] };
+    return { ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) } as Response;
+  }));
+  return calls;
+}
+
 function renderPage() {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -240,5 +267,25 @@ describe("DirectorsDeckPage — + NEW BOOK create flow", () => {
     expect(workspaceGrid.className).toContain("@min-[760px]/deck:grid-cols-[240px_minmax(0,1fr)]");
     expect(workspaceGrid.className).toContain("@min-[1100px]/deck:grid-cols-[272px_minmax(0,1fr)_322px]");
     expect(container!.querySelector('nav[aria-label="Book tools"]')!.className).toContain("@min-[980px]/deck:hidden");
+  });
+
+  it("renames with the active revision token and consumes the returned book", async () => {
+    const calls = stubExistingBook(() => ({ ok: true, status: 200, payload: { book: { id: "book-1", companyId: "acme", slug: "book", title: "Returned Title", metadata: {}, revision: 8, createdAt: "", updatedAt: "" } } }));
+    const r = renderPage(); container = r.container; root = r.root; await flush(); await flush();
+    click(container!.querySelector('button[aria-label="Rename active book"]')!); await flush();
+    setInputValue(container!.querySelector("#rename-book-input") as HTMLInputElement, "Requested Title");
+    act(() => { container!.querySelector('#rename-book-input')!.closest("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+    await flush();
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ title: "Requested Title", expectedRevision: 7 });
+    expect((container!.querySelector('select[aria-label="Active book"]') as HTMLSelectElement).selectedOptions[0].textContent).toBe("Returned Title");
+  });
+
+  it("sends mode changes with the active revision and visibly surfaces a conflict", async () => {
+    const calls = stubExistingBook(() => ({ ok: false, status: 409, payload: { error: "Book changed elsewhere" } }));
+    const r = renderPage(); container = r.container; root = r.root; await flush(); await flush();
+    click(Array.from(container!.querySelectorAll("button")).find((button) => button.textContent?.includes("Chapter ·2"))!);
+    await flush();
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ metadata: { directorMode: "chapter", autonomyMode: "assisted" }, expectedRevision: 7 });
+    expect(container!.querySelector('[role="alert"]')?.textContent).toContain("Book changed elsewhere");
   });
 });

@@ -1,4 +1,5 @@
 import { api } from "./client";
+import type { CreatorGenerationWorkerReadiness } from "@paperclipai/shared";
 
 export interface ImageProvider {
   id: string;
@@ -79,6 +80,12 @@ export interface ContentIdea {
   title: string;
   caption: string;
   suggestedHashtags: string[];
+}
+
+export interface ContentGeneratorCapability {
+  enabled: boolean;
+  code: "content_generator_unavailable";
+  reason: string;
 }
 
 export interface SocialPost {
@@ -291,6 +298,7 @@ export interface ImageStudioCapabilityCatalog {
   generatedAt: string;
   providers: ImageStudioProviderCapabilityState[];
   capabilities: ImageStudioCapability[];
+  generationWorker: CreatorGenerationWorkerReadiness;
 }
 
 export interface GenerateBatchBody {
@@ -686,7 +694,13 @@ export const imageStudioApi = {
       `/image-studio/prompt-templates/${id}`,
     ),
 
-  /** Generate AI content ideas for a persona */
+  /** Server-owned Content Ideas capability truth. */
+  getContentGeneratorCapability: (companyId: string) =>
+    api.get<ContentGeneratorCapability>(
+      `/companies/${companyId}/image-studio/content-generation-capability`,
+    ),
+
+  /** Generate AI content ideas for a persona. */
   generateContent: (companyId: string, personaId: string, body: { topic: string; count?: number }) =>
     api.post<{ ideas: ContentIdea[] }>(
       `/companies/${companyId}/image-studio/personas/${personaId}/generate-content`,

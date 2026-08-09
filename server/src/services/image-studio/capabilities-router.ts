@@ -2,6 +2,10 @@ import { Router } from "express";
 import { assertCompanyAccess } from "../../routes/authz.js";
 import type { ImageProvider } from "../image-providers/types.js";
 import {
+  CREATOR_OS_GENERATION_WORKER_UNAVAILABLE_REASON,
+  type CreatorGenerationWorkerReadiness,
+} from "@paperclipai/shared";
+import {
   buildImageStudioCapabilityCatalog,
   type CapabilityPersonaContext,
 } from "./capabilities.js";
@@ -12,6 +16,7 @@ export interface ImageStudioCapabilitiesRouterOptions {
     personaId: string,
   ) => Promise<CapabilityPersonaContext | null>;
   inspectionDeadlineMs?: number;
+  generationWorkerReadiness?: CreatorGenerationWorkerReadiness;
 }
 
 export function imageStudioCapabilitiesRouter(
@@ -35,11 +40,16 @@ export function imageStudioCapabilitiesRouter(
       res.status(404).json({ error: "Persona not found" });
       return;
     }
-    res.json(
-      await buildImageStudioCapabilityCatalog(providers, persona, new Date(), {
+    const catalog = await buildImageStudioCapabilityCatalog(providers, persona, new Date(), {
         inspectionDeadlineMs: options.inspectionDeadlineMs,
-      }),
-    );
+      });
+    res.json({
+      ...catalog,
+      generationWorker: options.generationWorkerReadiness ?? {
+        enabled: false,
+        disabledReason: CREATOR_OS_GENERATION_WORKER_UNAVAILABLE_REASON,
+      },
+    });
   });
 
   return router;

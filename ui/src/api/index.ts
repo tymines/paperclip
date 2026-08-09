@@ -19,3 +19,4 @@ export { sidebarPreferencesApi } from "./sidebarPreferences";
 export { inboxDismissalsApi } from "./inboxDismissals";
 export { companySkillsApi } from "./companySkills";
 export { imageStudioApi } from "./imageStudio";
+export { creatorOsApi } from "./creatorOs";

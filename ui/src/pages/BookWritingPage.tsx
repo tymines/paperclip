@@ -89,6 +89,7 @@ export interface BookData {
   slug: string;
   title: string;
   metadata: Record<string, unknown>;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -102,6 +103,7 @@ export interface CharacterEntity {
   voiceCard: Record<string, unknown>;
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown> | null;
@@ -116,6 +118,7 @@ export interface WorldLocationEntity {
   sensoryNotes: Record<string, unknown>;
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown> | null;
@@ -132,6 +135,7 @@ export interface StyleEntity {
   tropes: string[];
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown> | null;
@@ -145,6 +149,7 @@ interface OutlineEntity {
   beats: Record<string, unknown>[];
   locked: boolean;
   source: string;
+  revision: number;
   createdAt: string;
   updatedAt: string;
   metadata?: Record<string, unknown> | null;
@@ -368,7 +373,7 @@ interface CharacterCardProps {
   bookId: string;
   companySlug: string;
   bookSlug: string;
-  onUpdate: (id: string, data: Partial<CharacterEntity>) => void;
+  onUpdate: (id: string, data: Partial<CharacterEntity> & { expectedRevision?: number }) => Promise<CharacterEntity>;
   onDelete: (id: string) => void;
 }
 
@@ -379,7 +384,8 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
   const [editRole, setEditRole] = useState(char.role);
   const [editDesc, setEditDesc] = useState(char.description);
   const [editVoiceCard, setEditVoiceCard] = useState(safeJsonStringify(char.voiceCard));
-  const [editSource, setEditSource] = useState(char.source || "authored");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
   // Optional custom prompt (Tyler: "if I want a specific cover I can just
@@ -432,12 +438,22 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
     .map((n) => n[0] ?? "")
     .join("") || "?";
 
-  const handleSave = () => {
-    onUpdate(char.id, {
+  const beginEdit = () => {
+    setEditName(char.name); setEditRole(char.role); setEditDesc(char.description);
+    setEditVoiceCard(safeJsonStringify(char.voiceCard));
+    setEditError(null); setEditing(true);
+  };
+
+  const handleSave = async () => {
+    setSavingEdit(true); setEditError(null);
+    try {
+      await onUpdate(char.id, {
       name: editName, role: editRole, description: editDesc,
-      voiceCard: safeJsonParse(editVoiceCard), source: editSource,
-    });
-    setEditing(false);
+      voiceCard: safeJsonParse(editVoiceCard), expectedRevision: char.revision,
+      });
+      setEditing(false);
+    } catch (err) { setEditError(err instanceof Error ? err.message : String(err)); }
+    finally { setSavingEdit(false); }
   };
 
   const handleCancel = () => {
@@ -445,12 +461,11 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
     setEditRole(char.role);
     setEditDesc(char.description);
     setEditVoiceCard(safeJsonStringify(char.voiceCard));
-    setEditSource(char.source || "authored");
     setEditing(false);
   };
 
   const handleToggleLock = () => {
-    onUpdate(char.id, { locked: !char.locked });
+    void onUpdate(char.id, { locked: !char.locked, expectedRevision: char.revision });
   };
 
   if (editing) {
@@ -460,15 +475,10 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
         <EditableField label="Role" value={editRole} onChange={setEditRole} />
         <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
         <EditableField label="Voice" value={editVoiceCard} onChange={setEditVoiceCard} multiline rows={10} autoGrow large placeholder="{}" />
-        <div className="mb-2">
-          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
-          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
-            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
+        {editError && <div role="alert" className="mb-2 text-xs text-red-300">{editError}</div>}
         <div className="flex items-center gap-2 mt-1">
-          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
-            <Save className="w-2.5 h-2.5" /> Save
+          <button onClick={() => void handleSave()} disabled={savingEdit} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+            <Save className="w-2.5 h-2.5" /> {savingEdit ? "Saving…" : "Save"}
           </button>
           <button onClick={handleCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
             <X className="w-2.5 h-2.5" /> Cancel
@@ -516,7 +526,7 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
           <p className="text-[11px] text-gray-400 mt-1 leading-relaxed line-clamp-2">{char.description}</p>
         )}
       </div>
-      <div className="flex flex-col gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex flex-col gap-1 shrink-0">
         <button
           onClick={handleToggleLock}
           className={cn(
@@ -528,11 +538,11 @@ export function CharacterCardComponent({ char, bookId, companySlug, bookSlug, on
           {char.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
         </button>
         <button
-          onClick={() => setEditing(true)}
-          className="rounded p-1 text-gray-500 hover:text-blue-400"
+          onClick={beginEdit}
+          className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-gray-400 hover:text-blue-400"
           title="Edit"
         >
-          <Edit3 className="w-3 h-3" />
+          <Edit3 className="w-3 h-3" /> Edit
         </button>
         <button
           onClick={() => setDeleting(true)}
@@ -601,7 +611,7 @@ interface LocationCardProps {
   bookId: string;
   companySlug: string;
   bookSlug: string;
-  onUpdate: (id: string, data: Partial<WorldLocationEntity>) => void;
+  onUpdate: (id: string, data: Partial<WorldLocationEntity> & { expectedRevision?: number }) => Promise<WorldLocationEntity>;
   onDelete: (id: string) => void;
 }
 
@@ -612,7 +622,8 @@ export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUp
   const [editDesc, setEditDesc] = useState(loc.description);
   const [editRules, setEditRules] = useState(safeJsonStringify(loc.rules));
   const [editSensory, setEditSensory] = useState(safeJsonStringify(loc.sensoryNotes));
-  const [editSource, setEditSource] = useState(loc.source || "authored");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
   const [showImagePrompt, setShowImagePrompt] = useState(false);
@@ -655,12 +666,22 @@ export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUp
     setImageGenerating(false);
   };
 
-  const handleSave = () => {
-    onUpdate(loc.id, {
+  const beginEdit = () => {
+    setEditName(loc.name); setEditDesc(loc.description); setEditRules(safeJsonStringify(loc.rules));
+    setEditSensory(safeJsonStringify(loc.sensoryNotes));
+    setEditError(null); setEditing(true);
+  };
+
+  const handleSave = async () => {
+    setSavingEdit(true); setEditError(null);
+    try {
+      await onUpdate(loc.id, {
       name: editName, description: editDesc,
-      rules: safeJsonParse(editRules), sensoryNotes: safeJsonParse(editSensory), source: editSource,
-    });
-    setEditing(false);
+      rules: safeJsonParse(editRules), sensoryNotes: safeJsonParse(editSensory), expectedRevision: loc.revision,
+      });
+      setEditing(false);
+    } catch (err) { setEditError(err instanceof Error ? err.message : String(err)); }
+    finally { setSavingEdit(false); }
   };
 
   const handleCancel = () => {
@@ -668,7 +689,6 @@ export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUp
     setEditDesc(loc.description);
     setEditRules(safeJsonStringify(loc.rules));
     setEditSensory(safeJsonStringify(loc.sensoryNotes));
-    setEditSource(loc.source || "authored");
     setEditing(false);
   };
 
@@ -679,15 +699,10 @@ export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUp
         <EditableField label="Description" value={editDesc} onChange={setEditDesc} multiline rows={6} autoGrow large />
         <EditableField label="Rules (JSON)" value={editRules} onChange={setEditRules} multiline rows={8} autoGrow large placeholder="{}" />
         <EditableField label="Sensory Notes (JSON)" value={editSensory} onChange={setEditSensory} multiline rows={8} autoGrow large placeholder="{}" />
-        <div className="mb-2">
-          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
-          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
-            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
+        {editError && <div role="alert" className="mb-2 text-xs text-red-300">{editError}</div>}
         <div className="flex items-center gap-2 mt-1">
-          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500">
-            <Save className="w-2.5 h-2.5" /> Save
+          <button onClick={() => void handleSave()} disabled={savingEdit} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50">
+            <Save className="w-2.5 h-2.5" /> {savingEdit ? "Saving…" : "Save"}
           </button>
           <button onClick={handleCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200">
             <X className="w-2.5 h-2.5" /> Cancel
@@ -734,15 +749,15 @@ export function LocationCardComponent({ loc, bookId, companySlug, bookSlug, onUp
           <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{loc.description}</p>
         )}
       </div>
-      <div className="flex flex-col gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex flex-col gap-1 shrink-0">
         <button
-          onClick={() => onUpdate(loc.id, { locked: !loc.locked })}
+          onClick={() => void onUpdate(loc.id, { locked: !loc.locked, expectedRevision: loc.revision })}
           className={cn("rounded p-1", loc.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}
         >
           {loc.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
         </button>
-        <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400">
-          <Edit3 className="w-3 h-3" />
+        <button onClick={beginEdit} className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-gray-400 hover:text-blue-400">
+          <Edit3 className="w-3 h-3" /> Edit
         </button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400">
           <Trash2 className="w-3 h-3" />
@@ -796,7 +811,7 @@ interface StyleCardProps {
   bookId: string;
   companySlug: string;
   bookSlug: string;
-  onUpdate: (id: string, data: Partial<StyleEntity>) => void;
+  onUpdate: (id: string, data: Partial<StyleEntity> & { expectedRevision?: number }) => Promise<StyleEntity>;
   onDelete: (id: string) => void;
 }
 
@@ -808,7 +823,8 @@ export function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpd
   const [editSample, setEditSample] = useState(entry.sampleParagraph);
   const [editCliches, setEditCliches] = useState((entry.bannedCliches || []).join(", "));
   const [editTropes, setEditTropes] = useState((entry.tropes || []).join(", "));
-  const [editSource, setEditSource] = useState(entry.source || "authored");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
 
@@ -823,14 +839,30 @@ export function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpd
     setImageGenerating(false);
   };
 
-  const handleSave = () => {
-    onUpdate(entry.id, {
+  const beginEdit = () => {
+    setEditPov(entry.pov); setEditTense(entry.tense); setEditComps(entry.comps); setEditSample(entry.sampleParagraph);
+    setEditCliches((entry.bannedCliches || []).join(", ")); setEditTropes((entry.tropes || []).join(", "));
+    setEditError(null); setEditing(true);
+  };
+
+  const handleSave = async () => {
+    setSavingEdit(true); setEditError(null);
+    try {
+      await onUpdate(entry.id, {
       pov: editPov, tense: editTense, comps: editComps, sampleParagraph: editSample,
       bannedCliches: editCliches.split(",").map((s) => s.trim()).filter(Boolean),
       tropes: editTropes.split(",").map((s) => s.trim()).filter(Boolean),
-      source: editSource,
-    });
-    setEditing(false);
+      expectedRevision: entry.revision,
+      });
+      setEditing(false);
+    } catch (err) { setEditError(err instanceof Error ? err.message : String(err)); }
+    finally { setSavingEdit(false); }
+  };
+
+  const handleCancel = () => {
+    setEditPov(entry.pov); setEditTense(entry.tense); setEditComps(entry.comps); setEditSample(entry.sampleParagraph);
+    setEditCliches((entry.bannedCliches || []).join(", ")); setEditTropes((entry.tropes || []).join(", "));
+    setEditError(null); setEditing(false);
   };
 
   if (editing) {
@@ -842,15 +874,10 @@ export function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpd
         <EditableField label="Sample Paragraph" value={editSample} onChange={setEditSample} multiline rows={8} autoGrow large />
         <EditableField label="Banned Clichés (comma-separated)" value={editCliches} onChange={setEditCliches} multiline rows={3} autoGrow large placeholder="suddenly, very unique" />
         <EditableField label="Tropes (comma-separated)" value={editTropes} onChange={setEditTropes} multiline rows={3} autoGrow large placeholder="Enemies to Lovers, The Chosen One" />
-        <div className="mb-2">
-          <label className="text-[10px] font-medium text-gray-500 uppercase tracking-wider block mb-0.5">Source</label>
-          <select className="w-full rounded border border-gray-700 bg-gray-800/50 px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-blue-500/50" value={editSource} onChange={(e) => setEditSource(e.target.value)}>
-            {SOURCE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
+        {editError && <div role="alert" className="mb-2 text-xs text-red-300">{editError}</div>}
         <div className="flex items-center gap-2 mt-1">
-          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
-          <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
+          <button onClick={() => void handleSave()} disabled={savingEdit} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50"><Save className="w-2.5 h-2.5" /> {savingEdit ? "Saving…" : "Save"}</button>
+          <button onClick={handleCancel} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
         </div>
       </div>
     );
@@ -874,11 +901,11 @@ export function StyleCardComponent({ entry, bookId, companySlug, bookSlug, onUpd
       {entry.tropes && entry.tropes.length > 0 && (
         <p className="text-[11px] text-blue-400/70 mt-1">🎭 {entry.tropes.join(", ")}</p>
       )}
-      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
+      <div className="absolute top-2 right-2 flex gap-1">
+        <button onClick={() => void onUpdate(entry.id, { locked: !entry.locked, expectedRevision: entry.revision })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
           {entry.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
         </button>
-        <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
+        <button onClick={beginEdit} className="flex items-center gap-1 rounded px-1.5 py-1 text-[10px] text-gray-400 hover:text-blue-400"><Edit3 className="w-3 h-3" /> Edit</button>
         <button onClick={() => setDeleting(true)} className="rounded p-1 text-gray-500 hover:text-red-400"><Trash2 className="w-3 h-3" /></button>
         <CameraButton
           onClick={() => handleImageGenerate("cover", `Book cover: ${entry.pov || "N/A"} ${entry.tense || ""}${entry.comps ? `, comps: ${entry.comps}` : ""}`)}
@@ -908,7 +935,7 @@ interface OutlineCardProps {
   bookId: string;
   companySlug: string;
   bookSlug: string;
-  onUpdate: (id: string, data: Partial<OutlineEntity>) => void;
+  onUpdate: (id: string, data: Partial<OutlineEntity> & { expectedRevision?: number }) => Promise<OutlineEntity>;
   onDelete: (id: string) => void;
 }
 
@@ -920,26 +947,32 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
   const [editSource, setEditSource] = useState(entry.source || "authored");
   const [deleting, setDeleting] = useState(false);
   const [imageGenerating, setImageGenerating] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   const handleImageGenerate = async (endpointType: string, prompt: string) => {
     setImageGenerating(true);
     try {
       const imageUrl = await generateBookImage(companySlug, endpointType, prompt, bookSlug, apiFetch as (url: string, opts?: RequestInit) => Promise<unknown>);
       if (imageUrl) {
-        onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl } });
+        await onUpdate(entry.id, { metadata: { ...((entry.metadata as Record<string, unknown>) || {}), imageUrl }, expectedRevision: entry.revision });
       }
     } catch { /* noop */ }
     setImageGenerating(false);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     let beats: Record<string, unknown>[] = [];
     try { const p = JSON.parse(editBeats); if (Array.isArray(p)) beats = p; } catch { /* use empty */ }
-    onUpdate(entry.id, {
-      chapterNumber: parseInt(editCh, 10) || 1, title: editTitle,
-      beats, source: editSource,
-    });
-    setEditing(false);
+    setEditError(null);
+    try {
+      await onUpdate(entry.id, {
+        chapterNumber: parseInt(editCh, 10) || 1, title: editTitle,
+        beats, source: editSource, expectedRevision: entry.revision,
+      });
+      setEditing(false);
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   if (editing) {
@@ -955,9 +988,10 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
           </select>
         </div>
         <div className="flex items-center gap-2 mt-1">
-          <button onClick={handleSave} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
+          <button onClick={() => void handleSave()} className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-medium text-white hover:bg-blue-500"><Save className="w-2.5 h-2.5" /> Save</button>
           <button onClick={() => setEditing(false)} className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"><X className="w-2.5 h-2.5" /> Cancel</button>
         </div>
+        {editError && <p role="alert" className="mt-1 text-[10px] text-red-400">{editError}</p>}
       </div>
     );
   }
@@ -975,7 +1009,7 @@ function OutlineCardComponent({ entry, bookId, companySlug, bookSlug, onUpdate, 
         <span className="text-[10px] text-gray-600">{beatCount} beat{beatCount > 1 ? "s" : ""}</span>
       )}
       <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button onClick={() => onUpdate(entry.id, { locked: !entry.locked })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
+        <button onClick={() => void onUpdate(entry.id, { locked: !entry.locked, expectedRevision: entry.revision })} className={cn("rounded p-1", entry.locked ? "text-yellow-400" : "text-gray-500 hover:text-gray-300")}>
           {entry.locked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
         </button>
         <button onClick={() => setEditing(true)} className="rounded p-1 text-gray-500 hover:text-blue-400"><Edit3 className="w-3 h-3" /></button>
@@ -1139,34 +1173,47 @@ export function OverviewEditor({
 }: {
   book: BookData | null;
   loading: boolean;
-  onUpdate: (data: { title?: string; metadata?: Record<string, unknown> }) => Promise<void> | void;
+  onUpdate: (data: { title?: string; metadata?: Record<string, unknown>; expectedRevision?: number }) => Promise<BookData>;
   onDelete?: () => Promise<void>;
 }) {
   const [editTitle, setEditTitle] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [initialized, setInitialized] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editExpectedRevision, setEditExpectedRevision] = useState(1);
   // Delete confirmation: type the exact title to arm the button.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteText, setDeleteText] = useState("");
   const [deleting, setDeleting] = useState(false);
-
-  // Latch initial values from book on first load
-  if (book && !initialized) {
-    setEditTitle(book.title || "");
-    setEditDesc((book.metadata?.description as string) || "");
-    setInitialized(true);
-  }
 
   // Reset when book changes
   useEffect(() => {
     if (book) {
       setEditTitle(book.title || "");
       setEditDesc((book.metadata?.description as string) || "");
-      setInitialized(true);
+      setEditExpectedRevision(book.revision);
+      setEditing(false);
+      setError(null);
     }
   }, [book?.id]);
+
+  const beginEdit = () => {
+    if (!book) return;
+    setEditTitle(book.title || "");
+    setEditDesc((book.metadata?.description as string) || "");
+    setEditExpectedRevision(book.revision);
+    setError(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    if (!book) return;
+    setEditTitle(book.title || "");
+    setEditDesc((book.metadata?.description as string) || "");
+    setError(null);
+    setEditing(false);
+  };
 
   const handleSave = async () => {
     if (!editTitle.trim()) {
@@ -1176,7 +1223,8 @@ export function OverviewEditor({
     setSaving(true);
     setError(null);
     try {
-      await onUpdate({ title: editTitle.trim(), metadata: { description: editDesc } });
+      await onUpdate({ title: editTitle.trim(), metadata: { description: editDesc }, expectedRevision: editExpectedRevision });
+      setEditing(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1190,24 +1238,20 @@ export function OverviewEditor({
   return (
     <div className="p-4 space-y-3">
       <div className="rounded-md border border-gray-800 bg-gray-900/50 p-3 space-y-3">
-        <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
-        <EditableField
-          label="Description / Premise"
-          value={editDesc}
-          onChange={setEditDesc}
-          multiline
-          rows={8}
-          autoGrow
-          placeholder="What's this book about?"
-        />
-        {error && <div role="alert" className="rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 text-[11px] text-red-300">{error}</div>}
-        <button
-          onClick={handleSave}
-          disabled={saving || !editTitle.trim()}
-          className="flex items-center gap-1 rounded bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50"
-        >
-          {saving ? "Saving..." : "Save Changes"}
-        </button>
+        {editing ? <>
+          <EditableField label="Title" value={editTitle} onChange={setEditTitle} />
+          <EditableField label="Description / Premise" value={editDesc} onChange={setEditDesc} multiline rows={8} autoGrow placeholder="What's this book about?" />
+          {error && <div role="alert" className="rounded border border-red-800/60 bg-red-950/30 px-2 py-1.5 text-[11px] text-red-300">{error}</div>}
+          <div className="sticky bottom-0 flex flex-wrap gap-2 bg-gray-900/95 pt-2">
+            <button onClick={() => void handleSave()} disabled={saving || !editTitle.trim()} className="flex items-center gap-1 rounded bg-blue-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-blue-500 disabled:opacity-50"><Save className="h-3 w-3" />{saving ? "Saving..." : "Save"}</button>
+            <button onClick={cancelEdit} disabled={saving} className="flex items-center gap-1 rounded border border-gray-700 px-2.5 py-1 text-[10px] text-gray-300"><X className="h-3 w-3" />Cancel</button>
+          </div>
+        </> : <>
+          <div className="flex items-start justify-between gap-3">
+            <div><h2 className="font-serif text-lg text-gray-100">{book.title}</h2><p className="mt-2 whitespace-pre-wrap text-xs text-gray-400">{String(book.metadata?.description ?? "No description yet.")}</p></div>
+            <button onClick={beginEdit} className="flex shrink-0 items-center gap-1 rounded border border-gray-700 px-2.5 py-1.5 text-xs text-gray-300 hover:text-blue-300"><Edit3 className="h-3 w-3" />Edit</button>
+          </div>
+        </>}
       </div>
 
       {/* Danger zone — delete book (Tyler, 2026-07-12). DB rows only; vault
@@ -1478,12 +1522,14 @@ export function BookWritingPage() {
 
   const API_PREFIX = `/companies/${companySlug}/book-studio/books/${activeBook?.id}`;
 
-  const updateCharacter = async (id: string, data: Partial<CharacterEntity>) => {
-    await apiFetch(`${API_PREFIX}/characters/${id}`, {
+  const updateCharacter = async (id: string, data: Partial<CharacterEntity> & { expectedRevision?: number }): Promise<CharacterEntity> => {
+    const expectedRevision = data.expectedRevision ?? characters.find((row) => row.id === id)?.revision;
+    const res = await apiFetch<{ character: CharacterEntity }>(`${API_PREFIX}/characters/${id}`, {
       method: "PATCH",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, expectedRevision }),
     });
-    setCharacters((prev) => prev.map((c) => (c.id === id ? { ...c, ...data } : c)));
+    setCharacters((prev) => prev.map((c) => (c.id === id ? res.character : c)));
+    return res.character;
   };
 
   const deleteCharacter = async (id: string) => {
@@ -1500,12 +1546,14 @@ export function BookWritingPage() {
     setShowCreateCharacter(false);
   };
 
-  const updateLocation = async (id: string, data: Partial<WorldLocationEntity>) => {
-    await apiFetch(`${API_PREFIX}/world-locations/${id}`, {
+  const updateLocation = async (id: string, data: Partial<WorldLocationEntity> & { expectedRevision?: number }): Promise<WorldLocationEntity> => {
+    const expectedRevision = data.expectedRevision ?? locations.find((row) => row.id === id)?.revision;
+    const res = await apiFetch<{ "world-location": WorldLocationEntity }>(`${API_PREFIX}/world-locations/${id}`, {
       method: "PATCH",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, expectedRevision }),
     });
-    setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, ...data } : l)));
+    setLocations((prev) => prev.map((l) => (l.id === id ? res["world-location"] : l)));
+    return res["world-location"];
   };
 
   const deleteLocation = async (id: string) => {
@@ -1522,12 +1570,14 @@ export function BookWritingPage() {
     setShowCreateLocation(false);
   };
 
-  const updateStyle = async (id: string, data: Partial<StyleEntity>) => {
-    await apiFetch(`${API_PREFIX}/style/${id}`, {
+  const updateStyle = async (id: string, data: Partial<StyleEntity> & { expectedRevision?: number }): Promise<StyleEntity> => {
+    const expectedRevision = data.expectedRevision ?? styleEntries.find((row) => row.id === id)?.revision;
+    const res = await apiFetch<{ "style-entry": StyleEntity }>(`${API_PREFIX}/style/${id}`, {
       method: "PATCH",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, expectedRevision }),
     });
-    setStyleEntries((prev) => prev.map((s) => (s.id === id ? { ...s, ...data } : s)));
+    setStyleEntries((prev) => prev.map((s) => (s.id === id ? res["style-entry"] : s)));
+    return res["style-entry"];
   };
 
   const deleteStyle = async (id: string) => {
@@ -1544,12 +1594,14 @@ export function BookWritingPage() {
     setShowCreateStyle(false);
   };
 
-  const updateOutline = async (id: string, data: Partial<OutlineEntity>) => {
-    await apiFetch(`${API_PREFIX}/outline/${id}`, {
+  const updateOutline = async (id: string, data: Partial<OutlineEntity> & { expectedRevision?: number }): Promise<OutlineEntity> => {
+    const expectedRevision = data.expectedRevision ?? outlineEntries.find((row) => row.id === id)?.revision;
+    const res = await apiFetch<{ "outline-entry": OutlineEntity }>(`${API_PREFIX}/outline/${id}`, {
       method: "PATCH",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, expectedRevision }),
     });
-    setOutlineEntries((prev) => prev.map((o) => (o.id === id ? { ...o, ...data } : o)));
+    setOutlineEntries((prev) => prev.map((o) => (o.id === id ? res["outline-entry"] : o)));
+    return res["outline-entry"];
   };
 
   const deleteOutline = async (id: string) => {
@@ -1566,14 +1618,15 @@ export function BookWritingPage() {
     setShowCreateOutline(false);
   };
 
-  const updateBook = async (data: { title?: string; metadata?: Record<string, unknown> }) => {
-    if (!activeBook) return;
+  const updateBook = async (data: { title?: string; metadata?: Record<string, unknown>; expectedRevision?: number }): Promise<BookData> => {
+    if (!activeBook) throw new Error("No active book");
     const res = await apiFetch<{ book: BookData }>(
       `/companies/${companySlug}/book-studio/books/${activeBook.id}`,
-      { method: "PATCH", body: JSON.stringify(data) },
+      { method: "PATCH", body: JSON.stringify({ ...data, expectedRevision: data.expectedRevision ?? activeBook.revision }) },
     );
     setActiveBook(res.book);
     setBooksList((prev) => prev.map((b) => (b.id === res.book.id ? res.book : b)));
+    return res.book;
   };
 
   // ── Chat-to-draft state ──────────────────────────────────────────────────
