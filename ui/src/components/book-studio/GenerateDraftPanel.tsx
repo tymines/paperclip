@@ -136,6 +136,7 @@ export function GenerateDraftPanel({
   const [prompt, setPrompt] = useState("");
   const [draft, setDraft] = useState<Record<string, unknown> | null>(null);
   const [errorMessage, setErrorMessage] = useState("");
+  const [isRedoing, setIsRedoing] = useState(false);
   const loadingGate = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -146,10 +147,11 @@ export function GenerateDraftPanel({
     };
   }, []);
 
-  const handleGenerate = async () => {
+  const handleGenerate = async (preserveCurrentDraft = false) => {
     if (loadingGate.current) return; // double-click guard
     loadingGate.current = true;
-    setState("loading");
+    if (preserveCurrentDraft) setIsRedoing(true);
+    else setState("loading");
     setErrorMessage("");
 
     abortRef.current?.abort();
@@ -181,9 +183,10 @@ export function GenerateDraftPanel({
       if (err instanceof DOMException && err.name === "AbortError") return;
       const message = err instanceof Error ? err.message : "Unknown error";
       setErrorMessage(message);
-      setState("error");
+      setState(preserveCurrentDraft ? "draft" : "error");
       onError?.(err instanceof Error ? err : new Error(message));
     } finally {
+      setIsRedoing(false);
       loadingGate.current = false;
     }
   };
@@ -191,11 +194,13 @@ export function GenerateDraftPanel({
   const handleAccept = () => {
     if (draft) onAccept(draft);
     setDraft(null);
+    setErrorMessage("");
     setState("idle");
   };
 
   const handleDiscard = () => {
     setDraft(null);
+    setErrorMessage("");
     setState("idle");
     onDiscard();
   };
@@ -304,16 +309,29 @@ export function GenerateDraftPanel({
         )}
 
         {/* Action buttons */}
-        <div className="flex items-center gap-2 pt-1">
+        {errorMessage && (
+          <p className="text-[11px] text-red-400" role="alert">{errorMessage}</p>
+        )}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <button
             onClick={handleAccept}
-            className="flex items-center gap-1 rounded bg-green-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-green-600"
+            disabled={isRedoing}
+            className="flex min-h-11 items-center gap-1 rounded bg-green-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-green-600 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9"
           >
             <Check className="w-2.5 h-2.5" /> Accept
           </button>
           <button
+            onClick={() => void handleGenerate(true)}
+            disabled={isRedoing}
+            className="flex min-h-11 items-center gap-1 rounded bg-purple-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-purple-600 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-9"
+          >
+            {isRedoing ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <RotateCcw className="h-2.5 w-2.5" />}
+            {isRedoing ? "Redoing with Calliope..." : "Redo with Calliope"}
+          </button>
+          <button
             onClick={handleDiscard}
-            className="flex items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200"
+            disabled={isRedoing}
+            className="flex min-h-11 items-center gap-1 rounded border border-gray-700 px-2 py-1 text-[10px] text-gray-400 hover:text-gray-200 disabled:cursor-not-allowed disabled:opacity-50 sm:min-h-9"
           >
             <X className="w-2.5 h-2.5" /> Discard
           </button>
@@ -332,10 +350,10 @@ export function GenerateDraftPanel({
             placeholder={`Describe the ${ENTITY_LABELS[entityType].toLowerCase()} you want...`}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") handleGenerate(); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void handleGenerate(); }}
           />
           <button
-            onClick={handleGenerate}
+            onClick={() => void handleGenerate()}
             disabled={!prompt.trim() || loadingGate.current}
             className="flex items-center gap-1 rounded bg-purple-600 px-2.5 py-1 text-[10px] font-medium text-white hover:bg-purple-500 disabled:opacity-50 shrink-0"
           >
@@ -360,7 +378,7 @@ export function GenerateDraftPanel({
         <div className="rounded-md border border-red-500/40 bg-red-950/30 p-2.5">
           <p className="text-xs text-red-400 mb-2">{errorMessage}</p>
           <button
-            onClick={handleGenerate}
+            onClick={() => void handleGenerate()}
             className="flex items-center gap-1 rounded bg-red-700 px-2 py-1 text-[10px] font-medium text-white hover:bg-red-600"
           >
             <RotateCcw className="w-2.5 h-2.5" /> Try Again
